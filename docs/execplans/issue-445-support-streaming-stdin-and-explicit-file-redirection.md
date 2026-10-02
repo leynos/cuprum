@@ -453,6 +453,107 @@ likelihood, and mitigation.
   fixing sites and the test names so the reason each finding is closed is
   checkable without re-deriving it.
 
+- [x] (2026-10-02) Fourth rebase onto `origin/main`. `main` had advanced by
+  exactly one commit, `a592b50c` (RFC 0001: execution interception for test
+  doubles, PR #517), which touches `docs/contents.md`, `docs/roadmap.md`, and a
+  new `docs/rfcs/0001-execution-interception.md`. The exclusive boundary was
+  `c65d843c`, main's tip as of this branch's previous rebase and the merge base
+  with the new target — the boundary was corroborated rather than assumed:
+  `c65d843c` is an ancestor of both the branch head and `a592b50c`, and it *is*
+  `a592b50c`'s parent, so the target range was exactly one commit. The 62
+  replayed commits were verified to contain no merges.
+
+  All 62 replayed without a single conflict, and the result is provably
+  faithful: `range-diff` reports 62 of 62 lines as `=` (no change at all, not
+  merely equivalent), the commit count is preserved at 62, and
+  `git diff 453c4ae0..1d2e9ca0` and `git show a592b50c` name the same three
+  files in the same statuses (`docs/contents.md` modified,
+  `docs/rfcs/0001-execution-interception.md` added, `docs/roadmap.md` modified)
+  and **471 identical added content lines with no removals**. The two diffs are
+  not byte-identical, and saying they were would have been wrong: their hunk
+  headers differ by a uniform offset of 14, and the `index` lines differ
+  because their pre-images do. Both differences have the same cause and it is
+  the expected one — the `roadmap.md` pre-image for
+  `git diff 453c4ae0..1d2e9ca0` is the branch's own file, 14 lines longer than
+  the `c65d843c` blob that `a592b50c` diffs against, and 14 is exactly the
+  branch's §0 change to that file (17 added, 3 removed). So the metadata
+  difference is *evidence of* the clean replay rather than a deviation from it:
+  every content line matches and only the coordinates the branch's own
+  insertions shift are shifted.
+
+  The one file both sides touch is `docs/roadmap.md`. Their changes lie in
+  disjoint regions: the branch adds to §0 at the top of the file, and main
+  appends §9.1 and §11 at the bottom. The measurements are these, each read
+  from a `diff -U0` hunk header rather than inferred from a cumulative diff,
+  because a cumulative diff at the rebased head shows *all four* hunks and
+  makes the two sides look interleaved when they are not. Against the boundary
+  `c65d843c` the branch's hunks are at old lines 12 and 24, and main's
+  insertions are at old lines 618 and 781. In main's own commit `a592b50c`
+  main's two blocks land at lines 619 and 789; in the rebased file they land at
+  633 and 803, because the branch's §0 change sits above them and shifts both
+  by 14 lines. So both sides' content is asserted individually at their
+  measured positions on the rebased head — main's `## 11.` heading at line 803
+  with its `11.1.1` task at 821, and the branch's `StdinStream` bullet at line
+  34 inside the §0 entry whose bullet line is 33 — rather than resting on "the
+  file merged cleanly", which is not evidence that either side's content
+  survived.
+
+  Driver selection was checked before replay, not assumed. The global config
+  registers a `merge.weave.driver`, but no attribute rule selects it:
+  `git check-attr merge -- docs/roadmap.md` reports `unspecified`, the
+  repository has no `.gitattributes` weave rule and no `.git/info/attributes`,
+  and the global attributes file that does exist is **empty** — it is present at
+  `~/.config/git/attributes` and zero bytes long. So no driver participated,
+  and the replay used the built-in merge backend under `zdiff3` as configured.
+  The attributes file was pinned to `/dev/null` anyway so the operation could
+  not begin depending on a host-level rule mid-way.
+
+  Recovery refs were written before any mutation under
+  `refs/recovery/issue445-r4-20261002T210700Z/{OLD_HEAD,OLD_BASE,TARGET}`. The
+  force-with-lease was bound to the remote head read immediately before the
+  operation, `453c4ae0`, and that same value was re-confirmed after the replay
+  and before the push.
+
+  **The pertinent-change question, answered.** Main's new material is an RFC,
+  not a shared helper, so the question the hook asks — whether main introduced
+  patterns or resources this branch should adopt — resolves to a *no*, with the
+  RFC's interaction with this branch recorded rather than left implicit:
+
+  1. What main's RFC describes still holds at this branch's head. Its entry
+     point is intact (`_execute_subprocess()` still takes the pre-spawn readings
+     and calls `_spawn_subprocess()`), the ordering it depends on is intact
+     (`start` with the real `pid`, then the wait, then `exit` and the
+     `CommandResult`, all after the spawn returns), and its isolation claim is
+     intact. The RFC names `_spawn_subprocess()` without naming a module, so the
+     branch's relocation of it into `cuprum/_subprocess_spawn.py` — already an
+     ADR-007 addendum — does not falsify the text.
+  2. The RFC's phrase "the wait that follows" the spawn resolves, against this
+     head, to `_await_direct_completion()` — which is what makes the RFC still
+     correct rather than stale. This branch put a caller *below* that function,
+     in `cuprum/_subprocess_rendezvous.py`, racing the child's exit wait against
+     the stdin writer's task. Because two of the race's three call sites sit
+     under `_await_direct_completion()` (the direct and streamed paths), lifting
+     the function lifts the race. The writer is not a new hazard either:
+     `cuprum/_subprocess_stdin.py` is byte-identical at the boundary `c65d843c`
+     and at `a592b50c`, so main already spawned and reconciled a writer inside
+     the same function.
+  3. The third race call site is outside the RFC's reach, and the addendum says
+     so rather than implying one seam covers every run. Line iteration enters
+     through `cuprum/_line_iteration.py` and spawns from
+     `cuprum/_line_stream/coordinator.py` directly; `_execute_subprocess()` is
+     not on that path. The RFC's non-goal covers "a pipeline whose scope has a
+     substitute backend" and does not name line iteration, so a `lines()` run is
+     unaddressed rather than resolved. That is a boundary the next implementer
+     should know about, and it is recorded as one.
+
+  This is recorded as an append-only addendum to ADR-007 rather than as a code
+  change, because RFC 0001 is `Proposed`, no task depends on it, and this
+  branch ships no part of it. The addendum's finding is that the RFC needs no
+  amendment for the paths it claims: an implementer following "Where it is
+  called" literally lifts the right function, and the addendum's value is
+  resolving "the wait" — and naming the path that is not covered — so both are
+  checkable rather than judgements the next reader has to re-make.
+
 - [x] (2026-10-02) CodeScene's two findings were opened and closed by *different
   revisions*, and the plan should name which. The failure is on `c064a1f2`, the
   pre-fix tree: `Quality Gate Failed`,
