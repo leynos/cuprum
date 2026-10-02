@@ -221,6 +221,70 @@ def covered_modules() -> frozenset[str]:
     return covered
 
 
+def _require_selector_resolves_to_module(module: str, entry: Exemption) -> None:
+    """Require the entry's selector to expand to the module it exempts."""
+    resolved = selected_paths(variable_expansion(entry.selector))
+    require(
+        condition=module in {str(path) for path in resolved},
+        message=(
+            f"{__name__}.EXCEPTIONS exempts {module} as collected by "
+            f"`make {entry.target}` through {entry.selector}, but "
+            f"{entry.selector} does not resolve to it. Recorded reason: "
+            f"{entry.reason!r}. An exemption whose selector does not "
+            "collect the module is not an exemption, it is a gap."
+        ),
+    )
+
+
+def _require_target_consumes_selector(module: str, entry: Exemption) -> None:
+    """Require the named target's recipe to hand the selector to a command.
+
+    The consumption check raises its own diagnosis, which names the recipe
+    shape but knows nothing about exemptions. It is re-raised with the entry
+    that provoked it, so a failure sends the reader to the table row rather
+    than to a Makefile target they did not choose.
+    """
+    try:
+        require_selector_is_consumed(
+            recipe_of(entry.target),
+            selector=entry.selector,
+        )
+    except AssertionError as error:
+        require(
+            condition=False,
+            message=(
+                f"{__name__}.EXCEPTIONS exempts {module} as collected by "
+                f"`make {entry.target}` through {entry.selector}, but that "
+                f"target does not consume the selector: {error}. Recorded "
+                f"reason: {entry.reason!r}."
+            ),
+        )
+
+
+def _require_a_workflow_runs_target(module: str, entry: Exemption) -> None:
+    """Require some workflow `run:` step to invoke the named target.
+
+    An exemption is a claim that CI collects the module. A target nothing
+    invokes is collected only by whoever runs it by hand, so the claim is
+    checked against the workflow documents rather than assumed from the
+    Makefile alone.
+    """
+    runners = [
+        f"{workflow_name}:{job_name}"
+        for workflow_name, job_name, _index, script in run_scripts()
+        if script_runs_command(script, f"make {entry.target}")
+    ]
+    require(
+        condition=bool(runners),
+        message=(
+            f"{__name__}.EXCEPTIONS exempts {module} as collected by "
+            f"`make {entry.target}`, but no workflow step runs that "
+            f"target, so nothing in CI collects it. Recorded reason: "
+            f"{entry.reason!r}."
+        ),
+    )
+
+
 def exceptions_verified() -> frozenset[str]:
     """Return the exception entries that are genuinely collected elsewhere.
 
@@ -255,46 +319,9 @@ def exceptions_verified() -> frozenset[str]:
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     verified: set[str] = set()
     for module, entry in EXCEPTIONS.items():
-        resolved = selected_paths(variable_expansion(entry.selector))
-        require(
-            condition=module in {str(path) for path in resolved},
-            message=(
-                f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                f"`make {entry.target}` through {entry.selector}, but "
-                f"{entry.selector} does not resolve to it. Recorded reason: "
-                f"{entry.reason!r}. An exemption whose selector does not "
-                "collect the module is not an exemption, it is a gap."
-            ),
-        )
-        try:
-            require_selector_is_consumed(
-                recipe_of(entry.target),
-                selector=entry.selector,
-            )
-        except AssertionError as error:
-            require(
-                condition=False,
-                message=(
-                    f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                    f"`make {entry.target}` through {entry.selector}, but that "
-                    f"target does not consume the selector: {error}. Recorded "
-                    f"reason: {entry.reason!r}."
-                ),
-            )
-        runners = [
-            f"{workflow_name}:{job_name}"
-            for workflow_name, job_name, _index, script in run_scripts()
-            if script_runs_command(script, f"make {entry.target}")
-        ]
-        require(
-            condition=bool(runners),
-            message=(
-                f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                f"`make {entry.target}`, but no workflow step runs that "
-                f"target, so nothing in CI collects it. Recorded reason: "
-                f"{entry.reason!r}."
-            ),
-        )
+        _require_selector_resolves_to_module(module, entry)
+        _require_target_consumes_selector(module, entry)
+        _require_a_workflow_runs_target(module, entry)
         verified.add(module)
     return frozenset(verified)
 

@@ -71,6 +71,22 @@ _FOREACH_ARITY = 3
 _LOOP_HEADER_WIDTH = 4
 
 
+def _record(
+    found: list[tuple[int, tuple[str, ...]]],
+    current: list[str],
+    start: int,
+) -> None:
+    """Append the command under construction, if it has any words.
+
+    A separator at the start of a command, or two in a row, leaves ``current``
+    empty; recording it would report a command the shell never ran, and the
+    callers index into these words, so an empty one would read as a command
+    with a program of ``""``.
+    """
+    if current:
+        found.append((start, tuple(current)))
+
+
 def _segments(
     tokens: cabc.Sequence[str],
 ) -> tuple[tuple[int, tuple[str, ...]], ...]:
@@ -93,20 +109,18 @@ def _segments(
     start = 0
     for index, token in enumerate(tokens):
         if token in _COMMAND_SEPARATORS:
-            if current:
-                found.append((start, tuple(current)))
-                current = []
+            _record(found, current, start)
+            current = []
             start = index + 1
             continue
         if token.endswith(";"):
             current.append(token[:-1])
-            found.append((start, tuple(current)))
+            _record(found, current, start)
             current = []
             start = index + 1
             continue
         current.append(token)
-    if current:
-        found.append((start, tuple(current)))
+    _record(found, current, start)
     return tuple(found)
 
 

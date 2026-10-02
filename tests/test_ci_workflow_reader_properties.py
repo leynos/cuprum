@@ -34,6 +34,8 @@ from hypothesis import strategies as st
 from tests.helpers import ci_leg_matrix
 
 if typ.TYPE_CHECKING:
+    import re
+
     from hypothesis.strategies import DrawFn
 
 #: Hypothesis's default deadline measures the host rather than the code, and a
@@ -111,6 +113,61 @@ def _recognized_clauses(draw: DrawFn) -> str:
     return " && ".join(draw(st.permutations(parts)))
 
 
+def _holds(clause: str, leg: dict[str, object], queried: str) -> bool:
+    """Decide one clause from the docstring's rules, not from the reader.
+
+    The three recognized forms are settled here as prose states them: a matrix
+    reference holds when the leg carries its key and the comparison holds, an
+    event comparison when its literal is the event under test, and a status
+    function always. The model deliberately reaches for the public
+    `MATRIX_CLAUSE_PATTERN` and nothing else, so a reader that changed how it
+    *decides* a form still has to agree with this.
+
+    Parameters
+    ----------
+    clause : str
+        One clause of an ``&&``-joined condition.
+    leg : dict of str to object
+        The matrix leg the clause is read over.
+    queried : str
+        The event the condition is being decided against.
+
+    Returns
+    -------
+    bool
+        Whether the clause holds.
+    """
+    match = ci_leg_matrix.MATRIX_CLAUSE_PATTERN.match(clause)
+    if match is not None:
+        return _matrix_holds(match, leg)
+    if clause.startswith("github.event_name =="):
+        return clause.endswith(f"'{queried}'")
+    assert clause.casefold().startswith(("always", "success", "failure")), (
+        f"the clause generator produced {clause!r}, which none of the "
+        "reader's recognized forms describes; the model would decide it "
+        "by accident rather than by reading it"
+    )
+    return True
+
+
+def _matrix_holds(match: re.Match[str], leg: dict[str, object]) -> bool:
+    """Decide a matrix clause: a missing key fails, a bare key is truthy.
+
+    Returns
+    -------
+    bool
+        Whether the leg satisfies the clause.
+    """
+    key = match.group("key")
+    if key not in leg:
+        return False
+    operator = match.group("operator")
+    if operator is None:
+        return bool(leg[key])
+    literal = match.group("literal")
+    return leg[key] == literal if operator == "==" else leg[key] != literal
+
+
 @SETTINGS
 @given(condition=_recognized_clauses(), leg=LEGS, event=EVENTS)
 def test_admits_event_agrees_with_an_independent_evaluation(
@@ -133,30 +190,9 @@ def test_admits_event_agrees_with_an_independent_evaluation(
         f"the generator must always produce an event clause; {condition!r} has none"
     )
     admitted = ci_leg_matrix.admits_event(condition, leg, queried, subject=_MESSAGE)
-    expected = True
-    for clause in condition.split("&&"):
-        clause = clause.strip()
-        match = ci_leg_matrix.MATRIX_CLAUSE_PATTERN.match(clause)
-        if match is not None:
-            key = match.group("key")
-            literal = match.group("literal")
-            operator = match.group("operator")
-            if key not in leg:
-                expected = False
-            elif operator is None:
-                expected = expected and bool(leg[key])
-            elif operator == "==":
-                expected = expected and leg[key] == literal
-            else:
-                expected = expected and leg[key] != literal
-        elif clause.startswith("github.event_name =="):
-            expected = expected and clause.endswith(f"'{queried}'")
-        else:
-            assert clause.casefold().startswith(("always", "success", "failure")), (
-                f"the clause generator produced {clause!r}, which none of the "
-                "reader's recognized forms describes; the model would decide it "
-                "by accident rather than by reading it"
-            )
+    expected = all(
+        _holds(clause.strip(), leg, queried) for clause in condition.split("&&")
+    )
     assert admitted == expected, (
         f"{condition!r} over {leg!r} at {presented!r} must be {expected}; the "
         f"reader reported {admitted}, so it disagreed with a direct "
