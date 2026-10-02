@@ -72,8 +72,10 @@ def _assignment_pieces(draw: DrawFn, remaining: list[str]) -> list[str]:
 
 
 @st.composite
-def _acyclic_graph(draw: DrawFn) -> tuple[str, list[dict[str, str]]]:
-    """Build an acyclic variable graph and the words each name derives.
+def _acyclic_graph(
+    draw: DrawFn,
+) -> tuple[str, list[dict[str, str]], tuple[str, ...]]:
+    """Build an acyclic variable graph, its records, and the words it derives.
 
     Names are ``V0..Vn`` and each assignment may reference only *later* names,
     so no reference can close a cycle: a cycle is a refusal with its own
@@ -93,9 +95,13 @@ def _acyclic_graph(draw: DrawFn) -> tuple[str, list[dict[str, str]]]:
 
     Returns
     -------
-    tuple of (str, list of dict)
-        The name to expand, and the ``makeutil``-shaped assignment records for
-        the whole graph.
+    tuple of (str, list of dict, tuple of str)
+        The name to expand, the ``makeutil``-shaped assignment records for the
+        whole graph, and the *complete* word sequence that name derives, in
+        order and with duplicates — the model the expansion is compared to. It
+        is returned because deriving it is the only reason the graph is built
+        backwards, and a property that cannot see it can only assert the
+        expansion is non-empty.
     """
     count = draw(st.integers(min_value=2, max_value=4))
     names = [f"V{index}" for index in range(count)]
@@ -113,13 +119,13 @@ def _acyclic_graph(draw: DrawFn) -> tuple[str, list[dict[str, str]]]:
             for piece in pieces
             for word in (derived[piece[2:-1]] if piece.startswith("$(") else [piece])
         ]
-    return names[0], records
+    return names[0], records, tuple(derived[names[0]])
 
 
 @SETTINGS
 @given(graph=_acyclic_graph())
 def test_expansion_substitutes_every_reference_and_collapses_continuations(
-    graph: tuple[str, list[dict[str, str]]],
+    graph: tuple[str, list[dict[str, str]], tuple[str, ...]],
 ) -> None:
     """Expand an acyclic graph into exactly the words its pieces derived.
 
@@ -128,14 +134,23 @@ def test_expansion_substitutes_every_reference_and_collapses_continuations(
     and a selector that is too small makes every coverage claim above it pass
     for the wrong reason; a reader that left a backslash in place would put a
     word in the tuple that is not a path pattern.
+
+    The expansion is compared to the derived sequence as a whole, not merely
+    inspected for bad words: order and duplicates are part of what the selector
+    *means*, and a reader that sorted its output or deduplicated it would pass
+    every check above while collecting a different set of modules.
     """
-    name, records = graph
+    name, records, expected = graph
     table = makefile._variable_records({"variables": records})
     expanded = makefile._expand(table[name], table)
     words = tuple(expanded.split())
-    assert words, (
+    assert words == expected, (
+        f"{name} must expand to exactly the words its pieces derived, in "
+        f"order and with duplicates; got {words!r} against {expected!r}"
+    )
+    assert expected, (
         f"every generated assignment carries at least one literal, so {name} "
-        f"must expand to a word; it expanded to {expanded!r}"
+        "must derive a word; the model is empty, so this control is inert"
     )
     assert all(word.endswith(".py") for word in words), (
         f"every generated piece is a `.py` word or a reference to one, so "
@@ -154,10 +169,10 @@ def test_expansion_substitutes_every_reference_and_collapses_continuations(
 @SETTINGS
 @given(graph=_acyclic_graph())
 def test_every_name_in_an_acyclic_graph_resolves(
-    graph: tuple[str, list[dict[str, str]]],
+    graph: tuple[str, list[dict[str, str]], tuple[str, ...]],
 ) -> None:
     """Every intermediate name expands, not just the one asked for first."""
-    _name, records = graph
+    _name, records, _expected = graph
     table = makefile._variable_records({"variables": records})
     for record in records:
         expanded = makefile._expand(table[record["name"]], table)
@@ -248,7 +263,7 @@ def test_a_comment_contributes_no_token(
 @SETTINGS
 @given(graph=_acyclic_graph())
 def test_the_graph_generator_produces_a_reference_and_a_continuation(
-    graph: tuple[str, list[dict[str, str]]],
+    graph: tuple[str, list[dict[str, str]], tuple[str, ...]],
 ) -> None:
     """Witness the two shapes the graph properties would otherwise miss.
 
@@ -257,7 +272,11 @@ def test_the_graph_generator_produces_a_reference_and_a_continuation(
     fails on that regression instead, which is the same role the anti-vacuity
     assertions inside the properties play for the clauses.
     """
-    _name, records = graph
+    _name, records, expected = graph
+    assert len(expected) > 1, (
+        "the model must derive more than one word for the comparison above to "
+        f"be about substitution rather than pass-through; got {expected!r}"
+    )
     assert any("$(" in record["raw_value"] for record in records), (
         "the graph generator must produce at least one reference; without one "
         "the expansion properties only exercise literal pass-through"
