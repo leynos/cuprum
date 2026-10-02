@@ -1197,6 +1197,30 @@ than discovering the gap months later.
     above: reducing it needs a CodeRabbit review submission, and queued
     request `d8860275` has still not run.
 
+- [x] (2026-10-03) Caught a formatting defect in this record's own first
+  attempt, and repaired it before it left the machine.
+  - *What happened.* The entry above was committed as `a664a931` and handed to
+    the gate runner. `make check-fmt` failed in 2 s: `mdtablefix --check`
+    reported `docs/execplans/issue-499-….md +2 -2`, wanting to reflow the
+    paragraph that `a664a931` itself had just added. This is the known
+    `mdtablefix --wrap` width trap — prose hand-wrapped at what looks like 80
+    columns can still be wider than the formatter's own measure.
+  - *Attribution was proved, not assumed.* The gate runner checked the file at
+    both revisions rather than inferring from the anchor: `mdtablefix --check`
+    on the `ebbf3f72` copy reports `1 file left unchanged`, and the same check
+    on the `a664a931` copy reports `+2 -2`. `git blame` attributes the lines to
+    `a664a931`. So this was a new defect, not inherited drift that the earlier
+    run had somehow missed.
+  - *Repair.* `a664a931` was unpushed and the document does not name its own
+    SHA at that point, so it was amended rather than followed by a fixup.
+    `make fmt` reflowed exactly those two lines and nothing else; the diff held
+    no other hunk. The amendment re-ran with `--no-edit` plus an explicit
+    trailer, and the message kept exactly one `Co-Authored-By` line.
+  - *The lesson.* The earlier `ebbf3f72` run passed `check-fmt` because its
+    added prose happened to fall inside the formatter's measure. Passing once
+    is not a licence to hand-wrap the next paragraph to 80 columns; the width
+    that matters is `mdtablefix`'s, and only `make fmt` proves it.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
