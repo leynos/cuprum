@@ -385,7 +385,69 @@ escalation, not a workaround.
         `resolver` docstrings were added there, taking the estate from 99.9% to
         `PASSED (minimum: 100.0%, actual: 100.0%)`. 182 tests pass across the
         eight binding-related suites.
-  - [ ] GitHub Actions green at head.
+  - [x] (2026-10-02 12:45Z) Gate set re-run at `a5c84fa1` before the commit:
+        `check-fmt`, `typecheck`, `lint`, `test`, `markdownlint`, and `nixie`,
+        all exit 0, each log recording its own HEAD. `make lint` regenerated
+        nothing, so `typos.toml` needed no separate commit.
+  - [x] (2026-10-02 13:05Z) The change set landed as `fa1de37b` (production),
+        `ee0401c8` (tests), `fea39f03` (the fail-fast fixture), and `59bf841f`
+        (docs and this plan), and pushed. The committed delta was checked
+        against the gated delta before pushing — the same twelve files and the
+        same `+517/-21`, with the plan's digest still the one the gate logs
+        recorded.
+  - [x] (2026-10-02 13:40Z) **CI at `a5c84fa1` failed, and the failure was not
+        visible locally.** Two legs, Python 3.12 and 3.14, failed on
+        `test_the_bound_path_reaches_every_event_of_the_execution`:
+        the `stdout` event reported `resolved_path: None` while `plan`,
+        `start`, and `exit` reported the bound path. Root cause, established by
+        reproducing it rather than by reading: this is a **semantic merge
+        conflict**. The branch adds `resolved_path` and routes every event
+        through `_StageObservation.emit`; `main` gained `71aaf3eb`, which
+        introduces `_LineEventEmitter` to build line events directly from a
+        fixed field list, and `main` has no `resolved_path` at all, so its list
+        could not mention the field. Neither side edited the other's lines, so
+        git merged cleanly while silently dropping the field on `stdout` and
+        `stderr` events. Reproduced by merging `origin/main` into the branch
+        and re-running the file: the same one-line diff, `stdout: None`.
+  - [x] (2026-10-02 13:45Z) Fixed in `cuprum/_line_callbacks.py` by carrying
+        `resolved_path` on `_LineEventEmitter` exactly as `env_mode` is
+        carried, and for the same documented reason: it is invariant per stage
+        observation and known before the spawn, so a line event that omitted it
+        would disagree with the events around it about which executable ran.
+        The other fields `_StageObservation.emit` sets and `emit_line` does not
+        were audited field by field and are all `_EventDetails` payload —
+        per-event detail that a line event correctly leaves at its defaults.
+        The file's own suite then passed 11/11.
+  - [x] (2026-10-02 14:00Z) A `coderabbit review --agent` pass completed
+        cleanly (exit 0, `"status":"review_completed"`, four findings over 51
+        files) against `59bf841f`, transcript
+        `/tmp/coderabbit-cd050cee-epm5-rereview3.out`. All four actioned:
+        - **E, second-person pronouns in the users' guide.** Real. The style
+          guide forbids first and second person outside `README.md`, and the
+          new paragraph was the only second-person text in the whole file
+          (`grep -c '\byou\b|\byour\b'` found two hits, both mine). Rewritten
+          impersonally; the file is now free of them.
+        - **F, the refusal scenario's name.** Real. "An unapproved executable
+          cannot borrow an approved name" implies a *path* is borrowing an
+          identity, but the scenario asserts the reverse-shaped claim: a
+          binding cannot authorize an unlisted *logical program*. Renamed to
+          "A binding cannot authorize an unlisted logical program", and the
+          `@scenario` declaration re-bound to match.
+        - **G and H, the first binding step's ignored `path`.** Two findings
+          that contradict each other: one asks the step to bind the configured
+          path instead of the interpreter, the other asks the wording to admit
+          it binds the interpreter and to leave the behaviour alone. Taken as
+          a pair, they expose the real defect, which is that the feature file
+          and the step disagreed: the step documented in its own comment that
+          `path` cannot be a real location because the suite must run on any
+          machine, but the feature text still named a literal path. Resolved by
+          making the two agree — the scenario now reads "to the running
+          interpreter" and the discarded parameter is gone, so there is no
+          longer a value that is silently ignored.
+        - Non-vacuity for F and G/H: mutating the step to bind a different
+          program fails the scenario with the intended message (the child fell
+          back to the catalogued name), and the mutation was reverted exactly.
+  - [ ] GitHub Actions green at the merge ref for the current head.
   - [ ] `coderabbit review --agent` returns no unresolved finding at head.
 
 ## Surprises & discoveries
@@ -715,6 +777,46 @@ escalation, not a workaround.
   `<test_name>.resolver`. Impact: add the one-line docstring when introducing a
   closure inside a test; the estate is at exactly 100%, so a single omission
   fails the gate for everyone.
+- Observation: **a clean merge can silently drop a field, and the local tree
+  cannot see it.** The branch's `resolved_path` reached every event through
+  `_StageObservation.emit`. Meanwhile `main` gained `71aaf3eb`, which added
+  `_LineEventEmitter` and gave it its own `ExecEvent(...)` call with an
+  explicit field list — written when `resolved_path` did not exist, so the list
+  could not name it. The two edits touch different functions, git merged them
+  without a single conflict marker, and every local run passed. Only the merge
+  ref failed: `stdout` and `stderr` events carried `resolved_path: None` while
+  `plan`, `start`, and `exit` carried the bound path, so a consumer watching
+  the stream would see the executable appear to change mid-run and then change
+  back. Evidence: CI run at `a5c84fa1` on Python 3.12 and 3.14,
+  `test_the_bound_path_reaches_every_event_of_the_execution` reporting
+  `stdout: None`; `git merge-tree` on the two heads showed no conflict; merging
+  `origin/main` locally reproduced the identical assertion failure. Impact:
+  **PR CI builds the merge ref, not the branch head**, so a branch that is
+  green locally and green in isolation can still be red, and a clean merge is
+  no evidence that the merged result is correct. When two branches each add a
+  field to, or a constructor of, the same data structure, merge the base into
+  the branch and run the affected suite before trusting either.
+- Observation: fixing that merge conflict required knowing *which* fields
+  belong on a line event, and the file already answers it. `env_mode` is
+  documented as invariant per stage observation and known before the spawn, so
+  it is carried on every phase and must appear on line events too, or the mode
+  would appear to change mid-stream. `resolved_path` has exactly that shape, so
+  the fix was to give it the same treatment rather than to invent a rule.
+  Evidence: the four remaining fields `_StageObservation.emit` sets and
+  `emit_line` does not — the `_EventDetails` payload — are per-event detail
+  that a line event correctly leaves at its defaults. Impact: when adding a
+  field to a shared event, classify it by the invariant the file already
+  states, and thread it through every construction site; a field that is fixed
+  for the whole observation must be on the line events or the stream
+  contradicts itself.
+- Observation: **a green CI leg is not evidence the suite ran.** At `a5c84fa1`
+  the Python 3.13 and 3.15a legs reported `success` while having run only the
+  typechecker — 1470 log lines, zero occurrences of the failing test file. The
+  3.12 and 3.14 legs ran the suite and failed. Evidence: the two "successful"
+  logs contain no reference to `test_executable_binding_execution.py` at all.
+  Impact: read a leg's log for the test file you care about before citing its
+  green as coverage of the suite; "no leg failed" and "every leg tested this"
+  are different claims.
 
 ## Decision log
 
@@ -802,6 +904,24 @@ escalation, not a workaround.
   interrogate's one-decimal rounding of main's existing debt rather than on the
   tree being covered. Fixing all five removes that dependency. Date/Author:
   2026-10-01, implementing agent.
+- Decision: resolve the CI failure by merging `origin/main` into the branch and
+  threading `resolved_path` through `_LineEventEmitter`, rather than by
+  relaxing the assertion that caught it. Rationale: the failing assertion is
+  the contract the issue asks for — "the executed path is inspectable" — and it
+  was doing its job, catching a field that vanished in the merge. Weakening it
+  to accommodate `stdout: None` would have deleted the only test that notices a
+  line event disagreeing with the events around it about which executable ran.
+  Date/Author: 2026-10-02, implementing agent.
+- Decision: the feature scenario binds "the running interpreter" rather than a
+  literal path, and its step no longer takes a `path` parameter. Rationale: the
+  two CodeRabbit findings on this step contradicted each other — one asked the
+  step to bind the configured path, the other asked the wording to admit it
+  binds the interpreter — and taking them as a pair exposed the defect they
+  were both circling: the feature text named a path the step never read. The
+  suite has to run on any machine, so the executable must be one guaranteed to
+  exist; naming it in the step text and deleting the unused parameter removes
+  the disagreement instead of documenting it. Date/Author: 2026-10-02,
+  implementing agent.
 
 ## Outcomes & retrospective
 

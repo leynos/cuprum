@@ -774,11 +774,12 @@ it still raises `ForbiddenProgramError`, and the resolver is not called.
 
 A resolver must return a `str`. Returning anything else raises `TypeError`,
 because `None` is reserved to mean "no binding" and a resolver returning it by
-accident would silently run the catalogued name instead of the executable you
-chose. A resolver that raises is reported as `ExecutableResolutionError`, which
-names the logical program and chains your exception as its `__cause__`; it
-subclasses `RuntimeError`, so `except FileNotFoundError` around the call no
-longer catches a resolver that failed to find its virtual environment.
+accident would silently run the catalogued name instead of the executable the
+caller selected. A resolver that raises is reported as
+`ExecutableResolutionError`, which names the logical program and chains the
+resolver's own exception as its `__cause__`; it subclasses `RuntimeError`, so
+`except FileNotFoundError` around the call no longer catches a resolver that
+failed to find its virtual environment.
 
 <!-- tested-example: executable-bindings -->
 
