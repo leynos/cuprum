@@ -137,8 +137,6 @@ compromising explicitness.
   policy, whereas a binding answers a different question — which executable a
   program that is already permitted runs — and lives on the execution context
   rather than in the policy switch set.
-
-  [#440]: https://github.com/leynos/cuprum/issues/440
 - [ ] 3.3.2. Document policy switches and recommended defaults in
   `docs/users-guide.md` and add release notes describing the migration path for
   existing users.
@@ -973,4 +971,5 @@ questions" and §"Recommendation".
   - Success: the users' guide and the changelog state the settled behaviour
     with its rationale, or the question is closed as a documented non-goal.
 
+[#440]: https://github.com/leynos/cuprum/issues/440
 [issue-379]: https://github.com/leynos/cuprum/issues/379

@@ -112,11 +112,12 @@ with (
     assert result.resolved_path == sys.executable, "the bound path ran instead"
 ```
 
-A binding is not a permission. If a caller's program is inside the allowlist it
-ran before and runs now; if it was outside, it is still refused with
-`ForbiddenProgramError`, and the binding's resolver is never called for it.
-Nested scopes override one program at a time and leave sibling bindings intact,
-so introducing a binding cannot silently change what a neighbouring scope runs.
+A binding does not grant permission. If a caller's program is inside the
+allowlist it ran before and runs now; if it was outside, it is still refused
+with `ForbiddenProgramError`, and the binding's resolver is never called for
+it. Nested scopes override one program at a time and leave sibling bindings
+intact, so introducing a binding cannot silently change what a neighbouring
+scope runs.
 
 A resolver must return a `str`; anything else raises `TypeError`, which keeps
 `None` meaning only "no binding" rather than doubling as a resolver's answer. A
@@ -127,13 +128,13 @@ That is a change for callers migrating a hand-rolled resolver: a
 `FileNotFoundError` raised inside one no longer escapes as itself, so catch
 `ExecutableResolutionError` (a `RuntimeError`) or inspect `__cause__`.
 
-Two caveats worth stating plainly. Path validation is advisory — construction
-rejects malformed paths, but the file at the bound path may be replaced between
-the check and the `exec`, so filesystem ownership, write permissions, and
-read-only deployment remain the operator's responsibility. And `resolved_path`
-is a *string* the run reports, not a hash or a descriptor: it names the
-executable that was started, which is the same path the child received, but it
-does not attest to the bytes at that path. See
+Two limits apply. Path validation is advisory — construction rejects malformed
+paths, but the file at the bound path may be replaced between the check and the
+`exec`, so filesystem ownership, write permissions, and read-only deployment
+remain the operator's responsibility. And `resolved_path` is a *string* the run
+reports, not a hash or a descriptor: it names the executable that was started,
+which is the same path the child received, but it does not attest to the bytes
+at that path. See
 [§5.1.2 of the design document](cuprum-design.md#512-executable-bindings) for
 the full boundary.
 

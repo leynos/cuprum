@@ -86,7 +86,9 @@ def _catalogue_for(*programs: str) -> tuple[ProgramCatalogue, tuple[Program, ...
     catalogue = ProgramCatalogue.from_programs(
         *entries,
         name="executable-binding-tests",
-        documentation_locations=("docs/users-guide.md#executable-bindings",),
+        documentation_locations=(
+            "docs/users-guide.md#bind-a-catalogued-program-to-a-specific-executable",
+        ),
     )
     return catalogue, entries
 
