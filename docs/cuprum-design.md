@@ -492,6 +492,28 @@ allowlist enforced at run time. A builder constructed from a catalogue the
 active scope does not allow therefore constructs successfully and raises
 `ForbiddenProgramError` when the command runs.
 
+For screen readers: The following flowchart shows how `sh.make` resolves the
+catalogue for a new builder. An explicit argument wins; otherwise the innermost
+active scoped catalogue applies, and `DEFAULT_CATALOGUE` applies only outside
+any catalogue scope. The resolved catalogue is looked up at construction, which
+either rejects the program or binds the catalogue to the returned builder.
+
+Figure 3: `sh.make` catalogue resolution order and construction-time lookup
+
+```mermaid
+flowchart TD
+    A["sh.make(program, catalogue=None)"] --> B{Explicit catalogue?}
+    B -->|Yes| C[Use explicit catalogue]
+    B -->|No| D{Active context catalogue?}
+    D -->|Yes| E[Use innermost scoped catalogue]
+    D -->|No| F[Use DEFAULT_CATALOGUE]
+    C --> G["lookup(program) at construction"]
+    E --> G
+    F --> G
+    G -->|Missing| H[UnknownProgramError]
+    G -->|Found| I[Return builder with catalogue bound]
+```
+
 `sh.make` returns a callable that accepts positional/keyword arguments to be
 converted into argv strings according to internal rules (e.g. str() with basic
 quoting, or more elaborate conversions later). For more control, projects are
@@ -981,7 +1003,7 @@ returns a `CommandResult` carrying the recorded fallback. The clause matches
 failure is affected by this policy, and the unencodable-payload recovery above
 keeps its own unconditional handling.
 
-Figure 3: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
+Figure 4: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
 the failing write or flush to the disabled drain and its bounded projections
 
 ```mermaid
@@ -1019,7 +1041,7 @@ through the run, so no result is produced and the caller receives the error.
 The two arms therefore differ in outcome rather than in detection: best-effort
 yields a result with a recorded fallback, strict yields an exception.
 
-Figure 4: Broken-pipe echo recovery as a message sequence, from the `run_sync`
+Figure 5: Broken-pipe echo recovery as a message sequence, from the `run_sync`
 call through the drain and sink to the returned `CommandResult` or the
 propagated error
 
@@ -1208,7 +1230,7 @@ stderr sink, resolved at emission time, so it never enters capture, echo, line
 observers, or the activity tracker. An `on_idle` callback is synchronous and
 replaces the built-in renderer rather than joining it.
 
-Figure 5: Per-stream echo resolution and fd gating, from RunOutputOptions to
+Figure 6: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
 
 For screen readers: The following flowchart shows how per-stream echo
@@ -1579,7 +1601,7 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 6: Sequence of start/exit logging hook execution
+Figure 7: Sequence of start/exit logging hook execution
 
 ```mermaid
 sequenceDiagram
@@ -1634,7 +1656,7 @@ stderr, and the exit time. It then reads the process exit code through
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
 
-Figure 7: Subprocess timeout handling, from payload resolution to
+Figure 8: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
 
 ```mermaid
@@ -1745,7 +1767,7 @@ grace, captured text is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 8: Capturing drain EOF-grace sequence
+Figure 9: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -1891,7 +1913,8 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 9: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 10: Fail-fast termination selection via the `_stages_to_terminate`
+reducer
 
 ```mermaid
 sequenceDiagram
@@ -2078,7 +2101,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 10: Concurrent execution flow with allowlist validation and semaphore
+Figure 11: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -2124,7 +2147,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 11: Fail-fast mode cancellation behaviour
+Figure 12: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -2293,7 +2316,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 12: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 13: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -2775,7 +2798,7 @@ the caller is cancelled — by tearing the child process down through the
 existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
 the stream closes. A bare `async for` break does not close the custom iterator.
 
-Figure 13: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 14: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -2799,7 +2822,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 14: Line observation fan-out from decoded output to lifecycle events,
+Figure 15: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -2824,7 +2847,7 @@ values are enqueued and yielded as they arrive, and after the process exits the
 consumers are drained, the `CommandResult` is published, and iteration ends with
 `StopAsyncIteration` before the caller reads the `result` attribute.
 
-Figure 15: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 16: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
