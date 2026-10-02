@@ -586,4 +586,4 @@ def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:
     )
 
     assert captured == b"", f"an empty byte capture is b'', got {captured!r}"
-    assert lines == [], "an unattached stream publishes no lines"
+    assert not lines, "an unattached stream publishes no lines"
