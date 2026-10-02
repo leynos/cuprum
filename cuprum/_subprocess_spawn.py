@@ -144,16 +144,24 @@ class _SubprocessExecution:
     def consumes_stdout(self) -> bool:
         """Whether the parent must consume stdout, rather than discard it.
 
-        A stream the caller redirected is consumed by nobody, whatever the gates
-        below say: the child writes it straight to the target the run named, so
-        cuprum must neither pipe it nor relay what comes off it. The ``is_pipe``
-        test is asked first and short-circuits the rest.
+        A redirected stdout is consumed by nobody, whatever these gates say.
+        ``RunOutputOptions`` refuses that combination at construction, but only
+        when *capture* or *echo* is what asks for the pipe: those two need a
+        parent-side pipe to read, and a redirected stream has none. ``on_line``
+        and idle observation are not refused, because they observe a pipe the
+        run may still own rather than requiring one — they simply receive
+        nothing from a redirected stream, which has no parent-side data to
+        report. So this property is the second of the two places the
+        contradiction is caught, and the one that holds for a bundle assembled
+        by something other than the public constructor.
 
         Among the streams cuprum does hold, a registered ``on_line`` observes
         both of them, so it keeps the pipe open and the consumer running even
         when capture and echo are both off. Without that,
         ``run(output=RunOutputOptions(on_line=...))`` would attach stdout to
         ``DEVNULL`` and silently deliver nothing.
+
+        The ``is_pipe`` test is asked first and short-circuits the rest.
         """
         return self.stdio.stdout.is_pipe and (
             self.capture

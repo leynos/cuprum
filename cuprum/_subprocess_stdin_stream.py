@@ -134,42 +134,63 @@ async def _write_stdin_stream(
     whatever the encoder is still holding, which is the only way a trailing
     partial sequence becomes visible to the child.
 
-    An early child-side close (``BrokenPipeError``, or a bare ``OSError``
-    carrying ``errno.EPIPE``, as the docstring above advertises) is *not* an
-    error: a child that reads only part of its input and exits is behaving
-    normally, so the condition is recorded as a ``stdin_error`` observation
-    and the run proceeds to its exit code. A producer or encoder failure is
-    different: it is wrapped in ``StdinSourceError`` and raised, because the
-    run's input contract was broken rather than satisfied early.
-
     The pipe is closed and the producer finalized on every exit path,
     including the raising ones, so a caller who sees a failure still knows
-    that nothing cuprum owns outlives the run.
-
-    Raises
-    ------
-    _stdin_source_error
-        If pulling or encoding a chunk fails. The helper builds the public
-        ``StdinSourceError`` from the lazy shim, so what a caller catches is
-        that type, with the producer's own exception chained as ``__cause__``.
-        It is built through the helper rather than named literally here
-        because this module must not import ``cuprum.sh`` at runtime.
-    asyncio.CancelledError
-        If the writer is cancelled while the run is being torn down.
-        Cancellation is control flow rather than a source failure, so it
-        propagates unchanged instead of being wrapped.
+    that nothing cuprum owns outlives the run. Which failures raise at all is
+    the policy of :func:`_drain_source_into_pipe`, which this delegates to.
     """
     stdin = process.stdin
     if stdin is None:
         _LOGGER.debug("stdin_writer_skipped pid=%s reason=no_pipe", process.pid)
         return
-    source: cabc.AsyncIterator[str | bytes] | None = None
     sink = _write._StreamSink(
         process=process,
         stdin=stdin,
         codec=codec,
         observation=observation,
     )
+    try:
+        await _drain_source_into_pipe(stream, sink, process, observation)
+    finally:
+        await _close_stdin(process, stdin, observation)
+    _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
+
+
+async def _drain_source_into_pipe(
+    stream: StdinStream,
+    sink: _write._StreamSink,
+    process: asyncio.subprocess.Process,
+    observation: _StageObservation,
+) -> None:
+    """Pump the producer into the pipe, applying the run's failure policy.
+
+    This is the one place the three failure outcomes are told apart. A
+    producer failure ends the run with the producer's own exception as the
+    cause. A genuine child-side close is normal — a child that reads part of
+    its input and exits is behaving correctly — so it is recorded as an
+    ``early_close`` observation and the run proceeds to its exit code. Any
+    other failure is the encoder or the pipe, and is reported as itself.
+
+    The producer's whole lifecycle lives inside this guarded region — building
+    its iterator, pulling from it, and finalizing it — so a failure to *start*
+    the producer is reported the same way as a failure to advance it, and the
+    producer is finalized on every exit path.
+
+    Keeping the policy here rather than in the caller leaves the caller with
+    setup and teardown alone, and keeps each handler's ``raise`` visible to
+    the linter that requires it.
+
+    Raises
+    ------
+    _stdin_source_error
+        If the producer or the encoder fails, or the pipe write fails for a
+        reason other than the child closing its end.
+    asyncio.CancelledError
+        If the writer is cancelled while the run is being torn down.
+        Cancellation is control flow rather than a source failure, so it
+        propagates unchanged instead of being wrapped.
+    """
+    source: cabc.AsyncIterator[str | bytes] | None = None
     try:
         source = aiter(stream.chunks)
         await _pump_chunks(source, sink)
@@ -189,8 +210,6 @@ async def _write_stdin_stream(
         _emit_stdin_error(process, observation, exc, operation="early_close")
     finally:
         await _finalize_stdin_source(source)
-        await _close_stdin(process, stdin, observation)
-    _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
 class _ProducerFailureError(Exception):
