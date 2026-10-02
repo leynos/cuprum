@@ -222,9 +222,10 @@ def _scope_label(node: ast.AST) -> str:
     """
     if isinstance(node, ast.Module):
         return "module scope"
+    # Every node owning a statement list binds its name as a plain string:
+    # ``If`` and ``Try`` carry none, functions and classes carry ``str``.
+    # ``TypeAlias`` names are AST nodes, but it owns no statement list.
     name = getattr(node, "name", None)
-    if isinstance(name, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return "a definition"
     if name is None:
         return type(node).__name__
     return f"{type(node).__name__} {name!r}"
