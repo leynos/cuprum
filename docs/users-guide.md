@@ -1396,6 +1396,23 @@ The same check runs from a shell:
 python -c "import cuprum; print(cuprum.is_rust_available())"
 ```
 
+Native stream transfers accept a `buffer_size` argument, defaulting to 65536
+bytes (64 KiB). Any size from 1 byte to 1 GiB (`1 << 30`) inclusive is
+accepted; a value outside that window raises `ValueError`, whether the refusal
+comes from the extension or from the Python code in front of it. An integer too
+large for the native boundary to represent at all — beyond `i64::MAX`, or below
+`i64::MIN` — is a different failure and keeps `OverflowError`, because it never
+reaches the size check.
+
+An I/O failure while transferring raises `OSError`. When the failure came from
+the operating system, the exception carries its own code — `errno` on POSIX
+platforms, `winerror` on Windows — so branch on those attributes rather than on
+the message text, which is not a stable interface. Expected broken-pipe
+conditions do not surface at all: the pump treats a closed downstream as the
+end of the transfer, swallows the condition, and keeps draining the reader so
+the upstream process does not block on a full pipe buffer. A broken downstream
+is therefore not reported as an error.
+
 ### Rust-pump executor-hop spans
 
 Rust-backed pipelines can expose the executor hop that moves bytes between

@@ -355,7 +355,7 @@ relies on. See issue `#90`, tee-hotpath-profiling-baseline-2026-06-12.md §§3-4
 and adr-002-additional-rust-components.md (decoding-drift and FD-ownership
 risks).
 
-- [ ] 6.1.1. Introduce a `RustStreamError` enum in `rust/cuprum-rust/src/lib.rs`
+- [x] 6.1.1. Introduce a `RustStreamError` enum in `rust/cuprum-rust/src/lib.rs`
   and convert it to PyO3 errors at a single boundary point.
   - Success: invalid `buffer_size` raises `ValueError` and I/O failures raise
     `OSError`, with the conversion centralized rather than scattered across call

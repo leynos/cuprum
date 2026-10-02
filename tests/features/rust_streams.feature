@@ -16,3 +16,15 @@ Feature: Optional Rust stream operations
     Given the Rust pump stream is available
     When I pump a large payload through the Rust stream
     Then the output matches the large payload
+
+  Scenario Outline: Preserve native stream exception categories
+    Given the compiled Rust backend is required
+    When the <operation> native helper receives <failure>
+    Then it raises <exception>
+
+    Examples:
+      | operation | failure              | exception  |
+      | pump      | a zero buffer size   | ValueError |
+      | consume   | a zero buffer size   | ValueError |
+      | pump      | a fatal reader error | OSError    |
+      | consume   | a fatal reader error | OSError    |
