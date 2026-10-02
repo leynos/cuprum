@@ -55,7 +55,7 @@ async def _never_reaches_eof_bytes() -> bytes | None:
 
 #: A consumer that blocks until cancelled, in either capture mode.
 type _WedgedReader = cabc.Callable[
-    [], cabc.Coroutine[typ.Any, typ.Any, str | bytes | None]
+    [], cabc.Coroutine[object, object, str | bytes | None]
 ]
 
 
