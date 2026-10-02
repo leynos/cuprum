@@ -1678,9 +1678,9 @@ configuration.
 ### Byte-exact capture mode
 
 The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
-runners. A byte run is an ordinary run carrying one extra fact, `capture_bytes`,
-on its resolved `_SubprocessExecution` state. That fact flows to
-`_StreamConfig.capture_bytes`, and the single payload renderer,
+runners. A byte run is an ordinary run carrying one extra fact,
+`capture_bytes`, on its resolved `_SubprocessExecution` state. That fact flows
+to `_StreamConfig.capture_bytes`, and the single payload renderer,
 `cuprum._stream_drain_finish._captured_payload`, decides at the end of the
 drain whether to return `bytes(buffer)` or
 `buffer.decode(config.encoding, errors=config.errors)`.
@@ -1698,17 +1698,16 @@ drain serve both modes:
 Narrowing happens on the way out, at one seam per result class:
 `_require_bytes` and `_require_text` in `cuprum._result_assembly` re-take the
 guarantee that a drain's widened `str | bytes | None` payload matches the mode
-the result is being built for, raising `_ExecutionInvariantError` on a
-mismatch. `cuprum._bytes_run` holds the equivalent narrowing for whole result
-objects, plus `_validate_bytes_output`, which rejects a caller-supplied
+the result is being built for, raising `_ExecutionInvariantError` on a mismatch.
+`cuprum._bytes_run` holds the equivalent narrowing for whole result objects,
+plus `_validate_bytes_output`, which rejects a caller-supplied
 `RunOutputOptions.on_line` before anything spawns.
 
 Re-use policy: a new narrowed result class must go through both seams rather
 than asserting a payload's type away with a cast, and any new consume variant
 must keep the buffer raw so byte mode stays available to it. The `on_line`
-rejection is policy, not capability — the drain itself honours the
-combination; see
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
+rejection is policy, not capability — the drain itself honours the combination;
+see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
 boundaries it belongs to, and the
 [binary output section](users-guide.md#binary-output) of the users' guide.
 

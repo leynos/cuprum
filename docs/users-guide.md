@@ -266,11 +266,11 @@ are unaffected, since they mirror output rather than report it; a sink that
 cannot encode the child's bytes records a `relay_fallback` exactly as it does
 in text mode.
 
-The refusal applies only to a caller-supplied `on_line`. Structured
-observation registered with `sh.observe()` still fires in byte mode: those
-hooks receive decoded lines, so undecodable bytes are replaced in the *event*
-while the captured payload keeps the child's own bytes. The two travel on
-separate channels, and neither is a substitute for the other.
+The refusal applies only to a caller-supplied `on_line`. Structured observation
+registered with `sh.observe()` still fires in byte mode: those hooks receive
+decoded lines, so undecodable bytes are replaced in the _event_ while the
+captured payload keeps the child's own bytes. The two travel on separate
+channels, and neither is a substitute for the other.
 
 For a pipeline, the same rule applies to each stage: only the final stage's
 stdout is captured, interior stdout feeds the next stage and is reported as
