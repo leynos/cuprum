@@ -74,11 +74,13 @@ _FOREACH_ARITY = 3
 #: loop variable, `in`, and the call itself.
 _LOOP_HEADER_WIDTH = 4
 
+#: The word at which `set -- <value>` carries the value it binds: `set`, the
+#: `--` separator, then the value itself.
+_SET_VALUE_INDEX = 2
+
 
 def _record(
-    found: list[tuple[int, tuple[str, ...]]],
-    current: list[str],
-    start: int,
+    found: list[tuple[int, tuple[str, ...]]], current: list[str], start: int
 ) -> None:
     """Append the command under construction; a separator leaves it empty."""
     if current:
@@ -124,7 +126,7 @@ def _loop_header(
 
     Raises `AssertionError` when no `for` loop iterates the selector, or the
     closest one iterates another variable — reported by naming the list read.
-    """
+    """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     reference = f"$({selector})"
     # `for` must be the command's *program*, not a word inside one: an
     # `echo for p in $(foreach …` carries every token the loop does while the
@@ -187,11 +189,7 @@ def _loop_header(
 
 
 def _positional_binding(
-    tokens: cabc.Sequence[str],
-    *,
-    variable: str,
-    after: int,
-    body_end: int,
+    tokens: cabc.Sequence[str], *, variable: str, after: int, body_end: int
 ) -> int:
     """Return the index of the `set --` that binds the loop variable.
 
@@ -199,12 +197,15 @@ def _positional_binding(
     not one — lying before `body_end`, the loop's `done`. Raises
     `AssertionError` when the body binds nothing, since the iterated value then
     never reaches the positional parameters.
-    """
+    """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     spellings = {f"$${variable}", f"$${{{variable}}}"}
     for start, words in _segments(tokens):
         if not after < start < body_end or _program(words) != "set":
             continue
-        if len(words) > 2 and words[2].rstrip(";") in spellings:
+        if (
+            len(words) > _SET_VALUE_INDEX
+            and words[_SET_VALUE_INDEX].rstrip(";") in spellings
+        ):
             return start
     require(
         condition=False,
@@ -219,11 +220,7 @@ def _positional_binding(
 
 
 def _pytest_command(
-    tokens: cabc.Sequence[str],
-    *,
-    pytest_variable: str,
-    after: int,
-    body_end: int,
+    tokens: cabc.Sequence[str], *, pytest_variable: str, after: int, body_end: int
 ) -> tuple[int, tuple[str, ...]]:
     """Return the pytest invocation that consumes the positional parameters.
 
@@ -231,7 +228,7 @@ def _pytest_command(
     before its `done` — so a pytest run following the loop is not counted.
     Raises `AssertionError` when no command in that body invokes pytest with
     the positional expansion.
-    """
+    """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     program = f"$({pytest_variable})"
     for start, words in _segments(tokens):
         if not after < start < body_end or _program(words) != program:

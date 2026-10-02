@@ -265,7 +265,10 @@ _BOOTSTRAP_FAULTS = (
     ("echoed-not-run", f"echo $({_BOOTSTRAP_PYTEST}) {_BOOTSTRAP_MODULE}"),
     (
         "named-in-another-command",
-        f"$({_BOOTSTRAP_PYTEST}) tests/somewhere_else.py || exit $$?  # {_BOOTSTRAP_MODULE}",
+        (
+            f"$({_BOOTSTRAP_PYTEST}) tests/somewhere_else.py || exit $$?"
+            f"  # {_BOOTSTRAP_MODULE}"
+        ),
     ),
 )
 
