@@ -8,8 +8,16 @@ import typing as typ
 
 import pytest
 
-from cuprum import ECHO, ExecutionContext, sh
+from cuprum import (
+    ECHO,
+    ExecutionContext,
+    ForbiddenProgramError,
+    ScopeConfig,
+    scoped,
+    sh,
+)
 from cuprum.catalogue import (
+    DEFAULT_CATALOGUE,
     ProgramCatalogue,
     ProjectSettings,
     UnknownProgramError,
@@ -252,3 +260,121 @@ def test_make_still_serializes_non_reserved_keywords(tmp_path: Path) -> None:
         f"--working-dir={tmp_path}",
         "--stdin-file=payload",
     ), "non-reserved keywords must keep the documented --flag=value rendering"
+
+
+# =============================================================================
+# Scoped catalogue resolution
+# =============================================================================
+
+
+def test_make_uses_the_scoped_catalogue_without_repeating_it() -> None:
+    """A catalogue scope supplies the catalogue when the call omits one."""
+    gh = Program("gh")
+    project = ProjectSettings(name="gh-project", programs=(gh,))
+    catalogue = ProgramCatalogue(projects=(project,))
+
+    with scoped(catalogue=catalogue):
+        cmd = sh.make(gh)("--version")
+
+    assert cmd.program == gh, "Scoped catalogue should resolve the program"
+    assert cmd.project is project, "Scoped catalogue metadata should be attached"
+    assert cmd.argv_with_program == (str(gh), "--version"), (
+        "Scoped resolution should not alter argv construction"
+    )
+
+
+def test_make_rejects_programs_outside_the_scoped_catalogue() -> None:
+    """Membership is checked against the scoped catalogue at construction."""
+    catalogue = ProgramCatalogue.from_programs(Program("gh"))
+
+    with scoped(catalogue=catalogue), pytest.raises(UnknownProgramError, match=ECHO):
+        sh.make(ECHO)
+
+
+def test_make_falls_back_to_default_catalogue_without_a_scope() -> None:
+    """Outside any catalogue scope the default catalogue still applies."""
+    project = sh.make(ECHO)("-n", "hello").project
+
+    assert project is DEFAULT_CATALOGUE.lookup(ECHO).project, (
+        "An unscoped builder should resolve against the default catalogue"
+    )
+
+
+def test_make_inherits_the_catalogue_through_an_allowlist_only_scope() -> None:
+    """A scope that names no catalogue leaves the active catalogue in place."""
+    gh = Program("gh")
+    catalogue = ProgramCatalogue.from_programs(gh)
+
+    with (
+        scoped(catalogue=catalogue),
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+    ):
+        cmd = sh.make(gh)("--version")
+
+    assert cmd.project is catalogue.lookup(gh).project, (
+        "An allowlist-only scope should inherit the active catalogue"
+    )
+
+
+def test_make_prefers_an_explicit_catalogue_over_the_scoped_one() -> None:
+    """An explicit catalogue argument outranks the active scope."""
+    gh = Program("gh")
+    scoped_catalogue = ProgramCatalogue.from_programs(ECHO)
+    explicit_catalogue = ProgramCatalogue.from_programs(gh)
+
+    with scoped(catalogue=scoped_catalogue):
+        cmd = sh.make(gh, catalogue=explicit_catalogue)("--version")
+
+    assert cmd.project is explicit_catalogue.lookup(gh).project, (
+        "The explicit catalogue argument should win over the active scope"
+    )
+
+
+def test_builder_from_a_foreign_catalogue_fails_only_at_run_time() -> None:
+    """Construction checks the catalogue; the scope checks the allowlist."""
+    scoped_catalogue = ProgramCatalogue.from_programs(ECHO)
+    foreign_catalogue = ProgramCatalogue.from_programs(Program("cat"))
+
+    with scoped(catalogue=scoped_catalogue):
+        # Construction consults the explicit catalogue, so it succeeds even
+        # though the enclosing scope does not permit the program.
+        cmd = sh.make(Program("cat"), catalogue=foreign_catalogue)("--version")
+        with pytest.raises(ForbiddenProgramError, match="cat"):
+            cmd.run_sync()
+
+
+def test_make_uses_the_innermost_scoped_catalogue() -> None:
+    """Nested scopes resolve against the innermost catalogue in force."""
+    outer_program = Program("outer-tool")
+    inner_program = Program("inner-tool")
+    outer_catalogue = ProgramCatalogue.from_programs(outer_program)
+    inner_catalogue = ProgramCatalogue.from_programs(inner_program)
+
+    with scoped(catalogue=outer_catalogue):
+        before = sh.make(outer_program)("run")
+        with scoped(catalogue=inner_catalogue):
+            inner = sh.make(inner_program)("run")
+        after = sh.make(outer_program)("run")
+
+    assert before.project is outer_catalogue.lookup(outer_program).project, (
+        "The outer catalogue should resolve the builder before the inner scope opens"
+    )
+    assert inner.project is inner_catalogue.lookup(inner_program).project, (
+        "The innermost catalogue should resolve the builder"
+    )
+    assert after.project is outer_catalogue.lookup(outer_program).project, (
+        "Exiting the inner scope should restore the outer catalogue"
+    )
+
+
+def test_builder_keeps_its_catalogue_after_the_scope_exits() -> None:
+    """Resolution happens once, so a builder outlives the scope that made it."""
+    gh = Program("gh")
+    catalogue = ProgramCatalogue.from_programs(gh)
+
+    with scoped(catalogue=catalogue):
+        builder = sh.make(gh)
+
+    assert builder("--version").project is catalogue.lookup(gh).project, (
+        "A builder should keep the catalogue resolved at construction"
+    )

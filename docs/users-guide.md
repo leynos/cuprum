@@ -71,7 +71,8 @@ that resolves the installed package picks the marker up on its own.
 Declare the executable, make a builder, build an argument vector, then run it.
 `sh.make()` consults a catalogue before returning a builder. The default
 catalogue contains common tools such as `ECHO`, `GIT`, `LS`, `RSYNC`, and
-`TAR`. For an application-specific executable, build a catalogue explicitly:
+`TAR`. For an application-specific executable, build a catalogue explicitly and
+pass it, either as an argument or by activating it in a scope:
 
 <!-- tested-example: first-command -->
 
@@ -97,10 +98,12 @@ quoting and pipes in a string are not interpreted.
 ## Handle failure
 
 `UnknownProgramError` means `sh.make()` could not find a program in its
-catalogue. That is a policy or configuration error. A registered executable
-that is absent from the operating system raises `FileNotFoundError` at launch.
-A child that exits non-zero returns a result with `ok == False` and an
-`exit_code`; it does not automatically raise.
+catalogue — the explicit argument, the innermost `scoped(catalogue=...)`, or
+`DEFAULT_CATALOGUE`. That is a policy or configuration error, raised while
+building rather than running. A registered executable that is absent from the
+operating system raises `FileNotFoundError` at launch. A child that exits
+non-zero returns a result with `ok == False` and an `exit_code`; it does not
+automatically raise.
 
 <!-- tested-example: failures -->
 
@@ -390,19 +393,98 @@ Registrations such as `env()`, `before()`, `after()`, and `observe()` are
 context-local and are removed when their context manager exits. They do not
 change global environment variables.
 
-<!-- tested-example: scoped-policy -->
+`scoped(catalogue=catalogue)` activates a catalogue for the block, so
+`sh.make()` inside it resolves the program from that catalogue without being
+told again:
+
+<!-- tested-example: scoped-catalogue-resolution -->
 
 ```python
 import sys
 
-from cuprum import Program, ProgramCatalogue, env, scoped, sh
+from cuprum import ECHO, Program, ProgramCatalogue, UnknownProgramError, scoped, sh
 
-catalogue = ProgramCatalogue.from_programs(sys.executable, name="policy")
-python = sh.make(Program(sys.executable), catalogue=catalogue)
-with scoped(catalogue=catalogue), env(CUPRUM_EXAMPLE="scoped"):
-    result = python("-c", "import os; print(os.getenv('CUPRUM_EXAMPLE'))").run_sync()
-assert result.stdout == "scoped\n"
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="scoped-policy")
+
+# Outside any catalogue scope, the default catalogue still applies.
+assert sh.make(ECHO)("-n", "hello").project.name == "core-ops"
+
+with scoped(catalogue=catalogue):
+    build_python = sh.make(Program(sys.executable))
+    assert build_python("-c", "pass").project.name == "scoped-policy"
+
+# A builder resolved inside the scope keeps its catalogue after the block exits.
+assert build_python("-c", "pass").project.name == "scoped-policy"
+
+# A catalogue missing the program rejects it, rather than falling back.
+other = ProgramCatalogue.from_programs(Program("some-other-tool"), name="other")
+with scoped(catalogue=other):
+    try:
+        sh.make(Program(sys.executable))
+    except UnknownProgramError:
+        pass
+    else:
+        raise AssertionError("the scoped catalogue should reject the program")
 ```
+
+`sh.make()` resolves its catalogue in this order: an explicit `catalogue`
+argument, then the innermost active `scoped(catalogue=...)`, then
+`DEFAULT_CATALOGUE` outside any catalogue scope. A scope that supplies only an
+allowlist, such as `scoped(ScopeConfig(allowlist=...))`, does not change which
+catalogue is active. Resolution happens once, when `sh.make()` is called: the
+returned builder keeps its catalogue for its whole life, including after the
+scope exits.
+
+### Two enforcement points
+
+Cuprum checks the catalogue when a builder is created and the allowlist when a
+command runs. The two checks answer different questions, and they can disagree:
+
+- **`sh.make()` checks membership.** It looks the program up in the resolved
+  catalogue and raises `UnknownProgramError` if the catalogue does not list it.
+  This catches a typo or a misconfigured catalogue before any builder exists.
+- **The active scope checks permission.** When a command runs, the allowlist of
+  whichever context is active at that moment decides whether the program may
+  execute. If it may not, `run()` and `run_sync()` raise
+  `ForbiddenProgramError` before a process starts.
+
+A builder constructed from a catalogue the enclosing scope does not allow
+therefore constructs successfully and fails only at run time:
+
+<!-- tested-example: enforcement-points -->
+
+```python
+import sys
+
+from cuprum import (
+    ForbiddenProgramError,
+    Program,
+    ProgramCatalogue,
+    current_context,
+    scoped,
+    sh,
+)
+
+allowed = ProgramCatalogue.from_programs(sys.executable, name="allowed")
+foreign = ProgramCatalogue.from_programs(Program("some-other-tool"), name="foreign")
+other = Program("some-other-tool")
+
+with scoped(catalogue=allowed):
+    # Construction consults the named catalogue, so this succeeds.
+    command = sh.make(other, catalogue=foreign)("--version")
+    # Execution consults the scope, which does not allow the program.
+    assert not current_context().is_allowed(other)
+    try:
+        command.run_sync()
+    except ForbiddenProgramError:
+        pass
+    else:
+        raise AssertionError("the scope should forbid the foreign program")
+```
+
+The two catalogues need not agree: each is a separate policy surface. Naming a
+catalogue explicitly is how a caller opts out of the scope's catalogue for
+construction, but it never opts out of the scope's allowlist for execution.
 
 `ScopeConfig` accepts allowlist, hook, timeout, and environment settings when a
 catalogue alone is insufficient. `allow()` is the explicit way to widen policy:
@@ -636,7 +718,11 @@ deadlines, and the log records each expiry writes.
 A scope narrows which catalogued programs may run inside a `with` block.
 Running anything else raises `ForbiddenProgramError`, a `PermissionError`
 subclass, before a process starts. `current_context().is_allowed()` checks a
-program without running it.
+program without running it. A `scoped(catalogue=...)` block narrows the
+allowlist to the catalogue's programs _and_ supplies that catalogue to
+`sh.make()`; a `scoped(ScopeConfig(allowlist=...))` block narrows only the
+allowlist and leaves the active catalogue alone. See
+[Two enforcement points](#two-enforcement-points).
 
 <!-- tested-example: restricted-scope -->
 
@@ -1738,13 +1824,17 @@ to read the full benchmark output.
 
 ## Glossary
 
-- **Allowlist:** the set of programs a context permits to run. The default
-  context permits every program; a scope narrows it. The catalogue separately
-  controls which programs can be built into commands.
+- **Allowlist:** the set of programs a context permits to run, checked when a
+  command runs. The default context permits every program; a scope narrows it.
+  The catalogue separately controls which programs can be built into commands.
 - **Builder:** the callable that `sh.make()` returns. Calling it with arguments
-  produces a `SafeCmd`.
+  produces a `SafeCmd`. Its catalogue is fixed when `sh.make()` is called, so
+  the builder still works after the scope that supplied the catalogue exits.
 - **Catalogue:** a `ProgramCatalogue`, the set of programs for which builders
-  may be created, grouped into projects with metadata.
+  may be created, grouped into projects with metadata. Checked when a builder
+  is created. `sh.make()` uses an explicit `catalogue` argument first, then the
+  innermost active `scoped(catalogue=...)`, then `DEFAULT_CATALOGUE`; a caller
+  outside any catalogue scope still names its application catalogue.
 - **Descriptor:** an operating-system handle for an open pipe or file. The Rust
   pump borrows the descriptors of the pipes it connects.
 - **End of file (EOF):** the signal that a pipe's writer has closed and no more
@@ -1764,4 +1854,6 @@ to read the full benchmark output.
 - **Resident set size (RSS):** the memory a process holds in RAM; Cuprum
   reports the child's peak where the platform measures it.
 - **Scope:** a `with scoped(...)` block that narrows the allowlist and can add
-  hooks, a timeout, or environment overlays for the code inside it.
+  hooks, a timeout, or environment overlays for the code inside it. A
+  `scoped(catalogue=...)` scope also activates that catalogue for `sh.make()`
+  inside the block.

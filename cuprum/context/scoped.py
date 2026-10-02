@@ -60,8 +60,9 @@ def scoped(
         Scope configuration describing allowlist and hook updates. Mutually
         exclusive with ``catalogue``.
     catalogue:
-        Catalogue whose allowlist establishes the scope. Mutually exclusive
-        with ``config``.
+        Catalogue whose allowlist establishes the scope and whose program
+        entries ``sh.make`` resolves inside it. Mutually exclusive with
+        ``config``.
 
     Returns
     -------
@@ -89,4 +90,6 @@ def scoped(
     if catalogue is None:
         msg = "scoped() requires config or catalogue"
         raise TypeError(msg)
-    return _ScopedContext(ScopeConfig(allowlist=catalogue.allowlist))
+    return _ScopedContext(
+        ScopeConfig(allowlist=catalogue.allowlist, catalogue=catalogue)
+    )
