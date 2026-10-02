@@ -46,7 +46,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers.makefile import variable_expansion
+from tests.helpers.makefile import recipe_of, recipe_tokens, variable_expansion
 from tests.helpers.suite_selection import (
     SCENARIO_SELECTOR,
     SELECTOR,
@@ -109,6 +109,30 @@ def test_the_six_reported_modules_are_now_collected() -> None:
     assert not missing, (
         f"issue #499's six surviving modules must stay in the suite; these "
         f"are no longer collected by {SELECTOR}: {missing}"
+    )
+
+
+def test_the_dev_fast_target_still_names_its_renamed_module() -> None:
+    """Require the renamed module's second route to name the new path.
+
+    `tests/test_ci_dev_fast_action.py` is collected twice: by the selector,
+    which the test above pins, and by the `test-dev-fast-contract` recipe,
+    which names it literally because that target runs the dev-fast contracts
+    with their own budget rather than the suite's. A rename that updated only
+    the file on disk would leave the literal behind, and `make
+    test-dev-fast-contract` would then invoke a path that does not exist —
+    pytest exits 4, but only for whoever runs that target, since it is on no
+    aggregate and no workflow. The two routes are separate claims and each is
+    asserted where it can fail.
+
+    The recipe is read through the Makefile reader rather than the file text,
+    so a commented-out entry does not satisfy it.
+    """
+    recipe = recipe_of("test-dev-fast-contract")
+    assert "tests/test_ci_dev_fast_action.py" in recipe_tokens(recipe), (
+        "`make test-dev-fast-contract` must still name its module after the "
+        "rename; it is collected by no aggregate, so a stale literal here is "
+        f"unreported everywhere else. Recipe: {recipe!r}"
     )
 
 
