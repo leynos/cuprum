@@ -1,0 +1,23 @@
+# serializer version: 1
+# name: TestWorkflowSweepNarrowing.test_each_script_keeps_its_own_location
+  list([
+    tuple(
+      'ci.yml',
+      'first',
+      '1',
+      'make test',
+    ),
+    tuple(
+      'ci.yml',
+      'first',
+      '2',
+      'make lint',
+    ),
+    tuple(
+      'ci.yml',
+      'second',
+      '0',
+      'make markdownlint',
+    ),
+  ])
+# ---

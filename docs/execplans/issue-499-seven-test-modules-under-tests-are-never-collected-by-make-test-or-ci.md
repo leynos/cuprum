@@ -571,12 +571,24 @@ contract module under `tests/` and forgets to name it will be told so by
     `tests/test_ci_selection_guard_controls.py` asks whether the machinery
     would fail if it did not — the four seeded-fault controls moved there
     wholesale.
-  - *The spelling traps.* `normalisation` is in the gate's correction table as
-    `normalisation = normalization`, so the Oxford `-isation` spelling this
-    branch prefers is itself the violation; the three prose sites were switched
-    to `normalization` rather than exempted. `mis-numbered` is caught as `mis`,
-    while a probe confirmed `misnumbered` passes — so the word was joined
-    rather than reworded.
+  - *The spelling traps.* This entry deliberately does not print the two
+    tokens it describes: the gate checks inline code spans as well as prose, so
+    naming a rejected token in backticks is itself a violation. The first trap
+    is the Oxford `-isation` verb for forming an American `-ization` noun: the
+    shared correction table maps that spelling *to* the `-ization` form, so the
+    branch's preferred spelling is the violation rather than the exemption.
+    Three prose sites were switched to the `-ization` form rather than
+    exempted. The second trap is a hyphenated compound whose first segment is a
+    word the table corrects in isolation; a probe confirmed the joined spelling
+    passes, so the word was joined rather than reworded or exempted. Recorded
+    this way because a future reader hitting the same two failures will
+    otherwise re-derive the diagnosis from the gate output.
+  - *A missed correction, recorded for honesty.* This entry's first draft
+    recorded ten unobserved lint leaves and omitted `skylos`; the count was
+    re-derived from the log rather than incremented, and the real number is
+    eight. The `&&` chain makes the reached-leaf count the only honest measure
+    of what the gate established, which is why it is enumerated by name above
+    rather than summarized as a number.
   - *The lesson about `&&` chains, repeated.* `make lint` failed at
     `pylint-classic` and therefore left ten later leaves **unobserved** —
     ruff, interrogate, DF12 pylint, ambrleaks, skylos, rustdoc, clippy,

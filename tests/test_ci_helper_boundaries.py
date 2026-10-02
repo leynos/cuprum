@@ -42,7 +42,11 @@ from tests.helpers.ci_workflows import workflow_sources
 if typ.TYPE_CHECKING:
     # `Path` appears only in the `tmp_path` parameters below; those annotations
     # are never evaluated, so the import stays out of the runtime namespace.
+    # `SnapshotAssertion` is the same case: the `snapshot` fixture is supplied
+    # by syrupy's plugin, and only its annotation names the type.
     from pathlib import Path
+
+    from syrupy.assertion import SnapshotAssertion
 
     from tests.helpers.workflow_types import Job
 
@@ -129,12 +133,20 @@ class TestWorkflowSweepNarrowing:
         (tmp_path / name).write_text(body, encoding="utf-8")
         return tmp_path
 
-    def test_each_script_keeps_its_own_location(self, tmp_path: Path) -> None:
+    def test_each_script_keeps_its_own_location(
+        self, tmp_path: Path, snapshot: SnapshotAssertion
+    ) -> None:
         """Every tuple names the workflow, job, and step the script came from.
 
         The step index counts *all* steps rather than only the `run:` ones, so
         the location matches the YAML a reader would open. Pairing a script with
         the wrong index would point a failure at an innocent step.
+
+        The recorded shape is asserted twice over: the names and programs are
+        pinned semantically so a mispairing is named for what it is, and the
+        whole tuple list is held as a snapshot so a *new* field or a shifted
+        index is visible in review rather than absorbed by a loosened
+        comparison.
         """
         directory = self._workflow(
             tmp_path,
@@ -150,14 +162,31 @@ class TestWorkflowSweepNarrowing:
             "    steps:\n"
             "      - run: make markdownlint\n",
         )
-        assert run_scripts(directory) == [
-            ("ci.yml", "first", "1", "make test"),
-            ("ci.yml", "first", "2", "make lint"),
-            ("ci.yml", "second", "0", "make markdownlint"),
+        found = run_scripts(directory)
+        assert [workflow for workflow, *_rest in found] == ["ci.yml"] * 3, (
+            "every script must be attributed to the file it was read from; "
+            f"got {found!r}, which would report a failure against the wrong "
+            "workflow"
+        )
+        assert [job for _wf, job, *_rest in found] == ["first", "first", "second"], (
+            "each script must be attributed to the job that declared it; a "
+            f"mispaired job points a failure at an innocent one. Got {found!r}"
+        )
+        assert [index for _wf, _job, index, _script in found] == ["1", "2", "0"], (
+            "the step index must count *all* steps, not only the `run:` ones, "
+            f"so it matches the YAML a reader opens. Got {found!r}"
+        )
+        assert [script.strip() for *_rest, script in found] == [
+            "make test",
+            "make lint",
+            "make markdownlint",
         ], (
-            "each script must carry the location it was declared at; a "
-            "different pairing reports failures against the wrong step, and a "
-            "missing tuple reports a contract as vacuously satisfied"
+            "each tuple must carry the command it was declared with; a shifted "
+            f"script would run a contract against the wrong step. Got {found!r}"
+        )
+        assert found == snapshot, (
+            "the sweep's output shape changed; check whether a location or a "
+            "script was silently added, dropped, or reordered"
         )
 
     def test_a_reusable_workflow_call_contributes_no_script(
