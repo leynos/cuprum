@@ -205,6 +205,7 @@ class _ProducerFailureError(Exception):
     """
 
     def __init__(self, cause: Exception) -> None:
+        """Wrap ``cause`` so the handler can chain it to the public error."""
         super().__init__(str(cause))
         self.cause = cause
 
