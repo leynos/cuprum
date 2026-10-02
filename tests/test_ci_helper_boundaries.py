@@ -255,6 +255,23 @@ class TestWorkflowSweepNarrowing:
         with pytest.raises(AssertionError, match=r"list\.yml must parse to a mapping"):
             run_scripts(directory)
 
+    def test_a_job_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
+        """A scalar job is reported by name, not left to an `AttributeError`.
+
+        ``document_jobs`` vets the *jobs* mapping as a whole, not the value
+        under each job name, so a job written as a string reaches
+        `narrow_steps` and fails there on ``str.get`` with an opaque
+        ``AttributeError`` naming neither the workflow nor the job. That is
+        the failure mode this module's own promise rules out — a named
+        diagnostic rather than a `TypeError` deep in a test — so the payload
+        is narrowed where the job's name is still in hand.
+        """
+        directory = self._workflow(tmp_path, "scalar.yml", "jobs:\n  build: hello\n")
+        with pytest.raises(
+            AssertionError, match=r"scalar\.yml:build must be a mapping"
+        ):
+            run_scripts(directory)
+
     def test_a_workflow_declaring_no_jobs_is_refused(self, tmp_path: Path) -> None:
         """No `jobs:` key is a fault, not a workflow with nothing to run."""
         directory = self._workflow(tmp_path, "empty.yml", "name: nothing\n")

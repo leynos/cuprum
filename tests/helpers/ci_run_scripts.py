@@ -19,7 +19,12 @@ from __future__ import annotations
 
 import typing as typ
 
-from tests.helpers.ci_documents import document_jobs, narrow_steps, parse_document
+from tests.helpers.ci_documents import (
+    document_jobs,
+    mapping,
+    narrow_steps,
+    parse_document,
+)
 from tests.helpers.ci_workflows import WORKFLOW_DIR, workflow_sources
 
 if typ.TYPE_CHECKING:
@@ -36,6 +41,13 @@ def _job_run_scripts(job_payload: object, where: str) -> list[tuple[str, str]]:
     is declared but malformed is reported by `narrow_steps` rather than
     passed over as empty.
 
+    The job payload is narrowed here rather than only asserted by the type
+    checker. `document_jobs` vets the *jobs* mapping, not each value inside
+    it, so a job written as a scalar reaches this function unchecked and
+    `narrow_steps` fails on it with an opaque ``AttributeError`` instead of
+    the named diagnostic the module promises. This is the one place that can
+    tell a mapping from a scalar while still knowing which job it was.
+
     Parameters
     ----------
     job_payload : object
@@ -50,7 +62,7 @@ def _job_run_scripts(job_payload: object, where: str) -> list[tuple[str, str]]:
         rendered as a string so a location reads the same in a message as it
         does in the YAML.
     """
-    narrow = typ.cast("Job", job_payload)
+    narrow = typ.cast("Job", mapping(job_payload, f"{where} must be a mapping"))
     return [
         (str(index), script)
         for index, step in enumerate(narrow_steps(narrow, where))

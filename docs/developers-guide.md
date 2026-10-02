@@ -500,11 +500,14 @@ contracts read the Makefile through `tests/helpers/makefile.py`, which parses
 it with the pinned `makeutil` binary: a regex over the source can miss a
 continuation or read a comment as an assignment, and either mistake shrinks the
 selector to a set that makes every coverage assertion pass for the wrong
-reason. That reader is split in two on the family's usual seam.
+reason. That reader is split on the family's usual seam.
 `tests/helpers/makeutil.py` owns the process — running the parser, and
-reporting the ways a process fails — while `makefile.py` owns `make`'s own
-semantics for the document it returns: which assignment wins, how continuations
-collapse, how `$(VAR)` references resolve, and what a target's recipe says.
+reporting the ways a process fails — while `tests/helpers/recipe_read.py` owns
+how a target's recipe text is read, and `makefile.py` owns `make`'s own
+semantics for the document the parser returns: which assignment wins, how
+continuations collapse, and how `$(VAR)` references resolve. `makefile.py`
+re-exports `recipe_of` and `recipe_tokens` from `recipe_read.py`, so a caller
+keeps one import for the whole reader.
 
 That reader exposes its process boundary rather than reaching for the ambient
 tool. `makeutil_document` takes a `root` and a `runner`, so a test supplies the
@@ -519,13 +522,13 @@ continued recipe entry — it hands the backslash-newline to the shell — so th
 is a deliberate normalization, and a load-bearing one: `shlex` implements no
 line continuation, so an uncollapsed backslash-newline would arrive as a word
 containing the newline, which the shell never sees. It is also what `make` does
-to a *variable* value, so the shared helper reads the same way for both. A
-shell comment therefore ends at an uncontinued newline, so a `#` disables the
-remainder of its own entry rather than every command after it, even though the
-words stay in the string. That is why the text is read back with
-`recipe_tokens`, which honours comment markers and quoting: commented-out text
-contributes no tokens and cannot satisfy a check, and a substring test cannot
-tell a live recipe from a commented-out one.
+to a *variable* value, so both readers apply the same rule and a recipe and a
+variable value read the same way. A shell comment therefore ends at an
+uncontinued newline, so a `#` disables the remainder of its own entry rather
+than every command after it, even though the words stay in the string. That is
+why the text is read back with `recipe_tokens`, which honours comment markers
+and quoting: commented-out text contributes no tokens and cannot satisfy a
+check, and a substring test cannot tell a live recipe from a commented-out one.
 
 The rest of the reader family is split the way the questions are.
 `tests/helpers/ci_documents.py` operates on text and on parsed documents —

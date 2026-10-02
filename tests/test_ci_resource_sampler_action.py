@@ -11,8 +11,10 @@ position, and these tests run its shell under `/bin/bash`. Where those
 assumptions do not hold the shell tests skip with the reason, so a contributor
 on another platform is told why the question does not apply instead of seeing
 the action reported as broken. A missing tool skips those same tests for the
-same reason: they measure what the action does, and no host without `free`,
-`df`, or `du` can be measured at all.
+same reason: they measure what the action does, and no host without `free` or
+`df` — the two commands its `run:` bodies invoke — can be measured at all.
+`du` is checked with them for the toolbox the module asserts, not because the
+action calls it.
 
 That skip is deliberately narrower than the module's claim about runners. The
 toolbox assertion, `test_the_sampling_tools_exist`, carries `on_linux` rather
@@ -43,7 +45,9 @@ if typ.TYPE_CHECKING:
 ACTION = ".github/actions/resource-sampler"
 START_STEP = "Start resource sampler"
 REPORT_STEP = "Report peak resource use"
-#: `free` and `df` must exist for the sampler to sample anything at all.
+#: What the sampled shell bodies need on `PATH`. The action itself reads
+#: `free` and `df` only; `du` is in the tuple because it is checked alongside
+#: them, not because this action invokes it.
 REQUIRED_TOOLS = ("free", "df", "du")
 #: The sampler's loop sleeps before its first row, so the first sample lands at
 #: roughly 15 s and the second at 30 s. Allowing 40 s therefore tolerates a
