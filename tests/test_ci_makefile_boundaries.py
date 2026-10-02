@@ -167,6 +167,41 @@ class TestMakefileNarrowing:
         with pytest.raises(AssertionError, match=r"never assigns it"):
             variable_expansion("A", runner=runner)
 
+    def test_a_reference_naming_a_function_is_refused_as_such(self) -> None:
+        """A `make` function call is not an unassigned variable.
+
+        `$(foreach t,$(S),$(t))` has no `)` of its own until the call closes,
+        so a reader that scans to the first one extracts the name
+        `foreach t,$(S` and reports it as a variable nobody wrote. That sends
+        a reader looking for an assignment that was never meant to exist, so
+        the name is refused as the function call it is.
+        """
+        runner = self._document([
+            {"name": "A", "raw_value": "$(foreach t,$(B),$(t))", "operator": "="}
+        ])
+        with pytest.raises(AssertionError) as raised:
+            variable_expansion("A", runner=runner)
+        assert "function call or a nested" in str(raised.value), (
+            f"the extracted name is a function call, not a variable; got {raised.value}"
+        )
+        assert "never assigns" not in str(raised.value), (
+            "reporting the call as an unassigned variable names a variable "
+            f"nobody wrote; got {raised.value}"
+        )
+
+    def test_a_nested_reference_is_refused(self) -> None:
+        """A reference inside a reference is not a variable name either.
+
+        `$(B$(C))` nests one lookup inside another, which this reader does not
+        implement; the name it extracts stops at `C`'s closer and is refused
+        for the same reason a function call is.
+        """
+        runner = self._document([
+            {"name": "A", "raw_value": "$(B$(C))", "operator": "="}
+        ])
+        with pytest.raises(AssertionError, match=r"function call or a nested"):
+            variable_expansion("A", runner=runner)
+
     def test_a_reference_cycle_is_refused_rather_than_recursed(self) -> None:
         """A self-referential assignment is reported, not looped on."""
         runner = self._document([{"name": "A", "raw_value": "$(A)", "operator": "="}])
