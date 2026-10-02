@@ -3,7 +3,7 @@
 sccache's server probes its cache backend as its first act, and on Ubicloud
 that probe intermittently outlasts the fixed 10 s startup timeout, which used
 to fail the whole job. The action now writes a 60 s config and treats a server
-that will not start as a lost optimisation, not a failed build. A green run
+that will not start as a lost optimization, not a failed build. A green run
 cannot show which of those happened, so these tests run the start step's own
 ``run`` body with a fake ``sccache`` and assert each signal a fallback must
 leave: the annotation title, the run-page line, the ``status`` output and the
@@ -101,13 +101,17 @@ def test_a_server_that_starts_gets_a_sixty_second_timeout_and_zero_counters(
     assert "server_startup_timeout_ms = 60000" in (
         tmp_path / conf.removeprefix(str(tmp_path) + "/")
     ).read_text(encoding="utf-8"), "the config must set a 60 s startup timeout"
-    assert "status=started" in outputs.read_text(encoding="utf-8")
+    assert "status=started" in outputs.read_text(encoding="utf-8"), (
+        "a started server must publish status=started"
+    )
     assert "--zero-stats" in _calls(calls), "a started server must be zeroed"
     assert "RUSTC_WRAPPER" not in result.exported, (
         "a started server must leave the wrapper in place"
     )
-    assert FALLBACK_TITLE not in result.stdout
-    assert FALLBACK_SUMMARY not in result.summary
+    assert FALLBACK_TITLE not in result.stdout, "a started server must not warn"
+    assert FALLBACK_SUMMARY not in result.summary, (
+        "a started server must not write the fallback line"
+    )
 
 
 def test_a_server_that_will_not_start_falls_back_without_failing(
@@ -117,7 +121,7 @@ def test_a_server_that_will_not_start_falls_back_without_failing(
     result, outputs, calls = _run_start(tmp_path, starts=False)
 
     assert result.returncode == 0, (
-        f"a cache is an optimisation; the step must not fail the job: {result.stderr}"
+        f"a cache is an optimization; the step must not fail the job: {result.stderr}"
     )
     assert FALLBACK_TITLE in result.stdout, (
         f"the annotation title must be sccache-fallback, got {result.stdout!r}"
@@ -125,8 +129,13 @@ def test_a_server_that_will_not_start_falls_back_without_failing(
     assert FALLBACK_SUMMARY in result.summary, (
         f"the run page must carry the fallback line, got {result.summary!r}"
     )
-    assert "status=fallback" in outputs.read_text(encoding="utf-8")
-    assert result.exported.get("RUSTC_WRAPPER") == "", (
+    assert "status=fallback" in outputs.read_text(encoding="utf-8"), (
+        "a fallback must publish status=fallback"
+    )
+    assert "RUSTC_WRAPPER" in result.exported, (
+        f"the step must export RUSTC_WRAPPER, got {result.exported}"
+    )
+    assert not result.exported["RUSTC_WRAPPER"], (
         "the wrapper must be cleared so Cargo compiles with plain rustc, got "
         f"{result.exported}"
     )
