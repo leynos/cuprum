@@ -1048,6 +1048,56 @@ than discovering the gap months later.
     approval, or inspection displaces that queue entry, and none of this is a
     claim that it has run.
 
+- [x] (2026-10-02) Carried the merged record forward to the head that ships,
+  and closed the review loop on it.
+  - *The push and its own gate run.* This entry was committed as `e66db481` and
+    the five gates were re-run at that head, because a commit after a gate run
+    invalidates it: `check-fmt` exit 0 (1 s), `typecheck` exit 0 (`ty 0.0.74`),
+    `lint` exit 0 (2 min 15 s), `markdownlint` exit 0 (12 s), `test` exit 0
+    (3 min 55 s, pytest 3688 passed / 86 skipped, nextest 127 passed, doctests
+    3 ignored, 0 failures). `HEAD_BEFORE == HEAD_AFTER == e66db481` and the
+    tree was clean at both ends. Logs carry the `-issue499-e66db481` suffix.
+  - *Hosted CI at `e66db481`, fully settled.* 27 check runs: 22 `success`, the
+    same 5 `skipped` (`Kody Code Review`, `Loom model smoke test`, `Sourcery
+    review`, `automerge`, `extended`), 0 failures, 0 pending. `coverage` — the
+    slowest job and the one that failed environmentally on an earlier head —
+    reads `success`. CodeScene reads `completed` / `success` at this head with
+    details `https://codescene.io/projects/74471/delta/results/7792957`.
+  - *CodeRabbit closed all five rows itself, having re-checked the tree.*
+    Replying to the reconciliation as issue comment `5961244967`, it re-read
+    the named artefacts at `249d94f8` and marked each row **"Resolved in
+    source"** — `Testing (Overall)`, `Testing (Unit And Behavioural)`,
+    `Linked Issues check`, `Developer Documentation`, and
+    `Testing (Property / Proof)` — with the explicit statement that "No
+    further coding-agent prompt is needed to close these five rows." It also
+    confirmed the hosted CodeScene evidence independently and noted that
+    `lint-test` and the Python 3.12/3.14 checks were still in progress at its
+    moment of inspection, so it did not treat CI as green. That caveat is now
+    discharged: those checks read `success` in the settled run above.
+  - *What this does not claim.* `reviewDecision` still reads
+    `CHANGES_REQUESTED`, anchored at `92f17d25`. The bot's row dispositions are
+    per-row verdicts in a comment; they are not a review submission, and only a
+    review submission changes the decision. Reduction of the decision is what
+    queued request `d8860275` is for, and that request has not run.
+  - *One reasoning trap worth recording, because the green result hid it.*
+    Asked whether the `make lint` SKYLOS leaf could fire on a docs-only delta,
+    the gate run answered "no findings" — correct — but explained it as
+    `skylos` being scoped to the `cuprum` package so that docs "are never in
+    its scan set", and reported finding no docs-credit rule in `Makefile` or
+    `pyproject.toml`. The scan genuinely takes `cuprum` as its only positional
+    scope (`Makefile:442`), but the credit path lives inside `skylos`, not in
+    the configuration, so nothing about the invocation proves docs are unread.
+    Measured at this head:
+    `skylos cuprum --exclude cuprum/unittests --category dead_code
+    --format json` reports 21 rescued symbols of which **20 carry
+    `reason: "documented_public_api"`** and `unused_functions: 0` — the docs
+    *are* read, and the rescued entries name no document, which is exactly why
+    a filename grep looks like it confirms the false explanation. The gate
+    result stands; the explanation does not, and the next docs edit that
+    disturbs a mention will fail lint despite this green run. The disciplined
+    check is the `--format json` probe counting that `reason`, not an argument
+    about scope.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
