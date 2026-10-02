@@ -757,8 +757,8 @@ with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
 ### Bind a catalogued program to a specific executable
 
 A `Program` is the catalogue's name for a program, and by default it is also
-the string the operating system executes. It is often convenient for those to
-differ: a build may need a pinned absolute path, a virtual-environment
+the string that the operating system executes. It is often convenient for those
+to differ: a build may need a pinned absolute path, a virtual-environment
 executable, or a controlled replacement during a test. `bind_executable()`
 supplies the second without changing the first.
 
@@ -772,14 +772,14 @@ nothing was bound.
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
 
-A resolver must return a `str`. Returning anything else raises `TypeError`,
-because `None` is reserved to mean "no binding" and a resolver returning it by
-accident would silently run the catalogued name instead of the executable the
-caller selected. A resolver that raises is reported as
-`ExecutableResolutionError`, which names the logical program and chains the
-resolver's own exception as its `__cause__`; it subclasses `RuntimeError`, so
-`except FileNotFoundError` around the call no longer catches a resolver that
-failed to find its virtual environment.
+A resolver must return a `str`. Returning anything else raises `TypeError`
+because `None` is reserved to mean "no binding"; a resolver returning it
+silently runs the catalogued name instead of the executable the caller
+selected. A resolver that raises is reported as `ExecutableResolutionError`,
+which names the logical program and chains the resolver's own exception as its
+`__cause__`; it subclasses `RuntimeError`, so `except FileNotFoundError` around
+the call no longer catches a resolver that failed to find its virtual
+environment.
 
 <!-- tested-example: executable-bindings -->
 

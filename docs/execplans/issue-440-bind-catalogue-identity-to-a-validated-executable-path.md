@@ -5,7 +5,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: IN PROGRESS — every gate has been run at the working tree that is about
+to be committed, and all eleven findings from the CodeRabbit review of
+`6efb42b9` have been adjudicated and applied; the remaining open item is the
+closing `coderabbit review --agent` pass at the new head.
 
 ## Purpose / big picture
 
@@ -496,6 +499,27 @@ escalation, not a workaround.
         alike — while the job's own conclusion is `success`. It is the
         skipped-suite leg at this head too, so cite the 3.12 and 3.14 legs for
         suite coverage and treat 3.15a as unobserved.
+  - [x] (2026-10-02 18:05Z) All eleven findings from the CodeRabbit review of
+        `6efb42b9` are adjudicated: eight were applied in the working tree
+        before this entry, and the last three are now applied too — the stale
+        `#executable-bindings` anchor at both of its sites, the refusal step's
+        fail-on-success branch, and the resolver recording the path it was
+        asked for. Each was verified against the code rather than taken on
+        faith, and the new branch was probed to confirm it fires.
+  - [x] (2026-10-02 18:20Z) Every gate re-run at the tree this commit freezes,
+        sequentially, each logged under `/tmp` with the branch name in the
+        filename: `check-fmt` exit 0 (716 files formatted, 83 Markdown files
+        unchanged), `markdownlint` exit 0 (0 issues, spelling gate included),
+        `typecheck` exit 0, `python-lint` exit 0 (ruff, interrogate at 100.0%,
+        three pylint passes at 10.00/10, ambrleaks, skylos dead-code gate),
+        `rust-lint` exit 0, `nixie` exit 0, and `test` exit 0. The GitHub
+        Actions lint is covered by `yamllint --strict` (exit 0) and the
+        bounded `actionlint -shellcheck= -config-file .github/actionlint.yaml`
+        (exit 0); the unbounded form deadlocks on this host, and the branch
+        touches nothing under `.github/`. The substitute was shown to do real
+        work rather than merely return zero: the same invocation against a
+        probe repository whose workflow puts `run` and `uses` in one step
+        exits 1 with `unexpected key "run" for step to execute action`.
   - [ ] `coderabbit review --agent` returns no unresolved finding at head.
 
 ## Surprises & discoveries
@@ -862,9 +886,23 @@ escalation, not a workaround.
   typechecker — 1470 log lines, zero occurrences of the failing test file. The
   3.12 and 3.14 legs ran the suite and failed. Evidence: the two "successful"
   logs contain no reference to `test_executable_binding_execution.py` at all.
-  Impact: read a leg's log for the test file you care about before citing its
+  Impact: read a leg's log for the test file under scrutiny before citing its
   green as coverage of the suite; "no leg failed" and "every leg tested this"
   are different claims.
+- Observation: the stale documentation anchor CodeRabbit reported was not the
+  only one, and the audit that found the second one was itself nearly vacuous.
+  Resolving every `docs/<file>.md#<fragment>` reference in the tree against the
+  slugs its headings actually generate found two stale anchors: this issue's
+  `#executable-bindings` (the heading is "Bind a catalogued program to a
+  specific executable") and `#environment-policy-modes` in
+  `cuprum/unittests/test_env_context_policies.py`, which arrived with #434/#466
+  and is stale on `origin/main` today, so it is outside this issue's scope.
+  Evidence: a first version of the audit printed "stale anchors: 0" because
+  `rg -o` puts the line number in the field it treated as a path, so every
+  reference was skipped; the corrected version reports
+  `anchors resolved against real headings: 7; stale: 2`. Impact: a reference
+  audit needs a count of what it *resolved*, not only of what it rejected, or a
+  parser that reads nothing reports perfect health.
 
 ## Decision log
 
@@ -970,6 +1008,25 @@ escalation, not a workaround.
   exist; naming it in the step text and deleting the unused parameter removes
   the disagreement instead of documenting it. Date/Author: 2026-10-02,
   implementing agent.
+- Decision: the refusal scenario's counting resolver records the path it was
+  asked for and its step fails immediately if the run unexpectedly succeeds,
+  rather than relying on the later assertion to notice a missing error.
+  Rationale: recording `len(calls)` made the list a counter wearing a list's
+  type, and a resolver that ran but did not execute — the case the ordering
+  claim actually probes — would have been invisible. Failing at the call site
+  keeps the diagnostic next to the run that should not have happened. The new
+  branch was probed rather than assumed: driving the step with the unlisted
+  program also curated makes the allowlist admit it, and the step then raises
+  the intended `pytest.fail` message, so the branch is reachable and the check
+  is not vacuous. Date/Author: 2026-10-02, implementing agent.
+- Decision: leave `#environment-policy-modes` in
+  `cuprum/unittests/test_env_context_policies.py` alone. Rationale: the anchor
+  is stale — the heading it means is "Choose how a child environment is
+  composed" — but it arrived with #434/#466 and is stale on `origin/main`, so
+  fixing it here would widen an issue about executable bindings into an
+  unrelated one. It is recorded under Surprises so the next reader inherits the
+  finding without inheriting an unrequested diff. Date/Author: 2026-10-02,
+  implementing agent.
 
 ## Outcomes & retrospective
 
@@ -1059,14 +1116,25 @@ accepted decisions it must not contradict:
   typed, scoped policy carried on `CuprumContext` and projected into telemetry.
   This change deliberately mirrors its shape.
 
-Trace:
+Trace. The rightmost column is a test *concern*, not a module path: this
+repository has no `tests::` namespace, so each name below groups the artefacts
+that discharge the requirement rather than naming a file. The concrete
+artefacts behind each group are listed in `Verification plan`.
 
 ```plaintext
 issue-440 (bindings + validation)      -> EP-M1 -> tests::executable_binding
+                                                   [test_executable_binding{,_property_based}.py,
+                                                    test_executable_paths.py]
 issue-440 (scope lifetime + isolation) -> EP-M2 -> tests::context::executable_bindings
+                                                   [test_context_isolation.py,
+                                                    test_token_registration_stateful.py]
 issue-440 (exact execution + telemetry)-> EP-M3 -> tests::execution::resolved_path
+                                                   [test_executable_binding_execution.py,
+                                                    test_structured_events.py]
 issue-440 (acceptance + docs)          -> EP-M4 -> tests::behaviour::catalogue,
                                                    docs::cuprum-design §5.1.2
+                                                   [features/catalogue.feature,
+                                                    docs/users-guide.md]
 ```
 
 ## Verification plan

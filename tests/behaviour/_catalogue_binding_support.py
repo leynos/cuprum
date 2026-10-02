@@ -26,8 +26,13 @@ if typ.TYPE_CHECKING:
 # The scenario's own catalogue, distinct from the default one so the steps can
 # allowlist exactly the program under test. The entry carries the documentation
 # location the feature's sibling scenarios advertise, which keeps the fixture
-# honest about being a real catalogue rather than a test double.
-_SCENARIO_DOCS = "docs/users-guide.md#executable-bindings"
+# honest about being a real catalogue rather than a test double. The fragment
+# is the anchor GitHub generates for the guide's own heading, "Bind a
+# catalogued program to a specific executable", so the link lands on that
+# section rather than on a fragment that resolves to nothing.
+_SCENARIO_DOCS = (
+    "docs/users-guide.md#bind-a-catalogued-program-to-a-specific-executable"
+)
 
 # Each binding step enters and leaves its own ``scoped`` block around the whole
 # execution. A scenario has no teardown hook a step can register into, so a
@@ -138,13 +143,15 @@ def when_bind_unlisted_program(
     Returns
     -------
     dict[str, object]
-        The raised ``error``, if any, and the number of ``calls`` made.
+        The raised ``error``, if any, and how many ``calls`` the resolver
+        recorded. A refusal that happened before resolution left the count at
+        zero, which is the ordering claim the scenario makes.
     """
-    calls: list[int] = []
+    calls: list[str] = []
 
     def resolver() -> str:
         """Record the call and return a path that must never be executed."""
-        calls.append(len(calls))
+        calls.append(path)
         return path
 
     outcome: dict[str, object] = {"calls": 0}
@@ -160,6 +167,15 @@ def when_bind_unlisted_program(
             cmd.run_sync(output=c.RunOutputOptions(capture=True, echo=False))
         except c.ForbiddenProgramError as exc:
             outcome["error"] = exc
+        else:
+            # Reaching this branch means the allowlist let an unlisted program
+            # run. Failing here rather than letting the assertion in
+            # ``then_execution_is_refused`` report a missing error keeps the
+            # failure next to its cause: the run itself.
+            pytest.fail(
+                "the allowlist must refuse an unlisted program, but the run "
+                f"succeeded instead of raising {c.ForbiddenProgramError.__name__}"
+            )
     outcome["calls"] = len(calls)
     return outcome
 
@@ -224,7 +240,8 @@ def then_binding_was_never_resolved(refusal_outcome: dict[str, object]) -> None:
 
     The count is read as a number rather than as truthiness, so the failure
     message names how many times the resolver ran instead of merely calling the
-    result empty.
+    result empty. The resolver records the path it was asked for, so the
+    scenario still shows *what* was requested if resolution does happen.
     """
     calls = typ.cast("int", refusal_outcome["calls"])
     _require(
