@@ -262,7 +262,8 @@ still yields `None` rather than `b""`, and `cancelled` is reported the same way.
 Binary mode covers capture. A run that asks for `on_line` cannot be given one:
 line observation is defined on decoded text, and the line-boundary and encoding
 bookkeeping would have to decode exactly the bytes the mode exists to preserve.
-`run_bytes(output=RunOutputOptions(on_line=...))` is rejected with `ValueError`
+`run_bytes(output=RunOutputOptions(on_line=lines.append))` is rejected with
+`ValueError`
 before the child is spawned. Echoing, sinks, and idle heartbeats are
 unaffected, since they mirror output rather than report it; a sink that cannot
 encode the child's bytes records a `relay_fallback` exactly as it does in text
