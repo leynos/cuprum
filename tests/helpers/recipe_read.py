@@ -79,8 +79,12 @@ def recipe_of(
     Each recipe entry is returned on its own line, so the result preserves the
     entry boundaries `make` hands the shell: one command per line unless the
     entry itself was backslash-continued. Backslash continuations *within* an
-    entry are collapsed to a space, matching what `make` does before invoking
-    the shell, so a continued command reads back as one logical line.
+    entry are collapsed to a space. That collapse is this reader's own, not
+    `make`'s: `make` hands a continued recipe entry to the shell verbatim and
+    lets the shell join it, so ``make -n`` still prints the backslash-newline.
+    See :func:`_join_continuations` for why the normalization is load-bearing
+    anyway — `shlex` implements no line continuation — and why a *variable*
+    value is the one case where the collapse is `make`'s own rule.
 
     That distinction is load-bearing for every reader above. A comment ends at
     its entry's newline — an uncontinued ``#`` disables its own command, not

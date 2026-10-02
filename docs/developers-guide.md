@@ -517,18 +517,20 @@ through. A `FileNotFoundError` or a timeout at the process boundary becomes the
 `AssertionError` the read API documents, because the alternative — leaking the
 raw exception — reports a broken toolchain as if the Makefile were at fault.
 `recipe_of` joins a target's recipe entries with newlines, collapsing backslash
-continuations *within* an entry to one space. `make` does not itself collapse a
-continued recipe entry — it hands the backslash-newline to the shell — so this
-is a deliberate normalization, and a load-bearing one: `shlex` implements no
-line continuation, so an uncollapsed backslash-newline would arrive as a word
-containing the newline, which the shell never sees. It is also what `make` does
-to a *variable* value, so both readers apply the same rule and a recipe and a
-variable value read the same way. A shell comment therefore ends at an
-uncontinued newline, so a `#` disables the remainder of its own entry rather
-than every command after it, even though the words stay in the string. That is
-why the text is read back with `recipe_tokens`, which honours comment markers
-and quoting: commented-out text contributes no tokens and cannot satisfy a
-check, and a substring test cannot tell a live recipe from a commented-out one.
+continuations *within* an entry to one space. For a recipe entry that collapse
+is the reader's own rather than `make`'s: `make` hands the backslash-newline to
+the shell verbatim and lets the shell join it, so `make -n` still prints it.
+The normalization is nonetheless load-bearing — `shlex` implements no line
+continuation, so an uncollapsed backslash-newline would arrive as a word
+containing the newline, which the shell never sees. A *variable* value is the
+one case where the collapse is `make`'s own rule, so both readers apply the
+same transformation and a recipe and a variable value read the same way. A
+shell comment therefore ends at an uncontinued newline, so a `#` disables the
+remainder of its own entry rather than every command after it, even though the
+words stay in the string. That is why the text is read back with
+`recipe_tokens`, which honours comment markers and quoting: commented-out text
+contributes no tokens and cannot satisfy a check, and a substring test cannot
+tell a live recipe from a commented-out one.
 
 The rest of the reader family is split the way the questions are.
 `tests/helpers/ci_documents.py` operates on text and on parsed documents —
