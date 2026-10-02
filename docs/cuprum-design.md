@@ -297,6 +297,28 @@ published on the lifecycle events. `CommandResult.resolved_path` and
 a consumer distinguish "ran under its catalogued name" from "a binding named
 something else".
 
+##### What a resolver returns, and what it reports when it fails
+
+A resolver is typed as returning `str`, and that contract is enforced rather
+than assumed. `None` is the sentinel the execution layer reads as *unbound*, so
+a resolver returning it would send the child to the catalogued name instead — a
+different executable, and an accidental substitution indistinguishable from a
+deliberate fallback. Since every other substitution in this feature is
+deliberate, the accidental one must not be reachable: `resolve_binding` raises
+`TypeError` for any non-`str` result rather than passing it through.
+
+A resolver that raises is reported as `ExecutableResolutionError`, which names
+the logical program and chains the resolver's own exception as `__cause__`. A
+resolver generally consults state that may legitimately be absent — a virtual
+environment that was never created, a toolchain that is not installed — and
+each of those is a failure of the *binding*, so it is reported as one. Letting
+the underlying exception escape would present a path the caller never
+configured as though it were part of the contract, and would leave a caller
+filtering on `FileNotFoundError` unable to distinguish a missing bound tool
+from a missing system file. The error subclasses `RuntimeError`, and a resolver
+that raises `ExecutableResolutionError` itself is propagated unchanged rather
+than wrapped a second time.
+
 ##### Resolution and its limits
 
 Validation of an `ExecutablePath` is **advisory**. Construction is purely

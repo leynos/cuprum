@@ -686,6 +686,14 @@ nothing was bound.
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
 
+A resolver must return a `str`. Returning anything else raises `TypeError`,
+because `None` is reserved to mean "no binding" and a resolver returning it by
+accident would silently run the catalogued name instead of the executable you
+chose. A resolver that raises is reported as `ExecutableResolutionError`, which
+names the logical program and chains your exception as its `__cause__`; it
+subclasses `RuntimeError`, so `except FileNotFoundError` around the call no
+longer catches a resolver that failed to find its virtual environment.
+
 <!-- tested-example: executable-bindings -->
 
 ```python
