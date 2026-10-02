@@ -15,7 +15,7 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
-from cuprum._result_assembly import _require_text
+from cuprum._result_assembly import _require_bytes, _require_text
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
 if typ.TYPE_CHECKING:
@@ -71,21 +71,24 @@ async def _emit_completed_lines(
 async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     consumption: _LineConsumption,
-) -> str | None:
+) -> str | bytes | None:
     """Drain a stream while incrementally decoding and emitting complete lines.
 
-    Always text: line observation is refused in byte-exact mode, so a stream
-    reaching here has a text config. The drain still reports the widened
-    payload its shared signature promises, so the text guarantee is re-taken
-    rather than assumed.
+    The decoder feeds the line sink only; the capture buffer the drain returns
+    is untouched, so a byte-exact config still yields the child's own bytes
+    here and the widened payload is narrowed by the caller, not by this
+    function. A stream that was never attached reports the empty capture in
+    the run's own mode, matching
+    :func:`cuprum._streams._consume_stream_without_lines`.
 
     Returns
     -------
-    str | None
-        The decoded capture, or ``None`` when the run captured nothing.
+    str | bytes | None
+        The capture, typed by ``config.capture_bytes``; ``None`` when the run
+        captured nothing.
     """
     if stream is None:
-        return "" if consumption.config.capture_output else None
+        return _empty_capture(consumption.config)
 
     decoder = _incremental_decoder(consumption.config)
     pending_text = ""
@@ -110,7 +113,16 @@ async def _consume_stream_with_lines(
     )
     if pending_text:
         await _emit_line(consumption.on_line, _strip_line_ending(pending_text))
+    if consumption.config.capture_bytes:
+        return _require_bytes(captured, "line-observed stream")
     return _require_text(captured, "line-observed stream")
+
+
+def _empty_capture(config: _StreamConfig) -> str | bytes | None:
+    """Report an unattached stream in the mode the run asked for."""
+    if not config.capture_output:
+        return None
+    return b"" if config.capture_bytes else ""
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:

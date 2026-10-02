@@ -206,8 +206,10 @@ class Pipeline:
         ----------
         output : RunOutputOptions | None, default=None
             Capture and echo settings for every observed pipeline stream.
-            ``on_line`` is rejected: it carries decoded text, which byte-exact
-            capture cannot supply.
+            ``on_line`` is rejected: bytes mode returns each stream's own
+            bytes, so a callback carrying decoded text would be a second,
+            contradictory contract for the same stream. Use the text-mode
+            entry point when lines are wanted.
         timeout : float | None, default=None
             Maximum pipeline execution time in seconds.
         context : ExecutionContext | None, default=None
@@ -261,8 +263,10 @@ class Pipeline:
         Parameters
         ----------
         output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: it carries
-            decoded text, which byte-exact capture cannot supply.
+            Capture and echo settings. ``on_line`` is rejected: bytes mode
+            returns each stream's own bytes, so a callback carrying decoded
+            text would be a second, contradictory contract for the same
+            stream. Use the text-mode entry point when lines are wanted.
         timeout : float | None, default=None
             Maximum pipeline execution time in seconds.
         context : ExecutionContext | None, default=None

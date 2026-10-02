@@ -203,3 +203,29 @@ def test_pipeline_run_bytes_leaves_streams_unset_without_capture() -> None:
         f"a non-capturing stage's stderr must stay unset, got "
         f"{result.stages[0].stderr!r}"
     )
+
+
+def test_pipeline_run_bytes_survives_an_observe_hook() -> None:
+    """A registered observe hook must not cost a byte run its exactness.
+
+    Observe hooks supply an internal line sink the caller never asked for, so
+    the pipeline must still relay and capture the child's own bytes while the
+    observer receives decoded lines — the two travel on separate channels.
+    """
+    pipeline, allowlist = _relay_pipeline()
+    observed: list[str] = []
+
+    def hook(event: object) -> None:
+        """Record the decoded line the run publishes."""
+        line = getattr(event, "line", None)
+        if line is not None:
+            observed.append(line)
+
+    with scoped(ScopeConfig(allowlist=allowlist)), sh.observe(hook):
+        result = pipeline.run_bytes_sync()
+
+    assert result.stdout == _PRODUCER_STDOUT, (
+        "an observe hook must not decode the relayed payload, got "
+        f"{result.stdout!r}"
+    )
+    assert observed, "the observe hook must still receive decoded lines"
