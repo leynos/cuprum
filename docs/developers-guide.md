@@ -399,21 +399,21 @@ and asserts the exit status and the exported variables.
 The action also starts the server, as its last step, and that start is
 fail-open. The server's first act is to probe its cache backend, and on
 Ubicloud that probe intermittently outlasts sccache's fixed 10 s startup
-timeout, which used to fail the whole job at a bare `sccache --zero-stats`.
-The timeout is settable only through the config file `SCCACHE_CONF` names, so
-the step writes one with `server_startup_timeout_ms = 60000` and exports it.
-If the server still does not start, the job compiles with plain rustc: the
-step succeeds, clears `RUSTC_WRAPPER` (an empty value counts as unset for
-Cargo), and leaves four stable signals. They are the annotation
+timeout, which used to fail the whole job at a bare `sccache --zero-stats`. The
+timeout is settable only through the config file `SCCACHE_CONF` names, so the
+step writes one with `server_startup_timeout_ms = 60000` and exports it. If the
+server still does not start, the job compiles with plain rustc: the step
+succeeds, clears `RUSTC_WRAPPER` (an empty value counts as unset for Cargo),
+and leaves four stable signals. They are the annotation
 `::warning title=sccache-fallback::`, the run-page line
 `sccache: FALLBACK (cache disabled for this job)`, the `status` output set to
 `fallback` (`started` otherwise), and the empty wrapper. The annotation title
-and the summary line are what `~/docs/bin/sccache-fallbacks.py` searches for, so
-renaming either is a contract change.
+and the summary line are what `~/docs/bin/sccache-fallbacks.py` searches for,
+so renaming either is a contract change.
 
 Workflows therefore carry no separate step that starts or zeroes the server.
-Every call gives the setup step `id: sccache`, and every `Record
-compiler-cache effectiveness` step is guarded on
+Every call gives the setup step `id: sccache`, and every
+`Record compiler-cache effectiveness` step is guarded on
 `steps.sccache.outputs.status != 'fallback'`, because `sccache --show-stats`
 starts a server when none is running, which would repeat the failure the
 fallback just absorbed. `tests/test_setup_sccache_server_start.py` runs the
