@@ -160,7 +160,7 @@ def _bytes_output(output: RunOutputOptions | None) -> RunOutputOptions:
 
 
 def _validate_bytes_output(options: RunOutputOptions) -> None:
-    """Reject the options combinations a byte-exact run cannot honour.
+    """Reject the options combinations a byte-exact run does not offer.
 
     The check is deliberately narrow. Everything else ``RunOutputOptions``
     offers — capture, both echo shorthands, the sink, the idle options — is
