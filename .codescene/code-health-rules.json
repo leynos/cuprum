@@ -14,6 +14,13 @@
       "rules": [
         { "name": "Code Duplication", "weight": 0.0 }
       ]
+    },
+    {
+      "matching_content_path": "cuprum/unittests/test_context_hook_registration.py",
+      "matching_content_path_doc": "The two lifecycle tests, test_hook_registration_and_detach and test_hook_as_context_manager, are deliberately parallel: each drives one _TokenRegistration subclass through a different public lifecycle entry point (explicit detach versus context-manager exit) and asserts that the hook leaves the context. Measured by an ast-level identifier-and-literal-insensitive six-token window check, they share 50 distinct windows, 78 per cent of the smaller function's 64 distinct windows; that overlap is the contract handle registration exposes, not an extractable abstraction. The pair is not redundant, and both tests are falsifiable independently: with only _TokenRegistration.__exit__ replaced by a no-op, only test_hook_as_context_manager fails (2 failed, 6 passed); with _TokenRegistration.detach replaced by a no-op, both fail. Extracting a shared helper would flatten those two distinct entry points into one, so a future regression of either would be masked by a single test body. Scoped to this exact file so the exception does not silently cover other test modules; the module remains below 400 lines and holds no other over-threshold duplicate.",
+      "rules": [
+        { "name": "Code Duplication", "weight": 0.0 }
+      ]
     }
   ]
 }
