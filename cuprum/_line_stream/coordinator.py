@@ -334,10 +334,10 @@ async def _run_to_command_result(
 ) -> CommandResult:
     """Run to exit, assemble the ``CommandResult``, and emit the exit event.
 
-    Always text: line observation is refused in byte-exact mode, so the run
-    reaching here has a text config. The drain still reports the widened
-    payload its shared signature promises, so the text guarantee is re-taken
-    rather than assumed.
+    Always text: ``lines()`` is a text-mode driver and has no byte-exact entry
+    point, so the run reaching here has a text config. The drain still reports
+    the widened payload its shared signature promises, so the text guarantee
+    is re-taken rather than assumed.
 
     Returns
     -------

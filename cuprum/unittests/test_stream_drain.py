@@ -510,3 +510,85 @@ def test_line_emission_matches_splitlines_for_every_supported_boundary(
         "line emission must match str.splitlines() across every supported "
         f"boundary and byte partition, got {received!r} for {text!r}"
     )
+
+
+def _byte_config(sink: typ.IO[str], *, capture: bool = True) -> _StreamConfig:
+    """Build a byte-exact UTF-8 stream config for direct drain tests."""
+    return _StreamConfig(
+        capture_output=capture,
+        echo_output=False,
+        sink=sink,
+        encoding="utf-8",
+        errors="replace",
+        capture_bytes=True,
+    )
+
+
+def test_byte_exact_capture_still_observes_decoded_lines() -> None:
+    """Byte capture and line observation ride separate channels.
+
+    The drain buffer keeps the child's own bytes while the line feeder decodes
+    a copy to find boundaries. An undecodable payload proves the two do not
+    share a buffer: a regression that decoded into the capture would show
+    replacement characters here.
+    """
+    payload = b"first\nsec\xffond\nthird"
+    lines: list[str] = []
+
+    captured = asyncio.run(
+        _consume_stream(
+            _reader((payload,)),
+            _byte_config(io.StringIO()),
+            on_line=lines.append,
+        )
+    )
+
+    assert captured == payload, (
+        f"the capture must stay byte-exact, got {captured!r}"
+    )
+    assert lines == ["first", "sec�ond", "third"], (
+        "the observer must receive the decoded lines, got "
+        f"{lines!r}"
+    )
+
+
+def test_byte_exact_capture_observes_lines_across_chunk_boundaries() -> None:
+    """A split multi-byte character must not corrupt either channel.
+
+    The decoder is incremental, so a sequence spanning two chunks is held
+    until complete; the capture, which never decodes, must not be affected.
+    """
+    chunks = (b"a\xc3", b"\xa9b\n")
+    lines: list[str] = []
+
+    captured = asyncio.run(
+        _consume_stream(
+            _reader(chunks),
+            _byte_config(io.StringIO()),
+            on_line=lines.append,
+        )
+    )
+
+    assert captured == b"a\xc3\xa9b\n", (
+        f"the split sequence must survive intact, got {captured!r}"
+    )
+    assert lines == ["aéb"], (
+        f"the joined sequence must decode once, got {lines!r}"
+    )
+
+
+def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:
+    """An unattached byte-exact stream reports ``b""``, matching the no-lines path.
+
+    Line observation must not change the *type* a capture-disabled or
+    unattached stream reports, which is the one payload this drain does not
+    render itself.
+    """
+    lines: list[str] = []
+
+    captured = asyncio.run(
+        _consume_stream(None, _byte_config(io.StringIO()), on_line=lines.append)
+    )
+
+    assert captured == b"", f"an empty byte capture is b'', got {captured!r}"
+    assert lines == [], "an unattached stream publishes no lines"

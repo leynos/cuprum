@@ -10,8 +10,8 @@ and, from there, on the stream configuration the drains read.
 What both entry points owe regardless of which of them is called is a decision
 about the options they were handed, and that decision lives here:
 
-- :func:`_validate_bytes_output` rejects the one combination bytes mode cannot
-  honour — a line observer — before anything is spawned;
+- :func:`_validate_bytes_output` rejects the one combination bytes mode does
+  not offer — a caller-supplied line observer — before anything is spawned;
 - :func:`_bytes_output` normalizes the optional options object a caller may
   omit.
 
@@ -167,9 +167,15 @@ def _validate_bytes_output(options: RunOutputOptions) -> None:
     meaningful for binary output, so bytes mode keeps them; refusing the whole
     options object would take away far more than binary output costs. Line
     observation is the single exception, and it is refused rather than
-    downgraded: ``on_line`` carries decoded text, decoding is exactly what
-    bytes mode exists to avoid, and a callback that silently stopped firing
-    would be harder to notice than a rejected call.
+    downgraded: ``on_line`` carries decoded text while the run's capture is
+    byte-exact, so honouring it would give one stream two contradictory
+    contracts. A callback that silently stopped firing would be harder to
+    notice than a rejected call.
+
+    This is a policy decision, not a limit of the drain, which serves both
+    modes at once and still delivers decoded lines to registered observe
+    hooks. Only the caller-supplied ``on_line`` is refused; internal
+    observation is unaffected.
 
     Called before anything is spawned, so a caller that combines the two
     learns about it from a ``ValueError`` rather than from a child that ran

@@ -1,11 +1,13 @@
 """Internal stream-handling utilities for subprocess I/O.
 
 The pure-Python home for consuming a subprocess's stdout/stderr.
-``_consume_stream`` and the shared ``_drain`` loop decode bytes, optionally tee
-each chunk to a sink, capture the text, and emit decoded lines; the bounded echo
+``_consume_stream`` and the shared ``_drain`` loop read raw chunks, optionally
+tee each chunk to a sink, capture them, and emit decoded lines; the bounded echo
 renderer those two call into lives in ``cuprum._stream_echo``, and the
 line-boundary emitter that publishes decoded lines lives in
-``cuprum._stream_line_consumer``. The writer side that pumps one pipeline
+``cuprum._stream_line_consumer``. Capture and line emission are independent
+channels: the drain's buffer keeps the child's own bytes, and only the line
+feeder decodes, so one drain serves both modes. The writer side that pumps one pipeline
 stage's stdout into the next stage's stdin lives in ``cuprum._streams_pump``
 and is re-exported here (``_pump_stream``, ``_close_stream_writer``,
 ``_write_to_stream_writer``, ``_WriteOutcome``,
@@ -26,7 +28,6 @@ from cuprum._echo_truncation import (
     _EchoLineLimiter,
     _validate_bounded_echo_encoding,
 )
-from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._stream_drain_finish import _finish_drain
 from cuprum._stream_drain_state import _EchoGuard, _MirrorCursor, _RelayDiagnostics
 from cuprum._stream_echo import (
@@ -70,18 +71,6 @@ if typ.TYPE_CHECKING:
 # it without limit. :func:`_stream_line_consumer._emit_line` bridges the two.
 type _LineSink = cabc.Callable[[str], cabc.Awaitable[None] | None]
 type _ChunkSink = cabc.Callable[[bytes], cabc.Awaitable[None] | None]
-
-
-class _DrainInvariantError(_ExecutionInvariantError):
-    """Raised when a drain is asked for a combination it cannot honour.
-
-    Subclasses the shared package-level invariant error, which itself derives
-    from :class:`RuntimeError`, while retaining a distinct type for stream
-    drains. Mirrors
-    :class:`cuprum._subprocess_timeout._SubprocessInvariantError` for the
-    single-command path and
-    :class:`cuprum._pipeline_collect._PipelineInvariantError` for pipelines.
-    """
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -169,12 +158,6 @@ async def _consume_stream(
         The captured payload — bytes when the config asks for byte-exact
         capture, decoded text otherwise — or ``None`` when capture is
         disabled.
-
-    Raises
-    ------
-    _DrainInvariantError
-        If a byte-exact config is asked to observe decoded lines, which cannot
-        be honoured: the line consumer decodes each chunk to find boundaries.
     """
     if on_line is None:
         return await _consume_stream_without_lines(
@@ -182,16 +165,13 @@ async def _consume_stream(
             config,
             relay_diagnostics=relay_diagnostics,
         )
-    # Line observation and byte-exact capture are mutually exclusive, and the
-    # public entry points refuse the combination before anything spawns. This
-    # guard is the second line of defence, at the only seam where the choice is
-    # still visible: the line consumer decodes each chunk to find boundaries,
-    # so routing a byte-exact config into it would hand back decoded text from
-    # a run the caller asked to be byte-exact. Refusing beats returning the
-    # wrong type silently.
-    if config.capture_bytes:
-        msg = "byte-exact capture cannot observe decoded lines"
-        raise _DrainInvariantError(msg)
+    # Byte-exact capture and line observation compose, because the two facts
+    # travel on separate channels: the drain extends its buffer with the raw
+    # chunk, and only the line feeder decodes a copy to find boundaries. So a
+    # byte-exact run still returns the child's own bytes while its observers
+    # receive decoded lines, and the rejection of a *user* ``on_line`` in bytes
+    # mode is a policy choice made by the entry points, not a limit of the
+    # drain. See ``cuprum._bytes_run._validate_bytes_output``.
     return await _consume_stream_with_lines(
         stream,
         _LineConsumption(
