@@ -194,6 +194,7 @@ def test_unbuildable_encoder_still_closes_the_producer(
     closed: list[bool] = []
 
     async def producer() -> cabc.AsyncIterator[str]:
+        """Yield one chunk, recording whether the consumer finalized us."""
         try:
             await asyncio.sleep(0)
             yield "text"
