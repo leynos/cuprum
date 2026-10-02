@@ -488,18 +488,23 @@ that runs it.
 
 `tests/test_ci_test_selection_contract.py` enforces the rule, and it fails with
 a message naming each uncovered module and both fixes rather than reporting
-only that something is wrong. The enumeration and the exception table live in
-`tests/helpers/suite_selection.py`, which sits beside the code that validates
-each exemption's claim. Other contracts read the Makefile through
-`tests/helpers/makefile.py`, which parses it with the pinned `makeutil` binary:
-a regex over the source can miss a continuation or read a comment as an
-assignment, and either mistake shrinks the selector to a set that makes every
-coverage assertion pass for the wrong reason. That reader is split in two on
-the family's usual seam. `tests/helpers/makeutil.py` owns the process — running
-the parser, and reporting the ways a process fails — while `makefile.py` owns
-`make`'s own semantics for the document it returns: which assignment wins, how
-continuations collapse, how `$(VAR)` references resolve, and what a target's
-recipe says.
+only that something is wrong. Whether the machinery *can* fail is a separate
+claim, and it is driven against seeded faults in
+`tests/test_ci_selection_guard_controls.py` — a guard whose assertions all pass
+on a healthy tree is not shown to refuse anything until something is fed to it
+that it should refuse. The two modules were one until the pair crossed the
+400-line limit; the seam is the kind of claim, not the helper being read. The
+enumeration and the exception table live in `tests/helpers/suite_selection.py`,
+which sits beside the code that validates each exemption's claim. Other
+contracts read the Makefile through `tests/helpers/makefile.py`, which parses
+it with the pinned `makeutil` binary: a regex over the source can miss a
+continuation or read a comment as an assignment, and either mistake shrinks the
+selector to a set that makes every coverage assertion pass for the wrong
+reason. That reader is split in two on the family's usual seam.
+`tests/helpers/makeutil.py` owns the process — running the parser, and
+reporting the ways a process fails — while `makefile.py` owns `make`'s own
+semantics for the document it returns: which assignment wins, how continuations
+collapse, how `$(VAR)` references resolve, and what a target's recipe says.
 
 That reader exposes its process boundary rather than reaching for the ambient
 tool. `makeutil_document` takes a `root` and a `runner`, so a test supplies the
@@ -508,19 +513,19 @@ working directory and the parsed document instead of shelling out, and
 through. A `FileNotFoundError` or a timeout at the process boundary becomes the
 `AssertionError` the read API documents, because the alternative — leaking the
 raw exception — reports a broken toolchain as if the Makefile were at fault.
-`recipe_of` joins a target's recipe entries with newlines, collapsing
-backslash continuations *within* an entry to one space. `make` does not itself
-collapse a continued recipe entry — it hands the backslash-newline to the shell
-— so this is a deliberate normalisation, and a load-bearing one: `shlex`
-implements no line continuation, so an uncollapsed backslash-newline would
-arrive as a word containing the newline, which the shell never sees. It is also
-what `make` does to a *variable* value, so the shared helper reads the same way
-for both. A shell comment therefore ends at an uncontinued newline, so a `#`
-disables the remainder of its own entry rather than every command after it,
-even though the words stay in the string. That is why the text is read back
-with `recipe_tokens`, which honours comment markers and quoting: commented-out
-text contributes no tokens and cannot satisfy a check, and a substring test
-cannot tell a live recipe from a commented-out one.
+`recipe_of` joins a target's recipe entries with newlines, collapsing backslash
+continuations *within* an entry to one space. `make` does not itself collapse a
+continued recipe entry — it hands the backslash-newline to the shell — so this
+is a deliberate normalization, and a load-bearing one: `shlex` implements no
+line continuation, so an uncollapsed backslash-newline would arrive as a word
+containing the newline, which the shell never sees. It is also what `make` does
+to a *variable* value, so the shared helper reads the same way for both. A
+shell comment therefore ends at an uncontinued newline, so a `#` disables the
+remainder of its own entry rather than every command after it, even though the
+words stay in the string. That is why the text is read back with
+`recipe_tokens`, which honours comment markers and quoting: commented-out text
+contributes no tokens and cannot satisfy a check, and a substring test cannot
+tell a live recipe from a commented-out one.
 
 The rest of the reader family is split the way the questions are.
 `tests/helpers/ci_documents.py` operates on text and on parsed documents —
@@ -538,13 +543,13 @@ it, and reports its own emptiness for the same reason.
 
 These boundaries have their own contracts, driven with synthetic input:
 `tests/test_ci_makefile_boundaries.py` for the Makefile readers and
-`tests/test_ci_helper_boundaries.py` for the workflow ones. The
-repository-wide contracts above read this repository's real Makefile and
-workflows, which is the right way to assert what the repository does and the
-wrong way to test a *reader*: every case they can express is a case the estate
-already satisfies, so malformed input, refusals, and empty-input behaviour are
-never exercised. A reader could stop refusing anything and every contract above
-it would keep passing on a healthy tree.
+`tests/test_ci_helper_boundaries.py` for the workflow ones. The repository-wide
+contracts above read this repository's real Makefile and workflows, which is
+the right way to assert what the repository does and the wrong way to test a
+*reader*: every case they can express is a case the estate already satisfies,
+so malformed input, refusals, and empty-input behaviour are never exercised. A
+reader could stop refusing anything and every contract above it would keep
+passing on a healthy tree.
 
 The companion question — whether anything *runs* that selector — is
 `tests/test_ci_suite_wiring_contract.py`. It asserts that a workflow step

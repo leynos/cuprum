@@ -115,7 +115,7 @@ class TestWorkflowSweepNarrowing:
     """The sweep must carry each script's location, and refuse the rest.
 
     `run_scripts` is what the exemption guard asks "does any CI step run this
-    target" through, so a sweep that silently dropped a job, mis-numbered a
+    target" through, so a sweep that silently dropped a job, misnumbered a
     step, or read a reusable-workflow call as an empty job would change which
     exemptions are honoured. On the estate's own tree there is exactly one
     answer, and it is a satisfiable one, so none of those questions is settled

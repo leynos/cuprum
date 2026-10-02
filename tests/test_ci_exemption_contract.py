@@ -146,8 +146,7 @@ def test_an_exemption_whose_target_never_consumes_the_selector_is_refused(
     """
     module = "tests/integration/test_workflow_integration.py"
     assert module in {
-        str(path)
-        for path in selected_paths(variable_expansion(SCENARIO_SELECTOR))
+        str(path) for path in selected_paths(variable_expansion(SCENARIO_SELECTOR))
     }, f"{module} must be collected by {SCENARIO_SELECTOR}, or the seed is wrong"
     _seed(
         monkeypatch,

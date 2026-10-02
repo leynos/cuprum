@@ -44,7 +44,7 @@ def _join_continuations(value: str) -> str:
 
     For a *recipe entry* `make` does not collapse anything: it hands the
     backslash-newline to the shell, and the shell does the collapsing. Doing it
-    here as well is a deliberate normalisation, and it is load-bearing rather
+    here as well is a deliberate normalization, and it is load-bearing rather
     than cosmetic — `shlex` implements no line continuation, so a raw ``\``
     newline arrives as a word containing the newline itself. The shell would
     never see such a word, so a token check reading the uncollapsed text would
