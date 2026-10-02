@@ -412,6 +412,47 @@ likelihood, and mitigation.
   a *claim*, and a claim the inline code never had to make can be wrong — the
   other elements' annotations were re-checked at the same time.
 
+- [x] (2026-10-02) The extraction, the hang-guard replacement, and the two
+  docstring corrections were committed as `70b0af88` and fully gated on that
+  frozen revision: `make check-fmt`, `make typecheck`, `make lint`, and
+  `make test` all passed, run strictly sequentially, each logging
+  `head: 70b0af88…` and an `index_fingerprint` unchanged before and after its
+  own run. `check-fmt` reported 715 files already formatted; `typecheck`
+  (`ty 0.0.74`) passed, closing the `invalid-return-type` finding the previous
+  run had opened; `lint` passed in full, including pylint, ruff, interrogate,
+  Skylos, clippy, Whitaker, yamllint, actionlint, and the spelling gate;
+  `make test` reported 3675 passed and 86 skipped summed across its eleven
+  pytest targets, zero `FAILED`/`ERROR`/`INTERNALERROR` signatures, nextest
+  127/127, and doctests clean. The sum was re-derived from the log's eleven
+  per-target summaries rather than read from a report, because a total nobody
+  re-adds is a figure nobody can falsify.
+
+  An earlier attempt to gate this work had to be discarded for a specific
+  reason worth recording. That run started against the working tree rather than
+  a commit, and the tree changed *during* it: `_subprocess_stream_run.py` was
+  written at 20:30:09Z, after `check-fmt` had finished and before `lint` and
+  `test` started. Its `typecheck` failure was real — the narrowed return
+  annotation described above — but it described a revision that no longer
+  existed by the time the report was written, and its `lint`/`test` passes had
+  observed a file the planner did not think they were covering. Gating a
+  *commit* rather than a tree is what removes that ambiguity, and it is why
+  this entry names a revision rather than a timestamp.
+
+  The head was then pushed over SSH with a `--force-with-lease` bound to the
+  previously read remote head (`c064a1f2`). The push reported
+  `c064a1f2..70b0af88`, a fast-forward rather than a forced overwrite, and the
+  remote branch and the pull request both read back as `70b0af88`.
+
+  Three outstanding CodeRabbit threads were adjudicated against the tree rather
+  than against their summaries, and all three were already fixed in pushed
+  history (`1368452b`) with tests: `_reject_contested_stdin` refuses an explicit
+  `inherit()` beside a source; `_settle_stdin_writer` bounds all three
+  post-exit waits, with the 0.25 s window preserving the early-close
+  classification for in-flight payload writes; and `_reject_stdio_targets`
+  refuses pipeline stdio targets below `Pipeline.run`'s spawn. Replies cite the
+  fixing sites and the test names so the reason each finding is closed is
+  checkable without re-deriving it.
+
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
   tree rather than against the codex summary. Two were real defects in the
