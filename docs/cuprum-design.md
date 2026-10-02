@@ -1821,20 +1821,24 @@ them: `_prepare_execution_observation` builds the stage observation,
 `_run_prepared_command` sequences a validated command's execution after its
 public inputs are resolved, and `_execute_with_hooks` drives the bundle with
 after-hook dispatch and finalizes the run's sink session on every terminal path.
-`_ExecutionState` carries one run's already-resolved inputs — context, output
-options, resolved stdin, and the settled deadline — so the spawn helper stays a
-translation from what the run decided to what the subprocess layer consumes.
-`SafeCmd.run` resolves those inputs, builds the state, and hands it to
-`_run_prepared_command`; the helper never reconstructs it, which is what keeps
-its own signature small while leaving the public method's resolution order
-unchanged. Finalization is the reason the sequence lives in one module: the
-sink session must close *before* the observe-hook tasks drain, because the
-drain aggregates a hook failure with the error that ended the run, so closing
-afterwards would record the aggregate — an `error` annotation standing in for a
-timeout — and a drain that raised would skip the close entirely. The module was
-split out of `cuprum/sh.py` to resolve a file-level CodeScene `Low Cohesion`
-finding; see the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
-addendum of 2026-09-19.
+`_RunInputs` carries one public run's arguments exactly as the caller supplied
+them — still optional, because "not supplied" is what each one means before
+resolution — and `_resolve_execution_state` turns that request into
+`_ExecutionState`, which holds the same inputs already resolved: context,
+output options, resolved stdin, and the settled deadline. The resolved state
+keeps the spawn helper a translation from what the run decided to what the
+subprocess layer consumes. `SafeCmd.run` resolves those inputs, builds the
+state, and hands it to `_run_prepared_command`; the helper never reconstructs
+it, which is what keeps its own signature small while leaving the public
+method's resolution order unchanged. Finalization is the reason the sequence
+lives in one module: the sink session must close *before* the observe-hook
+tasks drain, because the drain aggregates a hook failure with the error that
+ended the run, so closing afterwards would record the aggregate — an `error`
+annotation standing in for a timeout — and a drain that raised would skip the
+close entirely. The module was split out of `cuprum/sh.py` to resolve a
+file-level CodeScene `Low Cohesion` finding; see the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-09-19.
 
 Error propagation policy (to be finalized, but roughly):
 

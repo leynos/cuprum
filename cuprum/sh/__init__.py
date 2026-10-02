@@ -28,6 +28,7 @@ from cuprum._command_internals import (
     _prepare_execution_observation as _prepare_execution_observation,
 )
 from cuprum._command_internals import _run_prepared_command as _run_prepared_command
+from cuprum._command_internals import _RunInputs as _RunInputs
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES as DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._execution_tracking import _ExecutionTracking as _ExecutionTracking
 from cuprum._idle_heartbeat import _validate_idle_options as _validate_idle_options
@@ -35,9 +36,9 @@ from cuprum._line_iteration import LineStream
 from cuprum._line_iteration import _iter_line_events as _iter_line_events
 from cuprum._pipeline_config import _prepare_pipeline_config as _prepare_pipeline_config
 from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES as _MIN_PIPELINE_STAGES
-from cuprum._pipeline_internals import _collect_hooks as _collect_hooks
-from cuprum._pipeline_internals import _enforce_allowlist as _enforce_allowlist
 from cuprum._pipeline_internals import _run_pipeline as _run_pipeline
+from cuprum._pipeline_observations import _collect_hooks as _collect_hooks
+from cuprum._pipeline_observations import _enforce_allowlist as _enforce_allowlist
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout

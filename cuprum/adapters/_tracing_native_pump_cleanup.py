@@ -42,14 +42,11 @@ class _NativePumpCleanupTracingMixin:
             "cleanup_deferred",
         }:
             return
-        if event.exec_id is None:
-            return
 
+        # The lookup returns ``None`` for an absent token too, so it covers the
+        # ``exec_id`` check this used to make separately.
         hook = typ.cast("TracingHook", self)
-        with hook._lock:
-            active = hook._span_states.get(event.exec_id)
-            if active is not None:
-                hook._active_spans.move_to_end(event.exec_id)
+        active = hook._lookup_active_span(event.exec_id, touch=True)
         if active is None:
             return
 

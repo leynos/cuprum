@@ -9,6 +9,7 @@ import time
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._scope_registration import _IdentityTupleRegistration
 from cuprum.stream_events import (
     StreamOperation,
     StreamOperationEvent,
@@ -65,41 +66,14 @@ def current_stream_operation_hooks() -> tuple[StreamOperationHook, ...]:
     return _stream_operation_hooks.get()
 
 
-class StreamOperationHookRegistration:
+class StreamOperationHookRegistration(_IdentityTupleRegistration[StreamOperationHook]):
     """Registration handle for a stream-operation observation hook."""
 
-    __slots__ = ("_detached", "_hook")
+    __slots__ = ()
 
     def __init__(self, hook: StreamOperationHook) -> None:
         """Append ``hook`` to the current context's stream-operation hooks."""
-        self._detached = False
-        self._hook = hook
-        _stream_operation_hooks.set((*_stream_operation_hooks.get(), hook))
-
-    def detach(self) -> None:
-        """Remove this registration without restoring stale hook state."""
-        if self._detached:
-            return
-        hooks = list(_stream_operation_hooks.get())
-        for index in range(len(hooks) - 1, -1, -1):
-            if hooks[index] is self._hook:
-                del hooks[index]
-                break
-        _stream_operation_hooks.set(tuple(hooks))
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        super().__init__(_stream_operation_hooks, hook)
 
 
 def observe_stream_operation(

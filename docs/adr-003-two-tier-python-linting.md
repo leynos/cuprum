@@ -326,3 +326,27 @@ coverage of the directly targeted non-package roots.
 Ambrleaks also runs with an isolated CPython 3.14 environment, so neither
 Pylint pass nor snapshot scanning recreates Cuprum's project virtual
 environment.
+
+## Addendum (2026-09-27): the nose code-duplication gate is the seventh stage
+
+[ADR-019: Adopt a nose code-duplication gate] adds a blocking duplication
+detector to `make lint`, after Skylos. The effective Python lint order is now:
+
+1. Ruff — fast, broad lint rules and docstring style.
+2. `interrogate` — 100 per cent docstring presence.
+3. PyPy-backed Pylint — focused selected messages.
+4. `df12-python-lints` — shared Pylint rules under CPython 3.14.
+5. `ambrleaks` — snapshot-secret scanning under CPython 3.14.
+6. Skylos — strict production dead-code detection.
+7. nose — production code-duplication detection behind reasoned exceptions.
+
+The gate is isolated tooling rather than an application dependency: it carries
+its own PEP 723 pins and runs under `uv run --no-project`, so it neither
+weakens the application's Python floor nor requires the virtualenv or the
+compiled extension. This addendum supersedes the six-stage count in the
+2026-08-23 addendum and in any statement that `make lint` ends with Skylos;
+ADR-019 remains the decision record for the duplication gate's scope,
+provisioning, and exception policy.
+
+[ADR-019: Adopt a nose code-duplication gate]:
+  adr-019-adopt-nose-duplication-gate.md

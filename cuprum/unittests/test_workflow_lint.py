@@ -281,10 +281,15 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     overrides.write_text(
         # Stubbing a target suppresses its recipe but not its prerequisites, so
         # the merged lint graph needs a stub for each heavy target it reaches.
+        # `install-nose` is heavy: it compiles the detector with
+        # `cargo-binstall`, which the hermetic tool directory does not provide,
+        # so leaving it real fails wherever `.tools/` is not already populated.
         # dev-fast-check and the Pylint verification targets stay real: they are
         # the cheap probes whose invocations are asserted below, and stubbing a
         # parent does not spare them.
-        ".PHONY: python-lint rust-lint lint-clippy lint-whitaker spelling\n"
+        ".PHONY: install-nose python-lint rust-lint\n"
+        ".PHONY: lint-clippy lint-whitaker spelling\n"
+        "install-nose:\n\t@:\n"
         "python-lint:\n\t@:\nrust-lint:\n\t@:\n"
         "lint-clippy:\n\t@:\n"
         "lint-whitaker:\n\t@:\n"

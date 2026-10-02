@@ -111,6 +111,10 @@ _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum._pipeline_native_pump_types._RustPumpState.complete_cleanup",
     "cuprum._pipeline_native_pump_types._RustPumpState.defer_cleanup",
     "cuprum._pipeline_stream_fds._BlockingModeGuard.restore",
+    "cuprum._scope_registration._TupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._release",
+    "cuprum._scope_registration._IdentityTupleRegistration._release",
 })
 _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters._tracing_line_stream._line_stream_attributes",

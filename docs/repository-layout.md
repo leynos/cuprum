@@ -26,28 +26,30 @@ _Figure 1: Simplified repository tree for contributor orientation._
 
 ## Path responsibilities
 
-| Path                     | Responsibility                                                                                                                |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `.github/`               | GitHub Actions workflows, Dependabot configuration, and reusable workflow actions.                                            |
-| `.rules/`                | Python coding rules referenced by `AGENTS.md` and maintainer guidance.                                                        |
-| `benchmarks/`            | Benchmark drivers, profiling helpers, deterministic fixtures, and benchmark validation code.                                  |
-| `cuprum/`                | Python package source for the command catalogue, safe command builders, execution runtime, streams, and Rust backend adapter. |
-| `docs/`                  | User, maintainer, design, decision, roadmap, and reference documentation.                                                     |
-| `docs/execplans/`        | Durable execution plans for non-trivial implementation work.                                                                  |
-| `rust/`                  | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                 |
-| `rust/.config/`          | nextest repository configuration, resolved from the Cargo workspace root.                                                     |
-| `rust/clippy.toml`       | Shared Clippy thresholds and environment-access policy used by every workspace member.                                        |
-| `rust/cuprum-rust/`      | Thin PyO3/maturin integration crate for the optional native backend; raw Python resource hand-off lives here.                 |
-| `rust/cuprum-streams/`   | Safe stream orchestration, pump policy, state machine, errors, and checked UTF-8 decoding; unsafe Rust is forbidden.          |
-| `rust/cuprum-native-io/` | Audited native descriptor/handle ownership, single-call I/O, progress kernels, and platform test fixtures.                    |
-| `test-wheelhouse/`       | Local wheel artefacts used by validation workflows and compatibility tests.                                                   |
-| `tests/`                 | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                             |
-| `tools/dev-fast/`        | Linux-only explicit Cargo adapter and approved Cranelift configuration for debug work.                                        |
-| `tools/mold/`            | Pinned checksums for the prebuilt Linux linker used by the dev-fast route.                                                    |
-| `AGENTS.md`              | Repository-specific assistant and contributor instructions.                                                                   |
-| `Makefile`               | Canonical entry point for build, format, lint, typecheck, test, documentation lint, and diagram validation gates.             |
-| `pyproject.toml`         | Python project metadata, dependency declarations, and tool configuration.                                                     |
-| `uv.lock`                | Locked Python dependency graph for reproducible `uv` environments.                                                            |
+| Path                     | Responsibility                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/`               | GitHub Actions workflows, Dependabot configuration, and reusable workflow actions.                                                  |
+| `.rules/`                | Python coding rules referenced by `AGENTS.md` and maintainer guidance.                                                              |
+| `benchmarks/`            | Benchmark drivers, profiling helpers, deterministic fixtures, and benchmark validation code.                                        |
+| `cuprum/`                | Python package source for the command catalogue, safe command builders, execution runtime, streams, and Rust backend adapter.       |
+| `docs/`                  | User, maintainer, design, decision, roadmap, and reference documentation.                                                           |
+| `docs/execplans/`        | Durable execution plans for non-trivial implementation work.                                                                        |
+| `scripts/`               | Isolated maintenance tooling (`scripts.` namespace package) and its tests under `scripts/tests/`.                                   |
+| `.tools/`                | Gitignored install root for pinned external tools; `.tools/nose` holds the duplication detector provisioned by `make install-nose`. |
+| `rust/`                  | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                       |
+| `rust/.config/`          | nextest repository configuration, resolved from the Cargo workspace root.                                                           |
+| `rust/clippy.toml`       | Shared Clippy thresholds and environment-access policy used by every workspace member.                                              |
+| `rust/cuprum-rust/`      | Thin PyO3/maturin integration crate for the optional native backend; raw Python resource hand-off lives here.                       |
+| `rust/cuprum-streams/`   | Safe stream orchestration, pump policy, state machine, errors, and checked UTF-8 decoding; unsafe Rust is forbidden.                |
+| `rust/cuprum-native-io/` | Audited native descriptor/handle ownership, single-call I/O, progress kernels, and platform test fixtures.                          |
+| `test-wheelhouse/`       | Local wheel artefacts used by validation workflows and compatibility tests.                                                         |
+| `tests/`                 | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                                   |
+| `tools/dev-fast/`        | Linux-only explicit Cargo adapter and approved Cranelift configuration for debug work.                                              |
+| `tools/mold/`            | Pinned checksums for the prebuilt Linux linker used by the dev-fast route.                                                          |
+| `AGENTS.md`              | Repository-specific assistant and contributor instructions.                                                                         |
+| `Makefile`               | Canonical entry point for build, format, lint, typecheck, test, documentation lint, and diagram validation gates.                   |
+| `pyproject.toml`         | Python project metadata, dependency declarations, and tool configuration.                                                           |
+| `uv.lock`                | Locked Python dependency graph for reproducible `uv` environments.                                                                  |
 
 _Table 1: Major repository paths and their ownership boundaries._
 

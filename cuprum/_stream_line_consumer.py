@@ -11,10 +11,10 @@ without bound. The pure splitting rules live in
 
 from __future__ import annotations
 
-import codecs
 import dataclasses as dc
 import typing as typ
 
+from cuprum._stream_echo import _incremental_decoder
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
 if typ.TYPE_CHECKING:
@@ -98,9 +98,3 @@ async def _consume_stream_with_lines(
     if pending_text:
         await _emit_line(consumption.on_line, _strip_line_ending(pending_text))
     return captured
-
-
-def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create the configured incremental decoder."""
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)

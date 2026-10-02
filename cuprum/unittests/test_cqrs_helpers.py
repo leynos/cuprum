@@ -25,7 +25,7 @@ from cuprum._observability import (
     _ExecEventEmissionError,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._pipeline_observations import _collect_hooks, _enforce_allowlist
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum._streams import _close_stream_writer, _write_to_stream_writer, _WriteOutcome
 from cuprum.context import (

@@ -43,7 +43,7 @@ def _build_spawn_observations(
     config: _PipelineRunConfig,
 ) -> tuple[_StageObservation, ...]:
     """Build per-stage observation state for spawning a pipeline."""
-    from cuprum._pipeline_internals import _build_pipeline_observations
+    from cuprum._pipeline_observations import _build_pipeline_observations
 
     observations = _build_pipeline_observations(parts, config, pending_tasks=[])
     # The pending-task list built here is discarded, so observe hooks (which

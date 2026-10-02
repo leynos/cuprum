@@ -8,6 +8,12 @@ here rather than inside either execution layer, and neither owns them alone.
 The adapter-facing protocol itself stays in :mod:`cuprum.sinks`; nothing here
 knows about any concrete adapter.
 
+A failure that ends a run before finalization owes one more step beyond the
+close: the observe-hook tasks the run owns still have to be drained.
+:func:`_close_sink_and_drain_after_failure` holds that pair in the order the
+close requires, so every failure branch in both execution layers states the
+same two steps once rather than restating the ordering each time.
+
 ``TimeoutExpired`` is resolved when :func:`_outcome_for_error` runs rather than
 at import time: :mod:`cuprum.sh` owns that exception and imports this module.
 """
@@ -18,6 +24,8 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._observability import _drain_tasks_during_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum.sinks import base as sinks
 
 if typ.TYPE_CHECKING:
@@ -209,8 +217,54 @@ def _outcome_for_error(error: BaseException) -> sinks.SessionOutcome:
             return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.ERROR)
 
 
+async def _close_sink_and_drain_after_failure(
+    sink_bracket: _SinkBracket,
+    pending_tasks: list[asyncio.Task[None]],
+    error: BaseException,
+    *,
+    message: str,
+) -> None:
+    """Commit a failure outcome to the sink, then drain the observe tasks.
+
+    Every branch that ends a run before finalization — in the single-command
+    path and in the pipeline path alike — owes the same two steps in the same
+    order, for the same reasons. The close comes first because
+    :meth:`_SinkBracket.close` clears its session on the first call, so an
+    error close issued after some other close would silently do nothing. The
+    drain is shielded because the run owns these observe-hook tasks: a
+    cancellation arriving while it waits on them must not let the run return
+    before they have settled, which would leak one task per pending hook.
+
+    Keeping the pair together is what makes that ordering a property of the
+    helper rather than a convention each failure branch has to restate. The
+    caller re-raises *error* itself; this only settles what the run owes.
+
+    Parameters
+    ----------
+    sink_bracket : _SinkBracket
+        The bracket owning the run's session, closed with the error outcome.
+    pending_tasks : list[asyncio.Task[None]]
+        The observe-hook tasks this run owns and must settle.
+    error : BaseException
+        The error that ended the run, preserved through the drain.
+    message : str
+        The execution shape's finalization label, used if the drain raises:
+        :func:`~cuprum._observability._drain_tasks_during_cleanup` requires it
+        rather than defaulting, so a path cannot silently inherit another's.
+    """
+    sink_bracket.close(outcome=_outcome_for_error(error))
+    await _shielded_cleanup(
+        _drain_tasks_during_cleanup(
+            pending_tasks,
+            error,
+            message=message,
+        )
+    )
+
+
 __all__ = [
     "_SinkBracket",
+    "_close_sink_and_drain_after_failure",
     "_close_sink_session",
     "_command_session_start",
     "_open_sink_session",

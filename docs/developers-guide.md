@@ -19,6 +19,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
 - [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
 - [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
+- [ADR-019: Adopt a nose code-duplication gate](adr-019-adopt-nose-duplication-gate.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -2001,20 +2002,36 @@ or identifiers to this surface.
 
 All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
 `HookRegistration`, and `EnvRegistration` in `cuprum/context/registration.py` —
-derive from one canonical `_TokenRegistration` base. The base owns the `_token`/
-`_detached` pair, the idempotent `detach()`, the context-manager protocol, and
-the `_install(new_ctx)` step that sets the derived context and captures the
-restoration token. Subclasses implement only the context-derivation step in
-`__init__`. The consolidated "Token-based Restoration" docstring lives on the
-base.
+derive from one canonical `_TokenRegistration` base. The base owns the `_token`
+attribute and the `_install(new_ctx)` step that sets the derived context and
+captures the restoration token, and implements `_release()`. Subclasses
+implement only the context-derivation step in `__init__`. The consolidated
+"Token-based Restoration" docstring lives on the base.
+
+The idempotent `detach()` and the context-manager protocol are one layer
+further up, in `_ScopeRegistration` (`cuprum/_scope_registration.py`), which
+every registration handle in the package shares — the context registrations
+here, the logging hook registrations, and the observation registrations. That
+module also owns `_without_identity`, the identity-match, end-first scan used
+by handles that remove their own entry from a hook tuple rather than restoring
+a token, and `_TupleRegistration`, the base that appends a hook to a
+`ContextVar`-backed tuple on behalf of both
+`_TokenTupleRegistration`/`_IdentityTupleRegistration`. The two subclasses
+differ only in how the tuple is put back — the former resets a captured token,
+the latter removes its own entry — so the append lives once in the base and
+each subclass implements `_release()`. A handle that detaches out of order must
+use the identity form: token restoration would resurrect a hook someone already
+removed. Detach runs exactly once per handle, and a `_release` that raises
+leaves the handle retryable rather than marking it detached.
 
 Re-use policy: any new scope-registration handle must derive from
-`_TokenRegistration` and confine itself to deriving the new context; the
-restoration protocol is subtle (`ContextVar` token discipline), so a divergent
-copy is a latent correctness hazard. Note that `LoggingHookRegistration`
-(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
-`HookRegistration` instances and detaches them in reverse order; it
-deliberately carries no token of its own.
+`_ScopeRegistration` (directly or through `_TupleRegistration` and one of its
+two subclasses) and confine itself to deriving the new context or naming its
+hook variable; the restoration protocol is subtle (`ContextVar` token
+discipline), so a divergent copy is a latent correctness hazard. Note that
+`LoggingHookRegistration` (`cuprum/logging_hooks.py`) is a *pair* handle: it
+composes two `HookRegistration` instances and detaches them in reverse order;
+it deliberately carries no token of its own.
 
 `cuprum/unittests/test_token_registration_stateful.py` verifies the token
 discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
@@ -2041,7 +2058,7 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/_command_internals.py`), `_build_pipeline_observations`
-(`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
+(`cuprum/_pipeline_observations.py`), and `_build_spawn_observations`
 (`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
 adds only its no-observe-hooks assertion) — must route through these helpers. A
 new shared tag is added once, in `_base_stage_tags`, or it will silently
@@ -4540,7 +4557,7 @@ requires that surface.
 
 ## Python linting
 
-Cuprum uses a five-stage Python lint gate. Ruff is the first stage and remains
+Cuprum uses a seven-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,
 docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
@@ -4548,8 +4565,9 @@ Pylint-derived rules. `interrogate` is the second stage and enforces docstring
 `conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks run
 third under the checksum-verified PyPy 8.0.0 Python 3.12 binary, so no
 parser-patching shim is required. The pinned `df12-python-lints` plugin runs
-fourth under CPython 3.14, and `ambrleaks` scans Syrupy snapshots fifth under
-the same interpreter.
+fourth under CPython 3.14, `ambrleaks` scans Syrupy snapshots fifth under the
+same interpreter, Skylos runs the strict production dead-code scan sixth, and
+the blocking nose code-duplication gate runs seventh.
 
 The decisions are recorded in
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
@@ -4586,6 +4604,9 @@ The short version is:
   AST, so the pin prevents phantom dead-code findings from newer syntax.
 - `$(SKYLOS)` adds the scan configuration to `$(SKYLOS_CLI)`, keeping detector
   dependencies out of Cuprum's application dependency closure.
+- `$(DUPLICATION_GATE)` runs the pinned nose code-duplication detector over
+  `$(SKYLOS_PRODUCTION_TARGETS)` and fails while any family is unsuppressed.
+  See "Code-duplication gate" below.
 
 ### Markdown formatting
 
@@ -4653,11 +4674,172 @@ make lint
    test roots.
 6. `$(SKYLOS)` scanning `$(SKYLOS_PRODUCTION_TARGETS)` for dead code, excluding
    `$(SKYLOS_EXCLUDE_FOLDERS)`, with gate mode enabled.
+7. `$(DUPLICATION_GATE) check`, the blocking nose code-duplication gate.
 
 Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
+
+### Code-duplication gate
+
+`make lint` (and the standalone `make duplication` target) runs
+`scripts/duplication_gate.py check`, which drives the pinned nose detector with
+the `[tool.nose]` settings in `pyproject.toml` and fails while unsuppressed
+duplication families remain. Findings name every member as a
+`path:start-end ~ path:start-end` family, with nose's unit name appended to
+each location it named, followed by the witness kind and refactoring value, so
+a finding can be pasted directly into a refactoring task or coding-agent
+prompt. The tool choice, settings, and exception policy follow
+[ADR-019](adr-019-adopt-nose-duplication-gate.md), which adopts the decision
+already recorded as ADR-021 in `leynos/episodic` at revision
+`d9e5ac0d254f375e2986f52d91a3b88c117c833b` rather than rerunning a detector
+comparison here.
+
+Both targets depend on `make install-nose`, which installs the `nose-cli`
+release binary at `NOSE_VERSION` into `.tools/nose` using `cargo-binstall`'s
+git mode against <https://github.com/corca-ai/nose>, because the crate is not
+published on crates.io. The target is a no-op once the binary reports the
+pinned version, and CI restores `.tools/nose` from a cache keyed on the runner
+operating system, architecture, base-image release, and that version.
+
+Compilation fallback is prohibited. The installer runs
+`cargo-binstall --disable-strategies compile,quick-install`, so a missing or
+unverifiable release asset is a visible provisioning failure rather than the
+start of a long source build, and the CI installer verifies its own
+`cargo-binstall` archive against a pinned SHA-256 digest before running it,
+because `cargo-binstall` clones the upstream repository before it downloads the
+release artefact. That cached-install path is Linux x86-64 only, and its digest
+is valid only for the archive name beside it; another platform needs its own
+artefact and its own digest, so do not reuse either for a different platform.
+
+The gate re-verifies `nose --version` against `[tool.nose] version` before
+scanning and refuses to run on a mismatch, pointing at `make install-nose`; set
+`NOSE_BIN` to point the gate at another binary, as a path resolved against the
+repository root when relative. `cuprum/unittests/test_toolchain_pins.py`
+asserts that the Makefile pin, the CI pin, and `[tool.nose] version` agree.
+
+A scan that finds no source files is a configuration error, not a pass. nose
+reports an empty scope with exit 0 and a summary of `families: 0, shown: 0` —
+identical to a genuinely clean tree — so the wrapper also reads stderr for the
+warning `no supported source files found under: <root>` and exits 2. This is
+what stops a mistyped `roots` entry, or a directory that exists but holds no
+Python, from reporting success while scanning nothing. The check keys on the
+empty scope alone: a root that does contain sources still returns its findings.
+
+`[tool.nose]` pins what is scanned and how: the `cuprum` package as the root,
+with `cuprum/unittests` excluded, `mode = "syntax,semantic,near"` so a change
+to nose's defaults cannot widen or narrow the gate silently, a floor of 24
+intermediate-language tokens, `surface = "all"` so families nose hides behind
+its dashboard ranking are still adjudicated, and `top = 30` ranked families. At
+introduction the full surface above the floor was 26 families, falling to 25
+once the first extraction landed, so `top = 30` was not binding; that is a
+measurement, not a guarantee. The count moves in both directions: a refactor
+can pair up two windows that were previously distinct without duplicating
+anything on purpose, and it can equally drop a pair below the floor. The
+semantic channel reports only exact intermediate-language equivalence, so the
+gate blocks on a narrow, witness-backed subset of semantic duplication; broader
+Type-4 duplication remains a review concern.
+
+Treat every new finding as copy-paste until proven otherwise: prefer extracting
+the shared logic over suppressing the report. When the parallel structure is
+intentional — per-channel observer recorders, independent wire-format
+declarations, or distribution namespaces that are deliberately not imported by
+the code that declares them — record a reasoned exception:
+
+```shell
+make duplication-allow FIRST='cuprum/events.py::ExecEvent' \
+  MEMBERS='cuprum/line_stream_events.py::LineStreamEvent cuprum/_pipeline_types.py::_EventDetails' \
+  REASON="Three distinct event schemas; no field is interchangeable between them"
+```
+
+Keys name locations, not line spans, because spans churn whenever code above
+them moves. A key is a repository-relative path glob, optionally suffixed
+`::name` to require nose's unit name as well; `::name` keys never match the
+fragment-level findings nose reports without a name, such as shared import
+blocks. An entry silences a family only when *every* location in that family
+matches one of its keys, so a new copy in an unlisted file still blocks the
+gate. Use `unit` for a single key and `members` for two or more; the target
+rejects a `members` list with fewer than two entries and accepts `FIRST` plus
+`MEMBERS` only when both are given on the Make command line, never from the
+ambient environment.
+
+`SECOND` is deliberately not a Make variable. GNU Make overwrites a repeated
+command-line variable with its last occurrence, so `SECOND=a SECOND=b` would
+silently keep only `b` and an exception for a three-member family would be
+recorded as covering two. `MEMBERS` carries every location past the first as
+one space-separated value, forwarded as its own `--second`; to record entries
+with another tool, call `scripts/duplication_gate.py allow` directly and repeat
+`--second`.
+
+The target refuses empty keys or reasons and stores entries under
+`[tool.duplication_gate]`.
+
+The spelling gate does not read a file named `pyproject.toml`. Typos excludes
+that basename at any depth, and neither the shared dictionary nor the
+`typos.local.toml` overlay lists it, so a misspelling inside a `reason` string
+is reported nowhere. This is easy to satisfy by accident: an identically spelled
+`reason` in `control.toml` fails the gate while the same line in
+`pyproject.toml` passes, which reads as a licence to use the non-Oxford form
+rather than as a hole in the check. Keeping reasons in Oxford `-ize` spelling
+is therefore on the author, not on the gate. Adjudicating this repository's
+cohort turned up four such spellings across the entries here — the agents of
+two verbs ending in `-ise`, and one noun for an assignment performed by a
+constructor — none of which the gate reported. They were corrected by hand.
+Note that this gap is narrow: it covers `pyproject.toml` alone, so prose
+*about* those spellings is checked like any other Markdown, and a guide cannot
+quote them without tripping the gate it is describing.
+
+The gate reports entries that no longer cover any finding as stale, and
+distinguishes an entry whose family has *grown* a location (widen the entry)
+from one that no family matches (remove the entry). Growth is only claimed when
+the entry named more than one location and the surviving family matches every
+one of its keys: a one-key entry's key is a path glob, so any family it still
+touches may equally be one the entry never described, and reporting that as
+growth would confidently instruct you to re-authorize duplication the entry
+never covered. A partial overlap on a multi-key entry is reported as a
+path-glob coincidence for the same reason. Because the gate adjudicates a
+ranked surface, absence from the report means "unmatched in this scan", not
+proof that the duplication is gone: never delete an entry merely because its
+family fell below the ranking cutoff, and never lower the enforced surface to
+obtain a green run.
+
+Allowlist updates take an advisory cross-process lock, so a concurrent writer
+waits until the current update completes. The lock coordinates processes that
+participate in its protocol; it does not coordinate unrelated editors of the
+same file. If a writer is cancelled or interrupted, closing its lock descriptor
+releases the lock. Each successful update fsyncs a temporary sibling before
+atomically replacing `pyproject.toml` with the destination file's mode
+preserved, so concurrent updates cannot overwrite one another.
+`scripts/atomic_write.py` provides that replacement helper; its
+`AtomicWriteOptions` value object controls parent creation, mode preservation,
+and syncing, and the allowlist writer is its only live consumer.
+
+nose is deterministic: repeated scans of the same tree produce byte-identical
+reports without a hash-seed or interpreter pin, so the gate needs no
+environment of its own beyond the pinned binary. Its helper tests run through
+`make duplication-test` under the gate's own Python 3.14 interpreter, isolated
+from the application suite.
+
+The gate is isolated tooling: `scripts/duplication_gate.py` and its sibling
+modules carry PEP 723 headers declaring Python 3.14 and their own pinned
+dependencies, and run under `uv run --no-project`, so the gate needs neither
+the application virtualenv nor the compiled extension. Cuprum's application
+floor stays at 3.12, so `make typecheck` re-checks the tooling modules in a
+second pass at their real floor rather than weakening them or misdeclaring
+Cuprum's support. Invoke the gate as a *script path*, not `-m`: `uv run` reads
+the PEP 723 header only from a script named on the command line, so `-m` would
+silently resolve the gate's dependencies from the ambient environment.
+
+Because `scripts/` has no `__init__.py`, it is a namespace package and CPython
+builds its search path from every `sys.path` entry holding a `scripts`
+directory — including the checkout root that a development install contributes.
+`scripts/duplication_gate.py` therefore pins its own tree to `sys.path` before
+importing its siblings, so an out-of-tree run reads its own configuration or
+fails loudly rather than silently adjudicating the checkout it happens to have
+imported. `scripts/tests/test_gate_entrypoint_binding.py` falsifies that
+binding by dropping `PYTHONPATH`, which is the arrangement a developer running
+the script directly gets.
 
 ### Markdown linting
 
@@ -4809,14 +4991,15 @@ Because `interrogate` requires a docstring on every documentable node,
 documenting a large module can take it over the project's 400-line ceiling
 enforced by Pylint's `too-many-lines`. Split the module by feature rather than
 suppressing the limit; this is why the pipeline dataclasses live in
-`cuprum/_pipeline_types.py` (re-exported from `cuprum/_pipeline_internals.py`)
-rather than inline. The coverage gate applies to tests, benchmarks, and scripts
-as well as the production package. Most gaps there are nested helpers whose
-docstring would merely restate the enclosing fixture; when that happens, give
-the helper a name and a one-line docstring that states its intent, and keep
-single-line docstrings on scenario dataclasses and adapters. Do not exclude a
-scope or a name pattern from the gate; an exclusion only hides the next
-undocumented helper.
+`cuprum/_pipeline_types.py` and the observation builders in
+`cuprum/_pipeline_observations.py`, both re-exported from
+`cuprum/_pipeline_internals.py` rather than declared inline. The coverage gate
+applies to tests, benchmarks, and scripts as well as the production package.
+Most gaps there are nested helpers whose docstring would merely restate the
+enclosing fixture; when that happens, give the helper a name and a one-line
+docstring that states its intent, and keep single-line docstrings on scenario
+dataclasses and adapters. Do not exclude a scope or a name pattern from the
+gate; an exclusion only hides the next undocumented helper.
 
 ### Lint Makefile variables
 
@@ -6009,16 +6192,34 @@ pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
 
+`cuprum/_pipeline_observations.py` owns the state a run is observed *through*:
+`_build_pipeline_observations` assembles one `_StageObservation` per command —
+enforcing the allowlist, collecting the context's hooks, resolving the working
+directory and environment overlay, and grafting the pipeline's stage index and
+stage count onto the base tags — and `_emit_plan_events_and_run_before_hooks`
+fires each stage's `plan` event and before hooks before any process is spawned.
+It was split out of `cuprum/_pipeline_internals.py`, which re-exports its names
+alongside the `cuprum/_pipeline_types.py` dataclasses. `_enforce_allowlist` and
+`_collect_hooks` are pure queries with no emission or mutation, which is what
+lets `cuprum._command_internals` reuse both on the single-command path without
+inheriting the pipeline's event traffic.
+
 `cuprum/_sink_lifecycle.py` holds the presentation-sink session lifecycle the
 two runners share: the `_SinkBracket` that is the take-once owner of one run's
 session, opening it before the work starts (`_open_sink_session`, with
 `_command_session_start` framing a single command), closing it on every
 terminal path (`_close_sink_session`), and mapping a result or an error onto
 the bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
-`cuprum/_pipeline_sink.py` keeps only the pipeline's own result mapping,
-`_pipeline_result_outcome`, which reports the first failing stage's exit code;
-the command-versus-pipeline split there is the shape of the run, not of the
-session.
+It also holds `_close_sink_and_drain_after_failure`, the pair every failure
+branch that ends a run before finalization owes: close the bracket with the
+error outcome, then drain the observe-hook tasks. The ordering is the whole
+point of the helper — `_SinkBracket.close` clears its session on the first
+call, so an error close issued after some other close would silently do nothing
+— and it is the caller's shape, not the helper's, that decides the finalization
+label passed in. `cuprum/_pipeline_sink.py` keeps only the pipeline's own
+result mapping, `_pipeline_result_outcome`, which reports the first failing
+stage's exit code; the command-versus-pipeline split there is the shape of the
+run, not of the session.
 
 ### CommandResult timing and child-resource accounting
 
