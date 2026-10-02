@@ -64,7 +64,7 @@ def test_executable_binding_preserves_identity() -> None:
 
 @scenario(
     "../features/catalogue.feature",
-    "An unapproved executable cannot borrow an approved name",
+    "A binding cannot authorize an unlisted logical program",
 )
 def test_unapproved_program_is_still_refused() -> None:
     """Behavioural guard: a binding never widens the allowlist."""
@@ -76,7 +76,7 @@ def test_unapproved_program_is_still_refused() -> None:
 # the same implementation is what makes it resolvable here; the sibling
 # telemetry behaviour module does the same for its tracing steps.
 when(
-    parsers.parse('I bind the program "{program_name}" to the executable "{path}"'),
+    parsers.parse('I bind the program "{program_name}" to the running interpreter'),
     target_fixture="binding_outcome",
 )(_binding_steps.when_bind_program_to_executable)
 when(

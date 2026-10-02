@@ -63,22 +63,20 @@ def _scenario_catalogue(program: Program) -> ProgramCatalogue:
 
 
 @when(
-    parsers.parse('I bind the program "{program_name}" to the executable "{path}"'),
+    parsers.parse('I bind the program "{program_name}" to the running interpreter'),
     target_fixture="binding_outcome",
 )
 def when_bind_program_to_executable(
     program_name: str,
-    path: str,
 ) -> dict[str, object]:
     """Run ``program_name`` inside a scope that binds it to another executable.
 
     The bound executable is the running interpreter: a real, executable file
-    whose name differs from the catalogued program's, so a regression that ran
-    the catalogued name instead would be visible in the child's own report.
-    ``path`` is ignored as a real location -- the scenario must run on any
-    machine, and the executable it needs is the one already running -- but the
-    feature file still states a path, because "bind to a configured path" is
-    the behaviour under test.
+    whose path differs from the catalogued program's name, so a regression that
+    ran the catalogued name instead would be visible in the child's own report.
+    The scenario names the interpreter rather than a literal path because the
+    executable has to exist on whatever machine runs the suite, and the
+    interpreter is the one executable guaranteed to.
 
     Both halves of the claim are returned: ``resolved_path`` is what the
     library says ran, and the child's own report is what actually did. Checking
@@ -88,15 +86,12 @@ def when_bind_program_to_executable(
     ----------
     program_name : str
         The logical program name captured from the scenario step text.
-    path : str
-        The configured path named by the scenario; binding ignores it.
 
     Returns
     -------
     dict[str, object]
         The run's ``result`` and the ``executable`` it was bound to.
     """
-    _ = path
     program = Program(program_name)
     bound = sys.executable
     with (

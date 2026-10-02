@@ -104,6 +104,12 @@ class _LineEventEmitter:
         per stage observation like the other fields here, and it is carried on
         *every* phase rather than only the terminal one, so each line event
         must report it or the mode would appear to change mid-stream.
+    resolved_path:
+        The executable this execution actually ran, when a binding named one.
+        Invariant per stage observation for the same reason as ``env_mode``:
+        resolution happens once, before the child is spawned, so a line event
+        that omitted it would disagree with the ``plan`` and ``exit`` events
+        around it about which executable ran.
     pid:
         Subprocess identifier, ``None`` before spawn.
     stream:
@@ -128,6 +134,7 @@ class _LineEventEmitter:
     cwd: Path | None
     env: EnvOverlay | None
     env_mode: EnvMode | None
+    resolved_path: str | None
     pid: int | None
     stream: LineStreamName
     tags: cabc.Mapping[str, object]
@@ -146,6 +153,7 @@ class _LineEventEmitter:
                 cwd=self.cwd,
                 env=self.env,
                 env_mode=self.env_mode,
+                resolved_path=self.resolved_path,
                 pid=self.pid,
                 timestamp=self.wall_clock(),
                 line=line,
@@ -188,6 +196,7 @@ def _line_event_emitter(
         cwd=observation.cwd,
         env=observation.env_overlay,
         env_mode=observation.env_mode,
+        resolved_path=observation.resolved_path,
         pid=context.pid,
         stream=context.stream,
         tags=observation.tags,
