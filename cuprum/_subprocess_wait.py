@@ -42,9 +42,14 @@ if typ.TYPE_CHECKING:
 
 # ``_CAPTURE_EOF_GRACE_S``, ``_await_eof_grace``, and ``_DrainContext`` are
 # imported rather than defined here, but they stay bound in this module's
-# namespace deliberately: the drain once lived here, and tests and callers
-# import or patch them by this path. Bouncing them through keeps one definition
-# while leaving every existing reference working.
+# namespace deliberately: the drain once lived here, and callers still import
+# them by this path. Bouncing them through keeps one definition while leaving
+# those imports working.
+#
+# Importing them from here is supported; patching them here is not. The drain
+# resolves each name from its own module's globals, so rebinding the copy in
+# this namespace is invisible to it. Tests that need to replace the grace
+# waiter must patch ``cuprum._stream_drain._await_eof_grace``.
 
 
 async def _wait_for_exit_code(

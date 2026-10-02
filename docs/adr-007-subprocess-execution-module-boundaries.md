@@ -442,8 +442,8 @@ Byte-exact runs (issue #444) are not a second execution path.
 `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
 counterparts, reuse the existing runners and carry one extra fact —
 `capture_bytes` — from the resolved execution state through the stream
-configuration to the drains. The reusable parts of that refactor live in their
-own modules:
+configuration to the drains. The reusable parts of that refactor live in
+separate modules:
 
 - `cuprum/_result_assembly.py` — the rules a finished execution applies when
   reporting its result: `_RunMeasurements`, which carries the measured fields
