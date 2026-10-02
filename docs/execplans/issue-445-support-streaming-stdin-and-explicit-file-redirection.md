@@ -205,6 +205,83 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-02) Fourth rebase, onto `origin/main` at `c65d843c` (seven new
+  commits: `71aaf3eb`, `81efc928`, `ecf0ed9e`, `d869c478`, `2cc83208`,
+  `b6bb9a99`, `c65d843c`). The boundary was the plain merge base `7b86b904`,
+  because this branch's PR targets `main` directly and no parent PR needed
+  recovering. A dry run with `git merge-tree --write-tree` predicted exactly
+  one conflict; the replay through the 55-commit series found that one and no
+  others.
+
+  The conflict was in `CHANGELOG.md`, an add/add against an empty base: main
+  added a **PEP 561 typing marker** bullet under `### Added`, and commit 16 of
+  this series adds the **Streaming stdin** and **Explicit standard-stream
+  redirection** bullets to the same region. Both sides were kept, main's bullet
+  first, and the pre-existing `ProgramCatalogue.from_project()` bullet that
+  follows them is untouched.
+
+  The post-rebase audit found no unexplained change. Commit counts match at 55
+  before and after; the `range-diff` marks 52 of 55 commits identical, and the
+  three that differ are all explained. Two (the module-size split and the
+  module-roster commit) differ only in the context line above their
+  `docs/developers-guide.md` hunks — main inserted text earlier in that file, so
+  the hunk anchor moved while every added line stayed byte-identical. The third
+  is the `CHANGELOG.md` resolution above. All 123 paths that main changed and
+  this branch did not are byte-identical to `c65d843c`; there are no file
+  deletions against the target; and the four newly repeated multi-line blocks
+  the scan flagged are all benign sibling shapes (`consumes_stdout` /
+  `consumes_stderr` twin properties, the paired `run` / `run_sync` signatures,
+  two matching `Raises` sections, and one added property-test case).
+
+  Weave was not selected for this operation. Its driver is registered globally,
+  but `git check-attr merge` reports `unspecified` for every path with and
+  without the attributes override, and the repository tracks no `.gitattributes`
+  — so the ambient global registration could not have selected it. The replay
+  therefore used Git's own text merge under `zdiff3`.
+
+- [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
+  findings, and a functional probe adjudicated all four against the current
+  tree rather than against the codex summary. Two were real defects in the
+  streaming writer, and both were reproduced before being fixed:
+
+  1. **A producer's own pipe error was read as the child closing the pipe.**
+     The `async for` body advanced the producer and wrote to the child inside
+     one `try`, and `_is_early_close` classified the resulting exception by
+     type alone. A producer raising `BrokenPipeError`, `ConnectionResetError`,
+     or `OSError(EPIPE)` from its own machinery — reading a socket it owns, say
+     — was therefore recorded as an `early_close` observation and swallowed,
+     while the documented contract says a producer failure becomes
+     `StdinSourceError`. Measured against a child that never reads and outlives
+     the run, the defect surfaced as a `TimeoutExpired` blaming the child for a
+     failure the writer had already seen. Fixed by splitting the loop into
+     `_pump_chunks`, which wraps only the producer's `anext` and marks it with
+     a `_ProducerFailureError` carrying the original exception; the shared
+     handler translates the marker instead of re-classifying by type. The
+     write-side path is untouched, so a genuine early close still records an
+     `early_close` observation.
+  2. **An unbuildable encoder escaped the error and cleanup boundary.**
+     `codec.encoder()` ran before the `try`, so a context naming an unknown
+     codec raised a bare `LookupError` from inside cuprum and skipped the
+     `finally` that finalizes the producer — measured directly: the producer's
+     `aclose` never ran, so a producer holding a file or connection would leak
+     it for the process lifetime. Fixed by making `_StreamSink.encoder()` lazy,
+     which puts the `LookupError` inside the guarded region on the first `str`
+     chunk.
+
+  The other two findings were disproved by measurement and need no change:
+  `_reject_stdio_targets` already refuses a `RunOutputOptions` naming a stdio
+  target at `cuprum/sh/pipeline.py:204` (with `test_pipeline_stdio_targets.py`
+  covering it), and a `StdioTarget.inherit()` combined with a stdin source
+  already raises the `ValueError` the finding asks for.
+
+  Nine regression tests in the new
+  `cuprum/unittests/test_stdin_source_failure_classification.py` pin the two
+  defects; all nine fail against the unfixed writer and pass after it. The
+  module was also split: the sink, per-chunk write, encoder flush, and
+  early-close predicate moved to `cuprum/_subprocess_stdin_write.py`, keeping
+  both files under the 400-line ceiling, and the maturin wheel snapshot gained
+  exactly one line for the new module.
+
 - [x] (2026-10-01) The three findings above were committed as `f5310367` and
   pushed, a fast-forward `36d483da..f5310367`. All six gates were re-run
   against the frozen revision and passed with the two files byte-identical at

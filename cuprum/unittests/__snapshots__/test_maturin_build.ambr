@@ -68,6 +68,7 @@
       'cuprum/_subprocess_spawn.py',
       'cuprum/_subprocess_stdin.py',
       'cuprum/_subprocess_stdin_stream.py',
+      'cuprum/_subprocess_stdin_write.py',
       'cuprum/_subprocess_stream_run.py',
       'cuprum/_subprocess_streams.py',
       'cuprum/_subprocess_timeout.py',
