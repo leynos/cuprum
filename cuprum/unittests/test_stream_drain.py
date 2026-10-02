@@ -543,12 +543,9 @@ def test_byte_exact_capture_still_observes_decoded_lines() -> None:
         )
     )
 
-    assert captured == payload, (
-        f"the capture must stay byte-exact, got {captured!r}"
-    )
+    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
     assert lines == ["first", "sec�ond", "third"], (
-        "the observer must receive the decoded lines, got "
-        f"{lines!r}"
+        f"the observer must receive the decoded lines, got {lines!r}"
     )
 
 
@@ -572,9 +569,7 @@ def test_byte_exact_capture_observes_lines_across_chunk_boundaries() -> None:
     assert captured == b"a\xc3\xa9b\n", (
         f"the split sequence must survive intact, got {captured!r}"
     )
-    assert lines == ["aéb"], (
-        f"the joined sequence must decode once, got {lines!r}"
-    )
+    assert lines == ["aéb"], f"the joined sequence must decode once, got {lines!r}"
 
 
 def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:

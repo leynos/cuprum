@@ -32,6 +32,8 @@ from cuprum.sh import (
 )
 from tests.helpers.catalogue import (
     python_builder as build_python_builder,
+)
+from tests.helpers.catalogue import (
     python_catalogue,
 )
 from tests.helpers.execution import _RunKwargs
@@ -39,6 +41,7 @@ from tests.helpers.execution import _RunKwargs
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
     from cuprum.program import Program
     from cuprum.sh import SafeCmd
@@ -105,6 +108,11 @@ def observe_scope() -> ObserveScope:
     Both must come from one catalogue: the allowlist admits only the program
     that catalogue registered, so a command built from a second catalogue
     would be refused before the drain this test exercises.
+
+    Returns
+    -------
+    ObserveScope
+        The allowlist and the command it admits.
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -270,18 +278,16 @@ def test_observe_hooks_do_not_break_byte_exact_capture(
     """
     observed: list[str] = []
 
-    def hook(event: LineEvent) -> None:
+    def hook(event: ExecEvent) -> None:
         """Record the decoded line the run publishes."""
-        line = getattr(event, "line", None)
-        if line is not None:
-            observed.append(line)
+        if event.line is not None:
+            observed.append(event.line)
 
     with scoped(ScopeConfig(allowlist=observe_scope.allowlist)), sh.observe(hook):
         result = _run_bytes_sync(observe_scope.cmd, {})
 
     assert result.stdout == _FAILING_PAYLOAD, (
-        "an observe hook must not decode the captured payload, got "
-        f"{result.stdout!r}"
+        f"an observe hook must not decode the captured payload, got {result.stdout!r}"
     )
     assert result.stderr == _FAILING_PAYLOAD, (
         f"stderr must stay byte-exact beside a hook, got {result.stderr!r}"
