@@ -55,7 +55,12 @@ def readers_that_expire_grace_immediately(
         "cuprum._subprocess_streams._consume_stream",
         consume_forever,
     )
-    monkeypatch.setattr("cuprum._subprocess_wait._await_eof_grace", expire_immediately)
+    # Patch where the drain resolves the name, not where it is re-exported:
+    # ``_subprocess_wait`` rebinds it for callers that import it by that path,
+    # but ``_await_capture_eof_grace`` reads its own module's global, so
+    # patching the re-export would leave the real 0.25-second grace running and
+    # this test would pass on that sleep rather than on the stub.
+    monkeypatch.setattr("cuprum._stream_drain._await_eof_grace", expire_immediately)
 
 
 def _capture_timeout_command(tmp_path: Path) -> tuple[sh.SafeCmd, ScopeConfig]:
@@ -140,7 +145,8 @@ def test_readers_reaching_eof_emit_no_grace_event_or_metric(
         """Wait for the closed process pipes to deliver EOF to both readers."""
         await asyncio.gather(*consumers)
 
-    monkeypatch.setattr("cuprum._subprocess_wait._await_eof_grace", wait_for_readers)
+    # As above: the drain resolves this name from its own module.
+    monkeypatch.setattr("cuprum._stream_drain._await_eof_grace", wait_for_readers)
     command, scope_config = _capture_timeout_command(tmp_path)
     metrics = InMemoryMetrics()
     events: list[ExecEvent] = []

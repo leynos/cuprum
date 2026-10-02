@@ -30,6 +30,7 @@ from cuprum._subprocess_wait import (
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
+    _BLOCK_SECONDS,
     CHILD_STDERR,
     CHILD_STDOUT,
     child_argv,
@@ -71,6 +72,19 @@ _RUN_TIMEOUT_S = 5.0
 type _WedgedReader = cabc.Callable[
     [], cabc.Coroutine[object, object, str | bytes | None]
 ]
+
+
+# Writes a payload that is not valid UTF-8, then blocks. ``sys.argv[1]`` is the
+# path of the readiness marker, written only once the payload is flushed, so a
+# caller that waits for the file knows the bytes are already in the pipe.
+_INVALID_UTF8_PAYLOAD = b"prefix\xff\x00\xfe\x80-tail"
+_INVALID_UTF8_CHILD_SOURCE = "; ".join((
+    "import sys, pathlib, time",
+    f"sys.stdout.buffer.write({_INVALID_UTF8_PAYLOAD!r})",
+    "sys.stdout.buffer.flush()",
+    "pathlib.Path(sys.argv[1]).write_text('ready')",
+    f"time.sleep({_BLOCK_SECONDS})",
+))
 
 
 async def _reaches_eof_late(text: str, turns: int) -> str | None:
@@ -486,18 +500,10 @@ def test_bytes_timeout_keeps_flushed_output_after_the_child_is_ready(
 
 def test_bytes_timeout_keeps_an_invalid_utf8_prefix(tmp_path: Path) -> None:
     """Bytes that are not valid text survive a timeout's partial capture."""
-    payload = b"prefix\xff\x00\xfe\x80-tail"
     marker = tmp_path / "ready"
-    source = "; ".join((
-        "import sys, pathlib, time",
-        f"sys.stdout.buffer.write({payload!r})",
-        "sys.stdout.buffer.flush()",
-        "pathlib.Path(sys.argv[1]).write_text('ready')",
-        "time.sleep(300)",
-    ))
     command = sh.make(Program(python_interpreter()), catalogue=python_catalogue()[0])(
         "-c",
-        source,
+        _INVALID_UTF8_CHILD_SOURCE,
         str(marker),
     )
 
@@ -516,7 +522,7 @@ def test_bytes_timeout_keeps_an_invalid_utf8_prefix(tmp_path: Path) -> None:
 
     expired = asyncio.run(run_case())
 
-    assert expired.output == payload, (
+    assert expired.output == _INVALID_UTF8_PAYLOAD, (
         "a byte-exact timeout must carry the invalid sequence through "
         f"unchanged, got {expired.output!r}"
     )
