@@ -53,6 +53,12 @@ async def _never_reaches_eof_bytes() -> bytes | None:
     await asyncio.Event().wait()
 
 
+#: A consumer that blocks until cancelled, in either capture mode.
+type _WedgedReader = cabc.Callable[
+    [], cabc.Coroutine[typ.Any, typ.Any, str | bytes | None]
+]
+
+
 async def _reaches_eof_late(text: str, turns: int) -> str | None:
     """Return ``text`` after ``turns`` scheduling turns, as a late EOF would."""
     for _ in range(turns):
@@ -193,26 +199,42 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
     asyncio.run(run_case())
 
 
-def test_non_capturing_drain_leaves_a_wedged_reader_unset() -> None:
-    """A non-capturing drain still reports ``None`` for a reader with no text."""
+@pytest.mark.parametrize(
+    ("wedged_reader", "capture_bytes"),
+    [
+        (_never_reaches_eof, False),
+        (_never_reaches_eof_bytes, True),
+    ],
+    ids=["text", "bytes"],
+)
+def test_non_capturing_drain_leaves_a_wedged_reader_unset(
+    wedged_reader: _WedgedReader,
+    capture_bytes: bool,
+) -> None:
+    """A non-capturing drain still reports ``None`` for a reader with no output.
+
+    Both modes are pinned because the empty-capture fallback is mode-specific:
+    a byte-exact run must report ``None`` here, not the ``b""`` it reports when
+    capture *is* enabled, and the two are easy to conflate.
+    """
 
     async def run_case() -> None:
         """Drain wedged readers for a run that captured nothing."""
         consumers = (
-            asyncio.create_task(_never_reaches_eof()),
-            asyncio.create_task(_never_reaches_eof()),
+            asyncio.create_task(wedged_reader()),
+            asyncio.create_task(wedged_reader()),
         )
 
-        stdout_text, stderr_text = await _drain_stream_consumers(
+        stdout_value, stderr_value = await _drain_stream_consumers(
             consumers,
-            _DrainContext(capture=False),
+            _DrainContext(capture=False, capture_bytes=capture_bytes),
         )
 
-        assert stdout_text is None, (
-            f"a non-capturing drain must leave stdout unset, got {stdout_text!r}"
+        assert stdout_value is None, (
+            f"a non-capturing drain must leave stdout unset, got {stdout_value!r}"
         )
-        assert stderr_text is None, (
-            f"a non-capturing drain must leave stderr unset, got {stderr_text!r}"
+        assert stderr_value is None, (
+            f"a non-capturing drain must leave stderr unset, got {stderr_value!r}"
         )
 
     asyncio.run(run_case())
@@ -378,31 +400,6 @@ def test_capturing_bytes_drain_reports_empty_bytes_without_a_capture() -> None:
         )
         assert stderr_bytes == b"", (
             f"a byte-exact capture must fall back to b''; got {stderr_bytes!r}"
-        )
-
-    asyncio.run(run_case())
-
-
-def test_non_capturing_bytes_drain_leaves_a_wedged_reader_unset() -> None:
-    """A non-capturing byte-exact drain still reports ``None``, not ``b""``."""
-
-    async def run_case() -> None:
-        """Drain wedged readers for a byte-exact run that captured nothing."""
-        consumers = (
-            asyncio.create_task(_never_reaches_eof_bytes()),
-            asyncio.create_task(_never_reaches_eof_bytes()),
-        )
-
-        stdout_bytes, stderr_bytes = await _drain_stream_consumers(
-            consumers,
-            _DrainContext(capture=False, capture_bytes=True),
-        )
-
-        assert stdout_bytes is None, (
-            f"a non-capturing run must leave stdout unset, got {stdout_bytes!r}"
-        )
-        assert stderr_bytes is None, (
-            f"a non-capturing run must leave stderr unset, got {stderr_bytes!r}"
         )
 
     asyncio.run(run_case())

@@ -162,6 +162,35 @@ def _stage_relay_fallbacks(
     return tuple(stage_tuples)
 
 
+def _join_stage_stderr(
+    stderr_by_stage: tuple[_StreamPayload | None, ...],
+    *,
+    capture_bytes: bool,
+) -> _StreamPayload:
+    """Join each stage's stderr in stage order, in the pipeline's mode.
+
+    Only called for a capturing run, so every chunk is present in the mode the
+    config carried. The join cannot be shared across modes: ``bytes.join`` and
+    ``str.join`` are different methods, and narrowing a generator to match a
+    dynamically chosen empty value is not something a type checker can follow.
+    Each branch therefore stays separate, and each narrows the chunks it joins,
+    because a stage payload in the wrong mode is an internal contradiction —
+    the helpers that say so are the same ones the result builders use.
+
+    Returns
+    -------
+    _StreamPayload
+        The concatenated stderr. An all-empty byte-exact run is ``b""``, not
+        ``None``: ``b""`` is itself a valid join result, and the distinction
+        between it and ``None`` is the one the capture flag draws everywhere.
+    """
+    if capture_bytes:
+        return b"".join(
+            _require_bytes(chunk, "stderr") or b"" for chunk in stderr_by_stage
+        )
+    return "".join(_require_text(chunk, "stderr") or "" for chunk in stderr_by_stage)
+
+
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
@@ -183,25 +212,12 @@ def _build_timeout_expired_error(
         The ``TimeoutExpired`` to raise, carrying whatever partial output the
         terminated stages had produced.
     """
-    # Branched rather than joining under a mode-selected separator: the two
-    # joins are different methods on different types, and narrowing the
-    # generator to match a dynamically chosen empty value is not something a
-    # type checker can follow. The duplication is one short expression and
-    # buys both branches an honest type. Each branch also narrows the chunks
-    # it joins: a stage payload in the wrong mode is an internal contradiction,
-    # and the helpers that say so are the same ones the result builders use.
     stderr_text: _StreamPayload | None = None
     if outputs.capture:
-        if outputs.capture_bytes:
-            stderr_text = b"".join(
-                _require_bytes(chunk, "stderr") or b""
-                for chunk in outputs.stderr_by_stage
-            )
-        else:
-            stderr_text = "".join(
-                _require_text(chunk, "stderr") or ""
-                for chunk in outputs.stderr_by_stage
-            )
+        stderr_text = _join_stage_stderr(
+            outputs.stderr_by_stage,
+            capture_bytes=outputs.capture_bytes,
+        )
     output = outputs.final_stdout if outputs.capture else None
     return _sh_module().TimeoutExpired(
         cmd=tuple(cmd.argv_with_program for cmd in parts),
