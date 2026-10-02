@@ -546,6 +546,85 @@ escalation, not a workaround.
         workflow (`37028968211`) is also `success`. The plan is therefore
         closed: every gate has passed at the pushed head, the review is clean,
         and nothing remains but the human decision to merge.
+- [x] (2026-10-02 18:45Z) Rebase onto `origin/main` requested, investigated,
+      and found to be a no-op. `origin/main` is `b6bb9a99`, which is already an
+      ancestor of the branch head `0ee8ba47`, so the branch is based on the
+      current target tip with nothing to replay. Recorded before any mutation:
+      `OLD_HEAD=0ee8ba47`, `OLD_BASE=TARGET=origin/main=b6bb9a99`,
+      merge-base `= b6bb9a99` (= TARGET, which is what "already rebased" looks
+      like), remote branch head `= 0ee8ba47` (= OLD_HEAD, so the local and
+      remote views agree). Recovery refs were created before any inspection
+      that could mutate, and are inert: four refs under the
+      `refs/rebase-recovery/` namespace, named with the `issue440-` prefix and
+      the `-20261002` suffix, covering `OLD_HEAD`, `OLD_BASE`, `TARGET`, and
+      `REMOTE_HEAD`. The
+      `--reapply-cherry-picks` replay hazard was tested rather than assumed: a
+      `git patch-id --stable` comparison across the 35 non-merge branch commits
+      and the last 400 commits of main reports **zero** overlapping patch-ids,
+      so no commit in the range duplicates content main already holds. No
+      rebase, and therefore no force push, was performed. See the Decision log
+      for why replaying anyway would have been actively harmful.
+- [x] (2026-10-02 18:50Z) Semantic audit of the existing base against the new
+      target, replacing a check that turned out to be vacuous. The published
+      Weave procedure's "target-only paths are byte-identical" test has *no
+      subjects* here: because `origin/main` is an ancestor, the set of paths
+      main changed since the fork but the branch never touched is empty (`comm
+      -23` over 128 main-changed and 171 branch-changed paths yields 0), so the
+      check would have passed without examining anything. The check with
+      content is whether the branch *deleted* content main added, so it was run
+      instead: across all 128 shared paths, not one line that main added since
+      the fork is absent at `HEAD`. A conflict-marker scan over all 51 changed
+      paths found none, and `git diff --check origin/main HEAD` is clean. Weave
+      itself was confirmed unselected for every one of the 51 paths (`git
+      check-attr merge` returns `unspecified`; the repository has no
+      `.gitattributes`, no `info/attributes`, and no `core.attributesFile`),
+      with a command-scoped negative control proving `check-attr` is live and
+      the null result is real rather than a silent failure.
+- [x] (2026-10-02 18:55Z) `weave check` recorded as **unchecked**, not as a
+      pass. The installed toolchain is `weave 0.5.1` with a matching
+      `weave-driver 0.5.1` at `/home/leynos/.cargo/bin/weave-driver`, and
+      `weave check` is supported. On this tree it exits `0` while printing
+      "no merge in progress (no MERGE_HEAD) and HEAD is not a merge commit, so
+      there is no three-way context … **NOTHING WAS CHECKED** — this is not a
+      clean bill of health." `MERGE_HEAD`, `REBASE_HEAD`, and `CHERRY_PICK_HEAD`
+      are all absent, and `HEAD` is a single-parent commit, so no 0.5.1 mode can
+      verify this tree: the no-argument mode has no three-way scope, and the
+      `--base/--ours/--theirs` mode would describe a three-input comparison
+      rather than the tree being accepted. The exit code alone would have
+      recorded a pass; the sentence is what makes it an explicit unchecked
+      state. `weave check` was also confirmed read-only: `git status
+      --porcelain` before and after shows the same single modified path, so it
+      mutated nothing.
+- [x] (2026-10-02 19:05Z) `sem` (0.5.3) applied as an independent entity-level
+      audit, and its arity findings adjudicated rather than adopted or waved
+      away. `sem diff --from origin/main --to HEAD` corroborates the design:
+      `_resolve_executable_for` added in
+      `_observability.py`, `_enforce_allowlist`
+      and `_collect_hooks` moved from `_pipeline_internals.py` to
+      `_context_policy.py`, and `_LineEventEmitter` modified — the last being
+      exactly the merge-conflict site the branch had to reconcile. `sem verify`
+      reports 494 call-arity findings across 121 files repo-wide, 15 of them in
+      files this branch touches. All 15 were read against the real signatures
+      and none is a genuine arity error; each falls into one of four heuristic
+      limits: **variadic parameters** (`_merge_tags(*tags)` at
+      `_observability.py:33` called with 3 and 4 tags,
+      `_catalogue_for(*programs)` called with 2, and
+      `env(*overlays, **kwvars)` called with 1 — sem counts `*args` as a single
+      fixed parameter); **framework callbacks** (`_events`
+      is a Hypothesis `@st.composite` strategy, so the zero-argument call is
+      Hypothesis invoking it, not a caller passing nothing); **shadowed local
+      functions** (`task_worker` is defined twice with different arities, at
+      `test_context_isolation.py:58` taking one parameter and `:87` taking two,
+      and sem resolves both call sites to the first definition); and
+      **higher-order returns** (`builder = sh.make(...)` followed by
+      `builder()`, where sem reads `sh.make`'s own parameters as the returned
+      callable's). A fifth shape is a fuzzy name match: the finding citing
+      `executable_binding` at `test_executable_context.py:357` points at a
+      `CuprumContext().with_executable_binding(...)` call, and sem has matched
+      the substring. The upstream project already tolerates this class of
+      finding — the 479 findings outside this branch are untouched in `main` —
+      so nothing here is repaired, and the audit is recorded as corroborating
+      evidence with a known false-positive rate rather than as a defect list.
 
 ## Surprises & discoveries
 
@@ -1052,6 +1131,46 @@ escalation, not a workaround.
   unrelated one. It is recorded under Surprises so the next reader inherits the
   finding without inheriting an unrequested diff. Date/Author: 2026-10-02,
   implementing agent.
+- Decision: the requested rebase onto `origin/main` is a no-op, so the branch
+  history is left alone rather than replayed. Rationale: `origin/main`
+  (`b6bb9a99`) is already an *ancestor* of `0ee8ba47`, so the rebase the
+  request describes has, in effect, already happened — the branch absorbed main
+  by merge at `82acb1ae` ("Merge remote-tracking branch 'origin/main' into
+  issue-440-…"), which makes `git merge-base HEAD origin/main` equal to
+  `origin/main` exactly. Three independent sources agree the tips are
+  `b6bb9a99` and `0ee8ba47`: the local tracking refs, `git ls-remote origin`,
+  and the GitHub REST API for both `refs/heads/main` and `refs/heads/<branch>`.
+  Replaying the 35 non-merge commits with
+  `rebase --no-fork-point --reapply-cherry-picks` would have produced new SHAs
+  and destroyed the merge, changing the candidate head for no gain and
+  invalidating the CI evidence and the zero-finding CodeRabbit result that the
+  status line above relies on. The claim was verified rather than assumed:
+  `git merge-tree --write-tree --name-only origin/main HEAD` exits 0 and its
+  tree hash (`8d1ba226ac4cc7b8d28593f56c74d116ed1fd415`) is byte-identical to
+  `git rev-parse HEAD^{tree}`, which is proof that merging main in would change
+  nothing. Date/Author: 2026-10-02, implementing agent.
+- Decision: the CodeScene "Code Health Review" failure is not a regression from
+  this rebase and is not repaired here. Rationale: it has failed on every one
+  of the branch's recent heads (`59bf841f`, `3e893565`, `6efb42b9`, `c738c78a`,
+  `72f0e660`, `0ee8ba47`), so it is a standing property of the branch rather
+  than anything a rebase could have introduced. The failed rule is
+  `code duplication` on `cuprum/context/_hooks.py`, a 137-line file this branch
+  *adds* by extracting six hook mutators out of `cuprum/context/core.py` so
+  that module stays under the repository's 400-line ceiling; CodeScene scores
+  the resulting near-identical `with_…_hook`/`without_…_hook` accessor bodies
+  at 9.10 against its 10.00 threshold. Repairing it is a genuine design
+  question — whether the six accessors should collapse into a table-driven pair
+  — and is out of scope for an instruction to rebase. It is recorded here so
+  the reader is not misled by the status line's "every gate passes", which
+  refers to the repository's own commit gates and not to the PR's external
+  quality checks. CodeScene is also not one of `main`'s required status checks:
+  ruleset `main-required-checks` (id `18427980`, `enforcement: active`) lists
+  twelve contexts — `lint-test`, `Typecheck and test (Python 3.12)`,
+  `Typecheck and test (Python 3.14)`, `coverage`, `benchmark-ratchet`,
+  `build-wheels / …` (five targets plus `verify-wheel-install`), and
+  `Extension-gated tests (Python/Rust boundary)` — and CodeScene is not among
+  them. All twelve pass at `0ee8ba47`, so the failure does not gate the merge.
+  Date/Author: 2026-10-02, implementing agent.
 
 ## Outcomes & retrospective
 
