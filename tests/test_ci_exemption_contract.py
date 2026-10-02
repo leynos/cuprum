@@ -31,6 +31,7 @@ from tests.helpers.makefile import (
     recipe_of,
     variable_expansion,
 )
+from tests.helpers.recipe_flow import require_module_runs_under_pytest
 from tests.helpers.suite_selection import (
     EXCEPTIONS,
     SCENARIO_SELECTOR,
@@ -250,10 +251,23 @@ def test_an_exemption_no_workflow_runs_is_refused(
         exceptions_verified()
 
 
-#: The Makefile target that runs the selection guard by name, and the target
-#: whose prerequisites must therefore include it.
+#: The Makefile target that runs the selection guard by name, the module it
+#: runs, and the Makefile variable naming the pytest command that runs it.
 _BOOTSTRAP_TARGET = "test-selection"
 _BOOTSTRAP_MODULE = "tests/test_ci_test_selection_contract.py"
+_BOOTSTRAP_PYTEST = "PYTEST"
+
+#: Ways of carrying the bootstrap module's path in the recipe while the shell
+#: runs something else. Each satisfies a substring test on the recipe text,
+#: which is what the contract below must not be.
+_BOOTSTRAP_FAULTS = (
+    ("commented-out", f"# $({_BOOTSTRAP_PYTEST}) {_BOOTSTRAP_MODULE}"),
+    ("echoed-not-run", f"echo $({_BOOTSTRAP_PYTEST}) {_BOOTSTRAP_MODULE}"),
+    (
+        "named-in-another-command",
+        f"$({_BOOTSTRAP_PYTEST}) tests/somewhere_else.py || exit $$?  # {_BOOTSTRAP_MODULE}",
+    ),
+)
 
 
 def _prerequisites(target: str) -> tuple[str, ...]:
@@ -271,20 +285,47 @@ def _prerequisites(target: str) -> tuple[str, ...]:
 
 
 def test_the_bootstrap_runs_the_guard_by_name() -> None:
-    """Require the route that the selector cannot silence to name the module.
+    """Require the route that the selector cannot silence to run the module.
 
     `_BOOTSTRAP_TARGET` exists because every assertion about the selector lives
     in a module the selector collects. If the bootstrap ran a *glob* or a
     directory instead of the module, a selector edit would silence it exactly
     as it silences the suite, and the bootstrap would be a no-op claiming to be
-    a guard. The path is asserted literally for that reason.
+    a guard. So the module must be an argument of a command the shell runs,
+    which is a stronger claim than the path appearing in the recipe's text.
     """
-    recipe = recipe_of(_BOOTSTRAP_TARGET)
-    assert _BOOTSTRAP_MODULE in recipe, (
-        f"`make {_BOOTSTRAP_TARGET}` must name {_BOOTSTRAP_MODULE} directly, or "
-        "the route that is supposed to survive a selector edit depends on the "
-        f"selector too. Recipe: {recipe!r}"
+    require_module_runs_under_pytest(
+        recipe_of(_BOOTSTRAP_TARGET),
+        module=_BOOTSTRAP_MODULE,
+        pytest_variable=_BOOTSTRAP_PYTEST,
     )
+
+
+@pytest.mark.parametrize(
+    ("fault", "recipe"),
+    _BOOTSTRAP_FAULTS,
+    ids=[fault for fault, _ in _BOOTSTRAP_FAULTS],
+)
+def test_a_bootstrap_that_only_names_the_module_is_refused(
+    fault: str,
+    recipe: str,
+) -> None:
+    """Show each way of naming the module without running it is refused.
+
+    The three faults all carry the module's exact path and the pytest
+    invocation's exact spelling, so every one of them satisfies a substring
+    test on the recipe — the claim the contract above used to make. Only the
+    first is even live, and it runs a *different* module. Driving them through
+    the same validator the contract uses is what makes the refusal the
+    contract's own, rather than a second assertion that could agree with it
+    while the contract stayed a text search.
+    """
+    with pytest.raises(AssertionError):
+        require_module_runs_under_pytest(
+            recipe,
+            module=_BOOTSTRAP_MODULE,
+            pytest_variable=_BOOTSTRAP_PYTEST,
+        )
 
 
 def test_the_python_routes_depend_on_the_bootstrap() -> None:

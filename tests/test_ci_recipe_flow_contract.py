@@ -32,9 +32,9 @@ PYTEST_INVOCATION = "PYTEST"
 
 #: Each step of the data flow through the `test-python` recipe, paired with the
 #: shape that satisfies every substring test while breaking the flow. Held as
-#: one table because the four faults are read together: a recipe can carry all
-#: four endpoint spellings and still collect nothing, and the controls below
-#: exist to prove each fault is refused rather than described.
+#: one table because the faults are read together: a recipe can carry every
+#: endpoint spelling and still collect nothing, and the controls below exist to
+#: prove each fault is refused rather than described.
 _RECIPE_FLOW_FAULTS = (
     (
         "the endpoints appear only as echo arguments",
@@ -76,6 +76,22 @@ _RECIPE_FLOW_FAULTS = (
         ),
         "must invoke",
     ),
+    (
+        "the binding is printed rather than performed",
+        (
+            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "echo set -- $$p; $(PYTEST) $$@; done"
+        ),
+        "must bind",
+    ),
+    (
+        "pytest runs after the loop has finished",
+        (
+            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "set -- $$p; done\n$(PYTEST) $$@"
+        ),
+        "must invoke",
+    ),
 )
 
 #: The loop the real recipe uses, so a seeded fault can break one step of it
@@ -103,7 +119,7 @@ def test_the_suite_target_recipe_consumes_the_selector() -> None:
     That chain is what ties the workflow check to the selector the coverage
     checks read, and it is checked structurally by
     `tests.helpers.recipe_flow.require_selector_drives_pytest`, which refuses
-    the four faults in `_RECIPE_FLOW_FAULTS` rather than describing them.
+    the faults in `_RECIPE_FLOW_FAULTS` rather than describing them.
 
     The helper is bounded rather than a shell interpreter: it recognizes the
     loop shape this repository's suite target is written in and refuses
@@ -131,12 +147,15 @@ def test_a_recipe_that_breaks_the_flow_is_refused(
 ) -> None:
     """Show each way of satisfying the words while breaking the flow is refused.
 
-    The four faults are the ones a mentions-the-name check cannot see: every
-    endpoint is present in the recipe's text, and the shell runs a suite that
-    collects something other than what the selector names. Driving them through
-    the same validator the production contract uses is what makes the contract
-    a claim about data flow — a per-fault bespoke assertion could agree with the
-    contract on this table while the contract itself stayed a substring test.
+    These are the faults a mentions-the-name check cannot see: every endpoint is
+    present in the recipe's text, and the shell runs a suite that collects
+    something other than what the selector names. Two of them put the words
+    where the loop does not reach them — a `set --` an `echo` prints, and a
+    pytest run after the loop has finished — so the body bound matters as much
+    as the words. Driving them through the same validator the production
+    contract uses is what makes the contract a claim about data flow; a
+    per-fault bespoke assertion could agree with the contract on this table
+    while the contract itself stayed a substring test.
 
     Each message must name the step it lost, so `expected` matches the diagnosis
     as well as the refusal: a validator that refused everything with one generic
