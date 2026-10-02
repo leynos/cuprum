@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
+import inspect
 import typing as typ
 
 import pytest
 
-from cuprum import ECHO, sh
+from cuprum import ECHO, ExecutionContext, sh
 from cuprum.catalogue import (
     ProgramCatalogue,
     ProjectSettings,
     UnknownProgramError,
 )
 from cuprum.program import Program
+from cuprum.sh import SafeCmd, build_argv
+from cuprum.sh.factory import _CONTEXT_OPTIONS, _RESERVED_OPTIONS, _RUN_OPTIONS
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -119,3 +123,105 @@ def test_make_supports_custom_catalogue() -> None:
         str(program),
         "run",
     ), "Full argv should include program and args"
+
+
+def test_reserved_options_cover_execution_context_and_run_parameters() -> None:
+    """The reserved set is exactly the context fields and run parameters.
+
+    The context half is derived from the dataclass; the run half is written by
+    hand. Comparing both against the live ``ExecutionContext`` and
+    ``SafeCmd.run_sync`` signatures fails when either drifts, so a new
+    execution option cannot silently start rendering as a child flag.
+    """
+    context_fields = {field.name for field in dc.fields(ExecutionContext)}
+    run_parameters = {
+        name
+        for name, parameter in inspect.signature(SafeCmd.run_sync).parameters.items()
+        if name != "self" and parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert context_fields == _CONTEXT_OPTIONS, (
+        "the derived context options must match ExecutionContext's fields"
+    )
+    assert run_parameters == _RUN_OPTIONS, (
+        "the handwritten run options must match SafeCmd.run_sync's keyword-only "
+        "parameters"
+    )
+    assert context_fields | run_parameters == _RESERVED_OPTIONS, (
+        "the builder must reserve the union of both execution-option sources"
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(_CONTEXT_OPTIONS - _RUN_OPTIONS),
+    ids=lambda name: name,
+)
+def test_make_rejects_context_field_keywords(name: str) -> None:
+    """Context field names are rejected with the ExecutionContext spelling."""
+    builder = sh.make(ECHO)
+
+    with pytest.raises(TypeError) as excinfo:
+        builder("hello", **{name: "value"})
+
+    assert str(excinfo.value) == (
+        f"{name} is an execution option; pass ExecutionContext({name}=...) to run_sync"
+    ), "the error must name the correct run_sync spelling"
+
+
+@pytest.mark.parametrize("name", sorted(_RUN_OPTIONS), ids=lambda name: name)
+def test_make_rejects_run_parameter_keywords(name: str) -> None:
+    """run_sync parameter names are rejected with the direct spelling."""
+    builder = sh.make(ECHO)
+
+    with pytest.raises(TypeError) as excinfo:
+        builder("hello", **{name: "value"})
+
+    assert str(excinfo.value) == (
+        f"{name} is an execution option; pass {name}=... to run_sync"
+    ), "the error must name the run_sync parameter directly"
+
+
+def test_make_rejects_the_first_reserved_keyword_in_insertion_order(
+    tmp_path: Path,
+) -> None:
+    """The reported keyword is the first reserved one the caller supplied.
+
+    ``timeout`` belongs to both sources; the run-parameter spelling wins so the
+    message matches the parameter the caller can pass straight to ``run_sync``.
+    """
+    builder = sh.make(ECHO)
+
+    with pytest.raises(TypeError) as excinfo:
+        builder("x", cwd=tmp_path, env={"A": "1"}, timeout=5)
+
+    assert str(excinfo.value) == (
+        "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
+    ), "the first reserved keyword in insertion order must be reported"
+
+
+def test_make_allows_reserved_names_as_positional_arguments(tmp_path: Path) -> None:
+    """A tool with a real --cwd flag still receives it positionally."""
+    builder = sh.make(ECHO)
+
+    cmd = builder(f"--cwd={tmp_path}", "--timeout=5")
+
+    assert cmd.argv == (
+        f"--cwd={tmp_path}",
+        "--timeout=5",
+    ), "reserved names must remain usable as positional argv elements"
+    assert cmd.argv == build_argv(f"--cwd={tmp_path}", "--timeout=5"), (
+        "the positional escape hatch must agree with build_argv"
+    )
+
+
+def test_make_still_serializes_non_reserved_keywords(tmp_path: Path) -> None:
+    """Names merely resembling the reserved ones keep rendering as flags."""
+    builder = sh.make(ECHO)
+
+    cmd = builder(working_dir=tmp_path, stdin_file="payload")
+
+    assert cmd.argv == (
+        f"--working-dir={tmp_path}",
+        "--stdin-file=payload",
+    ), "non-reserved keywords must keep the documented --flag=value rendering"

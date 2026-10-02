@@ -59,6 +59,13 @@ never compiles the Rust extension, even when a Rust toolchain is present, so
 `is_rust_available()` then returns `False`. Install a platform wheel for native
 acceleration; see [Optional Rust acceleration](#choosing-a-stream-backend).
 
+Cuprum ships a `py.typed` marker, so type checkers read its annotations under
+[PEP 561](https://peps.python.org/pep-0561/) and infer the real types of the
+symbols it exports. Every distribution carries the marker — the pure Python
+wheel, the native wheel, and both source archives — so a source build keeps the
+same typing support as a binary install. No configuration is needed: a checker
+that resolves the installed package picks the marker up on its own.
+
 ## Run a command
 
 Declare the executable, make a builder, build an argument vector, then run it.
@@ -130,6 +137,46 @@ form. For flags such as `--check`, pass a positional argument: `check=True`
 would produce `--check=True`. `None` raises `TypeError` in either position, so
 decide whether to omit or substitute an optional flag before building. An
 argument containing spaces remains one argument.
+
+Names that configure _how_ a command runs are reserved: the fields of
+`ExecutionContext` (`env`, `cwd`, `cancel_grace`, `native_pump_cleanup_grace`,
+`timeout`, `stdout_sink`, `stderr_sink`, `encoding`, `errors`, `tags`) and the
+parameters of `run_sync` (`output`, `timeout`, `context`, `stdin`). Passing one
+as a keyword raises `TypeError` instead of rendering it as a child flag.
+
+<!-- tested-example: reserved-execution-options -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="reserved")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+try:
+    python("-c", "print('unused')", cwd="/tmp")
+except TypeError as exc:
+    assert str(exc) == (
+        "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
+    )
+else:
+    raise AssertionError("cwd should not become a child flag")
+try:
+    python("-c", "print('unused')", timeout=5)
+except TypeError as exc:
+    assert str(exc) == "timeout is an execution option; pass timeout=... to run_sync"
+else:
+    raise AssertionError("timeout should not become a child flag")
+```
+
+Otherwise `cwd=repo_dir` would quietly become `--cwd=<path>` in the child's
+argv, and a run that rejected the flag would fail loudly while one that ignored
+it would run in the wrong directory. Pass the value where it belongs —
+`run_sync(context=ExecutionContext(cwd=...), timeout=..., stdin=...)`, as
+[Supply input, environment, and a deadline](#supply-input-environment-and-a-deadline)
+shows. A tool whose command line genuinely takes such a flag still receives it
+positionally, as `"--cwd=<dir>"`. Names merely resembling the reserved ones,
+such as `working_dir` or `stdin_file`, are unaffected.
 
 <!-- tested-example: arguments -->
 
@@ -235,9 +282,13 @@ not alter the deadline or exit status.
 ## Supply input, environment, and a deadline
 
 `StdinInput(text=...)` uses the context's encoding. Use `StdinInput(data=...)`
-for bytes; specify only one. `ExecutionContext.env` overlays the live parent
-environment; an empty mapping still inherits it. `cwd` changes the child's
-working directory. A call-level `timeout` overrides `ExecutionContext.timeout`.
+for bytes; specify only one. `ExecutionContext.env` composes over the live
+parent environment under the default `EnvMode.OVERLAY`; an empty mapping still
+inherits it. `EnvMode.REPLACE` instead starts the child from an empty
+environment, so only the supplied mapping is visible (see
+[the environment policy](#choose-how-a-child-environment-is-composed)). `cwd`
+changes the child's working directory. A call-level `timeout` overrides
+`ExecutionContext.timeout`.
 
 <!-- tested-example: input-and-context -->
 
@@ -378,10 +429,11 @@ stream metrics.
 Replace a shell string with a declared executable and separate arguments. Keep
 flags positional unless the tool accepts `--name=value`. Replace
 `subprocess.run(..., check=True)` with a result check according to the
-application's error policy. `ExecutionContext.env` is an overlay, so code that
-needs a replacement environment must implement that policy explicitly. The
-[0.2.0 migration guide](v0-2-0-migration-guide.md) covers line observation,
-result measurements, heartbeats, and presentation sinks.
+application's error policy. A replacement environment is selected with
+`EnvMode.REPLACE` on the `ExecutionContext`, not implemented by the caller. The
+[0.2.0 migration guide](v0-2-0-migration-guide.md)
+covers line observation, result measurements, heartbeats, and presentation
+sinks.
 
 ## Troubleshoot a run
 
@@ -606,6 +658,62 @@ with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
         raise AssertionError("the scope should forbid the interpreter")
 ```
 
+### Choose how a child environment is composed
+
+`EnvMode.OVERLAY` is the default environment policy. It resolves values against
+the live `os.environ` when a subprocess is spawned, rather than against an
+import-time or scope-entry snapshot. Variables added after a scope starts (the
+common `monkeypatch.setenv` case under pytest) remain visible to its children.
+
+`EnvMode.OVERLAY` and `EnvMode.INHERIT` compose identically: each keeps the
+mode selected by an outer scope while layering its values over the inherited
+overlay. `EnvMode.REPLACE` alone creates a boundary: it starts from an empty
+environment, applies only its mapping, and discards every outer overlay. Use the
+`UNSET` singleton as a value to remove a variable from a composed child
+environment.
+
+<!-- tested-example: env-modes -->
+
+```python
+import os
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.context import EnvMode, UNSET, env
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="env-modes")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+show = "-c", "import os; print(os.getenv('CUPRUM_DEMO'), os.getenv('CUPRUM_KEEP'))"
+
+os.environ["CUPRUM_KEEP"] = "kept"
+with env({"CUPRUM_DEMO": "overlaid"}, CUPRUM_DEMO="won"):
+    assert python(*show).run_sync().stdout == "won kept\n"
+with env({"CUPRUM_DEMO": UNSET, "CUPRUM_KEEP": UNSET}):
+    assert python(*show).run_sync().stdout == "None None\n"
+with env({"CUPRUM_DEMO": "only"}, mode=EnvMode.REPLACE):
+    assert python(*show).run_sync().stdout == "only None\n"
+```
+
+The last case shows a replacement policy discarding the inherited
+`CUPRUM_KEEP`, while `os.environ` itself is never mutated.
+
+Precedence, from lowest to highest, is:
+
+1. The current process's `os.environ`, read at spawn time.
+2. Ambient scoped overlays, with inner values winning. A nested `REPLACE`
+   discards every outer overlay and the live parent environment.
+3. The per-call `ExecutionContext.env` mapping. Its values win overall; a
+   per-call `REPLACE` also discards the ambient policy.
+
+`env()` accepts both positional mappings and keyword arguments, mirroring
+`dict(...)`, including `UNSET` values. The function returns an
+`EnvRegistration` handle which can be used as a context manager or detached
+manually. `ExecutionContext.cwd` remains a per-call setting, independent of
+`env_mode`. On POSIX, executable lookup uses the child environment's `PATH` and
+the supplied `cwd`; a replacement policy that omits `PATH` can therefore make a
+bare executable name fail to resolve. Prefer an absolute programme path when
+using a deliberately minimal replacement environment.
+
 ### Run code around every command
 
 `before(hook)` receives each command before it starts, and `after(hook)`
@@ -684,6 +792,14 @@ The structured logging adapter records `argv` verbatim, so a secret passed as a
 command-line argument reaches the log. Pass secrets through the environment or
 a file instead. [Metrics adapter](#metrics-adapter) and
 [Tracing adapter](#tracing-adapter) list every metric and span attribute.
+
+The structured log record carries the execution's effective environment policy
+as `cuprum_env_mode` (`inherit`, `overlay`, or `replace`), alongside the other
+correlation fields. The value is projected from the typed `ExecEvent.env_mode`
+field, which only Cuprum sets, so no caller input can forge it. The tag of the
+same name is reserved for the same reason: a caller-supplied `env_mode` tag is
+stripped when the observation tags are built, and a replacement run's trusted
+value is grafted in its place.
 
 ### Present output in GitHub Actions
 
@@ -963,8 +1079,33 @@ rather than `pid`, which the operating system can recycle across executions.
 Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 (such as the tracing adapter) drop them.
 
+Every event also carries `env_mode`: the effective environment policy for the
+execution, once the active context and any per-call policy have been composed.
+It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`, or `EnvMode.REPLACE`, and it
+is present on every phase — including `plan`, `pipeline_fail_fast`, and the
+ancillary `timeout`, `teardown_error`, and `capture_eof_grace_expired` events —
+because it is known before the child is spawned and describes the whole
+execution rather than one measurement. The value is `None` only on legacy or
+manually constructed events; the execution paths always resolve a mode.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
+
+Observing lines is cheaper than it was: Cuprum no longer rebuilds the invariant
+part of a line event — program, argv, cwd, env, pid, stream, tags, project, and
+exec id — for every line. Nothing else changed. The payloads are the same
+`ExecEvent` values, the hook ordering is the same, a hook that raises still
+fails the run exactly as described under
+[When an observe hook raises](#when-an-observe-hook-raises), and each line
+still carries a fresh event and a fresh timestamp. In the benchmarked
+line-callback workload the median wall time fell 30.96% under the profiler and
+26.28% unprofiled.
+
+That is not a universal speedup. The gain is confined to line-callback
+workloads that emit events per line: a run with no observe hook and no
+`on_line` callback creates no line callback at all, and is unaffected. Treat
+the figure as a property of the emission path, not a promise about an
+application.
 
 #### Aggregate Python stream-operation events
 
@@ -1078,6 +1219,20 @@ The hook collects:
 All metrics carry `program` and `project` labels; missing, empty, or explicit
 `None` project tags fall back to `unknown`.
 
+`cuprum_executions_total` and `cuprum_failures_total` additionally carry an
+`env_mode` label holding the execution's effective policy — `inherit`,
+`overlay`, or `replace`. It is a bounded label by construction (`EnvMode` is a
+closed three-value enum resolved by Cuprum, never by caller input), so it
+cannot give the series unbounded cardinality, and it is applied only to those
+two metrics: the per-line stream counters omit it, because a line's environment
+says nothing that its execution's mode does not already carry.
+
+A spawn failure is not counted. When a replacement policy's missing `PATH`
+leaves a bare program name unresolvable, the failure is raised before `start`,
+so no `exit` event follows and no `cuprum_failures_total` sample — and
+therefore no `env_mode`-labelled series — is recorded. Use the typed `env_mode`
+field on the corresponding `ExecEvent` to distinguish that case.
+
 The four resource metrics also carry a low-cardinality `resource_usage_mode`
 label naming how the measurement was obtained: `wait4_child`,
 `aggregate_cpu_delta`, or `unavailable`. The label applies only to those four
@@ -1120,6 +1275,8 @@ The hook creates spans with these attributes:
 - `cuprum.exit_code`: Exit code (set on span end)
 - `cuprum.duration_s`: Duration in seconds (set on span end)
 - `cuprum.project`: Project name from tags
+- `cuprum.env_mode`: The execution's effective environment policy
+  (`inherit`, `overlay`, or `replace`), set on spans for every phase
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,

@@ -37,8 +37,8 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
     monkeypatch.setattr(sinks.os, "fdopen", fail_fdopen)
     blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
 
-    with pytest.raises(RuntimeError, match="fdopen failed"):
-        blackhole.__enter__()
+    with pytest.raises(RuntimeError, match="fdopen failed"), blackhole:
+        pass
 
     def fstat_error(fd: int) -> OSError:
         """Return the OSError raised when fstat is called on a closed fd."""
@@ -46,7 +46,7 @@ def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
             os.fstat(fd)
         except OSError as exc:
             return exc
-        pytest.fail(f"expected closed fd {fd} to raise OSError")
+        return pytest.fail(f"expected closed fd {fd} to raise OSError")
 
     for fd in (master_fd, slave_fd):
         exc = fstat_error(fd)
@@ -207,8 +207,8 @@ def test_pty_blackhole_rejects_reuse_while_the_drainer_is_running() -> None:
     still_running.is_alive.return_value = True
     bh._thread = still_running
 
-    with pytest.raises(PtyBlackholeStateError, match="cannot reuse PtyBlackhole"):
-        bh.__enter__()
+    with pytest.raises(PtyBlackholeStateError, match="cannot reuse PtyBlackhole"), bh:
+        pass
 
 
 # ---------------------------------------------------------------------------

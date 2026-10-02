@@ -488,6 +488,14 @@ coercion path as `sh.make`, so positional ordering, keyword flag formatting,
 underscore-to-hyphen normalization, and `None` rejection stay in lockstep with
 builders.
 
+`build_argv` stays generic; the *builder* reserves the names that describe how
+a command runs. A keyword naming an `ExecutionContext` field or a `run_sync`
+parameter is rejected with `TypeError` (see
+[Execution options are reserved](#626-execution-options-are-reserved)) rather
+than rendered as a child flag, because the caller almost always meant the
+execution setting and a child that ignores unknown flags would otherwise run
+with the wrong configuration in silence.
+
 #### 6.2.2 Command builders
 
 Command builders centralize and type arguments for a given command. Builders
@@ -749,6 +757,51 @@ Hook call order is deterministic. A reasonable order is:
 
 Exact ordering must be documented when implemented.
 
+#### 6.2.6 Execution options are reserved
+
+A builder keyword is rendered as a child argument, so a name that configures
+the *run* rather than the *child* is ambiguous. `cwd`, `env`, `timeout`, and
+`stdin` are the first four a subprocess caller reaches for, and forwarding them
+silently produces the wrong execution: `git("tag", cwd=repo_dir)` runs
+`git tag --cwd=<path>` in the ambient directory. A tool that rejects the
+unknown flag fails loudly, but one that ignores it succeeds in the wrong place.
+
+The builder therefore rejects the union of two name sets before rendering:
+
+- the `ExecutionContext` fields, derived at import time from
+  `dataclasses.fields(ExecutionContext)`, so a new field cannot silently become
+  a child flag;
+- `run_sync`'s keyword-only parameters (`output`, `timeout`, `context`,
+  `stdin`), written by hand and pinned by a drift guard that compares the set
+  with `inspect.signature(SafeCmd.run_sync)`. Every `run` and `lines` parameter
+  is either shared with `run_sync` or one of the context fields, so `run_sync`
+  alone is the authoritative surface to guard.
+
+The `TypeError` names the correct spelling. Context fields are reported as
+`cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync`, and
+`run_sync`'s parameters directly, as
+`timeout is an execution option; pass timeout=... to run_sync`. `timeout`
+appears in both sets and takes the direct form, which matches the parameter the
+caller can pass straight through. The first reserved keyword in insertion order
+is the one reported, so a call mixing several names gets a stable message.
+
+Two properties are preserved deliberately:
+
+- **`build_argv` stays generic.** It is a pure serializer with no knowledge of
+  execution, and its property tests check that it agrees with the builder. The
+  restriction lives in the builder, not the serializer.
+- **Positional rendering is unchanged.** A tool whose command line genuinely
+  takes `--cwd` still receives it as `"--cwd=<dir>"`, which keeps the escape
+  hatch open without an opt-out on `SafeCmdBuilder`. Only the exact reserved
+  names are rejected, so `working_dir` and `stdin_file` keep rendering as
+  `--working-dir=…` and `--stdin-file=…`.
+
+A warning was rejected as too weak: the failure it guards against is silent
+misconfiguration, which a warning in a long continuous integration (CI) log
+does not prevent. A per-builder opt-out was rejected because the positional
+form already covers every tool that needs those flags, and an opt-out would
+reintroduce the ambiguity for any caller that set it out of habit.
+
 ### 6.3 `cuprum.unsafe` – Explicit Escape Hatch
 
 The `cuprum.unsafe` namespace houses constructors and helpers that bypass some
@@ -830,7 +883,7 @@ class ExecEvent:
     program: Program | None
     argv: tuple[str, ...]
     cwd: Path | None
-    env: Mapping[str, str] | None
+    env: EnvOverlay | None
     pid: int | None
     timestamp: float
     line: str | None
@@ -847,6 +900,7 @@ class ExecEvent:
     user_cpu_seconds: float | None  # exit: child user CPU seconds
     system_cpu_seconds: float | None  # exit: child system CPU seconds
     resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
+    env_mode: EnvMode | None  # effective policy; on every phase
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1246,8 +1300,11 @@ Implementation notes (current state):
   reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
-- Environment overrides are supplied via an `ExecutionContext` and merged on top
-  of `os.environ` without mutating global state.
+- Environment overrides are supplied via an `ExecutionContext` and composed
+  without mutating global state. The base they compose over depends on the
+  active `EnvMode`: `INHERIT` and `OVERLAY` merge the overrides on top of
+  `os.environ`, while `REPLACE` starts from an empty environment and keeps only
+  what the overlays supply.
 - Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
   child processes are not left running.
 
@@ -1313,6 +1370,32 @@ The following design decisions were made during implementation:
 
 ### 8.1.3 Structured execution events (observe hooks)
 
+Implemented as `_LineEventEmitter`, a frozen slotted private dataclass in
+`cuprum/_line_callbacks.py`, built once per observed stream, after spawn, when
+the pid is known. It binds the invariant half of a line event — program, argv
+with the program name first, cwd, env, pid, stream, tags, project, and exec_id
+— together with the observation's own `_emit_event` dispatcher. The factory
+returns `None` when no observe hook is installed, so a stream nobody emits
+events for prepares nothing. Every line then needs only itself: `emit_line`
+passes a fresh frozen `ExecEvent`, one fresh clock read, and the line to that
+unchanged dispatcher. The per-line `_EventDetails` construction and the per-line
+`argv_with_program` walk are gone.
+
+**The construction share is measured, not projected.** Pre-hoist the median was
+34.2928%; post-hoist it is 29.9087%, over three matched capture pairs with a
+candidate spread of 0.0423 points, against a limit of 30.0 that was revised
+from 10% to 28% and then to 30%, both on 2026-09-27 with user approval, the
+second revision on the measurement rather than a further projection. 100% of
+the residual numerator now sits inside the generated `ExecEvent.__init__`, whose
+`frozen=True` guard makes 27 `object.__setattr__` calls per construction; two
+faster constructions were measured and declined as public-API or correctness
+trades. The evidence is in
+[`tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md),
+with raw captures under
+[`profiling/5-2-1-line-event-emission/`](profiling/5-2-1-line-event-emission/README.md)
+and the plan in
+[the 5.2.1 plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md).
+
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
@@ -1348,12 +1431,36 @@ implemented with the following decisions:
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
+- **Environment mode:** every event carries `ExecEvent.env_mode`, the effective
+  environment policy for the execution once the active context and any per-call
+  policy have been composed. It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`,
+  or `EnvMode.REPLACE`, and it is present on every phase — including `plan`,
+  `pipeline_fail_fast`, and the ancillary diagnostics — because it is known
+  before the child is spawned and describes the whole execution rather than one
+  measurement. It is `None` only on legacy or manually constructed events. A
+  `REPLACE` policy discards the live parent environment, so a child that omits
+  `PATH` can fail to resolve a bare program name before it ever starts; without
+  the field a consumer sees an ordinary spawn failure and cannot tell it apart
+  from an overlay run. The mode is a trusted value projected by Cuprum, never
+  read from a caller tag: it is carried on the typed event, and `env_mode` is
+  additionally a reserved observation-tag key — stripped from caller-supplied
+  tags when the tags are built, with the REPLACE tag grafted only by production
+  code. The logging adapter emits it as the `cuprum_env_mode` extra, the
+  tracing adapter as the `cuprum.env_mode` span attribute, and the metrics
+  adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
+  phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
+  so it records no failure sample at all; the typed field is the only signal
+  available for it. The typed policy and its composition rules are specified in
+  [ADR-018](adr-018-typed-environment-policies.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
 - **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
   `capture`/`echo`. Callers can attach additional tags via
-  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
+  `ExecutionContext.tags`; caller tags take precedence when keys overlap, with
+  one exception: `env_mode` is a reserved key, so a caller-supplied value is
+  stripped rather than honoured, and the effective policy is grafted by
+  production code alone.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.

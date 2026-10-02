@@ -88,6 +88,30 @@
 
 ### Added
 
+- **`EnvMode`:** Select inherited, additive-overlay, or replacement child
+  environments without mutating process-global state
+  ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`UNSET`:** Explicitly remove an inherited variable while composing a child
+  environment ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`env_mode` fields:** `ScopeConfig`, `CuprumContext`, and
+  `ExecutionContext` now carry the selected environment policy
+  ([#434](https://github.com/leynos/cuprum/issues/434)). The effective policy
+  also reaches observers: `ExecEvent` carries an `env_mode` field on every
+  phase, which the logging and tracing adapters project as an extra and a span
+  attribute. The metrics adapter labels `cuprum_executions_total` and
+  `cuprum_failures_total` with it, so a non-zero exit under a replacement
+  policy is distinguishable from an ordinary overlay one. A spawn failure is
+  not counted: when a replacement policy's missing `PATH` leaves a bare program
+  name unresolvable, the failure is raised before `start`, so no `exit` event
+  and no `cuprum_failures_total` sample follow. Use the typed `env_mode` field
+  on the corresponding `ExecEvent` for that case. The per-line stream counters
+  deliberately omit the label, because a line's environment says nothing that
+  its execution's mode does not already carry.
+- **PEP 561 typing marker:** The package now ships `cuprum/py.typed`, so a type
+  checker treats `cuprum` as a typed package and reads its annotations instead
+  of falling back to `Any` for every import. The marker is empty, which under
+  PEP 561 declares the package fully typed; the marker travels in the pure
+  Python wheel, the native wheel, and both source distributions.
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper
@@ -335,6 +359,22 @@
 
 ### Breaking changes
 
+- **Builder keywords named after execution options are rejected:** `sh.make()`
+  builders serialized every keyword into a child `--name=value` argument, so
+  `python("-c", script, cwd=repo_dir)` produced `--cwd=<path>` instead of
+  changing the child's working directory — `git("tag", cwd=repo_dir)` ran in
+  the ambient directory, and a tool that ignores unknown flags succeeded in the
+  wrong place with no error. The builder now raises `TypeError` for the
+  `ExecutionContext` field names (`env`, `cwd`, `cancel_grace`,
+  `native_pump_cleanup_grace`, `timeout`, `stdout_sink`, `stderr_sink`,
+  `encoding`, `errors`, `tags`) and for `run_sync`'s parameters (`output`,
+  `timeout`, `context`, `stdin`), with a message naming the correct spelling:
+  `cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync`.
+  Pass the value to `run_sync(context=..., timeout=..., stdin=...)` instead. A
+  command line that genuinely takes such a flag still receives it positionally
+  (`python("--cwd=<dir>")`), and names merely resembling the reserved ones —
+  `working_dir`, `stdin_file` — keep rendering as flags
+  ([#513](https://github.com/leynos/cuprum/issues/513)).
 - **`ProgramCatalogue.visible_settings` is now a property:** Prefer
   `catalogue.visible_settings` over the former callable spelling. Existing
   `catalogue.visible_settings()` callers remain supported during the next-minor
@@ -412,6 +452,24 @@
   that depended on an import-time or scope-entry snapshot must pass explicit
   values through the overlay or `ExecutionContext.env` instead
   ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
+
+- **Line-callback event emission stops rebuilding invariant metadata:** The
+  observe-hook path resolved `program`, `argv` (including the full
+  program-prefixed tuple), `cwd`, `env`, `pid`, tags, and the execution
+  correlation token once per *line*, inside the same per-line `_EventDetails`
+  construction. A private `_LineEventEmitter` now binds them once per observed
+  stream, after spawn when the `pid` is known, and each line adds only the line
+  text and a fresh monotonic timestamp to a fresh frozen `ExecEvent`. The
+  observable contract is unchanged: the same payloads and field order, a
+  distinct event object and clock read per line, unchanged hook ordering and
+  failure propagation, and the same dispatcher. On the wrap-76 callback
+  workload the construction share of the consume subtree fell from 34.2928% to
+  29.9087% (median of three matched pairs) and median wall time fell 30.96%
+  profiled and 26.28% unprofiled. The gain is concentrated in line-callback
+  workloads; see the
+  [evidence record](docs/tee-hotpath-line-event-emission-5-2-1.md) and the raw
+  captures under
+  [`docs/profiling/5-2-1-line-event-emission/`](docs/profiling/5-2-1-line-event-emission/README.md).
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed

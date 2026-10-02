@@ -414,5 +414,5 @@ def test_out_of_order_detach_removes_each_registered_hook() -> None:
         )
     )
 
-    assert seen_outer == [], "events after both detaches must not invoke hook A"
-    assert seen_inner == [], "events after both detaches must not invoke hook B"
+    assert not seen_outer, "events after both detaches must not invoke hook A"
+    assert not seen_inner, "events after both detaches must not invoke hook B"

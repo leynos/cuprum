@@ -321,7 +321,7 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         assert self._queue.qsize() == size_before, (
             "a failed callback must not leave its line queued"
         )
-        assert self._delivered == [], (
+        assert not self._delivered, (
             "a failing callback must never record a delivered line"
         )
         failures = self._failures()

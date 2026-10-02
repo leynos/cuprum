@@ -112,6 +112,7 @@
       'cuprum/pump_observation.py',
       'cuprum/pump_span_events.py',
       'cuprum/pump_span_observation.py',
+      'cuprum/py.typed',
       'cuprum/rust.py',
       'cuprum/sh/__init__.py',
       'cuprum/sh/argv.py',

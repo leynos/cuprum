@@ -34,6 +34,7 @@ from cuprum.unittests._timeout_lane_support import (
     EXPECTED_NEXTEST_MIN_VERSION,
     declared_minimum_nextest_version,
 )
+from cuprum.unittests.test_doctest_warning_contract import DEV_FAST_TOOLCHAIN
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -47,6 +48,8 @@ _VERSION_SHAPE_RE = re.compile(r"\d+(?:\.\d+)+")
 _TOOL_PIN_SITES = (
     ("ruff", "RUFF_VERSION", "Ruff"),
     ("ty", "TY_VERSION", "ty"),
+    ("pylint", "PYLINT_VERSION", "Pylint"),
+    ("astroid", "ASTROID_VERSION", "Astroid"),
 )
 
 _MAKEFILE_PIN_RE_TEMPLATE = r"^{name}\s*\?=\s*(\S+)\s*$"
@@ -124,23 +127,33 @@ def _read_workflow_env(root: pth.Path, name: str) -> str:
 
 def _lint_test_job(root: pth.Path) -> Job:
     """Read the lint-test job from the CI workflow."""
+    return _workflow_job(root, "lint-test")
+
+
+def _workflow_job(root: pth.Path, name: str) -> Job:
+    """Read a named job from the CI workflow."""
     workflow = _ci_workflow(root)
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
-    job = jobs.get("lint-test")
-    assert isinstance(job, dict), "ci.yml must declare the lint-test job"
+    job = jobs.get(name)
+    assert isinstance(job, dict), f"ci.yml must declare the {name!r} job"
     return job
 
 
 def _lint_test_step(job: Job, name: str) -> Step:
     """Read a named step from the lint-test job."""
+    return _workflow_job_step(job, name, "lint-test")
+
+
+def _workflow_job_step(job: Job, name: str, job_name: str) -> Step:
+    """Read a named step from a CI workflow job."""
     steps = job.get("steps")
-    assert isinstance(steps, list), "the lint-test job must declare steps"
+    assert isinstance(steps, list), f"the {job_name!r} job must declare steps"
     for step in typ.cast("list[object]", steps):
         if not isinstance(step, dict) or step.get("name") != name:
             continue
         return typ.cast("Step", step)
-    pytest.fail(f"the lint-test job must declare an {name!r} step")
+    pytest.fail(f"the {job_name!r} job must declare an {name!r} step")
 
 
 def _lint_test_step_script(job: Job, name: str) -> str:
@@ -236,6 +249,44 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
             )
 
 
+def test_python_ci_installs_the_doctest_toolchain_before_running_tests() -> None:
+    """Keep the doctest's pinned nightly ready before pytest starts its timeout."""
+    root = repo_root()
+    job = _workflow_job(root, "typecheck-test")
+    environment = job.get("env")
+    assert isinstance(environment, dict), "typecheck-test must declare an env block"
+    expected_toolchain = _read_makefile_pin(root, "DEV_FAST_TOOLCHAIN")
+    assert expected_toolchain == DEV_FAST_TOOLCHAIN, (
+        "the doctest warning test must use the Makefile's dev-fast toolchain"
+    )
+    assert environment.get("DEV_FAST_TOOLCHAIN") == expected_toolchain, (
+        "the typecheck-test job must expose the pinned dev-fast toolchain"
+    )
+
+    install = _workflow_job_step(
+        job, "Install dev-fast doctest toolchain", "typecheck-test"
+    )
+    install_condition = typ.cast("dict[str, object]", install).get("if")
+    assert install_condition == "matrix.python-suite && env.LEG_RUNS == 'true'", (
+        "only Python lanes that run pytest should install the doctest toolchain"
+    )
+    install_command = install.get("run")
+    assert install_command == (
+        'rustup toolchain install "$DEV_FAST_TOOLCHAIN" --profile minimal'
+    ), "CI must install the pinned doctest toolchain before pytest"
+
+    steps = job.get("steps")
+    assert isinstance(steps, list), "typecheck-test must declare steps"
+    step_names = [
+        step.get("name")
+        for step in typ.cast("list[object]", steps)
+        if isinstance(step, dict)
+    ]
+    assert step_names.index("Install dev-fast doctest toolchain") < step_names.index(
+        "Run tests"
+    ), "the doctest toolchain must be installed before the Python suite"
+
+
 def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     """The formatter uses a pinned prebuilt installer, not a Rust fallback."""
     job = _lint_test_job(repo_root())
@@ -285,9 +336,9 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     assert whitaker_uses.startswith(
         "leynos/shared-actions/.github/actions/install-whitaker@"
     ), "the Install Whitaker CI step must use the shared installer"
-    assert whitaker_installer.get("with") == {
-        "installer-version": "${{ env.WHITAKER_INSTALLER_VERSION }}"
-    }, "the shared Whitaker installer must receive the configured version"
+    assert whitaker_installer.get("with") is None, (
+        "the shared Whitaker installer pins its own installer version"
+    )
 
 
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
@@ -397,3 +448,76 @@ def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
         f"{EXPECTED_NEXTEST_MIN_VERSION!r}; a site left behind certifies a "
         "floor the others no longer enforce"
     )
+
+
+def _pylint_targets(command: str) -> frozenset[str]:
+    """Return the target operands of one classic-Pylint command line."""
+    _, _, operands = command.partition(" -m pylint ")
+    return frozenset(token for token in operands.split() if not token.startswith("-"))
+
+
+#: The test roots classic Pylint must name directly: none is a package, so the
+#: recursive walk would otherwise skip every module beneath it.
+NON_PACKAGE_TEST_ROOTS = frozenset({
+    "cuprum/unittests",
+    "scripts/tests",
+    "tests/behaviour",
+    "tests/features",
+})
+
+
+def test_pylint_contract_covers_non_package_test_directories() -> None:
+    """The Makefile supplies skipped test directories as direct Pylint targets.
+
+    Each pass is read from its own command line. Searching their combined
+    output cannot tell which contributed a target: dropping
+    ``cuprum/unittests`` from the strict pass would leave the relaxed pass
+    still naming it, so the contract would pass while the strict pass quietly
+    stopped inspecting the package. The two passes are told apart by the
+    ``--disable=too-many-lines`` exemption, the only flag that separates them.
+    """
+    recipes = _expanded_make_recipes(repo_root(), targets=("pylint-classic",))
+    assert "pylint-pypy" not in recipes
+    assert "--jobs=1" in recipes
+
+    commands = [line for line in recipes.splitlines() if " -m pylint " in line]
+    relaxed = [line for line in commands if "--disable=too-many-lines" in line]
+    strict = [line for line in commands if "--disable=too-many-lines" not in line]
+    assert len(relaxed) == 1, (
+        f"classic Pylint must run exactly one relaxed pass; found {len(relaxed)} "
+        f"of {len(commands)} invocations"
+    )
+    assert len(strict) == 1, (
+        f"classic Pylint must run exactly one strict pass; found {len(strict)} "
+        f"of {len(commands)} invocations"
+    )
+
+    strict_targets = _pylint_targets(strict[0])
+    relaxed_targets = _pylint_targets(relaxed[0])
+    assert NON_PACKAGE_TEST_ROOTS.issubset(relaxed_targets), (
+        "the relaxed pass must name each non-package test root directly; "
+        f"missing {sorted(NON_PACKAGE_TEST_ROOTS - relaxed_targets)}"
+    )
+    repeated = NON_PACKAGE_TEST_ROOTS & strict_targets
+    assert not repeated, (
+        "the strict pass must not repeat the relaxed pass's roots; they are "
+        f"filtered out of it, but found {sorted(repeated)}"
+    )
+    assert "cuprum" in strict_targets, (
+        "the strict pass must still inspect the package root, which is what "
+        "reaches every module under the real packages"
+    )
+
+
+def test_df12_retains_its_separate_package_root_target_scope() -> None:
+    """DF12 keeps its existing scope while classic Pylint covers extra roots."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    targets = "benchmarks conftest.py cuprum scripts tests"
+    assert f"DF12_PYLINT_TARGETS ?= {targets}" in makefile
+    assert "$(DF12_PYLINT) $(DF12_PYLINT_TARGETS)" in makefile
+
+
+def test_ambrleaks_runs_in_an_isolated_cpython_environment() -> None:
+    """Snapshot scanning must not recreate the project virtual environment."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "uv run --isolated --python $(DF12_PYTHON) ambrleaks" in makefile
