@@ -468,6 +468,17 @@ likelihood, and mitigation.
   contradiction; the check run is the measurement, and the thread is a record
   of what the previous revision measured.
 
+- [x] (2026-10-02) Two commits have landed since the gated revision `70b0af88`:
+  `10ef0f22` and `3fd2a41c`, both record-keeping in this document. That
+  invalidates nothing here, but the reason is checkable rather than asserted —
+  `git diff --name-only 70b0af88..HEAD` lists exactly one path, and it is this
+  plan. So the four gates above still describe the code, because no code
+  changed after them; a source edit would have invalidated all four and is the
+  thing to watch for when reading this evidence later. The document edits carry
+  their own gates: `make check-fmt` and `make markdownlint` were re-run after
+  each, and `check-fmt` caught one that needed reflowing, which is the point of
+  running it.
+
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
   tree rather than against the codex summary. Two were real defects in the
