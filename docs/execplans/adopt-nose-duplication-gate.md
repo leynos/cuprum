@@ -158,6 +158,22 @@ repository rather than re-derived here.
       `test_maturin_wheel_build_snapshot` pins the wheel's file list, so the
       snapshot needed the new entry — the same drift the `_scope_registration`
       extraction caused earlier on this branch.
+- [x] (2026-10-02) Stubbed `install-nose` in
+      `test_the_lint_target_runs_the_workflow_linters`. The branch added
+      `install-nose` as a prerequisite of `python-lint`, but the contract test
+      stubs *recipes*, and stubbing a target does not suppress its
+      prerequisites, so the real installer ran and died on
+      `cargo-binstall: not found` (`Error 127`). CI provisions the detector
+      only in the `lint-test` job, so both `Typecheck and test` legs were red;
+      the failure predates the rebase and reappears verbatim at `eeae8e70`. It
+      was invisible locally because the test inherits `os.environ` and the nose
+      binary lives under the gitignored `.tools/`. Stubbing the installer
+      restores the contract's intent — it asserts the aggregate target reaches
+      the workflow linters, not that the installer works — and
+      `scripts/tests/test_make_install_nose.py` keeps the installer's own
+      coverage. Verified by running `cuprum/unittests`, `scripts/tests`, and
+      `tests` with `NOSE_BIN=/nonexistent/nose`: 3824 passed, 91 skipped, 0
+      failed.
 - [ ] Re-run the commit gates against the rebased head and update the draft
       pull request. The `ccccaa85` evidence above describes the pre-rebase
       series and does not carry over to the rewritten commits.

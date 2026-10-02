@@ -282,3 +282,14 @@ families rather than every reported one.
   typing there, so neither extraction nor deletion is available. The general
   lesson is that a passing gate says a tree is adjudicated, not that a change
   introduced no new reported pair.
+- Wiring the gate into an existing aggregate target can break contract tests
+  that execute that target's graph. `install-nose` became a prerequisite of
+  `python-lint`, so `test_the_lint_target_runs_the_workflow_linters` began
+  running the real installer: stubbing a Make target replaces its recipe but
+  not its prerequisites, and the test's hermetic tool directory offers no
+  `cargo-binstall`. The failure is easy to miss locally, because the test
+  inherits `os.environ` and the detector lives under the gitignored `.tools/`,
+  so only a clean checkout or CI exercises the missing dependency. When a new
+  prerequisite is added to a target that a contract test drives, the test needs
+  a stub for the prerequisite as well as for the target, unless the test exists
+  precisely to prove the prerequisite ran.
