@@ -735,113 +735,157 @@ escalation, not a workaround.
       commit — not the stamp beside it — as the authority for when each entry
       was written.
 - [x] (2026-10-02 19:47Z) **Rebased onto a moved target.** `origin/main`
-      advanced from `b6bb9a99` to `c65d843c` ("Reject bytes in sh.make
-      arguments (#512)") after the no-op check recorded in `2f89a370`, so the
-      ancestry test that then held no longer did. Rebased the 41 non-merge
-      commits in `b6bb9a99..74b9f004` onto `c65d843c` with the linear
-      procedure; **zero conflicts**. Every audit the rebase procedure requires
-      passed:
+  advanced from `b6bb9a99` to `c65d843c` ("Reject bytes in sh.make arguments
+  (#512)") after the no-op check recorded in `2f89a370`, so the ancestry test
+  that then held no longer did. Rebased the 41 non-merge commits in
+  `b6bb9a99..74b9f004` onto `c65d843c` with the linear procedure; **zero
+  conflicts**. Every audit the rebase procedure requires passed:
 
-      - **Oracle tree.** `git merge-tree --write-tree --messages` of
-        `74b9f004` into `c65d843c` exits 0 and yields tree `a55aa3b7`; the
-        rebased head `babb08a4` has tree `a55aa3b7` — **identical**. This is
-        the check that matters here, because the replay range contained a
-        merge commit (`82acb1ae`) and the known failure mode for that shape is
-        a clean, non-conflicting replay that silently drops content.
-      - **The merge was safe to linearize.** `git merge-tree` of `82acb1ae`'s
-        own parents reproduces its tree `18e7dd1c` exactly, so that merge was
-        purely mechanical and hand-resolved nothing; its second parent
-        `b6bb9a99` is an ancestor of `c65d843c`. It therefore carried no
-        content of its own for a linear replay to lose, and the oracle proof
-        above is not weakened by flattening it.
-      - **`range-diff`.** `b6bb9a99..74b9f004` against `c65d843c..babb08a4`
-        reports `=` on all 41 commits, so each replayed commit is
-        patch-identical to its original.
-      - **Semantic audit.** Of the target's 7 changed files, 4 are target-only
-        and every one is byte-identical at the new head; the 3 the branch also
-        touches (`docs/cuprum-design.md`, `docs/users-guide.md`,
-        `docs/v0-2-0-migration-guide.md`) show **pure insertions** against the
-        target (`88/0`, `56/0`, `58/0`), so no deletion is unexplained.
-        `git diff --check` is clean.
-      - **Driver.** Weave is not selected for any path in this repository: the
-        global attributes file is empty at 0 bytes, there is no tracked
-        `.gitattributes`, and `git check-attr merge` reports `unspecified` for
-        the conflicted-candidate files. The driver could not participate, so
-        the Weave semantic audit is not applicable here rather than skipped.
-      - **Lock files.** Neither the target commit nor the branch range touches
-        `uv.lock` or `rust/Cargo.lock`, and both are identical to the target's;
-        the lock-file policy has nothing to act on.
+  - **Oracle tree.** `git merge-tree --write-tree --messages` of
+    `74b9f004` into `c65d843c` exits 0 and yields tree `a55aa3b7`; the
+    rebased head `babb08a4` has tree `a55aa3b7` — **identical**. This is
+    the check that matters here, because the replay range contained a
+    merge commit (`82acb1ae`) and the known failure mode for that shape is
+    a clean, non-conflicting replay that silently drops content.
+  - **The merge was safe to linearize.** `git merge-tree` of `82acb1ae`'s
+    own parents reproduces its tree `18e7dd1c` exactly, so that merge was
+    purely mechanical and hand-resolved nothing; its second parent
+    `b6bb9a99` is an ancestor of `c65d843c`. It therefore carried no
+    content of its own for a linear replay to lose, and the oracle proof
+    above is not weakened by flattening it.
+  - **`range-diff`.** `b6bb9a99..74b9f004` against `c65d843c..babb08a4`
+    reports `=` on all 41 commits, so each replayed commit is
+    patch-identical to its original.
+  - **Semantic audit.** Of the target's 7 changed files, 4 are target-only
+    and every one is byte-identical at the new head; the 3 the branch also
+    touches (`docs/cuprum-design.md`, `docs/users-guide.md`,
+    `docs/v0-2-0-migration-guide.md`) show **pure insertions** against the
+    target (`88/0`, `56/0`, `58/0`), so no deletion is unexplained.
+    `git diff --check` is clean.
+  - **Driver.** Weave is not selected for any path in this repository: the
+    global attributes file is empty at 0 bytes, there is no tracked
+    `.gitattributes`, and `git check-attr merge` reports `unspecified` for
+    the conflicted-candidate files. The driver could not participate, so
+    the Weave semantic audit is not applicable here rather than skipped.
+  - **Lock files.** Neither the target commit nor the branch range touches
+    `uv.lock` or `rust/Cargo.lock`, and both are identical to the target's;
+    the lock-file policy has nothing to act on.
 
-      Recovery refs are preserved under `refs/recovery/issue-440/` for the old
-      head, old base, and target.
-      **Every SHA cited in entries written before this one now names a
-      pre-rebase commit that the rewrite replaced.** Those objects still exist
-      under the recovery refs, so `git show <old-sha>` still works and a
-      citation is not a lost commit; what changes is that the SHA no longer
-      appears on the branch. To map any old SHA to its replayed equivalent,
-      run:
+  Recovery refs are preserved under `refs/recovery/issue-440/` for the old
+  head, old base, and target. **Every SHA cited in entries written before this
+  one now names a pre-rebase commit that the rewrite replaced.** Those objects
+  still exist under the recovery refs, so `git show <old-sha>` still works and
+  a citation is not a lost commit; what changes is that the SHA no longer
+  appears on the branch. To map any old SHA to its replayed equivalent, run:
 
-      ```bash
-      git range-diff \
-        refs/recovery/issue-440/old-base-b6bb9a99..refs/recovery/issue-440/old-head-74b9f004 \
-        refs/recovery/issue-440/target-c65d843c..HEAD
-      ```
+  ```bash
+  git range-diff \
+    refs/recovery/issue-440/old-base-b6bb9a99..refs/recovery/issue-440/old-head-74b9f004 \
+    refs/recovery/issue-440/target-c65d843c..HEAD
+  ```
 
-      The left column is the pre-rebase series and the right column is the
-      current one, so an entry citing `91c96d51` is found on the left and read
-      across. Because it is anchored on the immutable recovery refs rather than
-      on `74b9f004`, this command keeps working as later commits are added.
-      Gate evidence for `74b9f004` and earlier is **stale for this
-      candidate**, and the four repository gates
-      (`check-fmt`, `test`, `typecheck`, `lint`) are re-run against the head
-      that carries this entry, with each gate's log recording the head it ran
-      at.
+  The left column is the pre-rebase series and the right column is the current
+  one, so an entry citing `91c96d51` is found on the left and read across.
+  Because it is anchored on the immutable recovery refs rather than on
+  `74b9f004`, this command keeps working as later commits are added. Gate
+  evidence for `74b9f004` and earlier is **stale for this candidate**, and the
+  four repository gates (`check-fmt`, `test`, `typecheck`, `lint`) are re-run
+  against the head that carries this entry, with each gate's log recording the
+  head it ran at.
 - [x] (2026-10-02 19:55Z) A process error is recorded here because it changes
-      which evidence is admissible. The gate sweep was launched against the
-      frozen head `a6d1e414`, and while it ran this entry set was edited into
-      the plan — a tracked file. The sweep reports `head_before == head_after`
-      for every gate, but that check compares commit SHAs and **cannot see a
-      dirty working tree**, so it cannot certify that a gate read the committed
-      tree. The consequence is scoped rather than total: `check-fmt` (via
-      `mdtablefix --check`) and `lint` (via the `spelling` sub-gate) read
-      Markdown and are therefore invalidated by the edit, whereas `test` and
-      `typecheck` were verified not to read this file at all — no test in the
-      repository references the issue-440 plan path — so their results stand
-      for any tree differing from `a6d1e414` only in this document. The
-      corrective action is to re-run the Markdown-reading gates at the head
-      that carries the edit and to prove by an empty non-Markdown diff that the
-      `test`/`typecheck` evidence still applies. The lesson for the next
-      operator is to treat "freeze the tree" as binding on the working tree and
-      not merely on the branch pointer: commit every documentation edit
-      **before** launching the sweep, or the sweep's own head assertions will
-      imply a rigour it does not have.
+  which evidence is admissible. The gate sweep was launched against the frozen
+  head `a6d1e414`, and while it ran this entry set was edited into the plan — a
+  tracked file. The sweep reports `head_before == head_after` for every gate,
+  but that check compares commit SHAs and **cannot see a dirty working tree**,
+  so it cannot certify that a gate read the committed tree. The consequence is
+  scoped rather than total: `check-fmt` (via `mdtablefix --check`) and `lint`
+  (via the `spelling` sub-gate) read Markdown and are therefore invalidated by
+  the edit, whereas `test` and `typecheck` were verified not to read this file
+  at all — no test in the repository references the issue-440 plan path — so
+  their results stand for any tree differing from `a6d1e414` only in this
+  document. The corrective action is to re-run the Markdown-reading gates at
+  the head that carries the edit and to prove by an empty non-Markdown diff
+  that the `test`/`typecheck` evidence still applies. The lesson for the next
+  operator is to treat "freeze the tree" as binding on the working tree and not
+  merely on the branch pointer: commit every documentation edit **before**
+  launching the sweep, or the sweep's own head assertions will imply a rigour
+  it does not have.
 - [x] (2026-10-02 20:02Z) The `a6d1e414` sweep: `check-fmt`, `test`, and
-      `typecheck` passed; `lint` **failed**, and the failure is environmental
-      rather than a defect in the branch. Everything lint ran up to that point
-      passed — `ruff check`, both pylint passes at `10.00/10`, `interrogate`
-      at `100.0%`, the `df12-python-lints` plugin pass, `ambrleaks`, `skylos`,
-      rustdoc under `-D warnings`, Clippy with `--all-targets --all-features`,
-      and Whitaker — and the run then died in the `spelling` sub-gate with:
+  `typecheck` passed; `lint` **failed**, and the failure is environmental
+  rather than a defect in the branch. Everything lint ran up to that point
+  passed — `ruff check`, both pylint passes at `10.00/10`, `interrogate` at
+  `100.0%`, the `df12-python-lints` plugin pass, `ambrleaks`, `skylos`, rustdoc
+  under `-D warnings`, Clippy with `--all-targets --all-features`, and Whitaker
+  — and the run then died in the `spelling` sub-gate with:
 
-      ```plaintext
-      Updating https://github.com/leynos/typos-config-builder.git (v0.1.3)
-        × Failed to resolve `--with` requirement
-        ╰─▶ Git operation failed
-      ```
+  ```plaintext
+  Updating https://github.com/leynos/typos-config-builder.git (v0.1.3)
+    × Failed to resolve `--with` requirement
+    ╰─▶ Git operation failed
+  ```
 
-      That is a `uv` fetch of the pinned config builder failing inside the
-      gate's own environment, not a spelling finding. The same fetch,
-      re-attempted immediately afterwards, succeeds and prints `0.1.3`, so the
-      cause is transient network or credential-helper flakiness on this host
-      and not the pinned revision. **Two consequences are recorded rather than
-      glossed.** First, the failure is *not* evidence about the Markdown, which
-      is fortunate because the tree was also dirty (previous entry) and the
-      spelling gate reads prose. Second, `make lint`'s sub-targets run in
-      sequence, so the failure aborted the remaining ones: `github-actions-lint`
-      **never ran** — `yamllint` and `actionlint` appear zero times in the log —
-      even though the change touches no workflow file. An aborted gate thus
-      leaves later checks unobserved, and this run cannot be cited as evidence
-      for them. The corrective action is a fresh `lint` on a frozen tree.
+  That is a `uv` fetch of the pinned config builder failing inside the gate's
+  own environment, not a spelling finding. The same fetch, re-attempted
+  immediately afterwards, succeeds and prints `0.1.3`, so the cause is
+  transient network or credential-helper flakiness on this host and not the
+  pinned revision. **Two consequences are recorded rather than glossed.**
+  First, the failure is *not* evidence about the Markdown, which is fortunate
+  because the tree was also dirty (previous entry) and the spelling gate reads
+  prose. Second, `make lint`'s sub-targets run in sequence, so the failure
+  aborted the remaining ones: `github-actions-lint` **never ran** — `yamllint`
+  and `actionlint` appear zero times in the log — even though the change
+  touches no workflow file. An aborted gate thus leaves later checks
+  unobserved, and this run cannot be cited as evidence for them. The corrective
+  action is a fresh `lint` on a frozen tree.
+- [x] (2026-10-02 20:05Z) Re-run of the two gates invalidated by the mid-sweep
+  edit, at the frozen head `c6f67235`: both pass. `check-fmt` exits 0 in 1 s;
+  `lint` exits 0 in 117 s and, crucially, reaches **all fourteen** sub-linters.
+  The `spelling` fetch that died at `a6d1e414` succeeded this time, and the
+  `github-actions-lint` sub-gate it had masked — `yamllint` and `actionlint` —
+  ran and passed, so the previously-unobserved gap is now closed rather than
+  merely re-asserted. The `a6d1e414` `lint` failure is thereby confirmed
+  transient: the same pinned fetch, same repository, same tree content for
+  every non-Markdown path. Separately, the `test`/`typecheck` evidence from
+  `a6d1e414` is retained rather than re-run, on proof rather than on argument:
+  `git diff --name-only a6d1e414 c6f67235 -- . ':!*.md'` is empty, so the two
+  heads differ only in this document. That the Markdown is genuinely unread by
+  those gates was re-verified against the test source rather than inferred from
+  a path grep — the only suite that executes documentation examples,
+  `tests/behaviour/test_documentation_examples_behaviour.py`, iterates an
+  explicit three-item allow-list (`README.md`, `docs/users-guide.md`,
+  `docs/v0-2-0-migration-guide.md`) and never globs `docs/`, so no test can
+  reach this file by directory walk either.
+- [x] (2026-10-02 20:11Z) **A Markdown defect in this document was found and
+  fixed; it would have failed CI.** Running `make markdownlint` — which the
+  four requested gates do **not** invoke, although CI's `lint-test` job runs it
+  before `Run lint, including Skylos dead-code detection` — reported two
+  `MD046/code-block-style` errors, at the audit list and at the `uv` transcript
+  of the two entries added in `a6d1e414` and `c6f67235`. The mechanism is worth
+  recording because the symptom misleads: for a checkbox item, `- [x] text`
+  gives the item a content indent of 2, so a blank line followed by indent-6
+  content is parsed as an **indented code block**. The failure was therefore
+  not a style nit — rendering the affected region with `markdown-it` showed the
+  entire five-bullet rebase audit and both recovery-refs paragraphs emitted as
+  `<pre><code>`, so the entry's most important evidence was published as
+  literal code. Provenance was established before acting: the pre-rebase head
+  `74b9f004` is clean under the same config (1 file linted, 0 issues — asserted
+  against the file count, because `markdownlint-cli2` reports
+  `0 issues in 0 files` for an empty or unmatched scope, a vacuous pass that
+  reads as clean). The defect is thus a regression introduced by these two
+  entries, not inherited. The fix re-indents every continuation line of the two
+  entries from 6 to 2 spaces, matching the file's own long-standing convention,
+  and was verified three ways: `markdownlint` drops to 0 issues across 83 files;
+  `markdown-it` reports exactly two `<pre><code>` blocks, the two real fences,
+  with the prose restored to visible text; and the whole-file **token stream is
+  byte-identical to before the change**, so not a word of content moved.
+  `mdtablefix` then re-wrapped the freed width (`make check-fmt` initially
+  failed at `+52 −57` because narrowing the indent shortens the line budget),
+  after which `check-fmt` and `markdownlint` both exit 0 and `nixie` validates
+  all diagrams. **The lesson is that the four named gates are not the gate
+  set.** `markdownlint` is local, fast, and part of CI's blocking path, and its
+  omission from the requested four is exactly how a CI-blocking Markdown defect
+  escapes a "fully gated" claim; a documentation edit that never runs it has
+  not been gated, whatever the other four report.
 
 ## Surprises & discoveries
 
