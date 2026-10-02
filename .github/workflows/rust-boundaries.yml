@@ -70,13 +70,11 @@ jobs:
           key: boundary-native-linux-${{ github.run_id }}
           restore-keys: boundary-native-linux-
       - name: Set up sccache
+        id: sccache
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-sccache
         with:
           cache-size: 1G
-      - name: Reset compiler-cache counters
-        if: runner.os == 'Linux'
-        run: sccache --zero-stats
       - name: Check default feature configuration
         run: cargo check -p cuprum-streams -p cuprum-native-io --all-targets --no-default-features
       - name: Lint all feature and helper targets
@@ -88,7 +86,7 @@ jobs:
           cargo test -p cuprum-streams -p cuprum-native-io --all-targets --all-features 2>&1 |
             tee target/boundary-verification/native.log
       - name: Record compiler-cache effectiveness
-        if: always() && runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && steps.sccache.outputs.status != 'fallback'
         run: sccache --show-stats --stats-format json
       - name: Archive native evidence
         if: always()
@@ -141,11 +139,10 @@ jobs:
           key: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-${{ github.run_id }}
           restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
         with:
           cache-size: 1G
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
       - name: Install prebuilt verifier and solver
         run: |
           make install-verus
@@ -158,7 +155,7 @@ jobs:
           mkdir -p rust/target/boundary-verification
           make boundary-verus boundary-contract 2>&1 | tee rust/target/boundary-verification/verus.log
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         run: sccache --show-stats --stats-format json
       - name: Archive proof and negative compiler evidence
         if: always()

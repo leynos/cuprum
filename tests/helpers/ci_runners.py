@@ -252,7 +252,15 @@ MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
 #: `typecheck-test` is absent: one of its legs only typechecks, so the wrapper
 #: is installed conditionally there and a job-wide contract cannot describe it.
 #: `test_the_typecheck_only_leg_installs_no_wrapper` covers that case instead.
+#: The guard every statistics step carries. `sccache --show-stats` starts a
+#: server when none is running, so reading statistics after the composite fell
+#: back would restart the very server whose startup just failed, and the
+#: step's own failure would mask the one-line fallback warning.
+NOT_FALLEN_BACK: typ.Final = "steps.sccache.outputs.status != 'fallback'"
+#: The step id every `setup-sccache` call carries, which the guard above reads.
+SCCACHE_STEP_ID: typ.Final = "sccache"
 SCCACHE_JOBS: typ.Final = (
+    ("rust-boundaries.yml", "native"),
     ("rust-boundaries.yml", "verus"),
     ("ci.yml", "lint-test"),
     ("ci.yml", "extension-tests"),
@@ -269,8 +277,10 @@ SCCACHE_JOBS: typ.Final = (
 SUITE_GATED_STEPS: typ.Final = (
     ("Restore the compiler cache", "matrix.python-suite"),
     ("Set up sccache", "matrix.python-suite"),
-    ("Reset compiler-cache counters", "matrix.python-suite"),
-    ("Record compiler-cache effectiveness", "always() && matrix.python-suite"),
+    (
+        "Record compiler-cache effectiveness",
+        f"always() && matrix.python-suite && {NOT_FALLEN_BACK}",
+    ),
 )
 #: Paths no cache step may ever carry. A `target` tree is invalidated far more
 #: often than the registry beside it, and sccache already holds the objects it
