@@ -86,6 +86,12 @@ open each document.
   environment inheritance, replacement, and deletion explicit at execution
   boundaries.
 
+## Requests for comments
+
+- [RFC 0001: Execution interception][rfc-0001] - proposed backend seam so
+  callers can be tested without a process, with a recording double and a
+  passthrough path for executable-level mocking frameworks.
+
 ## Planning and validation references
 
 - [Roadmap](roadmap.md) - phased delivery plan and implementation task
@@ -138,3 +144,4 @@ open each document.
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
+[rfc-0001]: rfcs/0001-execution-interception.md

@@ -616,6 +616,13 @@ the second half of
 [leynos/lading#251](https://github.com/leynos/lading/issues/251), whose
 subprocess-capture half is already closed.
 
+### 9.1. Give output silence a bounded, opt-in voice
+
+This step answers whether a run that has fallen silent can be given a bounded,
+opt-in voice in a CI log without the runner terminating a child, extending a
+timeout, or mistaking silence for progress. Its outcome delivers the heartbeat
+contract below and leaves the native-consume routing question to 9.1.6.
+
 - [x] 9.1.1. Add `RunOutputOptions(idle_after=…, on_idle=…)` and the
   `cuprum/_idle_heartbeat.py` state machine behind it.
   - Completion evidence (2026-09-14): `idle_after` is a finite, strictly
@@ -778,5 +785,186 @@ per-interpreter build matrix. This work is out of scope for 0.2.0.
   - Requires 10.4.2.
   - Success: the users' guide lists the supported free-threaded interpreters
     and the wheel each receives, and the changelog records the new wheel.
+
+## 11. Test doubles without a process (RFC 0001)
+
+Idea: if a caller of `run_sync()` can receive the fully resolved invocation —
+programme, argv, environment, working directory, stdin, and output options — at
+a seam above the process, then a policy module can be tested for what it asked
+for, and for what it does with a failure, without a child process, a `PATH`
+stub, a handwritten port type, or a bypass of the catalogue check. This is
+capability work for adopters: it removes the last reason a test runner
+substitutes the process rather than the call. See
+[RFC 0001](rfcs/0001-execution-interception.md).
+
+### 11.1. Make the spawn injectable without changing a default run
+
+This step answers whether the already isolated spawn can be lifted behind a
+protocol with no behavioural change on the default path. Its outcome is the
+permission every later task in this phase depends on. See RFC 0001 §Proposed
+design, "The backend protocol" and "Where it is called".
+
+- [ ] 11.1.1. Add `cuprum/backend.py` with the `Invocation` record, the
+  `ExecutionBackend` protocol, and `_DirectBackend`.
+  - `Invocation` carries the resolved programme, `argv_with_program`,
+    environment, cwd, stdin input, `RunOutputOptions`, `ExecutionContext`, and
+    tags.
+  - Use `backend.py` for the module: the private `cuprum/_backend.py` is taken
+    by the stream-backend dispatcher.
+  - Success: the existing unit and behavioural suites pass unchanged with no
+    backend configured, and `make typecheck` accepts the protocol however the
+    `Self`-returning sketch in the RFC is finally spelled.
+- [ ] 11.1.2. Move the spawn into `_DirectBackend.execute()`, moved rather than
+  duplicated from `_execute_subprocess()`
+  (`cuprum/_subprocess_execution.py:295`).
+  - Requires 11.1.1.
+  - Take the two reads that need the live process with it: the `start` event
+    with the real `pid`, and the rusage measurement off the process object.
+    Neither is producible without one.
+  - Return a normalized outcome record rather than assembling a
+    `CommandResult`, so the exit event and the result stay on the calling side
+    and are shared by every backend.
+  - Success: with the production backend installed, the emitted event sequence
+    and the assembled result are byte-identical to the current path.
+- [ ] 11.1.3. Re-check a delegated programme against the active scope inside
+  `_DirectBackend.execute()` and raise `ForbiddenProgramError` for one outside
+  the allowlist.
+  - Requires 11.1.2.
+  - The check that admitted the original invocation does not cover a
+    replacement a substitute supplied, so delegation is a second entry into the
+    production path and needs its own.
+  - Success: a passthrough that rewrites `program` to an unpermitted path fails
+    with the same error a direct run raises, a passthrough that leaves the
+    programme alone is unaffected, and the check is exercised for both a named
+    programme and an absolute path.
+- [ ] 11.1.4. Consult the backend in `_execute_subprocess()` after the
+  catalogue and allowlist checks and before the spawn it now delegates, passing
+  the production backend as the `real` argument.
+  - Requires 11.1.3.
+  - Success: a forbidden programme is still rejected by the catalogue, with no
+    backend consulted, while a permitted invocation reaches the substitute with
+    the effective environment the real path would have spawned with derivable
+    from the record, whether the record exposes it as one field or as the
+    overlay and the base it composes with.
+  - Deliberately neutral on that representation: 11.5.2 settles it from
+    adoption evidence. See RFC 0001 §"Open questions".
+- [ ] 11.1.5. Keep the observable surface identical on the substituted path:
+  the same `ExecEvent` sequence, the same `BeforeHook` and `AfterHook` calls,
+  and a `CommandResult` whose `pid` is the documented `-1` "unavailable"
+  sentinel with `max_rss_bytes`, `user_cpu_seconds`, and `system_cpu_seconds`
+  at their documented "not measured" value of `None`.
+  - Requires 11.1.4.
+  - See RFC 0001 §"Where it is called" and §"Compatibility and migration".
+  - Success: parity assertions cover the event sequence and the result fields,
+    not only the returned value.
+
+### 11.2. Configure the substitute per scope and per call
+
+This step answers whether resolution stays comprehensible once a substitute can
+be set at two levels. Its outcome decides whether per-call configuration is
+worth its ergonomic cost, or whether scoping alone suffices. See RFC 0001
+§"Where it is configured".
+
+- [ ] 11.2.1. Thread `backend` through `ScopeConfig` and both `SafeCmd` run
+  methods, with innermost-wins resolution and `None` meaning "no substitute".
+  - Requires 11.1.4.
+  - Success: an override in a nested scope or on one call replaces the outer
+    substitute for that scope or call only, the default of `None` leaves the
+    production path untouched, and the parameter appears in no positional
+    argument list.
+- [ ] 11.2.2. Pin the resolution rule against the allowlist in a property test
+  so the two scoped-inheritance paths cannot diverge.
+  - Requires 11.2.1.
+  - Success: Hypothesis generates nested scopes, per-call overrides, and the
+    absent case, and the resolved backend matches the allowlist's own nesting
+    rule for every generated shape.
+
+### 11.3. Ship the recording double adopters can use
+
+This step answers whether a reference double plus documentation and a changelog
+entry is enough for an adopter to drop its stub executable and its handwritten
+port type. Its outcome is the evidence behind the claim that the seam removes
+the reason to bypass Cuprum. See RFC 0001 §"The reference double".
+
+- [ ] 11.3.1. Add `cuprum/testing.py` with `RecordingBackend`.
+  - Requires 11.1.4.
+  - Record every invocation in arrival order; consume scripted results in the
+    same order; fail an unscripted invocation with an `AssertionError` naming
+    the argv, so a test cannot pass by accident.
+  - Provide a passthrough action that delegates to `real` with a modified
+    environment or executable path.
+  - Success: the miss failure names the argv, the scripted results are consumed
+    in order, and a passthrough with a filtered environment reaches a real
+    process with the resolved mapping the invocation reported.
+- [ ] 11.3.2. Reconcile an invocation with Cuprum's own record through the
+  `cuprum.testing` entry point.
+  - Requires 11.3.1.
+  - Construct an `Invocation` through the package's public surface rather than
+    by importing a private module, and check that it carries every field the
+    run's `ExecEvent` reports: programme, argv, cwd, env, and tags.
+  - Success: drifting one side of that correspondence fails a test, and the
+    construction recipe is the one the users' guide documents.
+- [ ] 11.3.3. Document the seam at the three levels it is used: a users' guide
+  section on testing callers without a process, the scripting standards'
+  command-mocking guidance, and a changelog entry.
+  - Requires 11.3.1.
+  - Success: the usage examples are executable, and they state plainly where a
+    substitute stops being the right tool and an end-to-end mock of the
+    executable takes over.
+
+### 11.4. Prove the promise end to end
+
+This step answers whether the seam holds when a caller under test runs several
+substituted commands and when a scope that carries one meets a pipeline: the
+first gives the "no process is created" claim its evidence, and the second
+settles the deferred scope explicitly rather than by omission.
+
+- [ ] 11.4.1. Add a behavioural scenario in which a caller under test issues
+  three commands, the double records all three with their resolved
+  environments, and no process is created.
+  - Requires 11.3.1.
+  - Success: the scenario fails the run at the spawn boundary — the spawn entry
+    point is replaced by one that fails the test if it is reached — and the
+    `ExecEvent` `pid` observation is asserted alongside it, not in place of it.
+    The three recorded invocations also arrive in call order.
+  - See RFC 0001 §"Implementation steps".
+- [ ] 11.4.2. Raise `NotImplementedError`, naming the pipeline's `parts`, when
+  a pipeline runs in a scope that carries a backend, and test that path.
+  - Requires 11.2.1.
+  - Success: the message names the offending pipeline, and the error is raised
+    before any stage spawns.
+- [ ] 11.4.3. Cover the configuration matrix in one combinatorial suite:
+  scope-level and per-call substitution crossed with nesting, a passthrough
+  action, and the pipeline refusal.
+  - Requires 11.4.1 and 11.4.2.
+  - Success: every combination produces the same resolved invocation and the
+    same result shape as the single-command cases, and none of them weakens the
+    catalogue or allowlist checks.
+
+### 11.5. Settle the questions an adopter's adoption answers
+
+This step answers whether the seam is proven outside Cuprum's own suite. Its
+outcome decides what remains: the environment-delta and idle-heartbeat
+questions, and whether pipelines need the seam at all. See RFC 0001 §"Open
+questions" and §"Recommendation".
+
+- [ ] 11.5.1. Replace lading's `PATH`-stub property tests with
+  `RecordingBackend`, and route its cmd-mox passthrough through a small backend
+  instead of a private spawn, before the resolution is treated as settled.
+  - Requires 11.3.3. Requires the lading 5.2.4 migration to be ready and the
+    pinned Cuprum release to carry the seam.
+  - Success: the stub helper survives only for the end-to-end tests that
+    genuinely exercise the process boundary, a substituted run still satisfies
+    the caller's argument-level and failure-level assertions, and the report
+    back states which of the RFC's open questions the adoption settled.
+  - Deliberately a cross-repository task: Cuprum tracks it as evidence but
+    cannot close it alone, and its result, not a guess, is what decides whether
+    pipelines need the seam.
+- [ ] 11.5.2. Resolve the RFC's remaining open questions — whether `Invocation`
+  carries the full environment, only the overlay delta, or both, and whether a
+  substituted run emits idle-heartbeat events — as recorded decisions.
+  - Requires 11.5.1.
+  - Success: the users' guide and the changelog state the settled behaviour
+    with its rationale, or the question is closed as a documented non-goal.
 
 [issue-379]: https://github.com/leynos/cuprum/issues/379
