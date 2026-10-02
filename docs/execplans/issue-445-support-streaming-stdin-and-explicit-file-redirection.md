@@ -1504,16 +1504,21 @@ likelihood, and mitigation.
 
 - Observation (module size, EP-M3): the ceiling was met again by the *fix*
   rather than the feature. Adding the rendezvous to
-  `cuprum/_subprocess_wait.py` took it from 327 to 449 lines — 49 over — and
-  the extraction that cleared it was itself forced by the same rule the
-  milestone was obeying. Evidence: `wc -l` after the fix read 449 against the
-  400-line `max-module-lines` ceiling in `pyproject.toml`. Impact:
-  `cuprum/_subprocess_rendezvous.py` owns the race and `_subprocess_wait.py`
-  returns to 336, re-exporting the moved name so the three call sites and the
-  monkeypatch seams keep one import path. This is the third pass at the same
-  ceiling (04:45Z, 09:05Z, 14:20Z were the earlier ones) and confirms the
-  lesson above: a milestone that adds *any* behaviour to a module already near
-  the line has to budget for the extraction, not just for the behaviour.
+  `cuprum/_subprocess_wait.py` took it past 400 lines and the extraction that
+  cleared it was itself forced by the same rule the milestone was obeying.
+  Correction: the figures first recorded here — "from 327 to 449, 49 over" —
+  were working-tree readings, and the tree they were read in is gone. What the
+  commits hold is 328 before the rendezvous commit and 336 after it, so the
+  overrun was real but its size was never committed. Evidence: `wc -l` over
+  every commit that holds the file reads 328 (`088ba5bb`) then 336
+  (`b200fc0e`), against the 400-line `max-module-lines` ceiling in
+  `pyproject.toml`. Impact: `cuprum/_subprocess_rendezvous.py` owns the race and
+  `_subprocess_wait.py` returns to 336, re-exporting the moved name so the
+  three call sites and the monkeypatch seams keep one import path. This is the
+  third pass at the same ceiling (04:45Z, 09:05Z, 14:20Z were the earlier ones)
+  and confirms the lesson above: a milestone that adds *any* behaviour to a
+  module already near the line has to budget for the extraction, not just for
+  the behaviour.
 
 - Observation (docs coupling): the module roster is test-enforced, so a split is
   not a code-only change. `cuprum/unittests/test_async_timeout_docs.py` asserts
@@ -2177,22 +2182,28 @@ ADR-009 (Oxford spelling)       -> EP-M4              -> make spelling
 
 ADR-007 keeps subprocess plumbing split across single-responsibility modules.
 This plan **does** add module boundaries and move an existing one, so the ADR
-was amended rather than satisfied by construction. Three append-only addenda
-dated 2026-09-27 record the subprocess half: the stdin-producer split
+was amended rather than satisfied by construction. Seven append-only addenda
+separate this branch's head from `origin/main` (8 there, 15 here). Five are
+ceiling-forced splits: the stdin-producer split
 (`_subprocess_stdin_stream.py`), the spawn-and-deadline split
 (`_subprocess_spawn.py`, `_subprocess_deadline.py`, and the exit that
-`_wait_for_exit_code_within_timeout` made from `_subprocess_wait.py`), and the
-stdin-writer rendezvous (`_subprocess_rendezvous.py`). The accepted body above
-them is left unedited: an addendum is appended, never a retroactive rewrite of
-the text that was accepted. The boundaries are re-checked at each milestone
-boundary.
+`_wait_for_exit_code_within_timeout` made from `_subprocess_wait.py`), the
+stdin-writer rendezvous (`_subprocess_rendezvous.py`), the two `cuprum.sh`
+splits (`cuprum/sh/stdio.py`, `cuprum/sh/pipeline.py`, then
+`cuprum/sh/stdio_rules.py`), and the chunk-write split
+(`cuprum/_subprocess_stdin_write.py`). The other two record design reviews
+rather than splits. The accepted body above them is left unedited: an addendum
+is appended, never a retroactive rewrite of the text that was accepted. The
+boundaries are re-checked at each milestone boundary.
 
 The 400-line module ceiling is the practical expression of that ADR here. The
 counts move as the work proceeds, so they are recorded by milestone rather than
-restated here: at the time of writing `_subprocess_execution.py` is 381 lines,
-`_subprocess_wait.py` 336, and `sh/safe_cmd.py` 337, all near enough to the cap
-that new logic goes into new small modules rather than into them — which is how
-the four modules above came to exist.
+restated here. At this revision `_subprocess_execution.py` is 394 lines,
+`_subprocess_wait.py` 336, and `sh/safe_cmd.py` 343; two of the three are
+*larger* than they are on `origin/main` (372 and 398 there), because this
+branch adds to them as well as splitting from them. All three sit near enough
+to the cap that new logic goes into new small modules rather than into them —
+which is how the seven modules above came to exist.
 
 ## Verification plan
 
