@@ -6,11 +6,12 @@ builder resolves against the innermost one, and where the two enforcement
 points fire. The context mechanics that are not catalogue-specific stay in
 ``test_context.py``.
 
-The property test at the end states the nesting invariant over arbitrary
-scope sequences rather than fixed examples: after any interleaving of
-catalogue scopes, allowlist-only scopes, and ``allow()`` registrations, the
-active catalogue is the one named by the innermost catalogue scope, and
-``None`` outside every catalogue scope.
+The property test states the nesting invariant over arbitrary scope
+sequences rather than fixed examples: after any interleaving of catalogue
+scopes, allowlist-only scopes, and ``allow()`` registrations, the active
+catalogue is the one named by the innermost catalogue scope, and ``None``
+outside every catalogue scope. The deterministic examples that follow it
+pin the selection and restoration boundaries it asserts.
 """
 
 from __future__ import annotations
@@ -236,20 +237,31 @@ def _open(step: _Step) -> contextlib.AbstractContextManager[object]:
     return allow(step.program)
 
 
+def _assert_selection(open_steps: cabc.Sequence[_Step], phase: str) -> None:
+    """Assert the active catalogue matches the innermost named open scope."""
+    assert current_context().catalogue is _expected_catalogue(open_steps), (
+        f"the active catalogue should be the innermost catalogue scope ({phase})"
+    )
+
+
 def _replay(
     steps: cabc.Sequence[_Step],
     remaining: cabc.Sequence[_Step] = (),
 ) -> None:
-    """Recursively replay ``steps``, asserting the invariant at each depth."""
+    """Recursively replay ``steps``, asserting the invariant at each boundary."""
+    _assert_selection(remaining, "on entry")
     if not steps:
-        # The whole sequence is open: the innermost named catalogue wins.
-        assert current_context().catalogue is _expected_catalogue(remaining), (
-            "the active catalogue should be the innermost catalogue scope"
-        )
         return
     step, rest = steps[0], steps[1:]
+    opened = [*remaining, step]
     with _open(step):
-        _replay(rest, [*remaining, step])
+        _assert_selection(opened, "after opening the scope")
+        _replay(rest, opened)
+        # The inner scopes have unwound but this one is still open, so the
+        # selection must not have been left behind by the recursion.
+        _assert_selection(opened, "after the inner scopes unwound")
+    # The scope has closed: the enclosing selection is active again.
+    _assert_selection(remaining, "after the scope closed")
 
 
 @_PROPERTY_SETTINGS
@@ -262,4 +274,61 @@ def test_catalogue_scope_nesting_resolves_to_the_innermost_named_catalogue(
     _replay(steps)
     assert current_context().catalogue is None, (
         "every catalogue scope should be unwound after the sequence exits"
+    )
+
+
+def test_scope_operations_after_a_catalogue_keep_it_selected() -> None:
+    """A catalogue survives plain and allow operations opened beneath it."""
+    catalogue = _CATALOGUES[ECHO]
+
+    with scoped(catalogue=catalogue):
+        assert current_context().catalogue is catalogue, (
+            "opening a catalogue scope should select that catalogue"
+        )
+        with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
+            assert current_context().catalogue is catalogue, (
+                "a plain scope under a catalogue scope keeps the catalogue"
+            )
+            with allow(LS):
+                assert current_context().catalogue is catalogue, (
+                    "an allow registration keeps the inherited catalogue"
+                )
+            assert current_context().catalogue is catalogue, (
+                "closing an allow registration restores the catalogue"
+            )
+        assert current_context().catalogue is catalogue, (
+            "closing a plain scope restores the enclosing catalogue"
+        )
+    assert current_context().catalogue is None, (
+        "closing the catalogue scope clears the selection"
+    )
+
+
+def test_nested_catalogues_restore_the_outer_selection_on_unwind() -> None:
+    """Each unwinding step restores the selection of the scope still open."""
+    outer = _CATALOGUES[ECHO]
+    middle = _CATALOGUES[LS]
+    inner = _CATALOGUES[ECHO]
+
+    with scoped(catalogue=outer):
+        with scoped(catalogue=middle):
+            with scoped(ScopeConfig(allowlist=frozenset([LS]))):
+                assert current_context().catalogue is middle, (
+                    "a plain scope keeps the innermost named catalogue"
+                )
+            assert current_context().catalogue is middle, (
+                "closing the plain scope restores the middle catalogue"
+            )
+            with scoped(catalogue=inner):
+                assert current_context().catalogue is inner, (
+                    "the innermost catalogue scope replaces the middle one"
+                )
+            assert current_context().catalogue is middle, (
+                "closing the inner catalogue scope restores the middle one"
+            )
+        assert current_context().catalogue is outer, (
+            "closing the middle catalogue scope restores the outer one"
+        )
+    assert current_context().catalogue is None, (
+        "closing the outer catalogue scope clears the selection"
     )
