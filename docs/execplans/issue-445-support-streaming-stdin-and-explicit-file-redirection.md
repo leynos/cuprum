@@ -5,10 +5,14 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE (one deviation pending owner acceptance — the scope tolerance
-in `Tolerances` was breached, and the breach was recorded after the fact rather
-than escalated at the trigger. The work is delivered and verified; the
-deviation's disposition is **pending**. See the paired entries in
+Status: AWAITING OWNER DISPOSITION (the implementation is delivered and
+verified; one recorded deviation is unresolved). The scope tolerance in
+`Tolerances` was breached: the work was continued past the trigger and the
+breach recorded after the fact, rather than escalated at the time. The plan
+therefore cannot honestly be marked `COMPLETE` until the owner accepts that
+deviation or directs rework — that disposition is **pending** and requires a
+human decision, not something this document can supply. Everything else is
+done: the branch is implemented, gated, and pushed. See the paired entries in
 `Decision log` and `Outcomes & retrospective`.)
 
 ## Purpose / big picture
@@ -21,7 +25,7 @@ and internally selected output pipes or `/dev/null`. There is no public
 streaming input source, and no public way to say "the child's stdout goes to
 *this* file" or "the child's stderr goes to *this* already-open descriptor".
 
-After this change a caller can write:
+After this change, a caller can write:
 
 ```python
 import asyncio
@@ -289,6 +293,124 @@ likelihood, and mitigation.
   expected result for two docstrings and a reflow. Any later commit invalidates
   this evidence, so a further change requires a fresh run rather than citation
   of this one.
+
+- [x] (2026-10-02) The rebased branch was published and the review threads were
+  answered. The push was a force-with-lease over SSH, bound to the head
+  recorded before the rebase: `+ 9c161f11...c064a1f2 ... (forced update)`, and
+  the remote branch was read back as
+  `c064a1f2da18f1e16acdbbc78bd511ba201ea64b`, matching the local head. The
+  lease basis was the pre-rebase remote head rather than a freshly fetched one,
+  so a concurrent push by another party would have failed the force instead of
+  being overwritten.
+
+  The pull-request body was then updated to carry the gate evidence. It now
+  names the frozen revision `329d0b13` on which all four gates ran, quotes each
+  gate's result, and records that the later commits to `c064a1f2` change only
+  this file — so the Python and Rust trees are byte-identical to the fully
+  gated revision. The body was read back at 156 lines and checked for the four
+  required elements: the closed issue, the session reference, the frozen
+  revision, and the final head.
+
+  All four `chatgpt-codex-connector` findings were answered on their own
+  threads. The reply route matters for future rounds: the GraphQL
+  `addPullRequestReviewComment` mutation returns
+  `FORBIDDEN: leynos does not have the correct permissions` with this account's
+  token scopes, so replies must go through the REST endpoint
+  `POST repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies` — and with the
+  *numeric* comment id, since a GraphQL node id (`PRRC_...`) returns
+  `404 Parent comment not found`. Note also that the bot's login differs
+  between the two APIs: `chatgpt-codex-connector[bot]` over REST, without the
+  suffix over GraphQL.
+
+- [x] (2026-10-02) A CodeRabbit review of the working tree left five findings,
+  and verifying the two in `test_stdin_writer_teardown_bound.py` turned up a
+  more serious defect than either described. Both were about resources the test
+  leaves behind, and measured as written the test did leak: two orphaned
+  grandchild processes, reparented to PID 1 and each holding a live
+  `time.sleep(600)` for ten minutes after every run of the suite.
+
+  The first finding was the grandchild's lifetime. The child cannot reap it —
+  the child exits immediately, which is the entire point of the scenario — and
+  the grandchild is reparented, so the parent has no handle on it either. That
+  makes a self-imposed cap the only bound available, so the grandchild now
+  sleeps for `_GRANDCHILD_LIFETIME_S` (30 s) rather than 600: still far longer
+  than the test, so the bound is never the constraint, but short enough that an
+  uncollected process dies on its own. Measured before and after: 600 s and 30
+  s respectively.
+
+  The second finding was the hang guard, and the reviewer's stated reason was
+  not the real one. `_UNWIND_WINDOW_S` was applied with
+  `pool.submit(...).result(timeout=_UNWIND_WINDOW_S)` under a
+  `with ThreadPoolExecutor(max_workers=1) as pool:`. `__exit__` calls
+  `shutdown(wait=True)`, which joins its workers **unconditionally**: the
+  timeout raises `TimeoutError` after its interval, but raising does not cancel
+  the worker, and the enclosing `with` block then blocks in `__exit__` joining
+  it anyway. Measured directly with a worker that sleeps 30 s and a 0.3 s
+  timeout, total elapsed was the full 30.00 s — the `except` clause below the
+  block only ran once the wedge had already been reaped. So the guard did not
+  "fail rather than hang" as its comment claimed: it hung for the whole wedge
+  and *then* raised from teardown, failing for the wrong reason with a message
+  that misdescribed what happened. Replaced with a bare daemon
+  `threading.Thread`, whose `join(timeout=...)` plus `is_alive()` check is the
+  only wait and is therefore decisive.
+
+  The guard was then proved non-vacuous rather than assumed. Monkeypatching the
+  worker body to wedge for 60 s against a 2 s window gave
+  `finished=False ... elapsed=2.00s` — detected inside the window and returned.
+  The executor version returns at the wedge duration for the same probe, which
+  is what makes elapsed time the discriminator between the two.
+
+  The remaining three findings were the plan's own Status line and pronouns
+  (documentation, handled separately) and a precision point about
+  `consumes_stdout`'s docstring, which claimed redirection is refused outright
+  where `_reject_captured_redirection` refuses it only when *capture* or *echo*
+  needs the pipe; an accepted `on_line` or idle observation simply receives
+  nothing from a redirected stream. The docstring now says that instead.
+
+- [x] (2026-10-02) A hosted CodeScene check run failed on `c064a1f2` with two
+  findings, both genuine regressions this branch introduced, and both fixed by
+  extraction rather than by trimming prose. The figures were reproduced locally
+  before any code changed, using the pinned recipe recorded for this repository
+  (non-blank, non-comment lines across the span; cyclomatic complexity as
+  `1 + branches + (BoolOp values - 1) + handlers + raises`), and each matches
+  CI exactly:
+
+  1. **Complex Method**, `_write_stdin_stream`, cc 9 against a threshold of 9.
+     The function had grown a second `except` clause when the producer-failure
+     marker was introduced, and the three-way decision it encoded was a policy
+     call sitting in the middle of what had been a setup/teardown function.
+     Extracted as `_drain_source_into_pipe`, which now owns the producer's whole
+     lifecycle — building its iterator, pumping it, and finalizing it — and
+     therefore the failure policy too. `_write_stdin_stream` drops to 32 lines
+     and cc 2; the new function is 45 lines and cc 8.
+  2. **Large Method**, `_run_subprocess_with_streams`, 73 lines on the target to
+     78 here against a threshold of 70. The two `except BaseException` tails
+     (reconcile the consumers, then re-raise) were the same shape twice.
+     Extracted the second as `_gather_consumer_output`; the run function drops
+     to 62 lines and cc 2, and the helper is 36 lines.
+
+  Both extractions were proved inert rather than assumed to be. The consumer
+  join's `try` block is byte-identical to the original at the AST level after
+  `ast.unparse`. The stdin guarded region is identical apart from
+  `_close_stdin`, which moved to the caller's `finally` — and on every exit
+  path both bodies still run, with the caller's `finally` last, so the ordering
+  the original had is preserved. One thing this audit caught: a first attempt
+  at the extraction left `aiter(stream.chunks)` *outside* the guarded region,
+  which would have let an async iterable whose `__aiter__` raises escape
+  unwrapped instead of becoming a `StdinSourceError`. That was found by diffing
+  the new guarded region against the old one statement by statement, not by the
+  tests, and the iterator construction was moved back inside.
+
+  A second defect in the same extraction was caught by the post-turn typecheck
+  rather than by either audit. `_gather_consumer_output` was first annotated
+  `-> tuple[str, str]`, but `asyncio.gather` yields `str | None` for a stream
+  that was not captured. The original was type-correct only because it assigned
+  straight into a function whose return type already declares `str | None` for
+  those elements; giving the narrower type a name made it a checkable claim, and
+  `ty` rejected it. Corrected to `tuple[str | None, str | None]`, matching
+  both the source and the caller. The lesson is that an extracted signature is
+  a *claim*, and a claim the inline code never had to make can be wrong — the
+  other elements' annotations were re-checked at the same time.
 
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
@@ -1315,11 +1437,11 @@ likelihood, and mitigation.
   proved that main's **entire** change to that file was a single argument added
   to one `_merge_env` call, and the other 32 lines were the function body this
   branch had moved. The generalizable move is to diff `base → target` for the
-  disputed file rather than reasoning about the conflict hunk: it tells you
-  what you actually owe the target, which for a relocation can be one line.
-  Left unchecked, the temptation is to accept the target's copy wholesale,
-  which here would have resurrected the old `_spawn_subprocess` alongside the
-  new module.
+  disputed file rather than reasoning about the conflict hunk: it shows what
+  the target is actually owed, which for a relocation can be one line. Left
+  unchecked, the temptation is to accept the target's copy wholesale, which
+  here would have resurrected the old `_spawn_subprocess` alongside the new
+  module.
 - Observation (evidence): a conflict-time scan for "target lines absent from the
   working tree" produces false positives while the replay is mid-flight,
   because later commits have not been applied yet. Four files were flagged; all
