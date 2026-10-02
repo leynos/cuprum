@@ -447,7 +447,55 @@ escalation, not a workaround.
         - Non-vacuity for F and G/H: mutating the step to bind a different
           program fails the scenario with the intended message (the child fell
           back to the catalogued name), and the mutation was reverted exactly.
-  - [ ] GitHub Actions green at the merge ref for the current head.
+  - [x] (2026-10-02 15:50Z) The merge into `origin/main` exposed a **second**
+        consequence of the same hoist, this time in an `insta`-style whole
+        payload snapshot rather than a field list. `main`'s
+        `tests/behaviour/_structured_events_support.py::normalize_event`
+        renders **every** declared `ExecEvent` field by name, so the snapshot
+        failed on `resolved_path` even though the field was present and
+        correct: the recorded payload predates it. The probe installs no
+        binding, so `None` is the honest value; the snapshot was regenerated
+        and now records `'resolved_path': None` on the plan, start, and exit
+        events. Evidence: `1 snapshot failed. 1 snapshot passed` before,
+        `1 snapshot updated`, `9 passed` after.
+  - [x] (2026-10-02 16:05Z) Full gate set re-run at `3e893565`, sequentially,
+        each log recording its own HEAD and the plan digest: `check-fmt`,
+        `typecheck`, `test` (Python and Rust), `markdownlint`, and `nixie`,
+        all exit 0. The committed delta's digest
+        (`bd6d7be266471bfa919fec0e47f4554cd622a090f0e55db50898814de6ffc0b3`)
+        equals the digest recorded before the commit, and the plan's digest
+        matches the gated one, so the gates describe the commit that exists.
+        `make lint` is the one exception and it is environmental: it ran every
+        sub-gate green — pylint 10.00/10 three times (classic, DF12, and the
+        plugin-pass), `ruff check`, interrogate `PASSED (minimum: 100.0%,
+        actual: 100.0%)`, `ambrleaks`, skylos, rustdoc, clippy, whitaker,
+        yamllint, and the typos gate — then **wedged in `actionlint`, the last
+        command**. This is the documented host-only deadlock, not a finding:
+        `timeout 120 actionlint …` on this branch exits 124, and the identical
+        command against `origin/main`'s own `ci.yml` also exits 124. The
+        bounded substitute passes: `timeout 300 actionlint -shellcheck=
+        -config-file .github/actionlint.yaml` exits 0 with no diagnostics.
+        The branch touches no file under `.github/` at all
+        (`git diff --name-only origin/main...HEAD -- .github/` is empty), so
+        there is nothing in this change for the workflow linter to catch.
+  - [x] (2026-10-02 16:20Z) CI at `3e893565` is running: `changes`,
+        `Typecheck and test (Python 3.12)`, `(3.13)`, `(3.14)`, `(3.15a)`,
+        both extension-gated suites, `lint-test`, `benchmark-ratchet`, and all
+        five wheel builds including `verify-wheel-install` have concluded
+        `success`; `coverage` is still running. The two legs that failed at
+        `a5c84fa1` — Python 3.12 and 3.14 — both pass, and both **ran the
+        suite** rather than skipping it: their step lists show
+        `17. success Run typechecker`, `18. success Install dev-fast doctest
+        toolchain`, and `19. success Run tests` as executed steps, not
+        `skipped`. That is the specific regression this commit fixes, and it
+        is established at step granularity rather than inferred from the job's
+        overall conclusion.
+  - [x] (2026-10-02 16:25Z) Confirmed that the 3.15a leg's green is **not**
+        evidence, exactly as the earlier note warned: its job steps after
+        "Set up runner" are all `skipped` — checkout, typechecker, and tests
+        alike — while the job's own conclusion is `success`. It is the
+        skipped-suite leg at this head too, so cite the 3.12 and 3.14 legs for
+        suite coverage and treat 3.15a as unobserved.
   - [ ] `coderabbit review --agent` returns no unresolved finding at head.
 
 ## Surprises & discoveries
