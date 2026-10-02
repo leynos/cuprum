@@ -19,7 +19,11 @@ import typing as typ
 
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
-from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._result_assembly import (
+    _require_bytes,
+    _require_text,
+    _RunMeasurements,
+)
 from cuprum._sink_lifecycle import _outcome_for_result
 from cuprum._timeout_reporting import _safe_emit_terminal
 from cuprum.events import ResourceUsageMode, TerminalOutcome
@@ -255,29 +259,34 @@ def _build_stage_result(
         the ordinary text result.
     """
     sh = _sh_module()
-    measurements = {
-        "program": inputs.cmd.program,
-        "argv": inputs.cmd.argv,
-        "exit_code": inputs.exit_code,
-        "pid": inputs.pid,
-        "started_at": inputs.started_at,
-        "duration": inputs.duration,
-        # A stage can never be measured, so all three figures stay ``None``.
-        "max_rss_bytes": None,
-        "user_cpu_seconds": None,
-        "system_cpu_seconds": None,
-        "relay_fallbacks": inputs.relay_fallbacks,
-    }
+    # A stage is never measured directly, so ``rusage`` is ``None`` and the
+    # three resource figures it carries stay ``None``. Building the same typed
+    # value the direct path builds keeps the two result constructions
+    # interchangeable: an untyped mapping would let a key drift out of step
+    # with the fields it fills without any type checker noticing.
+    measurements = _RunMeasurements(
+        pid=inputs.pid,
+        started_at=inputs.started_at,
+        duration=inputs.duration,
+        rusage=None,
+        relay_fallbacks=inputs.relay_fallbacks,
+    )
     if capture_bytes:
         return sh.BytesCommandResult(
+            program=inputs.cmd.program,
+            argv=inputs.cmd.argv,
+            exit_code=inputs.exit_code,
             stdout=_require_bytes(stdout, "stdout"),
             stderr=_require_bytes(stderr, "stderr"),
-            **measurements,
+            **measurements.as_kwargs(),
         )
     return sh.CommandResult(
+        program=inputs.cmd.program,
+        argv=inputs.cmd.argv,
+        exit_code=inputs.exit_code,
         stdout=_require_text(stdout, "stdout"),
         stderr=_require_text(stderr, "stderr"),
-        **measurements,
+        **measurements.as_kwargs(),
     )
 
 
