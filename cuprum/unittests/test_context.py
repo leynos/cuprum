@@ -1,8 +1,8 @@
 """Unit tests for CuprumContext.
 
 The context, its narrowing rules, and the scopes that apply them. Hook
-registration and ordering live in ``test_context_hooks.py``; the
-catalogue-specific behaviour lives in ``test_context_catalogue.py``.
+registration and ordering live in ``test_context_hook_registration.py``;
+the catalogue-specific behaviour lives in ``test_context_catalogue.py``.
 """
 
 from __future__ import annotations

@@ -8,6 +8,13 @@ mechanics that are not hook-specific stay in ``test_context.py``.
 
 Every registration test is parameterized over the before/after variants of one
 structural contract, so the two hook kinds cannot drift apart.
+
+The ``_registration`` suffix is load-bearing: pytest imports test modules by
+basename, so a name this module shared with ``tests/behaviour/
+test_context_hooks.py`` made a single-process collection of the whole
+repository fail with ``import file mismatch``. ``make test-python`` invokes
+pytest once per glob in separate processes and so could not see that; CI's
+coverage job collects everything in one process and could.
 """
 
 from __future__ import annotations
