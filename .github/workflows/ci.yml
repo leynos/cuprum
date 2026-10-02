@@ -585,7 +585,7 @@ jobs:
       # pytest. Install it here so a cold rustup download does not consume the
       # test's 30-second timeout.
       - name: Install dev-fast doctest toolchain
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         run: rustup toolchain install "$DEV_FAST_TOOLCHAIN" --profile minimal
 
       # `make test-python`, not `make test`: the Rust suite runs exactly once

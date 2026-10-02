@@ -77,7 +77,7 @@ def test_typecheck_python_suite_installs_mdtablefix_on_every_leg() -> None:
     )
 
     guard = ungated("ci.yml", "typecheck-test", installer.get("if"))
-    assert guard == "", (
+    assert not guard, (
         "typecheck-test must install mdtablefix on every leg, gated only by "
         f"the leg flag, got if: {installer.get('if')!r}"
     )
