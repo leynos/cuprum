@@ -13,11 +13,14 @@ rather than pass by luck.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import io
 import typing as typ
 
 import pytest
 
+from cuprum import sh
+from cuprum.context import ScopeConfig
 from cuprum.echo_events import EchoErrorCategory, EchoStream
 from cuprum.sh import (
     BytesCommandResult,
@@ -25,14 +28,19 @@ from cuprum.sh import (
     ExecutionContext,
     RunOutputOptions,
     StdinInput,
+    scoped,
 )
-from tests.helpers.catalogue import python_builder as build_python_builder
+from tests.helpers.catalogue import (
+    python_builder as build_python_builder,
+    python_catalogue,
+)
 from tests.helpers.execution import _RunKwargs
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.lines import LineEvent
+    from cuprum.program import Program
     from cuprum.sh import SafeCmd
 
 # Every byte value, then a lone continuation byte, a byte no UTF-8 sequence
@@ -49,6 +57,14 @@ _ECHO_STDIN = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
 
 
 type BytesExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], BytesCommandResult]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ObserveScope:
+    """An allowlist paired with a command it admits."""
+
+    allowlist: frozenset[Program]
+    cmd: SafeCmd
 
 
 def _run_bytes_async(cmd: SafeCmd, kwargs: _RunKwargs) -> BytesCommandResult:
@@ -80,6 +96,22 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
 def bytes_cmd(python_builder: cabc.Callable[..., SafeCmd]) -> SafeCmd:
     """Build the command whose two streams carry the binary payload."""
     return python_builder("-c", _WRITE_BOTH_STREAMS)
+
+
+@pytest.fixture
+def observe_scope() -> ObserveScope:
+    """Provide an allowlist and a binary-payload command it admits.
+
+    Both must come from one catalogue: the allowlist admits only the program
+    that catalogue registered, so a command built from a second catalogue
+    would be refused before the drain this test exercises.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    return ObserveScope(
+        allowlist=catalogue.allowlist,
+        cmd=python("-c", _WRITE_BOTH_STREAMS),
+    )
 
 
 def test_byte_exact_capture_round_trips_both_streams(
@@ -224,6 +256,37 @@ def test_line_observation_is_refused_before_the_sync_entry_point_runs(
 
     with pytest.raises(ValueError, match="on_line"):
         _run_bytes_sync(bytes_cmd, {"output": RunOutputOptions(on_line=observe)})
+
+
+def test_observe_hooks_do_not_break_byte_exact_capture(
+    observe_scope: ObserveScope,
+) -> None:
+    """A registered observe hook must not cost bytes mode its exactness.
+
+    The observe machinery supplies an internal line sink the caller never
+    asked for, so a run that merely *has* a hook registered must still return
+    the child's bytes. Both channels must hold at once: the capture stays
+    byte-exact, and the observer receives the decoded line.
+    """
+    observed: list[str] = []
+
+    def hook(event: LineEvent) -> None:
+        """Record the decoded line the run publishes."""
+        line = getattr(event, "line", None)
+        if line is not None:
+            observed.append(line)
+
+    with scoped(ScopeConfig(allowlist=observe_scope.allowlist)), sh.observe(hook):
+        result = _run_bytes_sync(observe_scope.cmd, {})
+
+    assert result.stdout == _FAILING_PAYLOAD, (
+        "an observe hook must not decode the captured payload, got "
+        f"{result.stdout!r}"
+    )
+    assert result.stderr == _FAILING_PAYLOAD, (
+        f"stderr must stay byte-exact beside a hook, got {result.stderr!r}"
+    )
+    assert observed, "the observe hook must still receive decoded lines"
 
 
 def test_bytes_entry_point_accepts_a_text_stdin_input(

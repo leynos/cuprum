@@ -168,8 +168,10 @@ class SafeCmd:
         Parameters
         ----------
         output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: it carries
-            decoded text, which byte-exact capture cannot supply.
+            Capture and echo settings. ``on_line`` is rejected: bytes mode
+            returns the child's own bytes, so a callback carrying decoded text
+            would be a second, contradictory contract for the same stream. Use
+            the text-mode entry point when lines are wanted.
         timeout : float | None, default=None
             Maximum execution time in seconds. An explicit value overrides the
             timeout in ``context``.
@@ -227,8 +229,10 @@ class SafeCmd:
         Parameters
         ----------
         output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: it carries
-            decoded text, which byte-exact capture cannot supply.
+            Capture and echo settings. ``on_line`` is rejected: bytes mode
+            returns the child's own bytes, so a callback carrying decoded text
+            would be a second, contradictory contract for the same stream. Use
+            the text-mode entry point when lines are wanted.
         timeout : float | None, default=None
             Maximum execution time in seconds.
         context : ExecutionContext | None, default=None
