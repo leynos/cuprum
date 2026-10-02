@@ -898,9 +898,20 @@ than discovering the gap months later.
     `tests/test_ci_resource_sampler_action.py`), and all five `TOOL_CACHE_KEY`
     inputs — `uv.lock`, `pyproject.toml`, `Makefile`, and the two action
     files — are byte-identical between `26af701b`, whose run was fully green,
-    and `4422afb6`. The failed job was re-run with `gh run rerun --failed`.
-    The re-run's result is recorded separately once read; it is not claimed
-    here.
+    and `4422afb6`. The failed job was re-run with `gh run rerun --failed`;
+    the branch was then pushed again and the new commit cancelled that
+    in-flight re-run, so the rerun reads `cancelled` and settles nothing.
+  - *The pushed head `3816be40` is fully green, `coverage` included.* Pushing
+    the entry above started run `37043769459` on `3816be40`. Its `coverage` job
+    (`id 110962502244`) completed `success` in 12m01s with all 29 steps green,
+    and every other job did too — the four `Typecheck and test` legs,
+    `lint-test`, both `Extension-gated tests` jobs, all five `build-wheels`
+    fan-outs, `verify-wheel-install`, `benchmark-ratchet`, `changes`, and the
+    native-contract, `verus`, and `extended` checks. CodeScene reads `success`
+    again (`id 110959988378`), so the refactor still holds at this head. The
+    earlier `coverage` failure is therefore confirmed environmental: the same
+    test passed unchanged once the cold toolchain install did not race the 30 s
+    ceiling, and nothing on the branch differs between the two runs.
 
 ## Surprises & discoveries
 
