@@ -101,15 +101,19 @@
   resolution helper, `InvalidExecutableBindingError` the rejection, and
   `merge_executable_bindings` the overlay-only composition rule.
   `CuprumContext.resolve_executable()` inspects the effective binding without
-  running anything. `ExecEvent` and `CommandResult` gain `resolved_path`,
-  carrying the executed executable or `None` when nothing was bound; the
-  logging adapter projects it as `cuprum_resolved_path` and the tracing adapter
-  as `cuprum.resolved_path`, and it is deliberately absent from the metrics
-  labels, which stay low-cardinality. Path validation is advisory: construction
-  rejects an empty path, a relative path unless `allow_relative=True`, and NUL
-  or `..` segments, but it cannot close the window between the check and the
-  `exec`, so filesystem ownership, permissions, and read-only deployment remain
-  the operator's responsibility
+  running anything. A resolver must return a `str`: any other result raises
+  `TypeError`, so a resolver returning `None` cannot be mistaken for "no
+  binding" and silently run the catalogued name instead, and a resolver that
+  raises is reported as `ExecutableResolutionError`, naming the logical program
+  and chaining the original exception. `ExecEvent` and `CommandResult` gain
+  `resolved_path`, carrying the executed executable or `None` when nothing was
+  bound; the logging adapter projects it as `cuprum_resolved_path` and the
+  tracing adapter as `cuprum.resolved_path`, and it is deliberately absent from
+  the metrics labels, which stay low-cardinality. Path validation is advisory:
+  construction rejects an empty path, a relative path unless
+  `allow_relative=True`, and NUL or `..` segments, but it cannot close the
+  window between the check and the `exec`, so filesystem ownership,
+  permissions, and read-only deployment remain the operator's responsibility
   ([#440](https://github.com/leynos/cuprum/issues/440)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state

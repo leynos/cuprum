@@ -313,9 +313,80 @@ escalation, not a workaround.
         behaviour and doctest suites. Landed as `5e2e3dd5` and `903fb33e`,
         split so the test-strength change and the prose correction stay
         separately reviewable.
-  - [ ] GitHub Actions green at `903fb33e`.
-  - [ ] `coderabbit review --agent` returns no unresolved finding at
-        `903fb33e`.
+  - [x] (2026-10-01 18:34Z) The review cycle was recorded in the plan and
+        landed as `a5c84fa1`, taking head past the `903fb33e` the entries below
+        used to name.
+  - [x] (2026-10-01 18:39Z) A second `coderabbit review --agent` pass emitted
+        three findings and then died with
+        `TRPCWebSocketClosedError: WebSocket closed`. The transcript is
+        `/tmp/coderabbit-cd050cee-epm5-rereview.out`. It is a **truncated**
+        review, not a completed one with three findings: the process exited 1
+        after a `{"type":"error"}` record, and no
+        `{"type":"complete","status":"review_completed"}` record follows. The
+        three it did return were all real.
+  - [x] (2026-10-01 18:45Z) A third pass completed cleanly (exit 0, one
+        finding) against the same tree, recording
+        `"status":"review_completed"` over 51 files. Transcript:
+        `/tmp/coderabbit-cd050cee-epm5-rereview2.out`. It returned only the
+        plan-path finding. That it did not repeat the earlier three is
+        nondeterminism, not evidence they were fixed — the files it cited had
+        not been edited between the two runs — so all four were dispositioned
+        on their own merits below rather than on which pass happened to report
+        them.
+  - [x] (2026-10-01 18:52Z) All four findings actioned, each verified against
+        the tree with a reproducer before and after:
+        - **A, the fail-fast fixture** (`test_adapter_projection.py`). Real:
+          production `emit_fail_fast` sets `resolved_path=None` deliberately,
+          but `_representative_event` populated it for every phase, so the
+          snapshot pinned a wire shape Cuprum never emits. Fixed by making the
+          fixture match production; the re-recorded snapshot is a two-line
+          deletion, both from the `[pipeline_fail_fast]` variant, which is the
+          Red/Green evidence that the fixture and not the snapshot was wrong.
+        - **B, a resolver returning a non-`str`** (`executable_binding.py`).
+          Real, and worse than reported: `None` is the sentinel the execution
+          layer reads as *unbound*, so via `_StageObservation.argv0`'s fallback
+          a resolver returning it would run the **catalogued name** — a
+          different executable, and the exact substitution this feature exists
+          to make deliberate. Fixed with `_checked_resolver_result`, which
+          raises `TypeError` for any non-`str`.
+        - **C, a raising resolver** (`context/_executable.py`). Real: a
+          resolver raising `FileNotFoundError` escaped as itself. The finding
+          cited `_command_internals.py:119-123`, but that site is a thin
+          wrapper over `CuprumContext.resolve_executable`, so the fix went to
+          the definition site; all three call sites (`_command_internals`,
+          `_observability`, `_pipeline_internals`) route through it. Fixed with
+          `ExecutableResolutionError`, which names the logical program and
+          chains the original exception. It lives in
+          `executable_binding.py`, not the context module, because the context
+          module is the only place that knows both the program and the
+          failure, and `ExecutableBinding` carries no program field.
+        - **D, a developer-specific path in this plan.** Real, and also wrong:
+          the recorded worktree path spelt `github---leynos--cuprum` with two
+          hyphens where the real directory has three. Replaced with a
+          description that cannot go stale.
+  - [x] (2026-10-01 18:53Z) Nine tests added in
+        `cuprum/unittests/test_executable_binding_failures.py` covering both
+        new behaviours, since the AGENTS.md rule requires a regression test
+        alongside a bug fix and neither behaviour had one. Non-vacuity was
+        established by three seeded faults rather than by asserting the tests
+        pass: reverting the resolver-result check failed five tests, removing
+        the context wrap failed four, and removing only the re-raise clause
+        failed the double-wrap test. Each failed for its intended reason, and
+        production was restored byte-identically afterwards.
+  - [x] (2026-10-01 21:30Z) The four `make lint` findings from the
+        environment-fixed retry cleared, all four being defects in this
+        branch's own code rather than environment artefacts. Fixed by: adding a
+        `Raises` section to `resolve_executable` for `DOC501`; deleting the
+        `# ruff: ignore[blind-except]` comment for `RUF100`; and splitting two
+        over-long doctest lines. Ruff and `ruff format --check` are clean on all
+        four touched files, and the longest line in the two production modules
+        is 88 columns. That cleared Ruff, which then let the `&&` chain reach
+        interrogate for the first time; see the Surprises entry. Four nested
+        `resolver` docstrings were added there, taking the estate from 99.9% to
+        `PASSED (minimum: 100.0%, actual: 100.0%)`. 182 tests pass across the
+        eight binding-related suites.
+  - [ ] GitHub Actions green at head.
+  - [ ] `coderabbit review --agent` returns no unresolved finding at head.
 
 ## Surprises & discoveries
 
@@ -552,6 +623,98 @@ escalation, not a workaround.
   the point of writing, with `TZ=UTC stat -c %y` or
   `TZ=UTC git log --date=format-local`, and never to copy a displayed time into
   a `Z` field.
+- Observation: a `coderabbit review --agent` pass can die mid-review and still
+  look like a completed one. The 18:39Z pass emitted three well-formed
+  `{"type":"finding"}` records and then a
+  `{"type":"error","errorType": "connection"}` record, exiting 1 with no
+  `review_completed` record. Treating the three findings as the review's
+  verdict would have been wrong twice over: the review never finished, and the
+  pass that *did* finish (18:45Z, over the same unedited tree) reported a
+  different set — one finding, none of the three. Evidence: the two transcripts
+  named above, compared record by record. Impact: a review's absence of a
+  finding is not evidence a finding was fixed, and its presence is not evidence
+  the rest were examined. Every finding is dispositioned against the tree with
+  a reproducer, and the run is only accepted as complete when it exits 0 having
+  recorded `review_completed`.
+- Observation: two of the four findings were worse than the reviewer's wording
+  implied, and one-of-the-four's cited location was not where the fix belonged.
+  Finding B was described as "validate the returned value"; the actual
+  consequence is that a resolver returning `None` sends the child to a
+  *different executable* by way of `argv0`'s fallback. Finding C was cited
+  against a call site rather than the definition, so a literal fix there would
+  have left the other two callers unprotected. Evidence: the `argv0` fallback
+  rule in `_pipeline_types.py` and the three `_resolve_executable_for` callers.
+  Impact: a finding is a pointer to a place to look, not a specification of the
+  fix. Confirm the stated mechanism, then check whether the real one is broader
+  or the right repair is elsewhere.
+- Observation: `python -m doctest cuprum/executable_binding.py` is not a valid
+  check of this package, and its failure is an artefact of the harness rather
+  than of the code. The runner splits the path, inserts the file's own
+  directory on `sys.path`, and imports the file as a *top-level* module named
+  `executable_binding`. The example's `cuprum.context` import loads the same
+  file a second time under its real package name, so the error class reachable
+  as `cuprum.executable_binding.ExecutableResolutionError` is a different class
+  object from the one the example binds, and the `except` clause cannot match
+  the raised instance. The traceback makes this look like a raising problem,
+  because the escaped exception carries the right *name* while belonging to the
+  wrong *class object*, which sends the reader after the example's source
+  rather than the harness. Evidence: the same docstring, run as
+  `doctest.testmod(cuprum.executable_binding)`, reports
+  `attempted: 9 failed: 0`. Impact: run Python doctests package-qualified.
+  Better, the repository has no Python doctest gate at all — `pyproject.toml`
+  sets only `timeout = 30` with no `--doctest-modules`, and the sole `doctests`
+  inputs in `.github/workflows/` belong to the Rust coverage job — so an
+  example's correctness rests on review, and a broken one would sit unnoticed.
+  Two modules already carry failures on `HEAD` under the naive harness
+  (`cuprum/context/scoped.py` references an undefined `ECHO`;
+  `cuprum/context/registration.py` fails twice), which is corroborating
+  evidence that no such gate has ever run.
+- Observation: a gate run whose tree changes mid-flight reports evidence for a
+  revision that no longer exists, and the change is invisible to a
+  status-code-only digest. Scrutineer captured `status_digest` before and after
+  its lint attempt, saw the same value, and correctly refused to read that as
+  "unchanged": a first run batching scrutineer's lint-2 with the repairs to the
+  very files lint-2 had flagged. `git status --porcelain` still reported a
+  modified-worktree status for both files, so the digest matched while the
+  contents did not. Evidence: the `sha256sum` values scrutineer took at 20:55Z
+  versus the ones recorded here. Impact: freeze a digest of file *contents*,
+  not of status codes, before a gate run, and re-run any gate whose inputs
+  moved.
+- Observation: clearing the four lint defects was entirely mechanical once the
+  real rule names were known, but two of the four repairs cost a round because
+  the first guess was aimed at the wrong object. `DOC501`
+  (`docstring-missing-exception`) attaches to the *raising function* — here
+  `resolve_executable` — not to the exception class it names; the first
+  `Raises` section was written on the class and did not satisfy the rule. And
+  the `# ruff: ignore[blind-except]` suppression was not merely useless but
+  itself an error: `try/except Specific/except Exception` is the shape ruff
+  recommends, so `TRY`/`BLE` do not flag it and the suppression trips
+  `RUF100 unused-noqa`. Evidence: the lint-2 transcript, and
+  `All checks passed!` after both were addressed. Impact: prefer the minimal
+  edit — removing the suppression — over writing a justification for it, and
+  place a rule's fix where the rule is anchored rather than where the message
+  points.
+- Observation: `python-lint` chains Ruff to interrogate with `&&`, so Ruff's
+  four findings had been **hiding** a second, unrelated gate — and the branch
+  had therefore never passed `make lint` at all. Fixing Ruff let the run reach
+  `interrogate --fail-under 100`, which reported 99.9% over the whole Python
+  estate. The four missing docstrings were all on nested `resolver` functions
+  inside test modules this branch adds, and none existed on `origin/main`
+  (`git cat-file -e origin/main:<path>` fails for both files), so the shortfall
+  was this branch's own. Evidence: interrogate's estate totals of 7533
+  definitions with 4 missed, and `RESULT: PASSED ... actual: 100.0%` after the
+  four one-line docstrings. Impact: a `&&` chain reports only the first
+  failure, so a green Ruff is not evidence the lint target passed — read the
+  gate's exit status, not its loudest sub-check. This is the same shape as the
+  earlier "an aborting gate leaves later checks unobserved" lesson.
+- Observation: interrogate counts docstrings on **nested** functions, not only
+  module-level definitions, which is easy to miss because the surrounding test
+  has one and the inner callable reads as an implementation detail. All four
+  misses were inner `def resolver()` closures. Evidence: the four-site list from
+  `interrogate --fail-under 0 -vv`, each rendering its qualname as
+  `<test_name>.resolver`. Impact: add the one-line docstring when introducing a
+  closure inside a test; the estate is at exactly 100%, so a single omission
+  fails the gate for everyone.
 
 ## Decision log
 
@@ -662,7 +825,7 @@ section. An unapproved path is refused before its resolver runs
 call count of zero, plus the `catalogue.feature` scenario whose counting
 resolver must never fire). A configured approved path runs exactly, witnessed
 from both sides — the library's `resolved_path` and the child's own report of
-`sys.executable` — because checking only the former could not distinguish the
+its `sys.argv[0]` — because checking only the former could not distinguish the
 two. Nested and concurrent bindings stay isolated, covered by the stateful
 property test and the context-isolation suite. The filesystem-replacement limit
 is documented rather than papered over: `docs/users-guide.md` and section 5.1.2
@@ -1030,8 +1193,8 @@ EP-M5 — gates and review.
 
 ## Concrete steps
 
-All commands run from the worktree root,
-`/home/leynos/.lody/repos/github---leynos--cuprum/worktrees/cd050cee-fb9a-4172-8a2b-0c20d30fd3d1`.
+All commands run from the worktree root, the working directory this plan was
+authored in.
 
 Red stage, EP-M1 (run before creating the module):
 
@@ -1090,6 +1253,14 @@ each is asserted by a named test:
 5. TOCTOU limits are documented. Assert `docs/cuprum-design.md` contains a
    section stating that the check is advisory and naming filesystem ownership,
    permissions, and read-only deployment as the operator's responsibility.
+6. A resolver that breaks its contract is reported rather than obeyed. Assert
+   that a resolver returning a non-`str` raises `TypeError` — `None` in
+   particular, because the execution layer reads it as *unbound* and would
+   otherwise run the catalogued name instead — and that a resolver which raises
+   surfaces as `ExecutableResolutionError` naming the logical program, with the
+   original exception chained and a resolver's own `ExecutableResolutionError`
+   propagated unwrapped. Asserted by
+   `cuprum/unittests/test_executable_binding_failures.py`.
 
 Quality criteria:
 
