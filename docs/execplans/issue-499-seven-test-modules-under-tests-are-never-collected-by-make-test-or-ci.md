@@ -1161,6 +1161,42 @@ than discovering the gap months later.
     has not been re-submitted, which is what queued request `d8860275` remains
     for.
 
+- [x] (2026-10-03) Gated, pushed, and observed `ebbf3f72`, the head carrying
+  the record above. This entry closes the loop on the head it describes, so the
+  record and the shipped revision are the same commit chain.
+  - *The gate run, with both host preconditions applied from the outset.* All
+    five gates passed at `ebbf3f72`, `head_before == head_after` and
+    `git status --porcelain` empty at every gate: `check-fmt` exit 0 (1 s),
+    `typecheck` exit 0 (1 s), `lint` exit 0 (110 s), `markdownlint` exit 0
+    (10 s), `test` exit 0 (256 s; pytest 3774 collected = 3688 passed + 86
+    skipped, 0 failed; nextest 127/127). Passing the preconditions in advance
+    worked: `lint` completed inside the 900 s bound, so the `actionlint
+    -shellcheck=` fallback was not needed and the shell-syntax coverage gap in
+    that fallback never arose. The two environment faults recorded against
+    `3e6c9ff4` did not recur. Logs: `/tmp/<gate>-issue499-ebbf3f72.out`.
+  - *The bootstrap again observed, not assumed.* `make test`'s
+    `test-selection` prerequisite collected
+    `tests/test_ci_test_selection_contract.py` by name — `collected 62 items`,
+    `62 passed in 0.21s` — on a second head.
+  - *Hosted CI at `ebbf3f72`, fully settled.* 27 check runs: 22 `success`, the
+    same 5 `skipped`, 0 failures, 0 pending. `coverage` reads `success`, as do
+    the Python 3.12, 3.13, 3.14, and 3.15a typecheck-and-test legs. Reading
+    the result required patience through a **16-round Lody broker outage**;
+    each attempt failed with an identity-verification refusal rather than an
+    API answer, so the failures were retried rather than recorded as absence.
+  - *CodeScene at this head, quoted and matched to the head.* Its check run
+    reports `status: completed`, `conclusion: success`, title `CodeScene PR
+    Check`, body `**Quality Gate Passed**`, details
+    `https://codescene.io/projects/74471/delta/results/7793523`. Its review
+    `APPROVED` carries `commit_id` `ebbf3f72` itself, so the approval covers
+    the shipped head rather than an earlier one.
+  - *State at `ebbf3f72`.* `headRefOid` matches, `isDraft` false,
+    `mergeStateStatus` `CLEAN`, all 8 review threads resolved, no CodeRabbit
+    comment newer than 14:32:16Z. `reviewDecision` remains
+    `CHANGES_REQUESTED` anchored at `92f17d25`, which is unchanged by anything
+    above: reducing it needs a CodeRabbit review submission, and queued
+    request `d8860275` has still not run.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
