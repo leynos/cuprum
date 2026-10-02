@@ -121,6 +121,25 @@ class _StageObservation:
     # trusted field rather than a tag because a caller may shadow any tag key,
     # and the point of publishing the mode is that a consumer can rely on it.
     env_mode: EnvMode | None = None
+    # Resolved once, here, so a resolver runs exactly once per execution no
+    # matter how many lifecycle events the stage emits. ``None`` means the
+    # program was unbound and runs under its catalogued name, which
+    # ``argv0`` turns into ``str(cmd.program)``.
+    resolved_path: str | None = None
+
+    @property
+    def argv0(self) -> str:
+        """The executable this stage's child is spawned with.
+
+        The spawn sites read this rather than ``resolved_path`` so the
+        fallback rule — an unbound program runs under its catalogued name —
+        exists once. ``str`` on the program is deliberate: ``Program`` is a
+        ``NewType`` over ``str``, but the child's argument vector must be plain
+        strings.
+        """
+        return (
+            str(self.cmd.program) if self.resolved_path is None else self.resolved_path
+        )
 
     def emit(
         self,
@@ -159,6 +178,7 @@ class _StageObservation:
             system_cpu_seconds=details.system_cpu_seconds,
             resource_usage_mode=details.resource_usage_mode,
             env_mode=self.env_mode,
+            resolved_path=self.resolved_path,
         )
         self._emit_event(event)
 
@@ -203,6 +223,11 @@ class _StageObservation:
             # needs it: whether the failing stage ran under a replacement
             # boundary is the first thing that explains a missing ``PATH``.
             env_mode=self.env_mode,
+            # Deliberately unset: this sanitized decision event describes no
+            # stage's execution, and the failing stage reports its own path on
+            # the ``exit`` event that follows. Carrying one here would invite a
+            # consumer to read the pipeline's decision as having run that path.
+            resolved_path=None,
         )
         self._emit_event(event)
 

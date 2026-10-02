@@ -79,6 +79,12 @@ def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
         ("max_rss_bytes", event.max_rss_bytes),
         ("user_cpu_seconds", event.user_cpu_seconds),
         ("system_cpu_seconds", event.system_cpu_seconds),
+        # The executed executable, omitted when unbound. It is the one field
+        # here that names what actually ran rather than what was measured, so
+        # it travels with ``program`` in spirit — but it belongs in the
+        # verbatim group because it is a plain optional string, not a value
+        # needing rendering.
+        ("resolved_path", event.resolved_path),
     )
 
 

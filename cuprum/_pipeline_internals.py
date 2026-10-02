@@ -24,12 +24,14 @@ import time
 import typing as typ
 from pathlib import Path
 
+from cuprum._context_policy import _collect_hooks, _enforce_allowlist
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
+    _resolve_executable_for,
     _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
@@ -64,33 +66,23 @@ if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
+# ``_collect_hooks`` and ``_enforce_allowlist`` are re-exported from
+# ``cuprum._context_policy``, which they moved to when this module reached
+# pylint's 400-line ceiling. Callers still reach them through here.
 __all__ = [
     "_await_pipeline_wait_result",
     "_build_timeout_expired_error",
+    "_collect_hooks",
     "_collect_pipeline_inputs",
+    "_enforce_allowlist",
     "_gather_pipeline_outputs",
     "_sh_module",
 ]
 
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
-
-
-def _enforce_allowlist(cmd: SafeCmd) -> None:
-    """Reject ``cmd`` when the active context forbids its program."""
-    current_context().check_allowed(cmd.program)
-
-
-def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
-    """Return the before/after/observe hooks registered on ``ctx``."""
-    return _ExecutionHooks(
-        before_hooks=ctx.before_hooks,
-        after_hooks=ctx.after_hooks,
-        observe_hooks=ctx.observe_hooks,
-    )
 
 
 def _build_pipeline_observations(
@@ -106,6 +98,9 @@ def _build_pipeline_observations(
     hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
     env_overlay, env_mode = _resolve_env_overlay(config.ctx.env, config.ctx.env_mode)
+    # Every stage is enforced above before any is resolved, so a pipeline that
+    # is refused at stage three never runs a resolver for stages one and two.
+    resolved_paths = tuple(_resolve_executable_for(cmd, cwd=cwd) for cmd in parts)
     return tuple(
         _StageObservation(
             cmd=cmd,
@@ -129,8 +124,11 @@ def _build_pipeline_observations(
             pending_tasks=pending_tasks,
             wall_clock=time.time,
             env_mode=env_mode,
+            resolved_path=resolved_path,
         )
-        for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
+        for idx, (cmd, hooks, resolved_path) in enumerate(
+            zip(parts, hooks_by_stage, resolved_paths, strict=True)
+        )
     )
 
 

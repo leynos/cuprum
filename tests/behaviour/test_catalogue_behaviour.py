@@ -16,6 +16,7 @@ from cuprum.catalogue import (
     UnknownProgramError,
 )
 from cuprum.program import Program
+from tests.behaviour import _catalogue_binding_support as _binding_steps
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -51,6 +52,51 @@ def test_curated_program_accepted() -> None:
 )
 def test_safe_command_builder() -> None:
     """Behavioural coverage for the sh.make safe command factory."""
+
+
+@scenario(
+    "../features/catalogue.feature",
+    "An executable binding names the executable but not the identity",
+)
+def test_executable_binding_preserves_identity() -> None:
+    """Behavioural coverage for scoped executable bindings (#440)."""
+
+
+@scenario(
+    "../features/catalogue.feature",
+    "A binding cannot authorize an unlisted logical program",
+)
+def test_unapproved_program_is_still_refused() -> None:
+    """Behavioural guard: a binding never widens the allowlist."""
+
+
+# pytest-bdd resolves a step against the fixtures visible to the module that
+# declares the scenario, and a plain ``import`` does not re-export the step
+# fixtures the decorators plant in the support module. Re-binding each step to
+# the same implementation is what makes it resolvable here; the sibling
+# telemetry behaviour module does the same for its tracing steps.
+when(
+    parsers.parse('I bind the program "{program_name}" to the running interpreter'),
+    target_fixture="binding_outcome",
+)(_binding_steps.when_bind_program_to_executable)
+when(
+    parsers.parse(
+        'I bind the unlisted program "{program_name}" to the executable "{path}"',
+    ),
+    target_fixture="refusal_outcome",
+)(_binding_steps.when_bind_unlisted_program)
+then("the bound executable runs and reports itself")(
+    _binding_steps.then_bound_executable_runs
+)
+then(parsers.parse('the logical program remains "{program_name}"'))(
+    _binding_steps.then_logical_program_is_preserved
+)
+then("execution is refused as a forbidden program")(
+    _binding_steps.then_execution_is_refused
+)
+then("the binding's executable was never resolved")(
+    _binding_steps.then_binding_was_never_resolved
+)
 
 
 @given("the default catalogue", target_fixture="catalogue")

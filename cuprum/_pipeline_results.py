@@ -126,6 +126,7 @@ def _build_pipeline_stage_results(
                 user_cpu_seconds=None,
                 system_cpu_seconds=None,
                 relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
+                resolved_path=obs.resolved_path,
             ),
         )
     return stage_results

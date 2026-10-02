@@ -27,6 +27,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': dict({
       'eof_grace_s': 0.25,
@@ -51,6 +52,7 @@
       'cuprum_phase': 'exit',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
       'cuprum_resource_usage_mode': 'wait4_child',
       'cuprum_system_cpu_seconds': 0.125,
       'cuprum_user_cpu_seconds': 0.375,
@@ -74,6 +76,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
       'cuprum.resource_usage_mode': 'wait4_child',
       'cuprum.system_cpu_seconds': 0.125,
       'cuprum.user_cpu_seconds': 0.375,
@@ -128,6 +131,7 @@
       'cuprum_env_mode': 'replace',
       'cuprum_phase': 'plan',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -144,6 +148,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': None,
   })
@@ -160,6 +165,7 @@
       'cuprum_phase': 'start',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -177,6 +183,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': None,
   })
@@ -194,6 +201,7 @@
       'cuprum_phase': 'stderr',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -212,6 +220,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': None,
   })
@@ -228,6 +237,7 @@
       'cuprum_phase': 'stdin',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -245,6 +255,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': None,
   })
@@ -261,6 +272,7 @@
       'cuprum_phase': 'stdin_error',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -278,6 +290,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': dict({
       'error_type': 'ValueError',
@@ -299,6 +312,7 @@
       'cuprum_phase': 'stdout',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -317,6 +331,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': None,
   })
@@ -333,6 +348,7 @@
       'cuprum_phase': 'teardown_error',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -350,6 +366,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': dict({
       'error_type': 'ValueError',
@@ -371,6 +388,7 @@
       'cuprum_phase': 'timeout',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_resolved_path': '/opt/tools/echo',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -388,6 +406,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.resolved_path': '/opt/tools/echo',
     }),
     'tracing_span_event': dict({
       'error_type': 'TimeoutError',
