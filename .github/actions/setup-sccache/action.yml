@@ -177,7 +177,7 @@ runs:
         export SCCACHE_CONF="${conf}"
         echo "SCCACHE_CONF=${conf}" >> "${GITHUB_ENV}"
         "${binary}" --stop-server >/dev/null 2>&1 || true
-        # A cache is an optimisation, so a server that will not start must
+        # A cache is an optimization, so a server that will not start must
         # not fail the job. Clearing the wrapper makes Cargo compile with
         # plain rustc (an empty RUSTC_WRAPPER counts as unset), and the
         # warning keeps the loss visible.
