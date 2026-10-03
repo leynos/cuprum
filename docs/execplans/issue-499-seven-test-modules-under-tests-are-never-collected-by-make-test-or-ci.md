@@ -1290,6 +1290,41 @@ than discovering the gap months later.
     digit or with a letter run that happened to be harmless, so the gap stayed
     invisible until a SHA led with a letter run that spelled a word — and the
     exempting rule, not the prose, was what needed fixing.
+  - *The follow-up, and why the first shape of the test did not survive.* The
+    hosted CodeScene check at the pushed head `77b3411b` returned
+    `conclusion: failure` with `**Quality Gate Failed**` and the single gate
+    `Enforce advisory code health rules (1 file with Complex Method)`, scored
+    `10.00 → 9.69`, naming
+    `test_sha_exemption_covers_letter_leading_abbreviations`. The finding is
+    against the test this entry added, and it is real: the function inlined
+    `any(re.search(rule, token) for rule in sha_rules)` three times, and the
+    config unpacking, the rule filter, and six assertions all sat in the one
+    body, spanning 33 lines (31 excluding comments).
+  - *Why the local recipe said 5 when CodeScene said 10.* The pinned
+    measurement recipe reported `cc=5` for that function. Counting the four
+    generator clauses in it as loops — which is what CodeScene's parser does
+    — gives **cc 10**, matching the published `10.00` exactly. The recipe's
+    `cyclomatic()` walks for `If`/`For`/`While` nodes and does not descend
+    into `comprehension`, so every generator expression is invisible to it.
+    That is a known limitation of the instrument, not a discrepancy in the
+    finding, and the agreement at 10 is what establishes it: the earlier
+    reading of `cc=5` was never evidence that the function was clear, which
+    is why it was not treated as a pass. The recipe needs the same treatment
+    for `comprehension` before it is trusted on this shape again.
+  - *The extraction.* Repaired at a seam rather than by trimming prose:
+    `_typos_sha_rules` now owns the config read and the rule filter,
+    `_exempts_hex_token` owns the match, and `_SHA_RULE_ALPHABET` names the
+    character class the filter is built from. The test is 18 lines and each
+    of its three matching steps is one call. The new helpers were checked
+    against the `df12` wrapper checker before committing: `_exempts_hex_token`
+    calls through an attribute with operands that are not its own parameters,
+    which is the shape `R9104` deliberately does not flag, and the plugin
+    reports `10.00/10` on the file with the full rule set enabled. The
+    failing-before property survives the rewrite: against the pre-fix config
+    the test still fails on the letter-leading assertion.
+  - *Not yet claimed as cleared.* The hosted check is the only authority for
+    this finding and the new head has not been pushed, so this entry records
+    the repair and the local evidence and does not claim CodeScene passes.
 
 ## Surprises & discoveries
 
