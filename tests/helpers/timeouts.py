@@ -149,6 +149,10 @@ def pipe_holding_child_argv(
 def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int:
     """Return the pid recorded in ``path``, waiting until the file appears.
 
+    The timeout is raised rather than reported through ``pytest.fail`` so the
+    function returns an expression on every path; the caller, not this helper,
+    decides how a missing pid is reported.
+
     Returns
     -------
     int
@@ -156,9 +160,9 @@ def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int
 
     Raises
     ------
-    pytest.fail
+    AssertionError
         If the file does not appear within ``seconds``.
-    """  # ruff: ignore[docstring-extraneous-exception] - pytest.fail raises its own outcome rather than an exception callers catch
+    """
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if path.exists():
@@ -166,7 +170,8 @@ def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int
             if text:
                 return int(text)
         time.sleep(0.05)
-    pytest.fail(f"Process did not record its pid for {context}")
+    msg = f"Process did not record its pid for {context}"
+    raise AssertionError(msg)
 
 
 def process_is_running(pid: int) -> bool:
