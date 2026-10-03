@@ -28,6 +28,7 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
+    from cuprum.lines import LineEvent
 
 # Every byte value, then a lone continuation byte, a byte no UTF-8 sequence
 # starts with, and a NUL. A pipeline that decoded anywhere along the way —
@@ -153,7 +154,7 @@ def test_pipeline_text_mode_is_unchanged_beside_the_byte_exact_entry_point() -> 
 def test_pipeline_run_bytes_rejects_line_observation_before_spawning() -> None:
     """``on_line`` is refused up front, exactly as the command path refuses it."""
     pipeline, allowlist = _relay_pipeline()
-    observed: list[typ.Any] = []
+    observed: list[LineEvent] = []
 
     with (
         scoped(ScopeConfig(allowlist=allowlist)),

@@ -200,6 +200,10 @@ def test_echo_presents_bytes_through_the_sink_binary_buffer(bytes_cmd: SafeCmd) 
     assert _FAILING_PAYLOAD in presented, (
         f"the echoed payload must reach the sink's buffer intact, got {presented!r}"
     )
+    assert not sink.writes, (
+        "a binary sink must be written through its buffer, never as decoded "
+        f"text, got {sink.writes!r}"
+    )
 
 
 def test_capture_survives_a_text_only_sink_encode_failure(bytes_cmd: SafeCmd) -> None:
