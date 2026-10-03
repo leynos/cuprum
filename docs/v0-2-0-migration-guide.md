@@ -195,8 +195,8 @@ changed is that a run with `capture=False` raises nothing, and `on_line`
 callbacks, `lines()` events, and echo sinks receive `U+FFFD` rather than
 raising. Code that used strict decoding as stream validation must instead
 validate the captured value: `result.stdout` still raises under a strict
-capture, and `run_bytes()` returns the child's bytes for validation by the
-caller. An ambient `sh.observe()` hook can no longer end a run under a strict
+capture, and `run_bytes()` returns the child's bytes so the caller can validate
+them. An ambient `sh.observe()` hook can no longer end a run under a strict
 policy either, which is what makes a strict `run_bytes()` return the bytes it
 captured.
 
