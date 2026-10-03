@@ -42,11 +42,6 @@ pytestmark = pytest.mark.skipif(
     reason="POSIX process groups are unavailable on Windows",
 )
 
-# The outcomes one scenario produced, keyed by the request that ran it. Steps
-# are handed the same fixture namespace, so a scenario's setup and its
-# assertions meet here rather than through a module global.
-_OUTCOMES_KEY = "cleanup_outcomes"
-
 
 @scenario(
     "../features/process_group_cleanup.feature",
@@ -114,31 +109,29 @@ def given_run_under_policy(
     cleanup_request["policy"] = policy_for(policy)
 
 
-@when("the run is cancelled")
+# The step names the count in words, so the feature reads as prose rather than
+# carrying a bare numeral a reader has to decode.
+_CANCELLATIONS = {"once": 1, "twice": 2}
+
+
+@when(parsers.parse("the run is cancelled {times}"))
 def when_run_is_cancelled(
     cleanup_request: _CleanupRequest,
     cleanup_outcomes: dict[str, CleanupOutcome],
     tmp_path: Path,
+    times: str,
 ) -> None:
-    """Run the scenario once, cancelling the run a single time."""
+    """Run the scenario once, cancelling the run as many times as it asks.
+
+    One step rather than a pair differing only in their count: the scenario's
+    whole point is that a second cancellation must not abandon cleanup, so the
+    count belongs in the feature line that asks for it rather than in a second
+    near-identical handler.
+    """
     cleanup_outcomes["latest"] = run_scenario(
         tmp_path,
         cleanup_request["policy"],
-        cancellations=1,
-    )
-
-
-@when("the run is cancelled twice")
-def when_run_is_cancelled_twice(
-    cleanup_request: _CleanupRequest,
-    cleanup_outcomes: dict[str, CleanupOutcome],
-    tmp_path: Path,
-) -> None:
-    """Run the scenario once, cancelling the run twice while it settles."""
-    cleanup_outcomes["latest"] = run_scenario(
-        tmp_path,
-        cleanup_request["policy"],
-        cancellations=2,
+        cancellations=_CANCELLATIONS[times],
     )
 
 
