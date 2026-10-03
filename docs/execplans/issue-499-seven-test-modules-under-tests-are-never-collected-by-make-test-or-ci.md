@@ -1400,6 +1400,47 @@ than discovering the gap months later.
     documentation-only delta on top. The terminal evidence for whichever
     revision carries this entry is the hosted CI run list at that revision,
     read after it settles, not a local log copied forward from an earlier one.
+- [x] (2026-10-03) Re-ran all five gates at `87383cd2`, the shipped head, and
+  corrected the pull request body, which had gone stale by 45 commits.
+  - *Why this run exists.* The body's verification section named `d16904f5` as
+    its gate-verified head. That claim was formerly true — `d16904f5` is still
+    an ancestor — but it described a revision 45 commits and roughly 5,000
+    inserted lines behind what ships. Its figures moved with it: the helper
+    sizes, the `tests/test_ci_*.py` batch total, and both negative-control
+    counts were all measured before the modules that now define the guard
+    family existed. The failure mode is the recorded one, that a body's
+    "gates passed at SHA X" outlives the truth of X once the branch moves.
+  - *The gates, clean end to end.* All five exited 0 with `head_before ==
+    head_after == 87383cd2` and `git status --porcelain` empty in both
+    captures around every gate: `check-fmt` 1 s, `typecheck` 1 s, `lint`
+    141 s, `markdownlint` 14 s, `test` 233 s. `make lint` observed all eleven
+    leaves, `interrogate` 100.0%, three `rated at 10.00` lines. Logs:
+    `/tmp/<gate>-issue499-87383cd2.out` with rc sidecars.
+  - *The test figures, derived from this run's log.* The eleven pytest session
+    summaries sum to 3689 passed, 86 skipped, 0 failed — and the collected
+    column sums to 3775, which equals passed + skipped exactly. The
+    `tests/test_ci_*.py` batch is 776 passed in 53.18 s. nextest reports 127
+    of 127 passed; cargo reports three ignored doctests and none failing. No
+    line whose text begins with a `warning:` diagnostic appears in any of the
+    five logs.
+  - *The body, corrected rather than re-scoped.* Every measurement above
+    replaced a figure taken at `d16904f5`: helper sizes (`makefile.py` 370 →
+    343, `ci_run_scripts.py` 103 → 115, `ci_leg_matrix.py` 219 → 360,
+    `suite_selection.py` 334 → 367, `ci_leg_gate.py` 286 → 312), the batch
+    total (685 → 776), control A (4 of 54 → 4 of 62) and control B (50 failed
+    / 4 passed → 54 failed / 8 passed), the helper count (five new → eight),
+    and one rename score (`R100` → `R63` for the sampler, which gained the
+    platform skips). `make nixie` was dropped from the gate list because it
+    was not run at either delivered head — the branch touches no Mermaid.
+  - *Verified after writing, not assumed.* The live body was read back with
+    `gh api` rather than trusted from the edit command: 17,529 bytes at
+    `87383cd2`, with `d16904f5`, `R22-`, and `685 passed` all absent and the
+    new figures present.
+  - *What this run does and does not certify.* It certifies `87383cd2`, the
+    revision the remote branch points at as observed by `git ls-remote`. The
+    commit recording this entry is a documentation delta on top of it and is
+    certified only by the hosted run list at its own revision, which cannot
+    exist before the push.
 
 ## Surprises & discoveries
 
