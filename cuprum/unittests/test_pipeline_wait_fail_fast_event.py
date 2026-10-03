@@ -297,12 +297,15 @@ class TestFailFastEventOrdering:
             processes: object,
             wait_tasks: object,
             failure_index: int,
-            *,
-            cancel_grace: float,
-            owns_group: object = False,
+            policy: object,
         ) -> tuple[bool, ...]:
-            """Record that termination started instead of signalling anything."""
-            del processes, wait_tasks, failure_index, cancel_grace, owns_group
+            """Record that termination started instead of signalling anything.
+
+            The parameters mirror the real helper's, so a change to how
+            termination is asked for shows up here as a mismatch rather than
+            being absorbed by a permissive stand-in.
+            """
+            del processes, wait_tasks, failure_index, policy
             # Yield like the real helper does, so the recorded order reflects
             # a genuine await point rather than a synchronous call.
             await asyncio.sleep(0)
