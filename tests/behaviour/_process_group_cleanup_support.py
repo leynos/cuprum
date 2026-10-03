@@ -260,12 +260,15 @@ async def _end_process(process: asyncio.subprocess.Process) -> None:
 
 
 async def _clean_up(resources: _RunResources, grandchild: int | None) -> None:
-    """Leave no process behind, whatever became of the scenario.
+    """Leave no process the scenario started behind, whatever became of it.
 
     The order matters. A run still polling its group is only unblocked once the
     descendant holding that group open is reaped, so the reap comes before the
     wait for the run. Each step is guarded so cleanup cannot replace the
     outcome the scenario is reporting, nor raise where the body already is.
+
+    The control process is not this helper's to end: it is guarded from the
+    moment it is spawned, in the caller, so no route out can skip it.
     """
     if not resources.task.done():
         resources.task.cancel()
@@ -275,10 +278,6 @@ async def _clean_up(resources: _RunResources, grandchild: int | None) -> None:
     # made to settle from here, and awaiting it endlessly would report that as
     # a killed session rather than as this scenario's failure.
     await asyncio.wait({resources.task}, timeout=_REAP_SECONDS)
-    # Ordinary failures only: an interrupt or cancellation targeting the
-    # scenario is not something this helper gets to absorb.
-    with contextlib.suppress(Exception):
-        await _end_process(resources.control)
 
 
 async def _drive_scenario(
@@ -302,27 +301,39 @@ async def _drive_scenario(
     pid_file = workdir / "grandchild.pid"
     command, catalogue = _pipe_holding_command(pid_file)
     control = await _spawn_control()
-    events: list[ExecEvent] = []
-    grandchild: int | None = None
-    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(events.append):
-        resources = _RunResources(
-            task=_run_task(command, policy),
-            control=control,
-            pid_file=pid_file,
-            events=events,
-        )
-        try:
-            grandchild = await _await_grandchild(pid_file)
-            cancellation = await _cancel_run(
-                resources.task,
-                grandchild,
-                cancellations,
-                SETTLE_BOUND_S,
+    # Guarded from the moment it exists, so a failure in the scope, the observe
+    # hook, or the run's own creation still ends it rather than leaking a
+    # process that would outlive the scenario.
+    try:
+        grandchild: int | None = None
+        events: list[ExecEvent] = []
+        with (
+            scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+            sh.observe(events.append),
+        ):
+            resources = _RunResources(
+                task=_run_task(command, policy),
+                control=control,
+                pid_file=pid_file,
+                events=events,
             )
-            return _describe(resources, grandchild, cancellation)
-        finally:
-            with contextlib.suppress(Exception):
-                await _clean_up(resources, grandchild)
+            try:
+                grandchild = await _await_grandchild(pid_file)
+                cancellation = await _cancel_run(
+                    resources.task,
+                    grandchild,
+                    cancellations,
+                    SETTLE_BOUND_S,
+                )
+                return _describe(resources, grandchild, cancellation)
+            finally:
+                with contextlib.suppress(Exception):
+                    await _clean_up(resources, grandchild)
+    finally:
+        # Ordinary failures only: an interrupt or cancellation targeting the
+        # scenario is not something this guard gets to absorb.
+        with contextlib.suppress(Exception):
+            await _end_process(control)
 
 
 def run_scenario(

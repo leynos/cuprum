@@ -270,6 +270,10 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
     async def run_case() -> None:
         """Cancel a teardown twice and confirm it still completed."""
         run = await _spawn_owned_run(tmp_path)
+        # Bound before the try so the guard below can tell "not started" from
+        # "started and still running"; assigning it inside would leave the
+        # cleanup reading an unbound name if the task were never created.
+        task: asyncio.Task[None] | None = None
         try:
             task = asyncio.create_task(_terminate_owned_run(run))
             # Let the teardown reach its grace-period wait before interrupting
@@ -277,7 +281,25 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             # to exercise rather than before it starts.
             await asyncio.sleep(0)
             task.cancel()
-            await asyncio.sleep(0)
+            # Wait for evidence rather than for an interval. The child dies on
+            # the SIGTERM teardown sends it, so its reaping is that delivery
+            # observed from outside; nothing else can end it, because it sleeps
+            # for far longer than this wait.
+            await asyncio.to_thread(
+                wait_for_process_death,
+                run.process.pid,
+                context="owned-group SIGTERM delivery",
+            )
+            # The grandchild ignores SIGTERM, so the group cannot have settled
+            # yet: the grace period is still counting down. Asserting that is
+            # what makes the second cancellation below land inside the shielded
+            # teardown rather than after it — if the escalation had already
+            # run, this fails loudly instead of the test passing without ever
+            # interrupting cleanup.
+            assert process_is_running(run.grandchild_pid), (
+                "the grandchild must outlive the grace phase, so the repeated "
+                "cancellation interrupts a teardown that is still working"
+            )
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -285,6 +307,24 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
                 "cleanup must finish even when the caller cancels twice"
             )
         finally:
+            # The assertions above can fail while the teardown is still in
+            # flight, so bound it here rather than leak the task and the
+            # descendant it was working on into the rest of the session.
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
+            # A group outlives its leader only while a member remains, and the
+            # kernel keeps the pgid reserved until then — so while the
+            # grandchild is up, this is still a group the run owns. Once it is
+            # gone the group has ended and its number may have been recycled
+            # onto a stranger, which is why the probe comes first.
+            if process_is_running(run.grandchild_pid):
+                os.killpg(run.process.pid, signal.SIGKILL)
+                await asyncio.to_thread(
+                    wait_for_process_death,
+                    run.grandchild_pid,
+                    context="grandchild cleanup",
+                )
             os.kill(run.unrelated_pid, signal.SIGKILL)
             await asyncio.to_thread(
                 wait_for_process_death,

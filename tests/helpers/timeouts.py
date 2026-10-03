@@ -95,11 +95,16 @@ def python_interpreter() -> str:
 # ends of the run's pipes. It ignores SIGTERM, so only a SIGKILL — to it, or to
 # a process group containing it — can end it. It writes its pid only after
 # installing its handler, so the pid file's arrival is itself the proof that the
-# grandchild is genuinely immune rather than mid-start-up.
+# grandchild is genuinely immune rather than mid-start-up. The pid is staged and
+# then renamed into place, so a reader polling for that file can never catch it
+# half-written: the expected name appears only once the whole pid is on disk.
 _GRANDCHILD_SOURCE = "; ".join((
     "import os, pathlib, signal, sys, time",
     "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
-    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))",
+    "target = pathlib.Path(sys.argv[1])",
+    "staged = target.parent / (target.name + '.part')",
+    "staged.write_text(str(os.getpid()))",
+    "os.replace(staged, target)",
     f"time.sleep({_BLOCK_SECONDS})",
 ))
 
