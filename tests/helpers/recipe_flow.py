@@ -25,7 +25,11 @@ import re
 import typing as typ
 
 from tests.helpers.ci_documents import require
-from tests.helpers.makefile import recipe_tokens
+from tests.helpers.recipe_read import (
+    command_program,
+    command_segments,
+    recipe_tokens,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -45,16 +49,6 @@ _PRINTERS = frozenset({"echo", "printf"})
 #: Make expansion cannot be known from the recipe text, so it is refused.
 _VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-#: Tokens that end one shell command. `shlex` hands `;`, `&&`, and `||` back both
-#: bare and glued, so a token separates when it is one of these exactly or ends
-#: with `;`. The shell keywords are here for the same reason.
-_COMMAND_SEPARATORS = frozenset({";", "&&", "||", "|", "do", "done", "then", "fi"})
-
-#: A leading `NAME=value` word: an environment assignment prefixed to a command.
-#: Stripped before reading the program, so `RUSTFLAGS=… $(PYTEST)` reads as a
-#: pytest invocation.
-_ENVIRONMENT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-
 #: How many `$(foreach` arguments to expect before treating the call as
 #: unreadable. Three is the arity `make` defines.
 _FOREACH_ARITY = 3
@@ -68,51 +62,13 @@ _LOOP_HEADER_WIDTH = 4
 _SET_VALUE_INDEX = 2
 
 
-def _record(
-    found: list[tuple[int, tuple[str, ...]]], current: list[str], start: int
-) -> None:
-    """Append the command under construction; a separator leaves it empty."""
-    if current:
-        found.append((start, tuple(current)))
-
-
-def _segments(
-    tokens: cabc.Sequence[str],
-) -> tuple[tuple[int, tuple[str, ...]], ...]:
-    """Split tokens into commands, pairing each with its first token's index."""
-    found: list[tuple[int, tuple[str, ...]]] = []
-    current: list[str] = []
-    start = 0
-    for index, token in enumerate(tokens):
-        if token in _COMMAND_SEPARATORS:
-            _record(found, current, start)
-        elif token.endswith(";"):
-            current.append(token[:-1])  # a glued separator still ends its word
-            _record(found, current, start)
-        else:
-            current.append(token)
-            continue
-        current = []
-        start = index + 1
-    _record(found, current, start)
-    return tuple(found)
-
-
-def _program(words: cabc.Sequence[str]) -> str:
-    """Return a command's program, ignoring leading environment assignments."""
-    index = 0
-    while index < len(words) and _ENVIRONMENT_ASSIGNMENT.match(words[index]):
-        index += 1
-    return words[index] if index < len(words) else ""
-
-
 def _loop_shape(tokens: cabc.Sequence[str], index: int) -> tuple[str, str, int] | None:
     """Return a `for` header's variable, list, and `done`, else `None`.
 
     `None` is how a caller tells the loop from a command that merely carries
     its words: an `echo for p in $(foreach …` has every token the loop does
     while the shell runs `echo`. The `done` is sought in the token stream,
-    because `_segments` consumes it as the separator it is, so it is never a
+    because `command_segments` consumes it as the separator it is, so it is never a
     command's program. A nested loop would end the body early; this suite
     target has none, and generalizing would buy a shell interpreter.
     """  # ruff: ignore[docstring-missing-returns] - the summary names the return
@@ -164,8 +120,8 @@ def _loop_header(
     closest one iterates another variable — reported by naming the list read.
     """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     reference = f"$({selector})"
-    for index, words in _segments(tokens):
-        if _program(words) != "for":
+    for index, words in command_segments(tokens):
+        if command_program(words) != "for":
             continue
         shape = _loop_shape(tokens, index)
         if shape is None:
@@ -192,26 +148,32 @@ def _loop_header(
 
 
 def _positional_binding(
-    tokens: cabc.Sequence[str], *, variable: str, after: int, body_end: int
+    tokens: cabc.Sequence[str],
+    *,
+    variable: str,
+    after: int,
+    before: int,
 ) -> int:
-    """Return the index of the `set --` that binds the loop variable.
+    """Return the index of the `set --` the pytest command actually consumes.
 
-    The binding must be a *command* of the loop body — so `echo set -- $$p` is
-    not one — lying before `body_end`, the loop's `done`. Raises
-    `AssertionError` when the body binds nothing, since the iterated value then
-    never reaches the positional parameters.
+    That is the *last* `set` between the loop header and the pytest invocation.
+    The positional parameters are mutable state, so an earlier binding says
+    nothing about what pytest receives: `set -- $$p; set -- other.py; $(PYTEST)
+    $$@` binds the iterated pattern and then discards it, and a check reading
+    the first binding would certify that recipe. Reading the last one is what
+    makes the value pytest consumes the value the loop iterated.
+
+    The binding must be a *command* — so `echo set -- $$p` is not one. Raises
+    `AssertionError` when nothing in the span binds, or when the last binding
+    is not the loop variable's.
     """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
-    spellings = {f"$${variable}", f"$${{{variable}}}"}
-    for start, words in _segments(tokens):
-        if not after < start < body_end or _program(words) != "set":
-            continue
-        if (
-            len(words) > _SET_VALUE_INDEX
-            and words[_SET_VALUE_INDEX].rstrip(";") in spellings
-        ):
-            return start
+    bindings = [
+        (start, words)
+        for start, words in command_segments(tokens)
+        if after < start < before and command_program(words) == "set"
+    ]
     require(
-        condition=False,
+        condition=bool(bindings),
         message=(
             f"the `test-python` recipe's loop must bind its value with "
             f"`set -- $${variable}`, so each iterated pattern becomes the "
@@ -219,22 +181,34 @@ def _positional_binding(
             "to the command that runs pytest"
         ),
     )
-    raise AssertionError
+    start, words = bindings[-1]
+    spellings = {f"$${variable}", f"$${{{variable}}}"}
+    require(
+        condition=len(words) > _SET_VALUE_INDEX
+        and words[_SET_VALUE_INDEX].rstrip(";") in spellings,
+        message=(
+            f"the `test-python` recipe's loop binds $${variable}, then "
+            "overwrites the positional parameters with a later `set` before "
+            "invoking pytest, so the patterns the loop iterated are discarded "
+            "rather than passed to it"
+        ),
+    )
+    return start
 
 
 def _pytest_command(
     tokens: cabc.Sequence[str], *, pytest_variable: str, after: int, body_end: int
-) -> tuple[int, tuple[str, ...]]:
-    """Return the pytest invocation that consumes the positional parameters.
+) -> int:
+    """Return the index of the pytest invocation that consumes the pointers.
 
-    The command must sit in the loop body — after the `set --` binding and
-    before its `done` — so a pytest run following the loop is not counted.
-    Raises `AssertionError` when no command in that body invokes pytest with
-    the positional expansion.
+    The command must sit in the loop body — after its header and before its
+    `done` — so a pytest run following the loop is not counted. Raises
+    `AssertionError` when no command in that body invokes pytest with the
+    positional expansion.
     """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     program = f"$({pytest_variable})"
-    for start, words in _segments(tokens):
-        if not after < start < body_end or _program(words) != program:
+    for start, words in command_segments(tokens):
+        if not after < start < body_end or command_program(words) != program:
             continue
         require(
             condition="$$@" in words,
@@ -244,7 +218,7 @@ def _pytest_command(
                 "rather than passed to pytest"
             ),
         )
-        return start, words
+        return start
     require(
         condition=False,
         message=(
@@ -290,11 +264,14 @@ def require_selector_drives_pytest(
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     tokens = recipe_tokens(recipe)
     loop, variable, body_end = _loop_header(tokens, selector=selector)
-    binding = _positional_binding(
-        tokens, variable=variable, after=loop, body_end=body_end
+    # Locate pytest first: it is the fixed point the binding is read up to, so
+    # a `set` after the pytest invocation cannot pass as the binding pytest
+    # consumes, and a `set` between the two is seen as the overwrite it is.
+    invocation = _pytest_command(
+        tokens, pytest_variable=pytest_variable, after=loop, body_end=body_end
     )
-    _pytest_command(
-        tokens, pytest_variable=pytest_variable, after=binding, body_end=body_end
+    _positional_binding(
+        tokens, variable=variable, after=loop, before=invocation
     )
 
 
@@ -330,8 +307,8 @@ def require_module_runs_under_pytest(
     program = f"$({pytest_variable})"
     invoked = [
         words
-        for _start, words in _segments(recipe_tokens(recipe))
-        if _program(words) == program
+        for _start, words in command_segments(recipe_tokens(recipe))
+        if command_program(words) == program
     ]
     require(
         condition=bool(invoked),
@@ -380,7 +357,7 @@ def require_selector_is_consumed(recipe: str, *, selector: str) -> None:
     reference = f"$({selector})"
     named = [
         words
-        for _start, words in _segments(recipe_tokens(recipe))
+        for _start, words in command_segments(recipe_tokens(recipe))
         if any(reference in word for word in words)
     ]
     require(
@@ -391,7 +368,7 @@ def require_selector_is_consumed(recipe: str, *, selector: str) -> None:
         ),
     )
     require(
-        condition=any(_program(words) not in _PRINTERS for words in named),
+        condition=any(command_program(words) not in _PRINTERS for words in named),
         message=(
             f"the target's recipe names {reference} only among the arguments "
             "of a command that prints them, so the selector is described "

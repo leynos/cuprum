@@ -27,7 +27,26 @@ from tests.helpers.makeutil import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
+
+#: Tokens that end one shell command. `shlex` hands `;`, `&&`, and `||` back
+#: both bare and glued, so a token separates when it is one of these exactly or
+#: ends with `;`. The shell keywords are here for the same reason.
+_COMMAND_SEPARATORS = frozenset({";", "&&", "||", "|", "do", "done", "then", "fi"})
+
+#: A leading `NAME=value` word: an environment assignment prefixed to a
+#: command. Stripped before reading the program, so `RUSTFLAGS=… $(PYTEST)`
+#: reads as a pytest invocation.
+_ENVIRONMENT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _record_command(
+    found: list[tuple[int, tuple[str, ...]]], current: list[str], start: int
+) -> None:
+    """Append the command under construction; a separator leaves it empty."""
+    if current:
+        found.append((start, tuple(current)))
 
 
 def _join_continuations(value: str) -> str:
@@ -165,6 +184,72 @@ def _recipe_text(step: object, name: str) -> str:
         message=f"{message} as a string; got {type(carried).__name__}",
     )
     return _join_continuations(typ.cast("str", carried)).removeprefix("@")
+
+
+def command_segments(
+    tokens: cabc.Sequence[str],
+) -> tuple[tuple[int, tuple[str, ...]], ...]:
+    """Split shell tokens into commands, each paired with its first index.
+
+    A recipe is a sequence of commands, and a caller asking whether one *runs*
+    has to know where each begins. The index is carried alongside the words
+    because a later decision is positional — whether a binding lies before the
+    command that consumes it — and recovering the offsets afterwards would be a
+    second, less trustworthy reading of the same token stream.
+
+    Parameters
+    ----------
+    tokens : sequence of str
+        Shell words, as :func:`recipe_tokens` returns them.
+
+    Returns
+    -------
+    tuple of (int, tuple of str)
+        One pair per command: the index of its first token in ``tokens``, and
+        its words. A separator contributes no command of its own, and a glued
+        separator still ends the word it trails.
+
+    Examples
+    --------
+    >>> command_segments(("set", "--", "a.py;", "$(PYTEST)", "$$@"))
+    ((0, ('set', '--', 'a.py')), (3, ('$(PYTEST)', '$$@')))
+    """
+    found: list[tuple[int, tuple[str, ...]]] = []
+    current: list[str] = []
+    start = 0
+    for index, token in enumerate(tokens):
+        if token in _COMMAND_SEPARATORS:
+            _record_command(found, current, start)
+        elif token.endswith(";"):
+            current.append(token[:-1])  # a glued separator still ends its word
+            _record_command(found, current, start)
+        else:
+            current.append(token)
+            continue
+        current = []
+        start = index + 1
+    _record_command(found, current, start)
+    return tuple(found)
+
+
+def command_program(words: cabc.Sequence[str]) -> str:
+    """Return a command's program, ignoring leading environment assignments.
+
+    Parameters
+    ----------
+    words : sequence of str
+        One command's shell words, as :func:`command_segments` returns them.
+
+    Returns
+    -------
+    str
+        The program the command runs, or ``""`` when the command is empty or is
+        nothing but assignments.
+    """
+    index = 0
+    while index < len(words) and _ENVIRONMENT_ASSIGNMENT.match(words[index]):
+        index += 1
+    return words[index] if index < len(words) else ""
 
 
 def recipe_tokens(recipe: str) -> tuple[str, ...]:

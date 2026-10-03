@@ -42,7 +42,7 @@ _RECIPE_FLOW_FAULTS = (
             "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
             "echo '$(foreach' '$(PYTEST_TARGETS)' '$(PYTEST)' '$$@'; done"
         ),
-        "must bind",
+        "must invoke",
     ),
     (
         "the loop iterates a different selector",
@@ -91,6 +91,14 @@ _RECIPE_FLOW_FAULTS = (
             "set -- $$p; done\n$(PYTEST) $$@"
         ),
         "must invoke",
+    ),
+    (
+        "the binding is overwritten before pytest reads it",
+        (
+            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "set -- $$p; set -- other.py; $(PYTEST) $$@; done"
+        ),
+        "overwrites",
     ),
 )
 
@@ -176,11 +184,13 @@ def test_a_recipe_that_breaks_the_flow_is_refused(
         ("set -- $$pattern;", ""),
         ("$(PYTEST)", "echo $(PYTEST);"),
         (_LOOP_HEADER, "echo " + _LOOP_HEADER),
+        ("set -- $$pattern;", "set -- $$pattern; set -- unrelated.py;"),
     ],
     ids=(
         "binding-removed",
         "pytest-not-invoked",
         "loop-disconnected",
+        "binding-overwritten",
     ),
 )
 def test_a_single_step_removed_from_the_real_recipe_is_refused(
