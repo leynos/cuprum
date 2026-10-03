@@ -265,11 +265,11 @@ key and its restore-key prefix as environment values. A restore and its save
 cannot disagree, and the rendered key is printed into the run summary so any
 miss can be explained from the run alone.
 
-| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                      |
-| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                           |
-| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test`                                            |
-| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs |
+| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                         |
+| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                              |
+| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test` (3.12, 3.14, 3.15a), `extension-tests` (3.13) |
+| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs    |
 
 Four rules hold that table together, each with a contract test:
 
@@ -425,13 +425,15 @@ deduplication had just reduced to a typechecker.
 
 Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
-`coverage-upload`, and the `typecheck-test` legs that run the Python suite.
-
-The 3.13 leg is the exception, and its steps are gated on `matrix.python-suite`
-for a reason worth keeping: a job that installs sccache and then reports zero
-compile requests looks exactly like one whose `RUSTC_WRAPPER` never reached the
-compiler, which is a failure this repository has already had. The leg that only
-typechecks therefore reports nothing rather than zero. Each zeroes the counters
+`coverage-upload`, and every `typecheck-test` leg. The matrix has no 3.13 leg:
+the coverage job runs that interpreter's suite and `extension-tests` runs its
+`make typecheck`, so no leg is gated by `python-suite`. The 3.15a leg still
+skips every step on pull requests through `LEG_RUNS`, so each other leg
+compiles on every event and that one compiles when it runs. A job that installs
+sccache and then reports zero compile requests looks exactly like one whose
+`RUSTC_WRAPPER` never reached the compiler, which is a failure this repository
+has already had, and a leftover `matrix.python-suite` guard would now skip its
+step outright, because no leg declares the key. Each job zeroes the counters
 before its build and writes `sccache --show-stats`, plus the JSON form, into
 the step summary afterwards. The probe is not masked with `|| true`: a compiler
 cache that cannot report is a broken compiler cache, and a job reporting zero
@@ -603,8 +605,7 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
 | `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
-| `typecheck-test` 3.13       | 3.13   | none                           | none, coverage runs it                   | absent    |
-| `extension-tests`           | 3.13   | none                           | 13 gated modules                         | **built** |
+| `extension-tests`           | 3.13   | none                           | 13 gated modules, then `make typecheck`  | **built** |
 | `extension-tests-windows`   | 3.13   | none                           | 13 gated modules                         | **built** |
 
 The 3.15a leg is experimental: it may fail without failing the run, and its
@@ -661,11 +662,13 @@ Two jobs survive that look like duplicates and are not:
   `SKIPPED`. The two runs execute different code. Its Windows counterpart,
   `extension-tests-windows`, runs the same gated modules against the native
   Windows boundary rather than duplicating the Linux run.
-- **`typecheck-test` on 3.13** keeps the typechecker and its required check
-  name while running neither suite. Dropping its pytest run is only safe
-  because the typechecker stands alone: `make typecheck` depends on `build`,
-  the dependency sync, and on nothing the test run produces. The other three
-  legs keep their Python run because coverage does not run those interpreters.
+- **The 3.13 typecheck** runs in `extension-tests`, after its gated modules,
+  rather than in a matrix leg of its own. The coverage job already runs the
+  3.13 suite, so a 3.13 leg would only start a runner to typecheck. The move is
+  safe because the typechecker stands alone: `make typecheck` depends on
+  `build`, the dependency sync, and on nothing the test run produces. The
+  `typecheck-test` legs, 3.12, 3.14 and 3.15a, keep their Python run because
+  coverage does not run those interpreters.
 
 The nextest installer is gone from this repository. Nothing here runs nextest
 directly any more; the coverage action installs its own.

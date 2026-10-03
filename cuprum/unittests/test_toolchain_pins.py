@@ -267,8 +267,8 @@ def test_python_ci_installs_the_doctest_toolchain_before_running_tests() -> None
         job, "Install dev-fast doctest toolchain", "typecheck-test"
     )
     install_condition = typ.cast("dict[str, object]", install).get("if")
-    assert install_condition == "matrix.python-suite && env.LEG_RUNS == 'true'", (
-        "only Python lanes that run pytest should install the doctest toolchain"
+    assert install_condition == "env.LEG_RUNS == 'true'", (
+        "every leg runs pytest, so only the leg flag may gate the doctest toolchain"
     )
     install_command = install.get("run")
     assert install_command == (
