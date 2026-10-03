@@ -180,7 +180,7 @@ def test_the_credentials_are_exported_before_sccache_is_set_up(
         "setting up sccache, because sccache binds its backend when its "
         "server starts"
     )
-    for name in ("Reset compiler-cache counters", "Install code", "Generate coverage"):
+    for name in ("Install code", "Generate coverage"):
         later = [
             index
             for index, step in enumerate(job_steps)

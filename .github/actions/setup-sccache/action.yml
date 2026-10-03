@@ -53,6 +53,17 @@ inputs:
       produce, and the instrumented objects the coverage gate produces.
     required: false
     default: 4G
+outputs:
+  status:
+    description: >-
+      `started` when the sccache server is running and its counters are zero,
+      `fallback` when it would not start and the job compiles with plain
+      rustc. A step that reads the server's statistics should not run on
+      `fallback`: with no server, `sccache --show-stats` prints empty default
+      statistics rather than starting one, so the report would describe a job
+      that never used the cache. `sccache --zero-stats` is the command that
+      does start a server when none is running.
+    value: ${{ steps.server.outputs.status }}
 runs:
   using: composite
   steps:
@@ -151,4 +162,50 @@ runs:
           } >> "${GITHUB_ENV}"
           echo "sccache will use ${HOME}/.cache/sccache capped at ${SCCACHE_LOCAL_CACHE_SIZE}."
         fi
-
+    - name: Start the sccache server
+      id: server
+      # LAST, because sccache reads its cache configuration once, when the
+      # server starts, and never rebinds. The server's first act is to probe
+      # its cache backend, and on Ubicloud that probe intermittently outlasts
+      # sccache's fixed 10 s startup timeout. The timeout is settable only
+      # through the config file `SCCACHE_CONF` names, never an environment
+      # variable, so write one.
+      shell: bash
+      run: |
+        set -euo pipefail
+        binary="${HOME}/.local/bin/sccache"
+        conf="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/setup-sccache.toml"
+        printf 'server_startup_timeout_ms = 60000\n' > "${conf}"
+        export SCCACHE_CONF="${conf}"
+        echo "SCCACHE_CONF=${conf}" >> "${GITHUB_ENV}"
+        "${binary}" --stop-server >/dev/null 2>&1 || true
+        # A cache is an optimization, so a server that will not start must
+        # not fail the job. Clearing the wrapper makes Cargo compile with
+        # plain rustc (an empty RUSTC_WRAPPER counts as unset), and the
+        # warning keeps the loss visible.
+        # Three signals, so a fallback can be found without reading logs: the
+        # annotation title (a contract: never rename it), a line on the run
+        # page, and the `status` output for a caller to act on. The `metric`
+        # line is bounded to two values for a log-derived count.
+        fall_back() {
+          echo "metric setup-sccache.server=start-failed"
+          echo "::warning title=sccache-fallback::sccache server did not start within 60 s; this job compiled without the compiler cache"
+          echo "sccache: FALLBACK (cache disabled for this job)" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          echo "status=fallback" >> "${GITHUB_OUTPUT}"
+          echo "RUSTC_WRAPPER=" >> "${GITHUB_ENV}"
+          exit 0
+        }
+        if ! "${binary}" --start-server; then
+          fall_back
+        fi
+        # A server this step started has zero counters already. Zeroing is
+        # belt and braces against a --start-server that adopted one, so the
+        # report measures this job's own build. `--zero-stats` connects or
+        # starts a server, so a server that died after `--start-server` makes
+        # it try again and can fail: that is the same loss, so it falls back
+        # too, instead of failing the job under `set -e`.
+        if ! "${binary}" --zero-stats >/dev/null; then
+          fall_back
+        fi
+        echo "metric setup-sccache.server=started"
+        echo "status=started" >> "${GITHUB_OUTPUT}"

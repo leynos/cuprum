@@ -396,6 +396,42 @@ An unknown backend fails the step before anything is exported.
 `tests/test_ci_setup_sccache_action.py` runs the step's own shell for each case
 and asserts the exit status and the exported variables.
 
+The action also starts the server, as its last step, and that start is
+fail-open. The server's first act is to probe its cache backend, and on
+Ubicloud that probe intermittently outlasts sccache's fixed 10 s startup
+timeout, which used to fail the whole job at a bare `sccache --zero-stats`. The
+timeout is settable only through the config file `SCCACHE_CONF` names, so the
+step writes one with `server_startup_timeout_ms = 60000` and exports it. If the
+server still does not start, the job compiles with plain rustc: the step
+succeeds, clears `RUSTC_WRAPPER` (an empty value counts as unset for Cargo),
+and leaves four stable signals. They are the annotation
+`::warning title=sccache-fallback::`, the run-page line
+`sccache: FALLBACK (cache disabled for this job)`, the `status` output set to
+`fallback` (`started` otherwise), and the empty wrapper. The annotation title
+and the summary line are what `~/docs/bin/sccache-fallbacks.py` searches for,
+so renaming either is a contract change.
+
+Workflows therefore carry no separate step that starts or zeroes the server.
+Every call gives the setup step `id: sccache`, and every
+`Record compiler-cache effectiveness` step is guarded on
+`steps.sccache.outputs.status != 'fallback'`. With no server,
+`sccache --show-stats` prints empty default statistics instead of starting one,
+so the guard keeps the report from describing a job that never used the cache.
+The command that does start a server when none is running is
+`sccache --zero-stats`, so the start step treats a failing `--zero-stats` as
+the same loss and falls back rather than failing the job.
+`tests/test_setup_sccache_server_start.py` runs the start step against a fake
+binary and asserts each signal, and that the server process itself sees the 60 s
+`SCCACHE_CONF` rather than only `GITHUB_ENV`.
+`tests/test_ci_compiler_cache.py` asserts the id, the absence of a
+workflow-level start or zeroing step, and, by scanning every workflow for the
+`--show-stats` command rather than a step name, that no report runs unguarded.
+
+Each start also logs one bounded line, `metric setup-sccache.server=started` or
+`metric setup-sccache.server=start-failed`, so a count can be taken from the
+logs with the same estate convention as `setup-rust`'s
+`metric setup-rust.sccache.server=` line.
+
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,
 so a content-addressed key would hit forever and absorb nothing new. Each
