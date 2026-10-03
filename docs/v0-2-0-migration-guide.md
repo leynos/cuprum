@@ -496,6 +496,13 @@ group, which reaches the child's descendants as well as the child itself. Under
 `INHERIT` the child remains in the caller's group and teardown signals the
 child alone, as it always has.
 
+Session leadership also detaches the child from the controlling terminal. An
+application that opts in should expect a terminal interrupt (`SIGINT`) or
+`SIGHUP` to stop at the run rather than reach the child, and a child that opens
+`/dev/tty` to fail for want of one. Under `INHERIT` the terminal still reaches
+the child, so this is part of what the opt-in trades away rather than a
+behaviour change to migrate around.
+
 The guarantee is bounded, and the bound is worth stating plainly rather than
 burying: a descendant that calls `setsid()` or `setpgid()` leaves the group
 deliberately, and nothing here can reach it. Containment of that kind needs a
