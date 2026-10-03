@@ -51,6 +51,7 @@
       'cuprum/_process_exit.py',
       'cuprum/_process_group.py',
       'cuprum/_process_lifecycle.py',
+      'cuprum/_process_signal.py',
       'cuprum/_rusage.py',
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.<abi3-extension>',
