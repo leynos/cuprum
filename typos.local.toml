@@ -13,15 +13,24 @@ accepted = []
 [patterns]
 ignore = [
   # Abbreviated Git commit SHAs, which the ExecPlans cite constantly. Typos
-  # tokenizes before applying this list, so a SHA such as `a6b8ba14` splits into
+  # tokenizes before applying this list, so a SHA such as `ba06a730` splits into
   # letter runs and `ba` is read as a misspelling of "be"/"by" — any SHA whose
   # letters happen to spell a dictionary word collides, which makes this a
-  # recurring class rather than a one-off. The leading digit is what keeps the
-  # rule narrow: no English word begins with a digit, so ordinary prose stays
-  # checked, unlike a bare `[0-9a-f]{7,40}`. Typos' regex engine has no
-  # lookahead, so the leading digit is expressed by consuming it rather than by
-  # asserting it.
-  '[0-9][0-9a-f]{6,39}',
+  # recurring class rather than a one-off. Each pattern below is one
+  # seven-character hexadecimal window with the mandatory digit at a different
+  # position: every SHA of seven characters or more contains such a window, and
+  # no English word contains a digit at all, so ordinary prose stays checked.
+  # Pinning the digit to the first position, as an earlier rule did, missed every
+  # abbreviation that leads with a letter — `ba06a730` among them. Typos' regex
+  # engine has no lookahead, so the digit's position is enumerated rather than
+  # asserted.
+  '[0-9][0-9a-f]{6}',
+  '[0-9a-f][0-9][0-9a-f]{5}',
+  '[0-9a-f]{2}[0-9][0-9a-f]{4}',
+  '[0-9a-f]{3}[0-9][0-9a-f]{3}',
+  '[0-9a-f]{4}[0-9][0-9a-f]{2}',
+  '[0-9a-f]{5}[0-9][0-9a-f]',
+  '[0-9a-f]{6}[0-9]',
   # markdownlint-cli2 follows this fixed external environment variable.
   '\bFORCE_COLOR\b',
   # GitHub's Actions API and the established CLI expose these literal names.

@@ -9,6 +9,8 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+#: Characters that appear in a local rule built only from hexadecimal classes.
+_SHA_RULE_ALPHABET = frozenset("[]0123456789abcdef-,{}|")
 CLIPPY_LINTS = {
     "allow_attributes",
     "allow_attributes_without_reason",
@@ -105,6 +107,27 @@ def _typos_local_config() -> dict[str, object]:
     """Load local spelling exemptions that supplement the shared dictionary."""
     with (ROOT / "typos.local.toml").open("rb") as config:
         return tomllib.load(config)
+
+
+def _typos_sha_rules() -> list[str]:
+    """Return the local spelling patterns that exempt hexadecimal tokens."""
+    patterns = _typos_local_config()["patterns"]
+    assert isinstance(patterns, dict), "local spelling patterns must be a mapping"
+    ignored = patterns["ignore"]
+    assert isinstance(ignored, list), "local spelling ignore patterns must be a list"
+    # The commit-SHA rules are the only entries drawn purely from the
+    # hexadecimal character classes, the quantifier braces, and the
+    # alternation separators that enumerate the digit's possible positions.
+    return [
+        entry
+        for entry in ignored
+        if isinstance(entry, str) and entry and set(entry) <= set(_SHA_RULE_ALPHABET)
+    ]
+
+
+def _exempts_hex_token(rules: list[str], token: str) -> bool:
+    """Report whether any local spelling rule exempts the token."""
+    return any(re.search(rule, token) for rule in rules)
 
 
 def _dry_run_test_rust() -> str:
@@ -206,6 +229,26 @@ def test_cargo_flag_exemption_is_limited_to_the_external_flag() -> None:
     assert re.search(pattern, ordinary_prose) is None, (
         "ordinary prose must retain the Oxford-spelling check"
     )
+
+
+def test_sha_exemption_covers_letter_leading_abbreviations() -> None:
+    """Commit SHAs must stay exempt whichever character they lead with."""
+    rules = _typos_sha_rules()
+    assert rules, "the local config must exempt abbreviated commit SHAs"
+    assert _exempts_hex_token(rules, "ba06a730"), (
+        "an abbreviation leading with a letter must be exempt: typos splits it "
+        "into letter runs, and a two-letter run reads as a word"
+    )
+    covered = ("a6b8ba14", "c01dce4b", "92f17d258643bf6226916424574bf8fcbcff6693")
+    for token in covered:
+        assert _exempts_hex_token(rules, token), (
+            f"the exemption must cover the hexadecimal token {token}"
+        )
+    prose = ("decade", "defaced", "facade", "acceded", "deadbeef")
+    for word in prose:
+        assert not _exempts_hex_token(rules, word), (
+            f"digit-free prose such as {word!r} must stay spell-checked"
+        )
 
 
 def test_doctest_recipe_passes_full_rustdoc_warning_flags_and_jobs() -> None:

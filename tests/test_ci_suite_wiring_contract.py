@@ -1,0 +1,278 @@
+"""Keep the suite selector wired to the job that actually runs it on a PR.
+
+`tests/test_ci_test_selection_contract.py` asks whether every root-level module
+is collected; this module asks the companion question that makes that one mean
+something — whether anything *runs* the selector the collection is defined by.
+
+The two are separate because they fail differently. A module outside the
+selector is a missing test, reported by name against the tree. A selector no
+job evaluates, a target whose recipe ignores the selector, or a suite step
+gated on a lane a pull request never schedules are all wiring faults: the tree
+looks correctly covered while CI collects something else, or nothing. They are
+read from three different artefacts — the Makefile, the workflow, and the job's
+matrix — which is why they sit together here rather than beside the tree walk.
+
+The resolution machinery is split the way the questions are: the recipe and
+selector readings come from `tests/helpers/suite_selection.py`, and the leg
+evaluation that decides *whether* a step runs comes from
+`tests/helpers/ci_leg_gate.py`. The reasoning is recorded under "Test
+selection" in the developers' guide.
+"""
+
+from __future__ import annotations
+
+import typing as typ
+
+import pytest
+
+from tests.helpers.ci_leg_gate import flag_holds_on, pull_request_legs
+from tests.helpers.ci_leg_matrix import matrix_legs
+from tests.helpers.ci_run_scripts import run_scripts
+from tests.helpers.ci_workflows import steps
+from tests.helpers.suite_selection import SELECTOR
+from tests.helpers.workflow_shell import script_runs_command
+
+if typ.TYPE_CHECKING:
+    from tests.helpers.workflow_types import Step
+
+#: The workflow, job, and target that run the Python suite for a pull request.
+#: `make test` also works locally but runs the Rust suite too, which is why CI
+#: calls the Python half on its own. `typecheck-test` is the job holding the
+#: `Run tests` step; `lint-test` runs the formatting, lint, Markdown, and MSRV
+#: checks but never the Python suite, so naming it here would assert a contract
+#: that does not exist.
+CI_SUITE_WORKFLOW = "ci.yml"
+CI_SUITE_JOB = "typecheck-test"
+CI_SUITE_TARGET = "make test-python"
+
+
+def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
+    """Require `ci.yml`'s `typecheck-test` job to run `make test-python` on a PR.
+
+    Without this, the Makefile could carry a correct selector that no job ever
+    evaluates: the coverage questions would all pass while CI ran something
+    else, or nothing. The assertion names the job rather than accepting any
+    step anywhere, and it resolves the step's guard against the job's matrix
+    legs rather than reading the command text alone.
+
+    Three things the text cannot tell apart, and this asserts. A step gated on
+    the pre-release leg would appear to run on every pull request while the
+    job-level `LEG_RUNS` flag switched it off on exactly that event; see
+    `tests/helpers/ci_leg_gate.py`. The estate's own gate,
+    `matrix.python-suite`, is false on the 3.13 leg because the coverage job
+    already runs pytest there, so the step is admitted by two of the job's
+    four legs. That count is the claim: it is what says a selector break in
+    one interpreter cannot pass unobserved. And a step gated on a single leg
+    satisfies "at least one leg" while running on no other interpreter at all,
+    which is why the lane count is asserted separately rather than inferred
+    from the first assertion. Matching the command by its leading shell
+    tokens, and resolving its guard against the legs, is what makes this a
+    claim about execution rather than about text.
+    """
+    lanes = pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET)
+    assert lanes, (
+        f"no step of {CI_SUITE_WORKFLOW}:{CI_SUITE_JOB} runs "
+        f"`{CI_SUITE_TARGET}` on a pull-request leg, so {SELECTOR} is never "
+        "evaluated on the lane that merges and every coverage assertion is moot"
+    )
+    admitted = max(len(step_lanes) for _step, step_lanes in lanes)
+    assert admitted > 1, (
+        "the suite must run on more than one pull-request leg, or a selector "
+        f"break in one interpreter is unobserved; got {lanes!r}"
+    )
+    # The denominator is the legs the flag leaves enabled for this event, not
+    # every leg the job declares: the experimental leg is never enabled on a
+    # pull request, so counting it would let an admit-everything guard satisfy
+    # `admitted < total` and this assertion would prove nothing.
+    enabled = [
+        leg
+        for leg in matrix_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+        if flag_holds_on(CI_SUITE_WORKFLOW, CI_SUITE_JOB, leg, "pull_request")
+    ]
+    assert admitted < len(enabled), (
+        f"the suite step is admitted by all {len(enabled)} legs the flag leaves "
+        f"enabled on a pull request, so its guard excludes none of them. The "
+        "3.13 leg is meant to be excluded — it sets `python-suite: false` "
+        "because the coverage job already runs pytest there — so this "
+        "assertion is now vacuous and the lane count above proves nothing. "
+        f"Got {lanes!r}"
+    )
+
+
+def test_a_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show the lane check reads guards, not command text.
+
+    `pull_request_legs` is what separates "the command appears in the job" from
+    "the command runs on a leg a pull request schedules". The estate happens to
+    satisfy it, so nothing here would notice if the guard evaluation stopped
+    discriminating and every step read as running on every leg — the check
+    would keep passing while certifying a lane that collects nothing.
+
+    The seeded fault drives that difference directly: the suite step is given
+    the pre-release leg's own gate, `matrix.experimental`, which no pull
+    request leg of this job sets. The step still runs `make test-python`, so a
+    text-only reader reports it; the lane check must report nothing. The second
+    half re-gates it on a key a pull-request leg does set, and requires the
+    step back — otherwise the first half would also hold for a reader that had
+    simply stopped finding the command.
+
+    The fault is seeded by replacing the step reader rather than by mutating a
+    step it returned. `steps` parses the workflow on every call, so a mutation
+    of one returned mapping is invisible to the next call: the first draft of
+    this test did that, and its negative control passed because the fault never
+    reached the code under test.
+    """
+    real_steps = steps(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+    # Every step of this job must carry the leg flag, so the fault is seeded as
+    # a full guard rather than a bare matrix clause. A bare `matrix.experimental`
+    # is refused by `ungated` for the right reason — it is not a guard this job
+    # may declare — and seeding it would prove that rule rather than this one.
+    flag = "env.LEG_RUNS == 'true'"
+
+    def suite_step_under(matrix_clause: str) -> list[Step]:
+        """Return this job's steps with the suite step re-gated."""
+        # `dict(step)` is a shallow copy, which widens each `Step` to a plain
+        # mapping; the cast records that the copies still stand in for steps,
+        # which is the contract this seam has to satisfy.
+        faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
+        suite = next(
+            step
+            for step in faulted
+            if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
+        )
+        suite["if"] = f"{matrix_clause} && {flag}"
+        return faulted
+
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "the estate must already satisfy this check, or the seeded fault is "
+        "not the difference under test"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_under("matrix.experimental"),
+    )
+    assert not pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on a key no pull-request leg sets must not be reported "
+        "as running on one"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_under("matrix.python-suite"),
+    )
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on a key a pull-request leg does set must be reported, "
+        "or the previous assertion holds for a reader that finds nothing"
+    )
+
+
+def test_an_event_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show a step gated on another event is not reported as a PR lane.
+
+    The finding this closes: the lane check read `admits`, which resolves a
+    guard over the leg alone, so a clause naming no matrix key — including
+    ``github.event_name == 'push'`` — counted as satisfied. A suite step gated
+    that way ran only on pushes, and the check certified it as running on every
+    pull request.
+
+    The seeded fault is the exact guard from that report:
+    ``github.event_name == 'push' && matrix.python-suite && env.LEG_RUNS ==
+    'true'``. The matrix half and the leg flag are satisfied on a pull request,
+    so only the event clause decides the answer, and the check must report
+    nothing. The second half re-gates the same step on the pull-request event
+    and requires it back, so the first half cannot hold for a reader that had
+    simply stopped finding the command.
+    """
+    flag = "env.LEG_RUNS == 'true'"
+    real_steps = steps(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+
+    def suite_step_gated_on(event_clause: str) -> list[Step]:
+        """Return this job's steps with the suite step guarded by an event."""
+        faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
+        suite = next(
+            step
+            for step in faulted
+            if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
+        )
+        suite["if"] = f"{event_clause} && matrix.python-suite && {flag}"
+        return faulted
+
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "the estate must already satisfy this check, or the seeded fault is "
+        "not the difference under test"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_gated_on("github.event_name == 'push'"),
+    )
+    assert not pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on a push must not be reported as running on a pull "
+        "request; reading the event clause as satisfied is the defect this "
+        "check exists to catch"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_gated_on(
+            "github.event_name == 'pull_request'"
+        ),
+    )
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on the pull-request event must be reported, or the "
+        "previous assertion holds for a reader that finds nothing"
+    )
+
+
+def test_an_unmodellable_context_guard_is_refused_rather_than_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show a context clause the reader cannot resolve fails loudly.
+
+    `admits_event` admits a clause by recognizing it, not by escaping
+    recognition, and the refusal has to be exercised: otherwise a later reader
+    could quietly restore the permissive behaviour and only the one event
+    spelling above would notice. ``github.ref`` is a context value no leg and
+    no event name resolves, so it is the shape the refusal exists for.
+    """
+    flag = "env.LEG_RUNS == 'true'"
+    real_steps = steps(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+    faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
+    suite = next(
+        step
+        for step in faulted
+        if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
+    )
+    suite["if"] = f"github.ref == 'refs/heads/main' && {flag}"
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps", lambda _workflow, _job: faulted
+    )
+    with pytest.raises(AssertionError, match=r"reads a value this reader cannot"):
+        pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET)
+
+
+def test_the_guard_names_the_ci_job_that_runs_the_suite() -> None:
+    """Pin the attribution, because the issue text and the tree disagreed.
+
+    Issue #499 said `lint-test` ran the suite. It does not: `lint-test` runs
+    the formatting, lint, Markdown, and MSRV checks, and the `Run tests` step
+    belongs to `typecheck-test`. Both appear in `ci.yml` and both are plausible
+    from the issue text alone, so the constant is asserted rather than trusted
+    — a guard pointing at the wrong job would certify a lane that never
+    evaluates the selector.
+    """
+    scripts = [
+        (job_name, script)
+        for workflow_name, job_name, _index, script in run_scripts()
+        if workflow_name == CI_SUITE_WORKFLOW
+    ]
+    running = {
+        job_name
+        for job_name, script in scripts
+        if script_runs_command(script, CI_SUITE_TARGET)
+    }
+    assert running == {CI_SUITE_JOB}, (
+        f"{CI_SUITE_TARGET} must be run by {CI_SUITE_JOB} and no other job; "
+        f"found {sorted(running)}"
+    )

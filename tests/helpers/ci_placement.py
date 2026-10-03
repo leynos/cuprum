@@ -35,6 +35,7 @@ from __future__ import annotations
 import re
 import typing as typ
 
+from tests.helpers.ci_documents import require
 from tests.helpers.ci_workflows import job, jobs, workflow_sources
 
 if typ.TYPE_CHECKING:
@@ -83,21 +84,6 @@ _FORKEXPRESSION = re.compile(
     r"\s*\|\|\s*'(?P<owned_arm>[^']+)'\s*\Z"
 )
 _MATRIX_EXPRESSION = re.compile(r"\A\s*matrix\.(?P<key>[\w-]+)\s*\Z")
-
-
-def require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold.
-
-    Public because `ci_job_rules` shares it; the alternative was a third copy
-    of the same three lines.
-
-    Raises
-    ------
-    AssertionError
-        When ``condition`` is false, carrying ``message``.
-    """
-    if not condition:
-        raise AssertionError(message)
 
 
 class Placement(typ.NamedTuple):

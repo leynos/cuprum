@@ -12,6 +12,13 @@ This module resolves the family a save step actually publishes, so
 family. Matrix legs are expanded, because one declared step in the interpreter
 matrix is four writers of four families at run time, and a save condition that
 names a matrix value is honoured, because the leg it excludes writes nothing.
+
+Both of those readings — which legs exist, and whether a condition admits one —
+come from `tests/helpers/ci_leg_matrix.py`. The selection contract asks the same
+two questions of a step guard, and a second answer here would be a second thing
+to keep in step with the workflow: the excluded leg is precisely the one the
+typecheck-only matrix value names, so a reader that drifted would start
+attributing a family to the leg that compiles nothing.
 """
 
 from __future__ import annotations
@@ -19,8 +26,10 @@ from __future__ import annotations
 import re
 import typing as typ
 
+from tests.helpers.ci_documents import require
+from tests.helpers.ci_leg_matrix import admits, matrix_legs
 from tests.helpers.ci_placement import placement
-from tests.helpers.ci_workflows import job, save_steps, step_inputs, steps
+from tests.helpers.ci_workflows import save_steps, step_inputs, steps
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -61,12 +70,6 @@ _MATRIX_REFERENCE = re.compile(r"matrix\.([a-z0-9-]+)", re.IGNORECASE)
 _EXPRESSION = re.compile(r"^\s*\$\{\{(?P<body>.+)\}\}\s*$", re.DOTALL)
 
 
-def _require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold."""
-    if not condition:
-        raise AssertionError(message)
-
-
 class CacheFamily(typ.NamedTuple):
     """One rendered cache family: what a single archive key identifies.
 
@@ -94,58 +97,18 @@ class CacheFamily(typ.NamedTuple):
 def _lane(workflow_name: str, job_name: str) -> str:
     """Return the cache lane a job publishes its archives to."""
     label = placement(workflow_name, job_name).owned
-    _require(
+    require(
         condition=label is not None,
         message=(
             f"{workflow_name}:{job_name} has no single owned runner, so the "
             "lane its archives land in is undefined"
         ),
     )
-    _require(
+    require(
         condition=label in LANE_OF_LABEL,
         message=f"{workflow_name}:{job_name} runs on unmapped label {label!r}",
     )
     return LANE_OF_LABEL[str(label)]
-
-
-def matrix_legs(workflow_name: str, job_name: str) -> list[dict[str, object]]:
-    """Expand one job's matrix into the legs it runs as.
-
-    Parameters
-    ----------
-    workflow_name:
-        Workflow file name, such as ``ci.yml``.
-    job_name:
-        Job key within that workflow.
-
-    Returns
-    -------
-    list[dict[str, object]]
-        One mapping per ``include`` entry, or a single empty mapping when the
-        job declares no matrix, so callers can iterate uniformly.
-
-    Notes
-    -----
-    Fails the contract, through :func:`_require`, when the job declares a
-    matrix without an ``include`` list, which this reader cannot expand.
-    """
-    strategy = job(workflow_name, job_name).get("strategy")
-    if not isinstance(strategy, dict):
-        return [{}]
-    matrix = strategy.get("matrix")
-    if not isinstance(matrix, dict):
-        return [{}]
-    include = matrix.get("include")
-    _require(
-        condition=isinstance(include, list),
-        message=(
-            f"{workflow_name}:{job_name} declares a matrix this contract cannot "
-            "expand; only `include` lists are supported"
-        ),
-    )
-    return [
-        typ.cast("dict[str, object]", leg) for leg in typ.cast("list[object]", include)
-    ]
 
 
 def _resolve(value: object, leg: cabc.Mapping[str, object], message: str) -> str:
@@ -156,12 +119,12 @@ def _resolve(value: object, leg: cabc.Mapping[str, object], message: str) -> str
         return text
     body = match.group("body").strip()
     reference = _MATRIX_REFERENCE.fullmatch(body)
-    _require(
+    require(
         condition=reference is not None,
         message=f"{message}: cannot resolve {text!r}",
     )
     name = typ.cast("re.Match[str]", reference).group(1)
-    _require(
+    require(
         condition=name in leg,
         message=f"{message}: matrix leg declares no {name!r}",
     )
@@ -175,7 +138,7 @@ def _renderer_inputs(workflow_name: str, job_name: str) -> dict[str, object]:
         for step in steps(workflow_name, job_name)
         if step.get("uses") == CACHE_KEYS_ACTION
     ]
-    _require(
+    require(
         condition=len(renderers) == 1,
         message=(
             f"{workflow_name}:{job_name} must render its keys through "
@@ -189,42 +152,16 @@ def _key_name(step: Step, message: str) -> str:
     """Return the ``env`` name a save step's key expression renders from."""
     key = step_inputs(step, message).get("key")
     match = _EXPRESSION.match(str(key))
-    _require(
+    require(
         condition=match is not None,
         message=f"{message}: key must be an expression, got {key!r}",
     )
     body = typ.cast("re.Match[str]", match).group("body").strip()
-    _require(
+    require(
         condition=body.startswith("env."),
         message=f"{message}: key must render from env, got {key!r}",
     )
     return body.removeprefix("env.")
-
-
-def _writes_on_leg(step: Step, leg: cabc.Mapping[str, object]) -> bool:
-    """Report whether a save step's condition admits one matrix leg.
-
-    Returns
-    -------
-    bool
-        ``True`` when the leg writes, ``False`` when the condition excludes it.
-
-    Notes
-    -----
-    Only matrix references are evaluated. A condition naming
-    ``matrix.python-suite`` excludes the leg that compiles nothing, and that
-    exclusion is what keeps the typecheck-only leg from appearing to own a
-    family another job writes. Every other clause is a run-time value this
-    contract deliberately does not model.
-    """
-    condition = step.get("if")
-    if not isinstance(condition, str):
-        return True
-    return all(
-        bool(leg.get(name, False))
-        for name in _MATRIX_REFERENCE.findall(condition)
-        if name in leg
-    )
 
 
 def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
@@ -245,7 +182,7 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
 
     Notes
     -----
-    Fails the contract, through :func:`_require`, when the job renders its keys
+    Fails the contract, through :func:`require`, when the job renders its keys
     other than exactly once through the shared renderer, when a save step names
     a key with no declared scope, when a scoping input is left to the action's
     default, or when the job publishes one family from more than one save step.
@@ -256,19 +193,26 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
     for step in save_steps(workflow_name, job_name):
         message = f"{workflow_name}:{job_name} save must declare inputs"
         key_name = _key_name(step, message)
-        _require(
+        require(
             condition=key_name in KEY_SCOPES,
             message=f"{message}: {key_name} has no declared scope",
         )
         for leg in matrix_legs(workflow_name, job_name):
-            if not _writes_on_leg(step, leg):
+            # A condition naming `matrix.python-suite` excludes the leg that
+            # compiles nothing, and that exclusion is what keeps the
+            # typecheck-only leg from appearing to own a family another job
+            # writes. Every other clause is a run-time value neither this
+            # contract nor `admits` models; `admits` treats those as satisfied,
+            # which would read the leg as writing and is the conservative
+            # direction for a one-writer rule.
+            if not admits(step.get("if"), leg):
                 continue
             # Every scoping input must be named explicitly rather than left to
             # the action's default. A default is invisible at the call site,
             # and a family whose scope a reader cannot see in the job is one
             # they cannot check for a second writer.
             missing = [name for name in KEY_SCOPES[key_name] if name not in inputs]
-            _require(
+            require(
                 condition=not missing,
                 message=f"{message}: must declare {missing}",
             )
@@ -280,7 +224,7 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
             # in one job that render the same family are the same collision the
             # caller's contract exists to catch, and a set would silently make
             # them one element and report the job as a sole writer.
-            _require(
+            require(
                 condition=family not in families,
                 message=f"{message}: publishes {family} more than once",
             )

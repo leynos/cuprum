@@ -17,7 +17,8 @@ from __future__ import annotations
 import re
 import typing as typ
 
-from tests.helpers.ci_placement import EXPRESSION, require
+from tests.helpers.ci_documents import require
+from tests.helpers.ci_placement import EXPRESSION
 from tests.helpers.ci_workflows import job
 
 #: One `${{ ... }}` span. Non-greedy to the first `}}`, because `[^}]*` stops

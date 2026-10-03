@@ -11,11 +11,40 @@ Contracts that compare a step's own guard in that job read it through
 is absent. The strip is exact rather than tolerant so that no other guard can
 hide behind it. Scope: `typecheck-test` only; every other job's guard is
 returned unchanged.
+
+The readings compose into the question a caller usually has — "would this job
+run that command on a pull request?" — which is :func:`pull_request_legs`: the
+job's flag decides whether the leg is enabled for the event, and the stripped
+guard decides whether the step admits it. That last part is
+`ci_leg_matrix.admits_event` rather than `ci_leg_matrix.admits`, because the
+question names an event and a guard may be gated on one; see that function for
+why the permissive reading is unsafe in this direction.
+
+The flag is read rather than re-derived, so the three answers a caller may get
+are worth stating: the leg is enabled, the leg is switched off, or the leg is
+enabled although the event the predicate names is not the one asked about.
+This repository runs no Python module doctests, so these are documentation
+rather than executed assertions:
+
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": False}, "pull_request")
+True
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "pull_request")
+False
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "push")
+True
 """
 
 from __future__ import annotations
 
+import re
 import typing as typ
+
+from tests.helpers.ci_leg_matrix import admits_event, matrix_legs
+from tests.helpers.ci_workflows import job_env, steps
+from tests.helpers.workflow_shell import script_runs_command
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 #: The one job whose steps carry the leg flag.
 GATED_LEG_JOB: typ.Final = ("ci.yml", "typecheck-test")
@@ -27,6 +56,119 @@ LEG_GATE: typ.Final = "env.LEG_RUNS == 'true'"
 LEG_FLAG_EXPRESSION: typ.Final = (
     "${{ !(matrix.experimental && github.event_name == 'pull_request') }}"
 )
+
+#: The event `pull_request_legs` resolves against. Named rather than spelled
+#: inline at each use, so the lanes reported and the event they were resolved
+#: against cannot drift apart.
+_PULL_REQUEST: typ.Final = "pull_request"
+
+#: One admitted leg, as its `key=value` fields. A leg is the identity of the
+#: pull request lane, so a caller asking whether the suite runs on more than one
+#: of them counts *these*, not the fields: reading the outer length would count
+#: the matrix keys of a single leg and report any leg as several. The alias
+#: exists to keep that distinction in the annotation rather than in a comment.
+type Lane = tuple[str, ...]
+
+#: One `(step name, lanes)` pair per step that admits at least one leg.
+type StepLanes = tuple[str, tuple[Lane, ...]]
+
+#: The negation inside the flag, read to decide a leg. The flag is
+#: ``!(<predicate>)``, so it is false exactly when its predicate holds: the leg
+#: is experimental *and* the event is a pull request. Reading the flag's own
+#: text — rather than re-deriving it from the leg's fields — is what keeps this
+#: honest if the predicate changes shape but still names the same two inputs.
+_FLAG_PREDICATE = re.compile(
+    r"\A\$\{\{\s*!\s*\((?P<predicate>.*)\)\s*\}\}\Z", re.DOTALL
+)
+#: The conjunction inside the predicate, in the two spellings the fields
+#: appear: the leg's own matrix key, and the event name comparison.
+_FLAG_TERMS = re.compile(
+    r"matrix\.(?P<key>[a-z0-9-]+)|github\.event_name\s*==\s*'(?P<event>[^']*)'",
+    re.IGNORECASE,
+)
+
+
+def flag_holds_on(
+    workflow_name: str, job_name: str, leg: cabc.Mapping[str, object], event: str
+) -> bool:
+    """Report whether the leg flag is true, for one leg and one event name.
+
+    Parameters
+    ----------
+    workflow_name : str
+        The workflow file name, such as ``"ci.yml"``.
+    job_name : str
+        The job the flag belongs to. Only ``typecheck-test`` declares one.
+    leg : Mapping of str to object
+        One leg, as `ci_leg_matrix.matrix_legs` returns it. The empty mapping
+        stands for a job whose steps are not expanded into legs.
+    event : str
+        The event name to evaluate against, such as ``"pull_request"``.
+
+    Returns
+    -------
+    bool
+        Whether the flag lets this leg run on that event. ``True`` for every
+        job that declares no flag, since nothing switches its legs off.
+
+    Raises
+    ------
+    AssertionError
+        If the gated job declares a flag this reader cannot decompose into the
+        predicate's terms. The contract this feeds asks *which* legs a pull
+        request runs, and a leg record built from an unread flag would name a
+        leg the flag might have switched off; the failure is reported rather
+        than guessed at. The refusal lives in :func:`_flag_terms`, which
+        raises it.
+    """  # ruff: ignore[docstring-extraneous-exception] - _flag_terms raises it
+    declared = job_env(workflow_name, job_name).get("LEG_RUNS")
+    if not isinstance(declared, str):
+        return _absent_flag_holds(workflow_name, job_name, declared)
+    holds = True
+    for term in _flag_terms(workflow_name, job_name, declared):
+        key = term.group("key")
+        if key is not None:
+            holds = holds and bool(leg.get(key, False))
+            continue
+        holds = holds and term.group("event") == event
+    return not holds
+
+
+def _absent_flag_holds(workflow_name: str, job_name: str, declared: object) -> bool:
+    """Report whether a job that declares no flag runs its legs."""
+    if (workflow_name, job_name) != GATED_LEG_JOB:
+        return True
+    message = (
+        f"{workflow_name}:{job_name} must declare a string LEG_RUNS, got "
+        f"{declared!r}; the contract this feeds names the legs a pull request "
+        "runs, and without the flag it cannot tell a leg that runs from one "
+        "the flag switches off"
+    )
+    raise AssertionError(message)
+
+
+def _flag_terms(
+    workflow_name: str, job_name: str, declared: str
+) -> list[re.Match[str]]:
+    """Decompose the declared flag into its terms, refusing unreadable text."""
+    match = _FLAG_PREDICATE.match(declared.strip())
+    if match is None:
+        message = (
+            f"{workflow_name}:{job_name} declares LEG_RUNS as {declared!r}, "
+            "which this reader cannot decompose; the leg records it builds "
+            "would name legs the flag may have switched off"
+        )
+        raise AssertionError(message)
+    terms = list(_FLAG_TERMS.finditer(match.group("predicate")))
+    if not terms:
+        message = (
+            f"{workflow_name}:{job_name} declares LEG_RUNS as {declared!r}, "
+            "whose predicate names neither a matrix key nor an event; nothing "
+            "a leg carries could satisfy it, so reading the absence of terms "
+            "as 'the flag holds' would report every leg as switched off"
+        )
+        raise AssertionError(message)
+    return terms
 
 
 def normalized(condition: object) -> str:
@@ -98,3 +240,73 @@ def ungated(workflow_name: str, job_name: str, condition: object) -> str:
         )
         raise AssertionError(message)
     return text.removesuffix(suffix)
+
+
+def pull_request_legs(
+    workflow_name: str, job_name: str, target: str
+) -> tuple[StepLanes, ...]:
+    """Return the pull-request legs a workflow's job would run a target on.
+
+    The suite selector is only evaluated if some job step runs the target on a
+    lane a pull request actually schedules, and "runs" has three conditions
+    that a reader of the step's text alone cannot separate: the step's own
+    guard admits the leg, the guard's event clauses hold for a pull request,
+    and the job's leg flag leaves the leg enabled for this event. A job whose
+    suite step is gated on a pre-release-only matrix key, on another event, or
+    whose every admitting leg is switched off by a flag, still contains the
+    command text and would satisfy a text-only check while CI collected
+    nothing on the branch that merges.
+
+    The event half is why this reads the guard through
+    `ci_leg_matrix.admits_event` rather than `ci_leg_matrix.admits`: the latter
+    resolves a guard over the leg alone and treats an unmodellable clause as
+    satisfied, which is the safe direction for the cache-ownership caller and
+    the unsafe one here.
+
+    Parameters
+    ----------
+    workflow_name : str
+        The workflow file name, such as ``"ci.yml"``.
+    job_name : str
+        The job expected to run ``target``.
+    target : str
+        The command to look for, matched as a leading command rather than as a
+        substring, so a mention inside another word or a comment does not
+        count.
+
+    Returns
+    -------
+    tuple of StepLanes
+        One ``(step name, lanes)`` pair per step of that job that runs
+        ``target`` and admits at least one leg the flag leaves enabled, in
+        declaration order. ``lanes`` holds one :data:`Lane` per admitted
+        pull-request *leg* — a tuple of that leg's ``key=value`` fields — so
+        its length is the number of lanes and not the number of matrix keys.
+        Empty when no step does, which is the failure the caller reports.
+
+    Raises
+    ------
+    AssertionError
+        If the job or its steps are not the shape the readers narrow them to,
+        or if a step running ``target`` carries a guard clause this reader
+        cannot resolve for a pull request; see `ci_leg_matrix.admits_event`.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the readers this composes
+    found: list[StepLanes] = []
+    for step in steps(workflow_name, job_name):
+        script = step.get("run")
+        if not isinstance(script, str) or not script_runs_command(script, target):
+            continue
+        guard = ungated(workflow_name, job_name, step.get("if"))
+        subject = (
+            f"{workflow_name}:{job_name} step "
+            f"{step.get('name', step.get('uses', '?'))!r}"
+        )
+        lanes = [
+            tuple(f"{key}={leg[key]}" for key in sorted(leg))
+            for leg in matrix_legs(workflow_name, job_name)
+            if flag_holds_on(workflow_name, job_name, leg, _PULL_REQUEST)
+            and admits_event(guard, leg, _PULL_REQUEST, subject=subject)
+        ]
+        if lanes:
+            found.append((str(step.get("name", step.get("uses", "?"))), tuple(lanes)))
+    return tuple(found)

@@ -393,7 +393,7 @@ and reports a plausible hit rate either way:
   action fails closed.
 
 An unknown backend fails the step before anything is exported.
-`tests/test_setup_sccache_action.py` runs the step's own shell for each case
+`tests/test_ci_setup_sccache_action.py` runs the step's own shell for each case
 and asserts the exit status and the exported variables.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
@@ -444,6 +444,149 @@ Cuprum's Ubicloud cache listing was empty before this migration, because
 `benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's
 entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
 land in Ubicloud's store rather than GitHub's.
+
+### Test selection
+
+`PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
+`typecheck-test` job collect. It is a list of glob patterns, not a directory
+sweep, so a test module that matches no pattern is simply never named — the
+target loops over the patterns, and `[ -e "$1" ] || continue` skips any whose
+first expansion does not exist. Nothing reports the omission: the loop exits
+zero having run only the modules its patterns named, and the contracts inside
+the module can regress unnoticed.
+
+Absent from this suite is not the same as absent from CI. The `coverage` job
+runs a bare `pytest` from the repository root through an out-of-repo composite
+action, with no path arguments, so it collects essentially the whole tree —
+including modules this selector omits. A module missing from `PYTEST_TARGETS`
+therefore still executes there and still gates the merge. What it loses is the
+fast local loop and the default pull-request suite.
+
+Issue #499 found seven such modules under `tests/` — they matched neither
+`tests/test_ci_*.py` nor the explicitly named `tests/test_native_sdist.py` —
+and pull request #488 hit the same problem with four more. The rule that keeps
+it from recurring is:
+
+**Every root-level `tests/test_*.py` module is named by `PYTEST_TARGETS` or by
+`ACT_SCENARIO_TARGETS`, or is recorded in the exception table of
+`tests/helpers/suite_selection.py` with the target that collects it and the
+reason the exclusion is intended.**
+
+The two fixes, in the order to try them:
+
+1. Rename the module into the `tests/test_ci_*.py` selector. This is what
+   #499 and #488 did, and what the selector's name already promises: it is the
+   CI contract suite.
+2. Add the module to `PYTEST_TARGETS`. Use this when the module is not a CI
+   contract — a module about the Rust build, say — so the `test_ci_` name would
+   misdescribe it.
+
+The exception table starts empty; an entry there is a deliberate decision that
+a module is collected elsewhere, never a way to silence the guard. If a module
+is genuinely collected by another target, name that target and the workflow
+that runs it.
+
+`tests/test_ci_test_selection_contract.py` enforces the rule, and it fails with
+a message naming each uncovered module and both fixes rather than reporting
+only that something is wrong. Whether the machinery *can* fail is a separate
+claim, and it is driven against seeded faults in
+`tests/test_ci_selection_guard_controls.py` — a guard whose assertions all pass
+on a healthy tree is not shown to refuse anything until something is fed to it
+that it should refuse. The two modules were one until the pair crossed the
+400-line limit; the seam is the kind of claim, not the helper being read. The
+enumeration and the exception table live in `tests/helpers/suite_selection.py`,
+which sits beside the code that validates each exemption's claim. Other
+contracts read the Makefile through `tests/helpers/makefile.py`, which parses
+it with the pinned `makeutil` binary: a regex over the source can miss a
+continuation or read a comment as an assignment, and either mistake shrinks the
+selector to a set that makes every coverage assertion pass for the wrong
+reason. That reader is split on the family's usual seam.
+`tests/helpers/makeutil.py` owns the process — running the parser, and
+reporting the ways a process fails — while `tests/helpers/recipe_read.py` owns
+how a target's recipe text is read, and `makefile.py` owns `make`'s own
+semantics for the document the parser returns: which assignment wins, how
+continuations collapse, and how `$(VAR)` references resolve. `makefile.py`
+re-exports `recipe_of` and `recipe_tokens` from `recipe_read.py`, so a caller
+keeps one import for the whole reader.
+
+That reader exposes its process boundary rather than reaching for the ambient
+tool. `makeutil_document` takes a `root` and a `runner`, so a test supplies the
+working directory and the parsed document instead of shelling out, and
+`variable_expansion` and `recipe_of` take the same two arguments and pass them
+through. A `FileNotFoundError` or a timeout at the process boundary becomes the
+`AssertionError` the read API documents, because the alternative — leaking the
+raw exception — reports a broken toolchain as if the Makefile were at fault.
+`recipe_of` joins a target's recipe entries with newlines, collapsing backslash
+continuations *within* an entry to one space. For a recipe entry that collapse
+is the reader's own rather than `make`'s: `make` hands the backslash-newline to
+the shell verbatim and lets the shell join it, so `make -n` still prints it.
+The normalization is nonetheless load-bearing — `shlex` implements no line
+continuation, so an uncollapsed backslash-newline would arrive as a word
+containing the newline, which the shell never sees. A *variable* value is the
+one case where the collapse is `make`'s own rule, so both readers apply the
+same transformation and a recipe and a variable value read the same way. A
+shell comment therefore ends at an uncontinued newline, so a `#` disables the
+remainder of its own entry rather than every command after it, even though the
+words stay in the string. That is why the text is read back with
+`recipe_tokens`, which honours comment markers and quoting: commented-out text
+contributes no tokens and cannot satisfy a check, and a substring test cannot
+tell a live recipe from a commented-out one.
+
+The rest of the reader family is split the way the questions are.
+`tests/helpers/ci_documents.py` operates on text and on parsed documents —
+`parse_document` for YAML that must be a mapping, `document_jobs` and
+`narrow_steps` for the shapes beneath it, `step_inputs` and `cache_paths` for a
+step's `with:` — and validates each shape it narrows, so a malformed document
+fails with a named diagnostic rather than an opaque `TypeError` deep in a test.
+The load-bearing distinction is `narrow_steps`: a reusable-workflow call
+declares `uses:` where a step list would go and legitimately yields no steps,
+while `steps:` of the wrong shape is a malformed job, and reporting the second
+as "no steps" would let every "no step does X" contract over it pass having
+read nothing. `tests/helpers/ci_run_scripts.py` sweeps workflows, jobs, and
+steps for `run:` scripts, returning each script with the location that holds
+it, and reports its own emptiness for the same reason.
+
+These boundaries have their own contracts, driven with synthetic input:
+`tests/test_ci_makefile_boundaries.py` for the Makefile readers and
+`tests/test_ci_helper_boundaries.py` for the workflow ones. The repository-wide
+contracts above read this repository's real Makefile and workflows, which is
+the right way to assert what the repository does and the wrong way to test a
+*reader*: every case they can express is a case the estate already satisfies,
+so malformed input, refusals, and empty-input behaviour are never exercised. A
+reader could stop refusing anything and every contract above it would keep
+passing on a healthy tree.
+
+The companion question — whether anything *runs* that selector — is
+`tests/test_ci_suite_wiring_contract.py`. It asserts that a workflow step
+actually invokes `make test-python` and that the target's recipe expands
+`$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates, or one
+consumed by a recipe that runs a bare directory, is caught too. The first of
+those resolves the step's guard against the job's matrix legs rather than
+grepping the command text: a step gated on the pre-release leg, or on any key a
+pull-request leg does not set, contains the command and still runs nothing on
+the branch that merges. The legs come from `tests/helpers/ci_leg_matrix.py` and
+the leg flag from `tests/helpers/ci_leg_gate.py`, which is also where
+`pull_request_legs` composes the two. The two halves are separate modules
+because they fail differently: a module outside the selector is a missing test
+reported by name against the tree, while broken wiring leaves the tree
+correctly covered and CI collecting something else.
+
+The exceptions that prove the shape are elsewhere: `ACT_SCENARIO_TARGETS` stays
+out of `PYTEST_TARGETS` because the scenarios need a container runtime, and
+`EXTENSION_TEST_TARGETS` stays out because the compiled extension must be built
+first. Both have their own targets, `make test-act` and `make test-extension`,
+and their own contracts.
+
+The guard has a bootstrap, and it needs one because every assertion about the
+selector lives in a module the selector collects. A `PYTEST_TARGETS` that had
+lost `tests/test_ci_*.py` would therefore silence the guard instead of failing
+it: the suite would run, the contract modules would not, and nothing would
+report the difference. `make test-selection` names
+`tests/test_ci_test_selection_contract.py` directly, and `make test` and
+`make test-python` both depend on it, so the selector's agreement with the
+module population is settled before the loop that reads it. The dependency is
+also ordered rather than incidental — the bootstrap is a prerequisite, so it
+completes before the selector-driven loop starts.
 
 ### One execution per suite
 
@@ -5552,21 +5695,24 @@ shape-only rationale).
 ### Workflow contract tests
 
 Because the caller is configuration rather than code,
-`tests/test_workflow_contract.py` pins the shape it must uphold, failing the
-pull request when the caller drifts — repointing the pin at a branch, widening
-the token scope, or dropping a configuration input — rather than letting the
-breakage surface only in a scheduled run. Unlike some sibling repositories,
-this module has no `skipif` guard: `.github/` is listed in
+`tests/test_ci_mutation_workflow_contract.py` pins the shape it must uphold,
+failing the pull request when the caller drifts — repointing the pin at a
+branch, widening the token scope, or dropping a configuration input — rather
+than letting the breakage surface only in a scheduled run. Unlike some sibling
+repositories, this module has no `skipif` guard: `.github/` is listed in
 `[tool.mutmut].also_copy`, so the workflow file is present inside mutmut's
-sandbox and the contract test runs there too. Run it locally with:
+sandbox and the contract test runs there too.
+
+The module carries the `test_ci_` prefix, so the `tests/test_ci_*.py` pattern in
+`PYTEST_TARGETS` collects it and `make test` runs it on every machine. It also
+has no dedicated Makefile target, so the focused local command is:
 
 ```bash
-uv run --with pytest --with pyyaml pytest tests/test_workflow_contract.py -q
+uv run --with pytest --with pyyaml pytest tests/test_ci_mutation_workflow_contract.py -q
 ```
 
-There is no dedicated Makefile target for this test; it also falls outside
-`PYTEST_TARGETS`, the glob list `make test` uses, so it must be run directly
-with the command above (or as part of a full mutmut pass). The test validates:
+A full mutmut pass runs it as well, through the same `also_copy` entry that puts
+`.github/` inside the sandbox. The test validates:
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
   SHA;
