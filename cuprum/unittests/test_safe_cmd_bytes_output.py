@@ -40,6 +40,7 @@ from tests.helpers.execution import _RunKwargs
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
@@ -241,10 +242,17 @@ def test_capture_survives_a_text_only_sink_encode_failure(bytes_cmd: SafeCmd) ->
     )
 
 
-def test_line_observation_is_refused_before_the_child_spawns(
-    bytes_cmd: SafeCmd,
+def _marker_python_source(marker: Path) -> str:
+    """Return a child that creates ``marker`` as soon as it runs."""
+    return f"import pathlib; pathlib.Path({str(marker)!r}).write_text('spawned')"
+
+
+def _assert_refused_without_spawning(
+    execute: BytesExecuteFn,
+    cmd: SafeCmd,
+    marker: Path,
 ) -> None:
-    """``on_line`` cannot be honoured in bytes mode, and says so up front."""
+    """Assert the refusal arrives without the child ever starting."""
     observed: list[LineEvent] = []
 
     def observe(event: LineEvent) -> None:
@@ -252,21 +260,34 @@ def test_line_observation_is_refused_before_the_child_spawns(
         observed.append(event)
 
     with pytest.raises(ValueError, match="on_line"):
-        _run_bytes_async(bytes_cmd, {"output": RunOutputOptions(on_line=observe)})
+        execute(cmd, {"output": RunOutputOptions(on_line=observe)})
 
     assert not observed, "the rejection must happen before any line is observed"
+    assert not marker.exists(), (
+        "the child must never be spawned, but it ran far enough to create "
+        f"{marker}; a spawned child that raised before observing would pass a "
+        "check that only looks at the callback"
+    )
 
 
-def test_line_observation_is_refused_before_the_sync_entry_point_runs(
-    bytes_cmd: SafeCmd,
+def test_line_observation_is_refused_before_the_child_spawns(
+    byte_entry_point: BytesExecuteFn,
+    python_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
 ) -> None:
-    """The synchronous entry point validates before it starts its own loop."""
+    """``on_line`` cannot be honoured in bytes mode, and says so up front.
 
-    def observe(_event: LineEvent) -> None:
-        """Accept a line event no byte-exact run may deliver."""
+    The refusal is asserted two ways because the return value alone cannot
+    distinguish the guarantees: a run that spawned the child and only then
+    raised would still raise ``ValueError``, and would still deliver no line
+    event. The child here creates a marker file as its first act, so the
+    marker's absence is what proves the pre-spawn guarantee on each entry
+    point rather than only the rejection result.
+    """
+    marker = tmp_path / "spawned.txt"
+    cmd = python_builder("-c", _marker_python_source(marker))
 
-    with pytest.raises(ValueError, match="on_line"):
-        _run_bytes_sync(bytes_cmd, {"output": RunOutputOptions(on_line=observe)})
+    _assert_refused_without_spawning(byte_entry_point, cmd, marker)
 
 
 def test_observe_hooks_do_not_break_byte_exact_capture(
