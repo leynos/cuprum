@@ -1241,6 +1241,56 @@ than discovering the gap months later.
     `/pulls/505` returns `null` and looks like "no decision", which is wrong.
     It has to come from `gh pr view --json reviewDecision` or GraphQL.
 
+- [x] (2026-10-03) Widened the abbreviated-SHA spelling exemption after it
+  rejected a SHA this record cites, and pinned the rule with a test that fails
+  without the fix.
+  - *The failure.* `make lint` at `c01dce4b` stopped in its `spelling` leaf:
+    typos reported at this file, line 1238, column 16, that the first letter
+    run of the cited SHA should have been "be" or "by". `make markdownlint`
+    shares that leaf, so both gates were red at the pushed head. This was not
+    an environment fault and not the `actionlint` deadlock: the gate reached
+    the spelling stage in 105 s and exited 2 on a real finding.
+  - *Why the exemption missed it.* The local rule was `[0-9][0-9a-f]{6,39}`.
+    Typos tokenizes before applying `extend-ignore-re`, so an abbreviation
+    splits into letter runs; the rule's mandatory **first** character being a
+    digit was what kept it narrow, but it also meant a SHA leading with a
+    letter was never exempted. `ba06a730` leads with `b`, so its opening
+    letter run survived tokenization and collided with the dictionary. Five
+    abbreviations cited in this record were in that position: `ba06a730`,
+    `ca5fb1fb`, `dd8dc2df`, `df3c59ad`, and `ebbf3f72`. The rest escaped notice
+    only because their opening letter runs happen to spell nothing.
+  - *Repair.* The single rule became seven seven-character windows, each with
+    the mandatory digit at a different position. Every abbreviation of seven
+    characters or more contains at least one such window, and no English word
+    contains a digit at all, so prose stays checked. Typos' regex engine has no
+    lookahead, so the digit's position is enumerated rather than asserted. The
+    alternatives deliberately carry no length floor of their own: a 7-character
+    window is the unit, and adding `{0,39}` tails would widen the match without
+    widening the criterion.
+  - *Evidence for the rule.* `typos` 1.50.1 was run against candidate configs
+    in an isolated directory. With the old rule the exact offending line
+    reproduces the reported error; with the new one it is silent. A ten-item
+    corpus of common English misspellings — the kind the dictionary already
+    corrects, spanning transpositions, doubled-letter errors, and dropped
+    letters — still flags every entry under the new rule, so the widening does
+    not blank real errors. The tokens are deliberately not reproduced here,
+    because inlining them would put them back in front of the gate that the
+    corpus exists to prove still catches them. A digit-free corpus (`decade`,
+    `defaced`, `facade`, `acceded`, `deadbeef`) is not matched. One candidate
+    that *did* blank `f8`, `2`, `e64`, `utf8`, and `1.85` was rejected for that
+    reason — breadth is not free.
+  - *The test.* `test_sha_exemption_covers_letter_leading_abbreviations` was
+    added beside the existing `--color` exemption test in
+    `scripts/tests/test_rust_lint_baseline_contract.py`, which already loads
+    `typos.local.toml`. The failing-before property was proved by restoring the
+    pre-fix config and running it: it failed on the letter-leading assertion.
+    With the fix restored the module reports `5 passed`.
+  - *The lesson.* A rule that exempts a token class must cover the class, not
+    the easy members of it. Every abbreviation in this record led with a
+    digit or with a letter run that happened to be harmless, so the gap stayed
+    invisible until a SHA led with a letter run that spelled a word — and the
+    exempting rule, not the prose, was what needed fixing.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of

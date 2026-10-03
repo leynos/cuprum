@@ -208,6 +208,41 @@ def test_cargo_flag_exemption_is_limited_to_the_external_flag() -> None:
     )
 
 
+def test_sha_exemption_covers_letter_leading_abbreviations() -> None:
+    """Commit SHAs must stay exempt whichever character they lead with."""
+    patterns = _typos_local_config()["patterns"]
+    assert isinstance(patterns, dict), "local spelling patterns must be a mapping"
+    ignored = patterns["ignore"]
+    assert isinstance(ignored, list), "local spelling ignore patterns must be a list"
+    # The SHA rules are the only entries drawn purely from the hexadecimal
+    # character class, the quantifier braces, and the alternation separators.
+    sha_rules = [
+        entry
+        for entry in ignored
+        if isinstance(entry, str)
+        and entry
+        and set(entry) <= set("[]0123456789abcdef-,{}|")
+    ]
+    assert sha_rules, "the local config must exempt abbreviated commit SHAs"
+    excerpt = "ba06a730"
+    assert any(re.search(rule, excerpt) for rule in sha_rules), (
+        "an abbreviation leading with a letter must still be exempt: typos "
+        "splits it into letter runs, and a two-letter run reads as a word"
+    )
+    for sha in (
+        "a6b8ba14",
+        "c01dce4b",
+        "92f17d258643bf6226916424574bf8fcbcff6693",
+    ):
+        assert any(re.search(rule, sha) for rule in sha_rules), (
+            f"the exemption must keep covering {sha}"
+        )
+    for word in ("decade", "defaced", "facade", "acceded", "deadbeef"):
+        assert not any(re.search(rule, word) for rule in sha_rules), (
+            f"digit-free prose such as {word!r} must stay spell-checked"
+        )
+
+
 def test_doctest_recipe_passes_full_rustdoc_warning_flags_and_jobs() -> None:
     """Require the separate gate to use pinned nightly rustdoc warnings."""
     output = _dry_run_test_rust()
