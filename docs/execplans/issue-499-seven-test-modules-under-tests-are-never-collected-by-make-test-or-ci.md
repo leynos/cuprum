@@ -1346,6 +1346,61 @@ than discovering the gap months later.
     the head that ships: the whole sequence is re-run against the revision that
     carries this paragraph, and only that run speaks for it.
 
+- [x] (2026-10-03) Re-ran all five gates at `893b2462`, the head carrying the
+  paragraph above, and re-read the hosted surfaces at that same head.
+  - *The gates, clean end to end.* All five exited 0 with
+    `head_before == head_after == 893b2462` and `git status --porcelain` empty
+    before and after every one: `check-fmt` 0.60 s, `typecheck` 0.47 s,
+    `lint` 141.02 s, `markdownlint` 11.04 s, `test` 225.95 s. Both
+    `actionlint`-bearing gates passed on attempt 1, so the host deadlock did
+    not recur. Logs: `/tmp/<gate>-issue499-893b2462.out` with rc sidecars.
+  - *The test figures, derived rather than quoted.* The eleven pytest session
+    summaries in the log sum to 3689 passed, 86 skipped, 0 failed — 3775
+    collected; nextest reports 127 of 127 passed; cargo reports three ignored
+    doctests and none failing. No line matching `warning:` appears in any of
+    the five logs. The only warning-shaped tokens in the test log are test
+    *names* such as `test_it_logs_at_warning_with_the_decision`, which are
+    identifiers on PASS lines, not diagnostics — the false-positive class
+    recorded elsewhere in this estate.
+  - *A figure reconciled, not retracted.* An earlier report gave `3816 passed`
+    where its own table and my sum both gave 3689, and the previous commit
+    characterized that as a disagreement with the log. It is not: 3816 is
+    3689 pytest passes plus 127 nextest passes, a cross-suite total where 3689
+    is pytest alone. Three defensible denominators exist for this one run —
+    3775 pytest collected, 3816 passing across both suites, 3902 collected
+    across both — and the earlier prose simply did not say which it meant.
+    The lesson is the "denominator scope must match the measured run" one: a
+    total is only meaningful with the set it counts stated beside it.
+  - *Hosted CI at `893b2462`, fully settled.* 27 check runs: 22 `success`, 5
+    `skipped`, 0 failures, 0 pending. `coverage` reads `success`, as do
+    `lint-test`, `benchmark-ratchet`, and `verus`; all four Python
+    typecheck-and-test legs (3.12, 3.13, 3.14, 3.15a); all three native
+    contracts (macos, ubuntu, windows); both extension-gated jobs; and the
+    five `build-native-wheels` legs beside `verify-wheel-install`. The skipped
+    set is the usual five: Kody Code Review, Loom model smoke test, Sourcery
+    review, automerge, and extended.
+  - *CodeScene at this head, quoted.* Its check run reads
+    `status: completed`, `conclusion: success`, title `CodeScene PR Check`,
+    body `**Quality Gate Passed**` with `6 Quality Gates Passed`, details
+    `https://codescene.io/projects/74471/delta/results/7794362`. Six gates
+    passed where `77b3411b` had five passing and the advisory code-health gate
+    failing.
+  - *State at `893b2462`.* `headRefOid` matches, `isDraft` false, `state`
+    OPEN, base `7b86b904`, `mergeStateStatus` `CLEAN`. `reviewDecision`
+    remains `CHANGES_REQUESTED` and the newest CodeRabbit review submission is
+    still `92f17d25` at 2026-10-02T14:32:16Z. Queued request `d8860275` is
+    still pending, now at 22h 35m and still un-run. Nothing above changes that:
+    a review submission is the only mechanism that can move the decision, and
+    no amount of local or hosted green substitutes for it.
+  - *What certifies what.* The entry you are reading describes `893b2462` but
+    is committed after it, so a reader must not treat this file's own commit as
+    covered by the run recorded above — a commit cannot certify its own head.
+    The five gates above are evidence for the revision they name, which carries
+    the extraction and the CodeScene-clearance entry; this prose is a
+    documentation-only delta on top. The terminal evidence for whichever
+    revision carries this entry is the hosted CI run list at that revision,
+    read after it settles, not a local log copied forward from an earlier one.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
