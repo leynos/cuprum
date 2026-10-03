@@ -350,6 +350,9 @@ def test_strict_decoding_does_not_reach_a_view_with_capture_disabled(
         "the observer must render the child's decoded view under a strict "
         f"capture policy, got {observed!r}"
     )
+
+
+class TestEchoOnly:
     """Verify the echo-only direct-execution path leaves results uncaptured."""
 
     @staticmethod
