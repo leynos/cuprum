@@ -2466,11 +2466,11 @@ table.
 The empty table's own machinery is driven by
 `tests/test_ci_exemption_contract.py` instead, on all three counts. Success:
 `test_a_valid_exemption_is_honoured` reaches the qualifying branch a
-refusal-only control never can.
-Subtraction: `test_a_valid_exemption_returns_its_module_to_the_covered_set`
-pins that a verified entry actually leaves `uncovered()`, which is what makes
-the exemption a subtraction rather than a decoration. Refusal, on each of the
-three claims an entry makes: a target that never consumes the selector
+refusal-only control never can. Subtraction:
+`test_a_valid_exemption_returns_its_module_to_the_covered_set` pins that a
+verified entry actually leaves `uncovered()`, which is what makes the exemption
+a subtraction rather than a decoration. Refusal, on each of the three claims an
+entry makes: a target that never consumes the selector
 (`test_an_exemption_whose_target_never_consumes_the_selector_is_refused`), a
 selector named only in dead text
 (`test_a_selector_only_named_in_dead_text_is_refused`), and a target no
@@ -2502,35 +2502,34 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 explanation of what drives the exemption machinery, and records the recipe-flow
 gap the same review round found.
 
-The paragraph named
-`test_the_exception_mechanism_reports_an_uncovered_module` and described
-`remedy` as "a pure formatter that reads no `EXCEPTIONS`", then went on to say
-the table's machinery "is driven by `tests/test_ci_exemption_contract.py`
-instead". Both halves are true and they do not belong in one breath: the cited
-test drives *diagnostic formatting* and says nothing about whether an exemption
-is honoured, subtracted, or refused, because `remedy` formats a message from
-the module list it is handed. Reading the two sentences together invites the
-inference that the exemption path is covered by that control, which it is not.
-The paragraph now separates the two claims and cites the three exemption tests
-that do establish them: success, subtraction, and each of the three refusals.
-All five names were re-resolved against the tree before being written.
+The paragraph named `test_the_exception_mechanism_reports_an_uncovered_module`
+and described `remedy` as "a pure formatter that reads no `EXCEPTIONS`", then
+went on to say the table's machinery "is driven by
+`tests/test_ci_exemption_contract.py` instead". Both halves are true and they
+do not belong in one breath: the cited test drives *diagnostic formatting* and
+says nothing about whether an exemption is honoured, subtracted, or refused,
+because `remedy` formats a message from the module list it is handed. Reading
+the two sentences together invites the inference that the exemption path is
+covered by that control, which it is not. The paragraph now separates the two
+claims and cites the three exemption tests that do establish them: success,
+subtraction, and each of the three refusals. All five names were re-resolved
+against the tree before being written.
 
 `tests/helpers/recipe_flow.py` gained the fault its own brief named and it did
 not catch: a loop that binds the iterated pattern with `set --` and then
 overwrites the positional parameters before pytest reads them. The validator
-read the *first* binding, so
-`set -- $$p; set -- other.py; $(PYTEST) $$@` was certified even though the
-pattern never reaches pytest. It now locates the pytest invocation first and
-requires the last `set` before it to be the one binding the loop variable, so
-an intervening rebind is refused by name. The fix moves the token-splitting
-machinery to `tests/helpers/recipe_read.py`, which already owns reading a
-recipe as shell words, keeping both modules inside the 400-line cap the lint
-gate enforces. Two controls were added: one substitutes the overwrite into the
-fault table, and one seeds it into the estate's real recipe, where the existing
-substring guard asserts the seed applied. The reorder did change one diagnosis
-— the all-`echo` recipe now reports the missing pytest invocation rather than
-the missing binding, both true of it — and that expectation was updated rather
-than the validator.
+read the *first* binding, so `set -- $$p; set -- other.py; $(PYTEST) $$@` was
+certified even though the pattern never reaches pytest. It now locates the
+pytest invocation first and requires the last `set` before it to be the one
+binding the loop variable, so an intervening rebind is refused by name. The fix
+moves the token-splitting machinery to `tests/helpers/recipe_read.py`, which
+already owns reading a recipe as shell words, keeping both modules inside the
+400-line cap the lint gate enforces. Two controls were added: one substitutes
+the overwrite into the fault table, and one seeds it into the estate's real
+recipe, where the existing substring guard asserts the seed applied. The
+reorder did change one diagnosis — the all-`echo` recipe now reports the
+missing pytest invocation rather than the missing binding, both true of it —
+and that expectation was updated rather than the validator.
 
 The verification evidence for the head this revision lands on is the gate set
 run at that head, recorded below with its logs; the seventh revision's note
