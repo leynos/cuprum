@@ -291,7 +291,14 @@ class _PipelineObservers:
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineSpawnResult:
-    """Processes and output tasks produced when spawning a pipeline."""
+    """Processes and output tasks produced when spawning a pipeline.
+
+    ``owns_group`` carries one flag per spawned stage, in stage order, so the
+    teardown paths can signal each stage the way it was spawned. It defaults to
+    empty for the callers that build this result directly: an empty sequence
+    leaves every stage on the direct-child route, which is what those callers
+    spawned.
+    """
 
     processes: list[asyncio.subprocess.Process]
     stderr_tasks: list[asyncio.Task[str | None] | None]
@@ -301,6 +308,7 @@ class _PipelineSpawnResult:
         ...,
     ]
     stages: _StageWaitContext
+    owns_group: tuple[bool, ...] = ()
     idle: _IdleMonitor | None = None
 
 

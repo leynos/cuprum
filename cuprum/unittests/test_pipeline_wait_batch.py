@@ -9,6 +9,7 @@ import typing as typ
 
 from cuprum import _pipeline_wait
 from cuprum._pipeline_types import _StageWaitContext
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.unittests._pipeline_wait_support import (
     make_stage_observations,
@@ -79,11 +80,11 @@ class TestSimultaneousCompletions:
             task: asyncio.Task[int],
             state: _PipelineWaitState,
             processes: list[asyncio.subprocess.Process],
-            cancel_grace: float,
+            policy: _TeardownPolicy,
         ) -> None:
             """Note which stage is being processed, then do the real work."""
             processed.append(state.task_to_index[task])
-            await process_completed(task, state, processes, cancel_grace)
+            await process_completed(task, state, processes, policy)
 
         monkeypatch.setattr(_pipeline_wait, "_process_completed_task", recording)
         processes = typ.cast(
@@ -96,7 +97,7 @@ class TestSimultaneousCompletions:
             return await _pipeline_wait._wait_for_pipeline(
                 processes,
                 pipe_tasks=[],
-                cancel_grace=0.25,
+                policy=_TeardownPolicy(0.25),
                 stages=_StageWaitContext(
                     started_at=(0.0,) * len(exit_codes),
                     observations=observations,

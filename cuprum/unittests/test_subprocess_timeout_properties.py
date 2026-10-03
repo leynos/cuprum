@@ -121,11 +121,21 @@ class _NullObservation:
 
 @dc.dataclass(frozen=True, slots=True)
 class _Execution:
-    """Execution stand-in exposing only the fields the waiter reads."""
+    """Execution stand-in exposing only the fields the waiter reads.
+
+    ``owns_process_group`` is one of those fields: teardown consults it to
+    decide whether the child's group is signalled along with the child.
+    Leaving it off would not fail loudly — the waiter would raise
+    ``AttributeError`` inside the task under test, and a case that waits on a
+    coordination event the double never gets to set would hang instead of
+    reporting that. It is ``False`` here because these cases assert the
+    direct-child teardown, which is the default policy.
+    """
 
     ctx: ExecutionContext
     timeout: float | None
     observation: _NullObservation = dc.field(default_factory=_NullObservation)
+    owns_process_group: bool = False
 
 
 def _execution(configured: float | None, grace: float) -> _SubprocessExecution:

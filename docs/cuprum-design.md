@@ -1679,21 +1679,22 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
-- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
-  deadline, terminating the process (through `_terminate_all_shielded`, so a
-  caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation), and draining the stream consumers exactly once. Its explicit
-  drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
-  task with the stdout and stderr consumer tasks, `_DrainContext` to carry
-  capture and observability settings, and
-  `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
-  consumers as one shielded cleanup unit. A capturing drain gives readers a
-  bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
-  maps an absent reader result to an empty string, and therefore keeps captured
-  timeout output deterministic; non-capturing drains skip the window and retain
-  `None` for absent text. Split out of `_subprocess_execution` so that module
-  stays about orchestration — spawning, wiring streams, assembling the result.
-- When that window expires with readers still pending, `_subprocess_wait` uses
+- `cuprum/_subprocess_wait.py` owns the wait half of *ending* a run: applying
+  the deadline and terminating the process (through `_terminate_all_shielded`,
+  so a caller cancelling during the grace period cannot skip the `SIGKILL`
+  escalation). `cuprum/_subprocess_drain.py` owns the other half: draining the
+  stream consumers exactly once. Its explicit drain interface uses
+  `_RunTaskOwnership` to bundle the optional stdin-writer task with the stdout
+  and stderr consumer tasks, `_DrainContext` to carry capture and observability
+  settings, and `_reconcile_run_tasks(tasks, context)` to cancel stdin before
+  settling both consumers as one shielded cleanup unit. A capturing drain gives
+  readers a bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before
+  cancellation, maps an absent reader result to an empty string, and therefore
+  keeps captured timeout output deterministic; non-capturing drains skip the
+  window and retain `None` for absent text. Both were split out of
+  `_subprocess_execution` so that module stays about orchestration — spawning,
+  wiring streams, assembling the result.
+- When that window expires with readers still pending, `_subprocess_drain` uses
   `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
   `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
   `operation="drain"`, `eof_grace_s`, and `pending_readers`. `MetricsHook`
@@ -1714,7 +1715,7 @@ Figure 8: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
-    participant Wait as _subprocess_wait
+    participant Wait as _subprocess_drain
     participant Consumers as Stream consumers
     participant Reader as StreamReader
     participant Telemetry as Exec telemetry
@@ -1756,9 +1757,13 @@ stages, arms the idle heartbeat once the first stage is actually running, and
 owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
 `cuprum/_process_lifecycle.py` keeps the subprocess handles and the shared
 `_shielded_cleanup` primitive, and executes the fail-fast, timeout, and error
-teardown decisions the waiter makes. Splitting startup from termination keeps
-each module within the Pylint module ceiling while leaving every helper that
-existing importers reach importable from its previous definition site.
+teardown decisions the waiter makes. It delegates the two per-process questions
+teardown asks — what a signal is delivered to, and what a completed teardown
+waits for — to `cuprum/_process_signal.py`, which is the only module that has
+to know whether a run owns its child's process group. Splitting startup from
+termination keeps each module within the Pylint module ceiling while leaving
+every helper that existing importers reach importable from its previous
+definition site.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout
