@@ -1032,11 +1032,20 @@ untouched. The two-phase grace is unchanged: `SIGTERM`, wait for
 `SIGTERM` and keeps a pipe open is therefore reached by the escalation, and the
 run settles instead of waiting out the EOF window.
 
+Session leadership also detaches the child from the controlling terminal, and
+that trade-off is worth stating because it is not obvious from the name.
+`INHERIT` leaves the child in the caller's session, so a terminal interrupt
+(`SIGINT`) or `SIGHUP` reaches the child and its descendants; under `OWN_GROUP`
+they do not arrive from the terminal at all, and the run is reachable only
+through Cuprum's own teardown. An abrupt parent death can therefore leave the
+group running where `INHERIT` would have let the terminal end it. A child that
+needs a terminal — one that opens `/dev/tty`, or that prompts — cannot get one.
+
 The guarantee is bounded, and the bound is a property of the kernel rather than
 of this option: a descendant that calls `setsid()` or `setpgid()` leaves the
 group deliberately, and no non-privileged mechanism can contain it. Ancestors
-and siblings are outside the group for the same reason. If you need containment
-of processes that actively escape, use a supervisor, a cgroup, or a container;
+and siblings are outside the group for the same reason. Containment of
+processes that actively escape needs a supervisor, a cgroup, or a container;
 a command runner cannot promise it.
 
 `OWN_GROUP` raises `ValueError` on Windows, where POSIX process groups do not
@@ -1046,11 +1055,11 @@ chance to spawn a descendant. Cuprum refuses rather than accepting the option
 and delivering no containment. `INHERIT` works everywhere and remains the
 default on every platform.
 
-**Do not signal a process group you do not lead.** Under `INHERIT` the child
-stays in the caller's group, and the documented limitation applies in the other
-direction too: signalling that group reaches the caller's own process and its
-siblings. Ownership is what makes the group signal safe, which is why it is not
-the default.
+**Do not signal a process group the run does not lead.** Under `INHERIT` the
+child stays in the caller's group, and the documented limitation applies in the
+other direction too: signalling that group reaches the caller's own process and
+its siblings. Ownership is what makes the group signal safe, which is why it is
+not the default.
 
 #### Timeout diagnostics
 

@@ -998,7 +998,7 @@ policy with an unchanged default and one opt-in member.
   - Requires 12.1.1.
   - Success: a `SafeCmd` run and a `SafeCmd.lines()` run built with
     `OWN_GROUP` both reach the spawn with the policy, and neither reads the
-    process-global environment or the concurrent-run configuration for it.
+    process-global environment nor the concurrent-run configuration for it.
 
 ### 12.2. Spawn owned groups and signal them on teardown
 
