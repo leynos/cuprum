@@ -439,7 +439,7 @@ coordination steps, so tests that replace one of their collaborators patch
 ## Addendum (2026-10-03): reinstate `_subprocess_drain` on a real seam
 
 The 2026-08-30 addendum read as though `_subprocess_drain.py` had been removed
-for good. In fact it records the removal of the *earlier* module of that name —
+for good. In fact it records the removal of the _earlier_ module of that name —
 the withdrawn compatibility boundary, which duplicated the drain helpers behind
 a second import path. The name returns here for a different reason and a
 different seam.
