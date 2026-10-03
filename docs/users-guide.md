@@ -1024,7 +1024,7 @@ That last assertion is the compatibility promise: a context that says nothing
 about the policy keeps the child in the caller's group, so no existing run is
 affected. Only a caller that names `OWN_GROUP` gets a new group.
 
-Under `OWN_GROUP` the child's process-group identifier is its own PID, because
+Under `OWN_GROUP` the child's process-group identifier equals its PID, because
 the spawn made it a session and process-group leader. Teardown signals exactly
 that group — never the caller's — so an unrelated process or an outer group is
 untouched. The two-phase grace is unchanged: `SIGTERM`, wait for
