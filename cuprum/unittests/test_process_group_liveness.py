@@ -102,6 +102,7 @@ def test_the_wait_returns_once_the_group_empties() -> None:
     """
 
     async def run_case() -> None:
+        """Wait on a group that empties only after the wait has begun."""
         leader = _spawn_blocking_session_leader()
 
         def kill_and_reap() -> None:
@@ -142,6 +143,7 @@ def test_a_failing_child_wait_leaves_no_group_poller_behind() -> None:
     """
 
     async def run_case() -> None:
+        """Fail one waiter while the group poller is still mid-wait."""
         leader = _spawn_blocking_session_leader()
         try:
 
