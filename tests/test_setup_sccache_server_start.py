@@ -24,6 +24,9 @@ from tests.helpers.composite_actions import (
     step_script,
 )
 
+if typ.TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
+
 ACTION = ".github/actions/setup-sccache"
 START_STEP = "Start the sccache server"
 #: The four signals of a fallback. The title and the summary line are what
@@ -43,6 +46,7 @@ def _run_start(
     asked to start a server, so a test can tell whether the timeout reached the
     process that needed it and not merely ``GITHUB_ENV``. ``zeroes=False``
     makes ``--zero-stats`` fail, as it can when the server died after starting.
+    ``--stop-server`` always fails, as it does when no server is running.
 
     Returns
     -------
@@ -64,6 +68,9 @@ def _run_start(
         f"  exit {start_status}\n"
         "fi\n"
         f'[ "$1" = "--zero-stats" ] && exit {zero_status}\n'
+        # No server is running yet when the step first stops one, so a real
+        # `--stop-server` fails; the step must carry on regardless.
+        '[ "$1" = "--stop-server" ] && exit 1\n'
         "exit 0\n",
         encoding="utf-8",
     )
@@ -147,22 +154,52 @@ def test_a_server_that_starts_gets_a_sixty_second_timeout_and_zero_counters(
     )
 
 
-@pytest.mark.parametrize(
-    ("starts", "zeroes", "touches_server_again"),
-    [(False, True, False), (True, False, True)],
-    ids=["start-fails", "zero-stats-fails-after-start"],
-)
+class Fallback(typ.NamedTuple):
+    """One way the server can be unusable, and what the step must say about it."""
+
+    starts: bool
+    zeroes: bool
+    touches_server_again: bool
+    metric: str
+    warning: str
+
+
+#: The two failed operations. The annotation title and summary line are shared,
+#: so a detector counts both, while the warning text and the bounded metric value
+#: say which operation failed: a start that never worked is not a server that
+#: started and then could not be zeroed.
+FALLBACKS: typ.Final = {
+    "start-fails": Fallback(
+        starts=False,
+        zeroes=True,
+        touches_server_again=False,
+        metric="metric setup-sccache.server=start-failed",
+        warning="sccache server did not start within 60 s",
+    ),
+    "zero-stats-fails-after-start": Fallback(
+        starts=True,
+        zeroes=False,
+        touches_server_again=True,
+        metric="metric setup-sccache.server=zero-stats-failed",
+        warning="sccache server started but could not be zeroed",
+    ),
+}
+
+
+@pytest.mark.parametrize("fallback", FALLBACKS.values(), ids=FALLBACKS.keys())
 def test_a_server_that_cannot_be_used_falls_back_without_failing(
-    tmp_path: Path, *, starts: bool, zeroes: bool, touches_server_again: bool
+    tmp_path: Path, fallback: Fallback
 ) -> None:
     """Every signal of a fallback is present and the step still succeeds.
 
     ``--zero-stats`` starts a server when none is running, so one that died
     after ``--start-server`` makes it try again and can fail. Under ``set -e``
     that would fail the job, which is the same loss as a start that never
-    worked and must be absorbed the same way.
+    worked and must be absorbed the same way, but named for what failed.
     """
-    result, outputs, calls = _run_start(tmp_path, starts=starts, zeroes=zeroes)
+    result, outputs, calls = _run_start(
+        tmp_path, starts=fallback.starts, zeroes=fallback.zeroes
+    )
 
     assert result.returncode == 0, (
         f"a cache is an optimization; the step must not fail the job: {result.stderr}"
@@ -174,8 +211,13 @@ def test_a_server_that_cannot_be_used_falls_back_without_failing(
     assert FALLBACK_SUMMARY in result.summary, (
         f"the run page must carry the fallback line, got {result.summary!r}"
     )
-    assert "metric setup-sccache.server=start-failed" in result.stdout, (
-        f"a fallback must log its bounded metric, got {result.stdout!r}"
+    assert fallback.metric in result.stdout.splitlines(), (
+        f"a fallback must log its bounded metric {fallback.metric!r}, got "
+        f"{result.stdout!r}"
+    )
+    assert fallback.warning in result.stdout, (
+        f"the warning must say which operation failed ({fallback.warning!r}), "
+        f"got {result.stdout!r}"
     )
     assert "status=fallback" in outputs.read_text(encoding="utf-8"), (
         "a fallback must publish status=fallback"
@@ -190,7 +232,7 @@ def test_a_server_that_cannot_be_used_falls_back_without_failing(
         "the wrapper must be cleared so Cargo compiles with plain rustc, got "
         f"{result.exported}"
     )
-    assert ("--zero-stats" in _calls(calls)) is touches_server_again, (
+    assert ("--zero-stats" in _calls(calls)) is fallback.touches_server_again, (
         "a start that failed must not be followed by --zero-stats, which would "
         f"start another server; calls were {_calls(calls)}"
     )
@@ -206,4 +248,54 @@ def test_the_stale_server_is_stopped_before_the_start(
     recorded = _calls(calls)
     assert recorded[:2] == ["--stop-server", "--start-server"], (
         f"the step must stop any running server before starting, got {recorded}"
+    )
+
+
+def test_a_stop_that_finds_no_server_does_not_stop_the_start(tmp_path: Path) -> None:
+    """The first stop of a job has no server to stop, and its failure is expected.
+
+    ``--stop-server`` exits non-zero when nothing is running, which is the normal
+    case on a fresh runner. The step runs under ``set -e``, so dropping the
+    ``|| true`` that absorbs it would fail every healthy job at its first step.
+    """
+    result, outputs, calls = _run_start(tmp_path, starts=True)
+
+    assert result.returncode == 0, result.stderr
+    assert _calls(calls)[:2] == ["--stop-server", "--start-server"], (
+        f"the start must follow a stop that failed, got {_calls(calls)}"
+    )
+    assert "status=started" in outputs.read_text(encoding="utf-8"), (
+        "a started server must publish status=started after a failed stop"
+    )
+
+
+#: The three outcomes whose user-visible output is a stable contract.
+OUTCOMES: typ.Final = {
+    "started": {"starts": True, "zeroes": True},
+    "start-fails": {"starts": False, "zeroes": True},
+    "zero-stats-fails": {"starts": True, "zeroes": False},
+}
+
+
+@pytest.mark.parametrize("outcome", OUTCOMES.values(), ids=OUTCOMES.keys())
+def test_the_user_visible_output_is_stable(
+    tmp_path: Path, outcome: dict[str, bool], snapshot: SnapshotAssertion
+) -> None:
+    """Snapshot what a person or a detector sees: log, run page and outputs.
+
+    The annotation title, the run-page line and the bounded metric are search
+    keys, so a wording change to any of them should be a reviewed diff, not an
+    incidental one. Nothing here is nondeterministic: the log carries no path.
+    """
+    result, outputs, _ = _run_start(tmp_path, **outcome)
+
+    visible = {
+        "log": result.stdout.splitlines(),
+        "run_page": result.summary.splitlines(),
+        "outputs": outputs.read_text(encoding="utf-8").splitlines(),
+        "wrapper": "kept" if "RUSTC_WRAPPER" not in result.exported else "cleared",
+    }
+
+    assert visible == snapshot, (
+        "the user-visible output changed; review the snapshot diff"
     )

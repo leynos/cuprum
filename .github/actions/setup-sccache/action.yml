@@ -186,17 +186,30 @@ runs:
         # Three signals, so a fallback can be found without reading logs: the
         # annotation title (a contract: never rename it), a line on the run
         # page, and the `status` output for a caller to act on. The `metric`
-        # line is bounded to two values for a log-derived count.
+        # line is bounded to three values (`started`, `start-failed` and
+        # `zero-stats-failed`) for a log-derived count.
+        #
+        # `fall_back` takes the operation that failed, `start` or `zero-stats`,
+        # so the warning and the metric say which one. The two metric values
+        # are a closed set: `start-failed` and `zero-stats-failed`.
         fall_back() {
-          echo "metric setup-sccache.server=start-failed"
-          echo "::warning title=sccache-fallback::sccache server did not start within 60 s; this job compiled without the compiler cache"
+          case "$1" in
+            start)
+              echo "metric setup-sccache.server=start-failed"
+              echo "::warning title=sccache-fallback::sccache server did not start within 60 s; this job compiled without the compiler cache"
+              ;;
+            zero-stats)
+              echo "metric setup-sccache.server=zero-stats-failed"
+              echo "::warning title=sccache-fallback::sccache server started but could not be zeroed; this job compiled without the compiler cache"
+              ;;
+          esac
           echo "sccache: FALLBACK (cache disabled for this job)" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
           echo "status=fallback" >> "${GITHUB_OUTPUT}"
           echo "RUSTC_WRAPPER=" >> "${GITHUB_ENV}"
           exit 0
         }
         if ! "${binary}" --start-server; then
-          fall_back
+          fall_back start
         fi
         # A server this step started has zero counters already. Zeroing is
         # belt and braces against a --start-server that adopted one, so the
@@ -205,7 +218,7 @@ runs:
         # it try again and can fail: that is the same loss, so it falls back
         # too, instead of failing the job under `set -e`.
         if ! "${binary}" --zero-stats >/dev/null; then
-          fall_back
+          fall_back zero-stats
         fi
         echo "metric setup-sccache.server=started"
         echo "status=started" >> "${GITHUB_OUTPUT}"

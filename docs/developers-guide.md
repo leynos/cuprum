@@ -423,14 +423,24 @@ the same loss and falls back rather than failing the job.
 `tests/test_setup_sccache_server_start.py` runs the start step against a fake
 binary and asserts each signal, and that the server process itself sees the 60 s
 `SCCACHE_CONF` rather than only `GITHUB_ENV`.
-`tests/test_ci_compiler_cache.py` asserts the id, the absence of a
-workflow-level start or zeroing step, and, by scanning every workflow for the
-`--show-stats` command rather than a step name, that no report runs unguarded.
+`tests/test_setup_sccache_lifecycle.py` holds the order (the start is the last
+step, after the install) and that the server process sees what the install
+exported. `tests/test_ci_compiler_cache.py` asserts the setup-step id, the
+absence of a workflow-level start or zeroing step, and the per-job report guard.
+`tests/test_ci_statistics_guard.py` finds every step that runs `--show-stats`
+in any workflow, by the command rather than a step name, and requires the guard
+as one `&&` term of a condition with no `||`.
 
-Each start also logs one bounded line, `metric setup-sccache.server=started` or
-`metric setup-sccache.server=start-failed`, so a count can be taken from the
-logs with the same estate convention as `setup-rust`'s
-`metric setup-rust.sccache.server=` line.
+Each start also logs one bounded line: `metric setup-sccache.server=started`,
+`metric setup-sccache.server=start-failed` when the server would not start, or
+`metric setup-sccache.server=zero-stats-failed` when it started but
+`--zero-stats` then failed. The two failures share the `sccache-fallback` title
+and the run-page line, so one detector counts both, and differ in warning text
+and metric value so a maintainer can tell which operation failed. A count can
+be taken from the logs with the same estate convention as `setup-rust`'s
+`metric setup-rust.sccache.server=` line. `test_setup_sccache_server_start.py`
+snapshots the log, run-page line, outputs and wrapper for all three outcomes,
+so a wording change to a search key is a reviewed diff.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,
