@@ -30,6 +30,11 @@ from cuprum._pipeline_streams import _create_pipe_tasks
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        ConsumerTask,
+    )
+
 _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
 
 
@@ -216,7 +221,7 @@ def test_flatten_drops_absent_tasks_and_appends_stdout_last(
 
     async def drive() -> None:
         """Build the optional task set and flatten it."""
-        stderr_tasks: list[asyncio.Task[str | None] | None] = [
+        stderr_tasks: list[ConsumerTask | None] = [
             asyncio.create_task(_immediate(f"e{idx}")) if present else None
             for idx, present in enumerate(stderr_present)
         ]
@@ -237,9 +242,9 @@ def test_flatten_drops_absent_tasks_and_appends_stdout_last(
 def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
     """Absent capture tasks yield ``None`` in place, preserving stage order."""
 
-    async def drive() -> tuple[str | None, ...]:
+    async def drive() -> tuple[CapturedOrNone, ...]:
         """Await a mix of present and absent capture tasks."""
-        tasks: list[asyncio.Task[str | None] | None] = [
+        tasks: list[ConsumerTask | None] = [
             None,
             asyncio.create_task(_immediate("first")),
             None,

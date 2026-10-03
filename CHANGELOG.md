@@ -356,6 +356,40 @@
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above
   ([#375](https://github.com/leynos/cuprum/issues/375)).
+- **Byte-exact result mode:** `SafeCmd.run_bytes()` / `run_bytes_sync()` and
+  `Pipeline.run_bytes()` / `run_bytes_sync()` return a subprocess's output as
+  the child's own bytes, through `BytesCommandResult` and
+  `BytesPipelineResult`. The new classes declare the same fields as
+  `CommandResult` and `PipelineResult` — measurements included — except that
+  `stdout` and `stderr` are `bytes | None`, so a binary payload survives the
+  round trip instead of being decoded with a lossy error handler. Capture is
+  the only thing the mode changes: text stays the default, `run()` never
+  returns bytes and `run_bytes()` never returns text, echo sinks and idle
+  heartbeats behave as they do in text mode, and a timeout still carries
+  partial output in the same field. A caller-supplied
+  `RunOutputOptions.on_line` is refused with `ValueError` before the child
+  spawns, because a decoded-text callback beside a byte-exact capture would be
+  a second, contradictory contract for one stream; structured observation
+  registered with `sh.observe()` is unaffected and still receives decoded
+  lines, since capture and line emission travel on separate channels. That
+  holds even under `ExecutionContext(errors="strict")`: observation and echo
+  render a *view* of the child's bytes and always replace undecodable input, so
+  an ambient hook cannot raise from the read loop and cost a byte-exact run the
+  bytes it had already captured.
+
+  Because the policy now governs the capture rather than every decode, strict
+  decoding no longer raises once capture is out of the picture. A strict run
+  still raises on undecodable output when it decodes a capture buffer — so
+  `run()`, `run_sync()`, and `SafeCmd.lines()` are unchanged in the ordinary
+  capturing case — but a run with `capture=False` raises nothing, and `on_line`
+  callbacks, `SafeCmd.lines()` events, and echo sinks receive
+  replacement-character views rather than raising. Previously a strict
+  `on_line` callback or `lines()` event raised `UnicodeDecodeError` in every
+  case, including a run capturing nothing; callers who relied on strict
+  decoding as stream validation should validate the captured value instead.
+
+  An external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 

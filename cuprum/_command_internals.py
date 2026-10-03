@@ -66,8 +66,8 @@ from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import (
-        CommandResult,
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,
@@ -104,6 +104,11 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
+    # Whether the captured streams are reported as bytes rather than decoded
+    # text. Defaulted rather than required because the text-mode entry point
+    # is the one the whole codebase calls; the binary entry points are the
+    # only callers that set it.
+    capture_bytes: bool = False
 
 
 def _prepare_execution_observation(
@@ -178,6 +183,7 @@ def _build_subprocess_execution(
         observation=observation,
         stdin_data=state.stdin_data,
         on_line=state.output.on_line,
+        capture_bytes=state.capture_bytes,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes
         # the spawn is the parent's work, and must not read as the child's
@@ -205,7 +211,7 @@ async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Execute *execution*, dispatch after-hooks, and handle cancellation.
 
     Draining the observe-hook tasks during cleanup must not let a failing
@@ -225,9 +231,9 @@ async def _execute_with_hooks(
 
     Returns
     -------
-    CommandResult
+    CommandResult | BytesCommandResult
         The completed command's result, once every after-hook has run and the
-        observe-hook tasks have drained.
+        observe-hook tasks have drained, in whichever mode the run asked for.
     """
     try:
         result = await _execute_subprocess(execution)
@@ -255,7 +261,7 @@ async def _execute_with_hooks(
 async def _run_prepared_command(
     cmd: SafeCmd,
     state: _ExecutionState,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run one validated command after its public inputs are resolved.
 
     ``SafeCmd.run`` remains the public entry point and keeps its signature; it
@@ -275,8 +281,9 @@ async def _run_prepared_command(
 
     Returns
     -------
-    CommandResult
-        The completed command's result.
+    CommandResult | BytesCommandResult
+        The completed command's result, byte-exact when the run asked for
+        bytes.
     """
     output = state.output
     # The bracket owns the session for the whole run: a plan observer, a

@@ -131,7 +131,10 @@ async def _finalize_with_failing_after_hook(
         """Adapt the supplied awaitable for ``asyncio.create_task``."""
         await observe_task_factory()
 
-    def failing_after_hook(_cmd: sh.SafeCmd, _result: sh.CommandResult) -> None:
+    def failing_after_hook(
+        _cmd: sh.SafeCmd,
+        _result: sh.CommandResult | sh.BytesCommandResult,
+    ) -> None:
         """Raise while finalizing the pipeline stage."""
         raise _AfterHookError
 

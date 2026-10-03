@@ -15,11 +15,11 @@ import typing as typ
 from cuprum.sinks import base as sinks
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import CommandResult
+    from cuprum._result_types import _AnyCommandResult
 
 
 def _pipeline_result_outcome(
-    stage_results: list[CommandResult],
+    stage_results: list[_AnyCommandResult],
 ) -> sinks.SessionOutcome:
     """Map a completed pipeline's stage results onto the terminal-outcome set.
 

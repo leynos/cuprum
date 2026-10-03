@@ -2555,7 +2555,9 @@ core functions affected are:
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental decoding configured by `config.encoding` and `config.errors`.
+  incremental decoding configured by `config.encoding` alone, replacing
+  undecodable bytes so an observer view cannot end the run (see
+  `OBSERVER_ERROR_POLICY` below).
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
@@ -2569,11 +2571,21 @@ echoed text to a configured sink, and accumulating captured bytes. The
 line-emitting consume variant layers one incremental decoder per invocation on
 top of this loop by passing an `on_chunk` delivery hook; the hook itself does
 not own shared state. Fixes to read, echo, and capture behaviour belong in
-`_drain()`, so the capture-only and line-emitting paths cannot diverge. The
-line-emitting variant configures its incremental decoder from `config.encoding`
-and `config.errors`, and `_drain()` applies the same error policy when decoding
-captured bytes. New consume variants should reuse `_drain()` unless they
-deliberately replace the whole stream-consumption contract.
+`_drain()`, so the capture-only and line-emitting paths cannot diverge.
+
+The line-emitting variant configures its incremental decoder from
+`config.encoding` alone and always replaces undecodable bytes; `_drain()` is
+the one place `config.errors` governs, when it decodes the bytes it captured.
+Observation and echo both render a *view* of the child's bytes rather than the
+run's capture, so neither may end a run it merely watches: reading
+`config.errors` in a view decoder would let a registered `sh.observe()` hook,
+or the line feeder the idle partition attaches, raise `UnicodeDecodeError` from
+the read loop and kill a byte-exact run that would otherwise have returned the
+child's bytes intact. The shared policy is
+`cuprum._constants.OBSERVER_ERROR_POLICY`. A text run still enforces a strict
+policy, because its capture decodes through the same `config.errors` as before.
+New consume variants should reuse `_drain()` unless they deliberately replace
+the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw

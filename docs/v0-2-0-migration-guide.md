@@ -153,6 +153,58 @@ Consumers that serialize or display these optional fields should preserve
 `None` as unavailable and should treat `user_cpu_seconds` and
 `system_cpu_seconds` as approximate when the aggregate fallback is in use.
 
+## Byte-exact capture is now a typed result mode
+
+Cuprum 0.2.0 adds `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with
+`run_bytes_sync()` counterparts, for callers who need the child's output
+undecoded. These entry points are additive: `run()` and `run_sync()` keep
+decoding by default and keep returning `CommandResult` and `PipelineResult`.
+
+A byte run is the same run in a different result mode. It accepts the same
+`output`, `timeout`, and `context` arguments (plus `stdin` for a single
+command) and returns `BytesCommandResult` or `BytesPipelineResult`, whose
+output fields are `bytes | None` rather than `str | None`. Each stage of a
+`BytesPipelineResult` is a `BytesCommandResult`. All measurement fields — `pid`,
+`started_at`, `duration`, `max_rss_bytes`, `user_cpu_seconds`,
+`system_cpu_seconds`, and `relay_fallbacks` — are unchanged, so nothing is lost
+by capturing exactly.
+
+Two behaviours are worth noting before migrating:
+
+- `RunOutputOptions.on_line` is rejected with `ValueError` before the child is
+  spawned. The capture is byte-exact, so a callback carrying decoded text would
+  contradict it. Structured observation registered with `sh.observe()` is
+  unaffected and still receives decoded lines.
+- A timeout still raises `TimeoutExpired` and still carries the partial output
+  read so far, in the same field, as bytes rather than text. An external
+  cancellation still re-raises `asyncio.CancelledError` rather than being
+  converted into a timeout.
+
+### Strict decoding now governs the capture alone
+
+`ExecutionContext(errors="strict")` used to govern every decode, so a strict
+run raised `UnicodeDecodeError` from any undecodable byte it read — including
+one read only to emit a line event on a run that captured nothing. Line
+observation and echo render a *view* of the child's bytes rather than reporting
+them, so from 0.2.0 they always replace undecodable input and the policy
+applies to the capture.
+
+In practice the capturing text run is unchanged: `run()`, `run_sync()`, and
+`SafeCmd.lines()` still raise, because each decodes its capture buffer. What
+changed is that a run with `capture=False` raises nothing, and `on_line`
+callbacks, `lines()` events, and echo sinks receive `U+FFFD` rather than
+raising. Code that used strict decoding as stream validation must instead
+validate the captured value: `result.stdout` still raises under a strict
+capture, and `run_bytes()` returns the child's bytes so the caller can validate
+them. An ambient `sh.observe()` hook can no longer end a run under a strict
+policy either, which is what makes a strict `run_bytes()` return the bytes it
+captured.
+
+Callers who previously worked around decoding by round-tripping through a
+surrogate encoding can now drop it and request the byte mode directly. See the
+[binary output section in the users' guide](users-guide.md#binary-output) for
+the full contract, echo and sink behaviour, and a worked example.
+
 ## Aggregate Python stream-operation observation
 
 Cuprum 0.2.0 adds an opt-in observation channel for completed operations in the

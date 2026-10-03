@@ -24,6 +24,12 @@ from hypothesis import strategies as st
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import _drain_stream_consumers, _DrainContext
 
+if typ.TYPE_CHECKING:
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        ConsumerTask,
+    )
+
 _EXAMPLES = 25
 
 
@@ -96,7 +102,7 @@ def _capturing_config() -> _StreamConfig:
     )
 
 
-async def _partial_capture(text: str) -> str | None:
+async def _partial_capture(text: str) -> CapturedOrNone:
     """Run the real capturing drain over a pipe holding ``text`` and no EOF."""
     config = _capturing_config()
     reader = asyncio.StreamReader()
@@ -104,7 +110,7 @@ async def _partial_capture(text: str) -> str | None:
     return await _drain(reader, config)
 
 
-async def _make_consumer(kind: str, text: str) -> str | None:
+async def _make_consumer(kind: str, text: str) -> CapturedOrNone:
     """Behave as a stream consumer of the requested ``kind``.
 
     ``completed`` and ``failing`` yield once before settling: a task the loop
@@ -115,8 +121,12 @@ async def _make_consumer(kind: str, text: str) -> str | None:
 
     Returns
     -------
-    str | None
-        The completed consumer text, when one is available.
+    CapturedOrNone
+        What this consumer leaves behind: the ``text`` it was given for
+        ``completed`` and ``pending`` (the latter is cancelled, so its return
+        is never observed), and the real drain's captured payload — text or
+        the child's bytes — for ``partial``. ``None`` only if a capturing
+        ``partial`` drain reports no capture at all.
 
     Raises
     ------
@@ -156,7 +166,7 @@ _KINDS_WITH_TEXT = frozenset({"completed", "partial"})
 
 async def _drain_while_raising(
     primary: BaseException,
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    consumers: tuple[ConsumerTask, ConsumerTask],
 ) -> None:
     """Drain ``consumers`` while ``primary`` is propagating, as cleanup does."""
     try:
@@ -185,7 +195,7 @@ def _expected_drain_outcome(
         return UnicodeDecodeError
 
 
-async def _run_drain_scenario(scenario: _DrainScenario) -> str | None:
+async def _run_drain_scenario(scenario: _DrainScenario) -> CapturedOrNone:
     """Drive a capturing drain to the scenario's EOF or cancellation boundary."""
     _payload, chunks = scenario.payload_and_chunks
     discard_event = asyncio.Event() if scenario.discard_on_cancel else None
@@ -210,7 +220,7 @@ async def _run_drain_scenario(scenario: _DrainScenario) -> str | None:
 async def _drain_to_eof(
     chunks: tuple[bytes, ...],
     config: _StreamConfig,
-) -> str | None:
+) -> CapturedOrNone:
     """Drain chunks supplied through EOF."""
     reader = asyncio.StreamReader()
     for chunk in chunks:
@@ -231,7 +241,7 @@ async def _drain_until_cancelled(
     discard_event: asyncio.Event | None,
     *,
     cancel_before_read: bool,
-) -> str | None:
+) -> CapturedOrNone:
     """Drain chunks until cancellation reaches the blocked reader."""
     reader = _BlockingChunkedReader(chunks)
     task = asyncio.create_task(_drain(typ.cast("asyncio.StreamReader", reader), config))

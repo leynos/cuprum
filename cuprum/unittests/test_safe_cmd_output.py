@@ -22,6 +22,7 @@ from tests.helpers.execution import ExecuteFn, _RunKwargs, assert_capture_disabl
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.lines import LineEvent
     from cuprum.sh import SafeCmd
 
 
@@ -307,6 +308,48 @@ def test_allows_disabling_capture(
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
     assert_capture_disabled(result)
+
+
+def test_strict_decoding_does_not_reach_a_view_with_capture_disabled(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A strict policy governs the capture, so an uncaptured view cannot raise.
+
+    ``errors="strict"`` used to govern every decode, so this run raised
+    ``UnicodeDecodeError`` from the line reader even though it captured
+    nothing. Line observation renders a view of the child's bytes rather than
+    reporting them, so the policy now stops at the capture: the run completes,
+    and the callback receives the replacement character the view renders.
+
+    Both halves are asserted. The line is compared against a decoded oracle
+    rather than merely counted, so a callback fed the wrong text — or an empty
+    view — fails, and the run's own completion is what proves no exception
+    escaped the read loop.
+    """
+    _, execute = execution_strategy
+    payload = b"before \xff after"
+    command = python_builder(
+        "-c",
+        f"import sys; sys.stdout.buffer.write({payload!r})",
+    )
+    observed: list[LineEvent] = []
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=False, on_line=observed.append),
+            "context": ExecutionContext(errors="strict"),
+        },
+    )
+
+    assert_capture_disabled(result)
+    assert [event.text for event in observed] == payload.decode(
+        "utf-8", errors="replace"
+    ).splitlines(), (
+        "the observer must render the child's decoded view under a strict "
+        f"capture policy, got {observed!r}"
+    )
 
 
 class TestEchoOnly:

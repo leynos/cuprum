@@ -126,6 +126,33 @@ def test_input_feeds_stdin(
     assert not result.stderr, "stdin feeding should not emit stderr"
 
 
+def test_byte_exact_run_round_trips_stdin_bytes_to_capture(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A byte-exact run feeds stdin bytes and reports them back unchanged.
+
+    The payload cannot survive a decode/encode pair, so a run that fed the
+    child decoded text — or decoded the capture on the way out — cannot pass
+    here. Both entry points are exercised, because the stdin write and the
+    capture drain each cross the mode seam.
+    """
+    payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+    command = python_builder(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+
+    async_result = asyncio.run(command.run_bytes(stdin=StdinInput(data=payload)))
+    sync_result = command.run_bytes_sync(stdin=StdinInput(data=payload))
+
+    assert async_result.stdout == payload, (
+        f"run_bytes must round-trip the stdin bytes, got {async_result.stdout!r}"
+    )
+    assert sync_result.stdout == payload, (
+        f"run_bytes_sync must round-trip the stdin bytes, got {sync_result.stdout!r}"
+    )
+
+
 def test_input_text_uses_configured_encoding(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

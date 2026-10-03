@@ -30,7 +30,6 @@ from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
-    _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
 from cuprum._pipeline_collect import (
@@ -40,13 +39,18 @@ from cuprum._pipeline_collect import (
     _gather_pipeline_outputs,
     _sh_module,
 )
-from cuprum._pipeline_results import (
-    _build_pipeline_stage_results,
-    _emit_timeout_exit_events,
+from cuprum._pipeline_finalize import (
+    _PIPELINE_FINALIZATION_ERROR,
+    _finalize_pipeline_execution,
+    _finalize_pipeline_timeout,
+    _reconcile_pipeline_run_failure,
+    _run_pipeline_after_hooks,
 )
-from cuprum._pipeline_sink import _pipeline_result_outcome
+from cuprum._pipeline_results import (
+    _build_pipeline_result,
+    _build_pipeline_stage_results,
+)
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
-from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
@@ -56,27 +60,38 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
-from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
+from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
+    from cuprum._result_types import _AnyPipelineResult
+    from cuprum._sink_lifecycle import _SinkBracket
     from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+    from cuprum.sh import SafeCmd
 
+# Every name the finalization module owns is re-exported here, because this is
+# the module ``cuprum.sh`` and the internal callers already import those helpers
+# from. Having moved the implementations is a private arrangement; making
+# callers follow it would be churn with no behaviour behind it.
 __all__ = [
+    "_PIPELINE_FINALIZATION_ERROR",
     "_await_pipeline_wait_result",
+    "_build_pipeline_result",
     "_build_timeout_expired_error",
     "_collect_pipeline_inputs",
+    "_finalize_pipeline_execution",
+    "_finalize_pipeline_timeout",
     "_gather_pipeline_outputs",
+    "_reconcile_pipeline_run_failure",
+    "_run_pipeline_after_hooks",
     "_sh_module",
 ]
 
 _MIN_PIPELINE_STAGES = 2
-_PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 
 
 def _enforce_allowlist(cmd: SafeCmd) -> None:
@@ -144,84 +159,29 @@ def _emit_plan_events_and_run_before_hooks(
             hook(obs.cmd)
 
 
-async def _finalize_pipeline_execution(
-    parts: tuple[SafeCmd, ...],
-    observers: _PipelineObservers,
-    stage_results: list[CommandResult],
+async def _finalize_after_run_error(
     sink_bracket: _SinkBracket,
-) -> None:
-    """Run after hooks, commit the sink outcome, then drain observe tasks.
-
-    This is the pipeline's counterpart to the command path's
-    :func:`cuprum._command_internals._execute_with_hooks`, and the three steps
-    are in that order for the same reason: an after-hook that raises is a
-    terminal *run* error, so the outcome the adapter records has to be decided
-    after the hooks have had their say. Closing with the stage-result outcome
-    first would leave the adapter reporting ``exit_zero`` for a run that ended
-    in an exception, and :meth:`_SinkBracket.close` clears its session on the
-    first call, so the error close that followed would be a no-op.
-
-    Both drains are shielded. The pipeline owns these observe-hook tasks, so a
-    cancellation landing while finalization waits on them must not return
-    before they have settled — that would leak a task per pending hook.
-    """
-    observations = observers.observations
-    pending_tasks = observers.pending_tasks
-    hooks_by_stage = tuple(obs.hooks for obs in observations)
-    try:
-        _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
-    except BaseException as after_hook_error:
-        sink_bracket.close(outcome=_outcome_for_error(after_hook_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
-        )
-        raise
-    sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
-    await _shielded_cleanup(_wait_for_exec_hook_tasks(pending_tasks))
-
-
-async def _reconcile_pipeline_run_failure(
-    spawn: _PipelineSpawnResult,
-    pending_tasks: list[asyncio.Task[None]],
     run_error: BaseException,
+    cleanup: cabc.Awaitable[object],
 ) -> None:
-    """Cancel the stream tasks and drain the observe tasks after a run failure.
+    """Commit the error outcome, then complete cleanup, before re-raising.
 
-    Kept as one coroutine so the caller can shield both halves together: the
-    stream tasks and the observe-hook tasks are all owned by the pipeline, and
-    a cancellation arriving between two separately shielded steps would leave
-    the second set pending.
+    The order is the point, and it is the same on each path that owes it.
+    Committing the outcome first is what makes the shield meaningful: if the
+    caller's cancellation arrives before that, the error outcome is still
+    written; if it arrives during the cleanup, the cleanup finishes anyway
+    because :func:`cuprum._process_lifecycle._shielded_cleanup` is what awaits
+    it. The caller re-raises *run_error* once this returns, so nothing here
+    needs to.
+
+    Both failure branches of :func:`_run_spawned_pipeline` reach this, which is
+    why the cleanup is a parameter rather than chosen here: a cancellation
+    lands while the stream tasks are still live and owes
+    :func:`_reconcile_pipeline_run_failure`, while a stage-result build failure
+    owns its observe-hook tasks outright and owes the drain instead.
     """
-    await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-    await _drain_tasks_during_cleanup(
-        pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
-    )
-
-
-async def _finalize_pipeline_timeout(
-    config: _PipelineRunConfig,
-    spawn: _PipelineSpawnResult,
-    observers: _PipelineObservers,
-    timeout_error: BaseException,
-) -> None:
-    """Report a pipeline timeout and finalize its sink and observe tasks."""
-    observations = observers.observations
-    config.sink_bracket.close(outcome=_outcome_for_error(timeout_error))
-    _report_pipeline_timeout_expiry(
-        observations,
-        spawn.processes,
-        configured_timeout=config.timeout,
-    )
-    _emit_timeout_exit_events(observations, spawn)
-    await _shielded_cleanup(
-        _drain_tasks_during_cleanup(
-            observers.pending_tasks,
-            timeout_error,
-            message=_PIPELINE_FINALIZATION_ERROR,
-        )
-    )
+    sink_bracket.close(outcome=_outcome_for_error(run_error))
+    await _shielded_cleanup(cleanup)
 
 
 async def _run_spawned_pipeline(
@@ -229,7 +189,7 @@ async def _run_spawned_pipeline(
     config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
     observers: _PipelineObservers,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Drive a spawned pipeline to a result, reconciling whatever ends it.
 
     Split from :func:`_run_pipeline`, which keeps the pre-spawn half. The
@@ -245,75 +205,64 @@ async def _run_spawned_pipeline(
 
     Returns
     -------
-    PipelineResult
-        The assembled stage results and the index of the first failing stage.
+    PipelineResult | BytesPipelineResult
+        The assembled stage results and the index of the first failing stage,
+        byte-exact when the pipeline was asked for bytes.
     """
     observations = observers.observations
-    pending_tasks = observers.pending_tasks
-    sink_bracket = config.sink_bracket
     try:
-        inputs = await _collect_pipeline_inputs(
-            parts,
-            spawn,
-            config,
-        )
+        inputs = await _collect_pipeline_inputs(parts, spawn, config)
     except _sh_module().TimeoutExpired as timeout_error:
-        await _finalize_pipeline_timeout(
-            config,
-            spawn,
-            observers,
-            timeout_error,
-        )
+        await _finalize_pipeline_timeout(config, spawn, observers, timeout_error)
         raise
     except BaseException as run_error:
-        sink_bracket.close(outcome=_outcome_for_error(run_error))
         # One shielded unit: shielding the two separately would let a
         # cancellation landing between them abandon the observe-hook drain.
-        await _shielded_cleanup(
-            _reconcile_pipeline_run_failure(spawn, pending_tasks, run_error)
+        await _finalize_after_run_error(
+            config.sink_bracket,
+            run_error,
+            _reconcile_pipeline_run_failure(spawn, observers.pending_tasks, run_error),
         )
         raise
     try:
         stage_results = _build_pipeline_stage_results(
-            parts,
             observations,
             processes=spawn.processes,
             inputs=inputs,
+            capture_bytes=config.capture_bytes,
         )
     except BaseException as result_error:
-        sink_bracket.close(outcome=_outcome_for_error(result_error))
         # The stage-result build sits between the spawn and finalization, so
         # the observe-hook tasks this pipeline owns are nobody else's yet: the
         # run owes the drain here for the same reason the spawn-failure branch
         # above does, and for the same reason the close comes first.
-        await _shielded_cleanup(
+        await _finalize_after_run_error(
+            config.sink_bracket,
+            result_error,
             _drain_tasks_during_cleanup(
-                pending_tasks,
+                observers.pending_tasks,
                 result_error,
                 message=_PIPELINE_FINALIZATION_ERROR,
-            )
+            ),
         )
         raise
     # Finalization owns the close, after the after-hooks have run: a failing
     # after-hook is a terminal run error, so the outcome cannot be committed
     # before the hooks have had their say.
     await _finalize_pipeline_execution(
-        parts,
-        observers,
-        stage_results,
-        sink_bracket,
+        parts, observers, stage_results, config.sink_bracket
     )
-
-    return _sh_module().PipelineResult(
-        stages=tuple(stage_results),
+    return _build_pipeline_result(
+        stage_results,
         failure_index=inputs.wait_result.failure_index,
+        capture_bytes=config.capture_bytes,
     )
 
 
 async def _run_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Execute a pipeline and return a structured result.
 
     A thin wrapper, so that the aggregate idle heartbeat is settled on every
@@ -322,8 +271,9 @@ async def _run_pipeline(
 
     Returns
     -------
-    PipelineResult
-        The assembled stage results and the index of the first failing stage.
+    PipelineResult | BytesPipelineResult
+        The assembled stage results and the index of the first failing stage,
+        byte-exact when the pipeline was asked for bytes.
     """
     try:
         return await _spawn_and_drive_pipeline(parts, config)
@@ -337,7 +287,7 @@ async def _run_pipeline(
 async def _spawn_and_drive_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Spawn every stage, then drive the spawned pipeline to a result."""
     pending_tasks: list[asyncio.Task[None]] = []
     try:
@@ -387,14 +337,3 @@ async def _spawn_and_drive_pipeline(
         spawn,
         _PipelineObservers(observations, pending_tasks),
     )
-
-
-def _run_pipeline_after_hooks(
-    parts: tuple[SafeCmd, ...],
-    hooks_by_stage: tuple[_ExecutionHooks, ...],
-    results: list[CommandResult],
-) -> None:
-    """Run registered after hooks for each pipeline stage."""
-    for cmd, hooks, result in zip(parts, hooks_by_stage, results, strict=True):
-        for hook in hooks.after_hooks:
-            hook(cmd, result)

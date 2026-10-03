@@ -14,13 +14,14 @@ import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
 
+from cuprum._result_types import _AnyCommandResult
 from cuprum.context._policy import _validate_timeout
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecHook
     from cuprum.program import Program
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import SafeCmd
 
 __all__ = [
     "AfterHook",
@@ -32,7 +33,13 @@ __all__ = [
 
 
 type BeforeHook = cabc.Callable[[SafeCmd], None]
-type AfterHook = cabc.Callable[[SafeCmd, CommandResult], None]
+# Widened to either result class when byte-exact capture was added, because a
+# binary run dispatches its after-hooks with a ``BytesCommandResult`` in place
+# of a ``CommandResult``. An existing hook keeps working unchanged: the extra
+# element only widens what a registered hook may be handed, and both classes
+# declare the same field names, so a hook that reads ``exit_code`` or
+# ``stdout`` reads it off either.
+type AfterHook = cabc.Callable[[SafeCmd, _AnyCommandResult], None]
 
 
 class ContextError(Exception):
