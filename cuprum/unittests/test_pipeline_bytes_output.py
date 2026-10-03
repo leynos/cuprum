@@ -19,6 +19,7 @@ from cuprum import Program, ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.sh import (
     BytesCommandResult,
     BytesPipelineResult,
+    ExecutionContext,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
@@ -214,14 +215,19 @@ def test_pipeline_run_bytes_survives_an_observe_hook() -> None:
     Observe hooks supply an internal line sink the caller never asked for, so
     the pipeline must still relay and capture the child's own bytes while the
     observer receives decoded lines — the two travel on separate channels.
+
+    Both halves are asserted, not merely that some event arrived: truthiness
+    would pass against a hook handed the wrong stream, or an undecoded one.
+    The observer's lines are compared with an independently derived oracle, so
+    the assertion fails if observation is dropped or fed the capture's bytes.
     """
     pipeline, allowlist = _relay_pipeline()
-    observed: list[str] = []
+    observed: list[tuple[str, str]] = []
 
     def hook(event: ExecEvent) -> None:
-        """Record the decoded line the run publishes."""
+        """Record the stream and decoded line the run publishes."""
         if event.line is not None:
-            observed.append(event.line)
+            observed.append((event.phase, event.line))
 
     with scoped(ScopeConfig(allowlist=allowlist)), sh.observe(hook):
         result = pipeline.run_bytes_sync()
@@ -229,4 +235,42 @@ def test_pipeline_run_bytes_survives_an_observe_hook() -> None:
     assert result.stdout == _PRODUCER_STDOUT, (
         f"an observe hook must not decode the relayed payload, got {result.stdout!r}"
     )
-    assert observed, "the observe hook must still receive decoded lines"
+
+    oracle = _PRODUCER_STDOUT.decode("utf-8", errors="replace").splitlines()
+    assert [line for phase, line in observed if phase == "stdout"] == oracle, (
+        "the observer must receive the producer's decoded stdout lines, got "
+        f"{observed!r}"
+    )
+
+
+def test_pipeline_run_bytes_survives_a_strict_observer() -> None:
+    """An observer's decode cannot end a strict byte run of a pipeline.
+
+    The producer's payload ends in invalid UTF-8, so an observer decoder that
+    honoured ``errors="strict"`` would raise from the read loop and cost the
+    pipeline its capture. The observer renders a view, so the run must return
+    the relayed bytes intact while the view still reaches the hook.
+    """
+    pipeline, allowlist = _relay_pipeline()
+    observed: list[tuple[str, str]] = []
+
+    def hook(event: ExecEvent) -> None:
+        """Record each decoded line, which must not raise on the invalid tail."""
+        if event.line is not None:
+            observed.append((event.phase, event.line))
+
+    with scoped(ScopeConfig(allowlist=allowlist)), sh.observe(hook):
+        result = pipeline.run_bytes_sync(
+            context=ExecutionContext(errors="strict"),
+        )
+
+    assert result.stdout == _PRODUCER_STDOUT, (
+        "a strict pipeline byte run must survive an ambient observer, got "
+        f"{result.stdout!r}"
+    )
+
+    oracle = _PRODUCER_STDOUT.decode("utf-8", errors="replace").splitlines()
+    assert [line for phase, line in observed if phase == "stdout"] == oracle, (
+        "the observer must render the replacement view under a strict capture "
+        f"policy, got {observed!r}"
+    )
