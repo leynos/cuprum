@@ -121,8 +121,12 @@ async def _make_consumer(kind: str, text: str) -> CapturedOrNone:
 
     Returns
     -------
-    str | None
-        The completed consumer text, when one is available.
+    CapturedOrNone
+        What this consumer leaves behind: the ``text`` it was given for
+        ``completed`` and ``pending`` (the latter is cancelled, so its return
+        is never observed), and the real drain's captured payload — text or
+        the child's bytes — for ``partial``. ``None`` only if a capturing
+        ``partial`` drain reports no capture at all.
 
     Raises
     ------
