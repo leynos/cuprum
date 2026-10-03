@@ -371,9 +371,14 @@
   spawns, because a decoded-text callback beside a byte-exact capture would be
   a second, contradictory contract for one stream; structured observation
   registered with `sh.observe()` is unaffected and still receives decoded
-  lines, since capture and line emission travel on separate channels. An
-  external cancellation re-raises `asyncio.CancelledError` rather than being
-  reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
+  lines, since capture and line emission travel on separate channels. That
+  holds even under `ExecutionContext(errors="strict")`: observation and echo
+  render a *view* of the child's bytes and always replace undecodable input, so
+  an ambient hook cannot raise from the read loop and cost a byte-exact run the
+  bytes it had already captured. The strict policy still governs the capture,
+  so a text run kept raising before, as it does now. An external cancellation
+  re-raises `asyncio.CancelledError` rather than being reported as a timeout
+  ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 

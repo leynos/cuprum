@@ -475,6 +475,32 @@ rather than reporting a replacement character as the child's output. No
 existing result class, and no `TimeoutExpired`, is subclassed or modified;
 `BytesCommandResult` and `BytesPipelineResult` are separate frozen types.
 
+### Observation and echo render a view, never the capture
+
+Keeping both channels open costs one rule, and the rule is not optional: every
+decode that renders a _view_ of the child's bytes replaces undecodable input,
+so it can never end the run it observes. That is `OBSERVER_ERROR_POLICY` in
+`cuprum/_constants.py`, and it governs the line observer's decoder and both
+echo decoders. `ExecutionContext.errors` governs the capture alone, which
+decodes its own untouched buffer.
+
+The rule is load-bearing rather than stylistic. Reading `config.errors` in a
+view decoder would let a hook the caller never registered decide the run's
+fate: under `errors="strict"` the observer's `UnicodeDecodeError` escapes the
+drain's read loop and kills a `run_bytes()` that had already captured the
+child's bytes, so the guarantee above — that a registered `sh.observe()` hook
+stays supported — would hold only for the default error policy. The capture
+still enforces a strict policy, because a text run that asked to reject
+undecodable bytes keeps rejecting them; the byte-exact mode simply never
+decodes its capture at all.
+
+This is the same division the mode already relies on elsewhere: a renderer's
+job is to show, and the capture's job is to report. The bounded-echo path needs
+no equivalent change because
+`cuprum/_echo_truncation._validate_bounded_echo_encoding` restricts it to
+ASCII-compatible stateless codecs, and every encode on that path carries
+ASCII-only marker text — a strict policy there has nothing to refuse.
+
 ### Guard against shadowed sibling definitions
 
 Moving these seams left one hazard the refactor's own tools could not see. The
