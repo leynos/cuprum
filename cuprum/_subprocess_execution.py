@@ -392,8 +392,8 @@ __all__ = [
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
     "_spawn_subprocess",
-    # Re-exported for the same reason: the deadline wait moved to
-    # ``cuprum._subprocess_wait``, but tests still import and patch it by this
-    # path.
+    # Re-exported so existing imports resolve: the deadline wait moved to
+    # ``cuprum._subprocess_wait``. It supports imports only, so a test must
+    # patch ``_subprocess_stream_run`` or ``_line_stream.coordinator``.
     "_wait_for_exit_code_within_timeout",
 ]

@@ -81,7 +81,6 @@ def test_bytes_result_classes_are_exported_from_their_definition_site() -> None:
     re-export or one re-pointed at a second definition fails here rather than
     in a caller's import.
     """
-    from cuprum import sh
     from cuprum.sh import results
 
     assert c.BytesCommandResult is results.BytesCommandResult, (
@@ -106,10 +105,6 @@ def test_bytes_result_type_hints_carry_bytes_not_text() -> None:
     a record whose ``stdout`` annotation drifted back to ``str | None`` would
     still construct and compare, and only this check would notice.
     """
-    import typing as typ
-
-    from cuprum import sh
-
     command_hints = typ.get_type_hints(c.BytesCommandResult)
     assert command_hints["stdout"] == bytes | None, (
         f"BytesCommandResult.stdout must be bytes | None, got "

@@ -375,9 +375,10 @@
   holds even under `ExecutionContext(errors="strict")`: observation and echo
   render a *view* of the child's bytes and always replace undecodable input, so
   an ambient hook cannot raise from the read loop and cost a byte-exact run the
-  bytes it had already captured. The strict policy still governs the capture,
-  so a text run kept raising before, as it does now. An external cancellation
-  re-raises `asyncio.CancelledError` rather than being reported as a timeout
+  bytes it had already captured. A text run that asks for strict decoding still
+  raises on undecodable output, exactly as it did before this change, because
+  the policy continues to govern the capture. An external cancellation re-raises
+  `asyncio.CancelledError` rather than being reported as a timeout
   ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
