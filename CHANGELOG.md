@@ -381,16 +381,15 @@
   decoding no longer raises once capture is out of the picture. A strict run
   still raises on undecodable output when it decodes a capture buffer — so
   `run()`, `run_sync()`, and `SafeCmd.lines()` are unchanged in the ordinary
-  capturing case — but a run with `capture=False` raises nothing, and
-  `on_line` callbacks, `SafeCmd.lines()` events, and echo sinks receive
+  capturing case — but a run with `capture=False` raises nothing, and `on_line`
+  callbacks, `SafeCmd.lines()` events, and echo sinks receive
   replacement-character views rather than raising. Previously a strict
   `on_line` callback or `lines()` event raised `UnicodeDecodeError` in every
   case, including a run capturing nothing; callers who relied on strict
   decoding as stream validation should validate the captured value instead.
 
-  An external cancellation re-raises `asyncio.CancelledError` rather than
-  being reported as a timeout
-  ([#444](https://github.com/leynos/cuprum/issues/444)).
+  An external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 
