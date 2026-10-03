@@ -128,8 +128,9 @@ class _RunResources:
         The run under test, cancelled by the scenario.
     control:
         A process belonging to no group the run owns.
-    pid_file, marker:
-        Where the grandchild records its pid, and where it signals readiness.
+    pid_file:
+        Where the grandchild records its pid, which is also the readiness
+        signal that it is running and immune.
     events:
         The run's observe stream, retained for its ``start`` event.
     """
@@ -137,7 +138,6 @@ class _RunResources:
     task: asyncio.Task[object]
     control: asyncio.subprocess.Process
     pid_file: Path
-    marker: Path
     events: list[ExecEvent]
 
 
@@ -159,7 +159,6 @@ def _control_argv() -> tuple[str, str, str]:
 
 def _pipe_holding_command(
     pid_file: Path,
-    marker: Path,
 ) -> tuple[SafeCmd, ProgramCatalogue]:
     """Return a command whose child leaves a pipe-holding grandchild behind.
 
@@ -170,7 +169,7 @@ def _pipe_holding_command(
     """
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
-    return python(*pipe_holding_child_argv(pid_file, marker)), catalogue
+    return python(*pipe_holding_child_argv(pid_file)), catalogue
 
 
 def _run_task(command: SafeCmd, policy: ProcessGroupPolicy) -> asyncio.Task[object]:
@@ -276,7 +275,9 @@ async def _clean_up(resources: _RunResources, grandchild: int | None) -> None:
     # made to settle from here, and awaiting it endlessly would report that as
     # a killed session rather than as this scenario's failure.
     await asyncio.wait({resources.task}, timeout=_REAP_SECONDS)
-    with contextlib.suppress(BaseException):
+    # Ordinary failures only: an interrupt or cancellation targeting the
+    # scenario is not something this helper gets to absorb.
+    with contextlib.suppress(Exception):
         await _end_process(resources.control)
 
 
@@ -299,8 +300,7 @@ async def _drive_scenario(
         The pids involved and how each of them fared once the run settled.
     """
     pid_file = workdir / "grandchild.pid"
-    marker = workdir / "grandchild.ready"
-    command, catalogue = _pipe_holding_command(pid_file, marker)
+    command, catalogue = _pipe_holding_command(pid_file)
     control = await _spawn_control()
     events: list[ExecEvent] = []
     grandchild: int | None = None
@@ -309,7 +309,6 @@ async def _drive_scenario(
             task=_run_task(command, policy),
             control=control,
             pid_file=pid_file,
-            marker=marker,
             events=events,
         )
         try:
@@ -322,7 +321,7 @@ async def _drive_scenario(
             )
             return _describe(resources, grandchild, cancellation)
         finally:
-            with contextlib.suppress(BaseException):
+            with contextlib.suppress(Exception):
                 await _clean_up(resources, grandchild)
 
 

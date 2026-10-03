@@ -93,14 +93,13 @@ def python_interpreter() -> str:
 
 # The grandchild inherits its parent's stdout and stderr, so it holds the write
 # ends of the run's pipes. It ignores SIGTERM, so only a SIGKILL — to it, or to
-# a process group containing it — can end it. It records its own pid and then a
-# readiness marker, both after installing its handler, so a caller that waits on
-# the marker knows the grandchild is genuinely immune rather than mid-start-up.
+# a process group containing it — can end it. It writes its pid only after
+# installing its handler, so the pid file's arrival is itself the proof that the
+# grandchild is genuinely immune rather than mid-start-up.
 _GRANDCHILD_SOURCE = "; ".join((
     "import os, pathlib, signal, sys, time",
     "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
     "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))",
-    "pathlib.Path(sys.argv[2]).write_text('ready')",
     f"time.sleep({_BLOCK_SECONDS})",
 ))
 
@@ -109,14 +108,13 @@ _GRANDCHILD_SOURCE = "; ".join((
 # pipe after the parent is gone.
 _PARENT_SOURCE = "; ".join((
     "import subprocess, sys, time",
-    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]])",
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])",
     f"time.sleep({_BLOCK_SECONDS})",
 ))
 
 
 def pipe_holding_child_argv(
     pid_file: Path,
-    marker: Path,
 ) -> tuple[str, ...]:
     """Return ``-c`` argv for a child that holds a pipe through a grandchild.
 
@@ -129,8 +127,6 @@ def pipe_holding_child_argv(
     pid_file:
         Path the grandchild writes its own pid to, after installing its
         handler. Its arrival therefore doubles as the readiness signal.
-    marker:
-        Path the grandchild writes once its handler is installed.
 
     Returns
     -------
@@ -142,7 +138,6 @@ def pipe_holding_child_argv(
         _PARENT_SOURCE,
         _GRANDCHILD_SOURCE,
         str(pid_file),
-        str(marker),
     )
 
 

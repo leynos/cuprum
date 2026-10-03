@@ -1,15 +1,14 @@
-"""Waiting for subprocess exit, and reconciling its stream consumers.
+"""Waiting for subprocess exit.
 
 Split from ``cuprum._subprocess_execution`` so the runner module is about
 orchestration — spawning, wiring streams, assembling the result — while the
-rules for *ending* a run live here: how a deadline is applied, when the
-process is terminated, and how the stream consumers are drained exactly once.
+wait half of *ending* a run lives here: how a deadline is applied and when the
+process is terminated. Draining the stream consumers is the other half of
+ending a run, and belongs to ``cuprum._subprocess_drain``.
 
 Termination goes through ``_terminate_all_shielded`` rather than
 ``_terminate_process`` directly, so a caller cancelling during the grace
-period cannot skip the ``SIGKILL`` escalation and strand a child. The task
-reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
-so its callers can run it under ``_shielded_cleanup`` as one unit.
+period cannot skip the ``SIGKILL`` escalation and strand a child.
 """
 
 from __future__ import annotations
@@ -104,8 +103,8 @@ async def _wait_for_exit_code_within_timeout(
     :class:`TimeoutError` is raised.
 
     Stream consumers belong to the caller, which drains them exactly once via
-    :func:`_drain_stream_consumers`; terminating the process here lets those
-    consumers reach EOF during that drain.
+    :func:`cuprum._subprocess_drain._drain_stream_consumers`; terminating the
+    process here lets those consumers reach EOF during that drain.
 
     Both expiry routes emit a structured ``cuprum.timeout`` log record and a
     best-effort ``timeout`` observe event tagged with the timeout mode

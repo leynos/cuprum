@@ -203,11 +203,10 @@ class _PartialSpawnCase:
 def _build_partial_spawn_case(tmp_path: Path) -> _PartialSpawnCase:
     """Build the owned pipeline whose second stage will fail to spawn."""
     pid_file = tmp_path / "grandchild.pid"
-    marker = tmp_path / "grandchild.ready"
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     return _PartialSpawnCase(
-        first=python(*pipe_holding_child_argv(pid_file, marker)),
+        first=python(*pipe_holding_child_argv(pid_file)),
         second=python("-c", "pass"),
         config=_prepare_pipeline_config(
             output=RunOutputOptions(capture=True, echo=False),

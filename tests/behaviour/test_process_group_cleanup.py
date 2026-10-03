@@ -80,12 +80,6 @@ class _CleanupRequest(typ.TypedDict):
 
 
 @pytest.fixture
-def cleanup_request() -> _CleanupRequest:
-    """Return the mutable request the Given and When steps fill in."""
-    return {}
-
-
-@pytest.fixture
 def cleanup_outcomes() -> dict[str, CleanupOutcome]:
     """Return the store the When step records outcomes in."""
     return {}
@@ -96,7 +90,18 @@ def cleanup_outcomes() -> dict[str, CleanupOutcome]:
     target_fixture="cleanup_request",
 )
 def given_pipe_holding_command() -> _CleanupRequest:
-    """Declare the run shape every scenario in this feature shares."""
+    """Declare the run shape every scenario in this feature shares.
+
+    This step is the single source of the request: it is the first ``Given``
+    every scenario in the feature uses, so its ``target_fixture`` override
+    creates the dictionary the policy step then fills in. A separate
+    ``cleanup_request`` fixture would only be shadowed by it.
+
+    Returns
+    -------
+    _CleanupRequest
+        An empty request, for the policy step to fill in.
+    """
     return {}
 
 
