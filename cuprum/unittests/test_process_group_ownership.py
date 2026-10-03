@@ -123,6 +123,7 @@ def test_owned_group_teardown_terminates_a_grandchild_that_ignores_sigterm(
     """
 
     async def run_case() -> None:
+        """Tear down an owned group while its grandchild is still up."""
         run = await _spawn_owned_run(tmp_path)
         assert process_is_running(run.grandchild_pid), (
             "the grandchild must be running before teardown, or this test "
@@ -146,6 +147,7 @@ def test_owned_group_teardown_releases_the_inherited_pipe(tmp_path: Path) -> Non
     """
 
     async def run_case() -> None:
+        """Drain stdout after a teardown that released the write end."""
         run = await _spawn_owned_run(tmp_path)
         assert run.process.stdout is not None, "the run must expose its stdout pipe"
         await _terminate_owned_run(run)
@@ -168,6 +170,7 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
     """
 
     async def run_case() -> None:
+        """Tear down one run and leave a neighbouring process alone."""
         run = await _spawn_owned_run(tmp_path)
         try:
             await _terminate_owned_run(run)
@@ -194,6 +197,7 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
     """
 
     async def run_case() -> None:
+        """Tear down without ownership, as the default policy does."""
         run = await _spawn_owned_run(tmp_path)
         try:
             await _terminate_all_shielded(
@@ -233,6 +237,7 @@ def test_owned_group_teardown_of_an_exited_child_is_not_an_error(
     """
 
     async def run_case() -> None:
+        """Tear down a group whose leader has already been reaped."""
         process = await asyncio.create_subprocess_exec(
             python_interpreter(),
             "-c",
@@ -261,6 +266,7 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
     """
 
     async def run_case() -> None:
+        """Cancel a teardown twice and confirm it still completed."""
         run = await _spawn_owned_run(tmp_path)
         try:
             task = asyncio.create_task(_terminate_owned_run(run))
