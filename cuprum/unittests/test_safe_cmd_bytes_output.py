@@ -46,10 +46,9 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import SafeCmd
 
-# Every byte value, then a lone continuation byte, a byte no UTF-8 sequence
-# starts with, a second lone continuation byte, and a NUL. A decoding run
-# replaces the four invalid ones and keeps the rest, so any difference is the
-# mode leaking.
+# Every byte value, then a byte no UTF-8 sequence can start with, a NUL, a
+# second such byte, and a lone continuation byte. A decoding run replaces the
+# invalid sequences and keeps the rest, so any difference is the mode leaking.
 _FAILING_PAYLOAD = bytes(range(256)) + b"\xff\x00\xfe\x80"
 _WRITE_BOTH_STREAMS = (
     "import sys;"
