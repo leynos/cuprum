@@ -1441,6 +1441,97 @@ than discovering the gap months later.
     commit recording this entry is a documentation delta on top of it and is
     certified only by the hosted run list at its own revision, which cannot
     exist before the push.
+- [x] (2026-10-03) Re-ran all five gates a second time at `09facd90`, the head
+  the pushed entry itself created, re-pointed the pull request body at it, and
+  scoped a three-gate run for the entry below this one.
+  - *Why a second run for a docs-only delta.* The entry above is an execplan
+    edit, so committing it moved the branch one commit past the revision its
+    own body named. That is the recorded failure mode recurring at the
+    smallest possible scale: a body's "gates passed at SHA X" goes stale the
+    moment anything lands on top of X, whether or not the delta can execute.
+    The choice was to leave the body naming a superseded head, or to certify
+    the new one. Neither a Markdown-only delta nor the prior run's green
+    result substitutes for evidence at the head being certified, so the gates
+    were run again at `09facd90`.
+  - *The gates, clean end to end.* All five exited 0 with `head_before ==
+    head_after == 09facd90836ac3c4dbef06f6ed99fdf8ad432ec3` and
+    `git status --porcelain` empty in both captures around every gate:
+    `check-fmt` 0 s, `typecheck` 1 s, `lint` 86 s, `markdownlint` 11 s, `test`
+    220 s. `make lint` again reached its final recipe line with all eleven
+    leaves observed — `ruff check` "All checks passed", `interrogate`
+    "RESULT: PASSED (minimum: 100.0%, actual: 100.0%)", three `rated at
+    10.00` lines covering both the CPython and PyPy pylint passes and
+    `df12-pylint`, then `ambrleaks`, `skylos`, `lint-clippy`,
+    `lint-whitaker`, spelling, `yamllint`, and `actionlint`. Logs:
+    `/tmp/<gate>-issue499-09facd90.out` with rc sidecars. The lint run took
+    86 s against the 900 s ceiling, so the occasional host `actionlint`
+    deadlock did not recur.
+  - *The test figures, derived independently twice.* The eleven pytest session
+    summaries sum to 3689 passed, 86 skipped, 0 failed, and the collected
+    column sums to 3775, which equals passed + skipped exactly. This was
+    derived once by the scrutineer and once by me from the same log, and the
+    two derivations agree to the unit. The `tests/test_ci_*.py` batch is 776
+    passed. nextest reports 127 of 127 passed; cargo reports three ignored
+    doctests and none failing. Zero lines beginning with a `warning:`
+    diagnostic appear in any of the five logs. The twelve "warning" strings in
+    the test log are command lines (`-D warnings`) and test identifiers, and
+    the two in the lint log are tool invocations carrying `-D warnings` — not
+    diagnostics.
+  - *A figure that is not an identifier.* The same `tests/test_ci_*.py` batch
+    measured 53.18 s at `87383cd2` and 50.88 s at `09facd90` over a byte-
+    identical set of test files. Elapsed times move with host load, so they
+    are recorded as observations rather than re-checked as claims; a body that
+    pinned one as a contract would go stale without anything changing.
+  - *Hosted CI at this head, settled rather than pending.* 27 check runs: 22
+    `success`, 5 `skipped`, 0 failures, 0 pending, with all three Actions runs
+    for the commit terminal at attempt 1. The skipped five are `Loom model
+    smoke test`, `Kody Code Review`, `Sourcery review`, `automerge`, and
+    `extended` — each a conditional no-op rather than a failure. Both the CI
+    and Rust-boundary runs are `pull_request` events, so they build the
+    synthetic head-into-base merge ref; the head SHA association is recorded
+    rather than claimed as the built commit. `benchmark-ratchet` carried a
+    mid-run annotation reading "regression reported; re-measuring to
+    confirm" and concluded `success`, so the re-measurement cleared it.
+  - *CodeScene at this head, quoted.* Check run `111101608703`: `status`
+    `completed`, `conclusion` `success`, `output.title` "CodeScene PR Check",
+    body "Quality Gate Passed" with "6 Quality Gates Passed", details
+    <https://codescene.io/projects/74471/delta/results/7794653>. The delta
+    result ID differs from the `87383cd2` run's `7794513` because CodeScene
+    re-analysed the new revision; quoting the new ID rather than carrying the
+    previous one forward is the point of reading it rather than assuming the
+    green status implies the earlier analysis still stands.
+  - *Verified after writing, not assumed.* Each body edit was read back
+    through `gh api` with `Cache-Control: no-cache` rather than trusted from
+    the `gh pr edit` return, and compared byte-for-byte against the file that
+    was submitted. Both comparisons matched exactly — 17,878 bytes for the
+    re-point, then 18,253 bytes once the merge-ref and re-measurement clauses
+    were added. `87383cd2` now survives only inside the narrative sentence
+    that records what that earlier run certified, a sentence that says so, so
+    the last stale claim is gone.
+  - *Scope of this run, and what it does not cover.* This delta is one
+    Markdown file, so `make check-fmt`, `make markdownlint`, and `make nixie`
+    were run and the code-bearing gates were not: `make test` and
+    `make typecheck` cannot observe a Markdown edit, and `make lint`'s
+    production dead-code scan is a whole-repo scan over `cuprum` in which one
+    docs file is not a unit of work. Those three gates are therefore
+    **unrun for this delta**, not passed, and this entry does not claim
+    otherwise. All three that were run reached their final recipe line with
+    rc 0, over a captured digest of the edit, with `HEAD` unchanged and the
+    one modified file still present before and after each. One correction
+    that only running the gate could produce: the execplan turned out to
+    contain no Mermaid fences at all, so `make nixie` passing is a
+    repository-wide pass in which this file contributed nothing to validate.
+    I had expected the opposite, and the gate's green would have looked like
+    evidence about this file if I had not read what it actually walked.
+  - *Why this entry is the last commit.* The commit carrying it moves the
+    branch one past `09facd90` again, so it is certified the same way — gates
+    at its own revision and the hosted run list once settled — and the body is
+    then re-pointed to it. That re-point is pull-request metadata rather than
+    a revision, so it changes the claim without invalidating the evidence it
+    names: the run that certifies the final head is the last run, and no
+    commit follows it. Recording this matters because the opposite impulse —
+    one commit per stale body sentence — is what opened the gap twice in a
+    single session.
 
 ## Surprises & discoveries
 
