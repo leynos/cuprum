@@ -41,6 +41,8 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum._pipeline_config import _PipelineRunConfig
+
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="POSIX process groups are unavailable on Windows",
@@ -177,7 +179,7 @@ class _PartialSpawnCase:
 
     first: sh.SafeCmd
     second: sh.SafeCmd
-    config: object
+    config: _PipelineRunConfig
     pid_file: Path
 
 
@@ -213,8 +215,35 @@ def _install_failing_second_spawn(
     real_spawn = asyncio.create_subprocess_exec
     spawn_calls = 0
 
-    async def failing_second_spawn(*args: object, **kwargs: object) -> object:
-        """Spawn the first stage for real, then fail the second conditionally."""
+    async def failing_second_spawn(
+        program: str,
+        *args: str,
+        stdin: int,
+        stdout: int,
+        stderr: int,
+        env: dict[str, str] | None,
+        cwd: str | None,
+        start_new_session: bool = False,
+    ) -> asyncio.subprocess.Process:
+        """Spawn the first stage for real, then fail the second conditionally.
+
+        The parameters mirror the spawn call the pipeline makes, so the real
+        spawn receives exactly what it would have received unpatched. They are
+        written out rather than absorbed into ``**kwargs`` because a spawn that
+        passed an option this double does not name should fail loudly here —
+        this test exists to observe the spawn path, so a change to that path
+        is something it should notice rather than silently forward.
+
+        Returns
+        -------
+        asyncio.subprocess.Process
+            The real spawn's result, for the first call only.
+
+        Raises
+        ------
+        FileNotFoundError
+            For the second call, standing in for a stage that cannot start.
+        """
         nonlocal spawn_calls
         spawn_calls += 1
         if spawn_calls > 1:
@@ -225,7 +254,16 @@ def _install_failing_second_spawn(
             )
             msg = "the second stage refused to start"
             raise FileNotFoundError(msg)
-        return await real_spawn(*args, **kwargs)
+        return await real_spawn(
+            program,
+            *args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+            cwd=cwd,
+            start_new_session=start_new_session,
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_second_spawn)
 

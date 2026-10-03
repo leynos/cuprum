@@ -252,12 +252,13 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     spawned = asyncio.run(
         _spawn_pipeline_processes((sh.make(ECHO)("quiet"),), config),
     )
-    # The trailing relay-diagnostics and ownership lists are unused here, but
-    # name the last two elements so the two clock lists keep binding to their
-    # own fields rather than sliding forward as the returned tuple grows.
-    *_, started_at, wall_clock_started_at, _relay_diagnostics, _owns_group = spawned
+    # Read the clock lists by field rather than by position. The result is a
+    # dataclass precisely so a new field cannot slide these bindings onto the
+    # wrong values, as a positional unpack of the same data would.
+    started_at = spawned.stages.started_at
+    wall_clock_started_at = spawned.stages.wall_clock_started_at
 
-    assert started_at == [10.0], "pipeline must return each monotonic stage start"
-    assert wall_clock_started_at == [20.0], (
+    assert started_at == (10.0,), "pipeline must return each monotonic stage start"
+    assert wall_clock_started_at == (20.0,), (
         "pipeline must return each wall-clock stage start"
     )

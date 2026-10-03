@@ -287,7 +287,9 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
     asyncio.run(run_case())
 
 
-def test_owned_policy_is_rejected_where_posix_groups_do_not_exist() -> None:
+def test_owned_policy_is_rejected_where_posix_groups_do_not_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``OWN_GROUP`` refuses rather than silently containing nothing.
 
     The refusal is raised while building the spawn arguments, before any child
@@ -298,17 +300,14 @@ def test_owned_policy_is_rejected_where_posix_groups_do_not_exist() -> None:
     is the thing under test, and it must hold regardless of which platform
     happens to be running the suite. The Windows job exercises the same helper
     through its real ``os.name``; this pins the branch deterministically
-    everywhere, and the patch is restored before anything could spawn.
+    everywhere. ``monkeypatch`` is what does the patching so the restore is
+    guaranteed rather than left to a ``finally``.
     """
-    original = os.name
-    try:
-        os.name = "nt"
-        with pytest.raises(ValueError, match="POSIX process groups"):
-            _subprocess_context._ownership_spawn_kwargs(
-                ProcessGroupPolicy.OWN_GROUP,
-            )
-    finally:
-        os.name = original
+    monkeypatch.setattr(os, "name", "nt")
+    with pytest.raises(ValueError, match="POSIX process groups"):
+        _subprocess_context._ownership_spawn_kwargs(
+            ProcessGroupPolicy.OWN_GROUP,
+        )
 
 
 def test_inherited_policy_spawns_no_new_session() -> None:
