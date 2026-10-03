@@ -42,8 +42,10 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 #: Directories scanned, relative to the repository root: the shipped package
-#: and the two test tiers that run under ``make test``. The ``benchmarks``
-#: tree is helper code rather than shipped behaviour and is not gated.
+#: and the trees whose pytest modules run under ``make test`` — ``scripts``
+#: holds the boundary and tooling suites, not a test tier of its own. The
+#: ``benchmarks`` tree is helper code rather than shipped behaviour and is not
+#: gated.
 _SCANNED_ROOTS: typ.Final[tuple[str, ...]] = (
     "cuprum",
     "scripts",
@@ -122,9 +124,13 @@ def _definition_kind(node: ast.stmt) -> str:
 def _statement_lists(node: ast.AST) -> cabc.Iterator[list[ast.stmt]]:
     """Yield every statement list *node* directly owns.
 
-    A branch node owns more than one list — ``orelse`` for an ``if``, the
-    ``handler.body`` of each ``except`` — and each is a separate scope for the
-    purposes of sibling shadowing, so all of them are visited.
+    A branch node owns more than one list — ``orelse`` for an ``if``,
+    ``finalbody`` for a ``try`` — and each is a separate scope for the
+    purposes of sibling shadowing, so all of them are visited. An ``except``
+    arm or ``match`` case is not reached here: ``ast.ExceptHandler`` and
+    ``ast.match_case`` are nodes in their own right, so the walk visits them
+    and their ``body`` arrives through the field loop below. Yielding those
+    bodies again from the parent would report one duplicate twice.
 
     Parameters
     ----------
@@ -141,10 +147,6 @@ def _statement_lists(node: ast.AST) -> cabc.Iterator[list[ast.stmt]]:
         value = getattr(node, field_name, None)
         if isinstance(value, list):
             yield value
-    for handler in getattr(node, "handlers", ()):
-        yield handler.body
-    for case in getattr(node, "cases", ()):
-        yield case.body
 
 
 def _shadowed_in(body: list[ast.stmt]) -> list[tuple[str, tuple[_DefinitionSite, ...]]]:
@@ -250,8 +252,9 @@ def _find_shadowing(source: str, *, filename: str) -> tuple[_Shadowing, ...]:
     tree = ast.parse(source, filename=filename)
     return tuple(
         _Shadowing(_scope_label(node), name, sites)
-        # Each node owns its statement lists outright, so visiting every node
-        # reaches each list exactly once.
+        # Each statement list has exactly one owning node: the walk visits the
+        # branch nodes too, and ``_statement_lists`` yields only fields that
+        # node itself owns, so no list is reached twice.
         for node in ast.walk(tree)
         for body in _statement_lists(node)
         for name, sites in _shadowed_in(body)
@@ -317,6 +320,33 @@ def test_guard_reports_shadowed_siblings(
     assert [site[1] for site in found[0].sites] == expected_lines, (
         f"expected defining lines {expected_lines}, got "
         f"{[site[1] for site in found[0].sites]}"
+    )
+
+
+def test_guard_reports_a_duplicate_inside_an_except_arm_once() -> None:
+    """An except arm is its own scope, and its duplicates are reported once.
+
+    ``ast.ExceptHandler`` is a node in its own right, so the walk reaches its
+    body without the parent ``try`` yielding it again. Yielding it from both
+    would report a single duplicate twice, which this pins.
+    """
+    source = (
+        "try:\n"
+        "    pass\n"
+        "except ValueError:\n"
+        "    def _dup():\n"
+        "        return 1\n"
+        "\n"
+        "    def _dup():\n"
+        "        return 2\n"
+    )
+
+    found = _find_shadowing(source, filename="probe.py")
+
+    assert len(found) == 1, f"expected exactly one report, got {found}"
+    assert found[0].name == "_dup", f"expected _dup, got {found[0].name!r}"
+    assert [site[1] for site in found[0].sites] == [4, 7], (
+        f"expected defining lines [4, 7], got {[site[1] for site in found[0].sites]}"
     )
 
 
