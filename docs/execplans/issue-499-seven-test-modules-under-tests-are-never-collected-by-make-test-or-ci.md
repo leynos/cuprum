@@ -2483,6 +2483,60 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 
 ## Revision note
 
+2026-10-03, seventh revision. Corrects the exemption this document claimed for
+three gates on a Markdown-only delta. The entry that scoped the `09facd90` run
+excused all three: `make test` and `make typecheck` were said to "cannot
+observe a Markdown edit", and `make lint` on the ground that its production
+dead-code scan is a whole-repo scan over `cuprum` in which one docs file is not
+a unit of work. The entry that scoped `01c10105` repeated the arrangement
+without repeating the reason, recording all three as unrun.
+
+The exemption is false for `make lint`, and the document already contained the
+disproof. `lint` requires `rust-lint`, which requires `spelling`, whose recipe
+is `typos-config-builder gate --repository . --scope all` — every tracked file,
+Markdown included. The disproof is that the spelling gate **failed on prose
+introduced in this very file** at an earlier head, recorded under
+`Surprises & discoveries`: a gate cannot fail on a file it cannot observe. The
+dead-code scan is indeed blind to a docs file, and that true observation is not
+a licence for the whole of `make lint`, which also runs spelling.
+
+`make check-fmt` observes it too, and needs no argument to show it:
+`mdtablefix --git --include-untracked` walks all 80 tracked Markdown files, and
+the `09facd90` log counts them — "80 files left unchanged".
+
+`make test` is the weaker case, and the original stated it too bluntly. The
+suite does collect tests that read `docs/` —
+`tests/behaviour/test_documentation_examples_behaviour.py` reads `README.md`,
+`docs/users-guide.md`, and `docs/v0-2-0-migration-guide.md`, and
+`tests/behaviour/test_performance_guidance_docs_behaviour.py` reads the users'
+guide — so it is not blind to `docs/` as a whole. But no test opens any file
+under `docs/execplans/`, and no test globs `docs/**`; the one string literal
+naming an execplan is a value in a pure model, never a path that is read. For a
+delta in `docs/execplans/`, then, the suite re-runs without re-reading the
+changed file. That is narrower than "cannot observe a Markdown edit" and it
+still does not license skipping the gate. `make typecheck` alone is genuinely
+blind to Markdown, and the original was right about that one.
+
+The gap is now closed rather than argued: at the time of writing, all five
+gates plus `make nixie` had been re-run at `5a63afcf`, the head then standing,
+so no claim in the pull request body rested on the exemption, and the body was
+corrected in step and re-pointed there. This note lands in a commit that moves
+the head one past `5a63afcf`, so it certifies nothing by itself: that commit is
+certified by the same full set run at it, and the body is re-pointed there in
+turn. That is the pattern this document has followed at each of the three heads
+before this one.
+
+The error is worth recording because of how it was made rather than what it
+cost. The claim was derived from what the gates sound like they cover — linting
+is about code, typing is about code — rather than from reading the recipes.
+`python-lint`'s dead-code scan is indeed a whole-repo scan over `cuprum` for
+which one docs file is no unit of work, and that true observation was
+generalized to the whole of `make lint`, which also runs spelling. Reading the
+`lint:` prerequisite list would have caught it; the
+`rust-lint: lint-clippy lint-whitaker spelling` line is one `sed` away. The
+lesson matches the one `Grep the concept, not the wording` records: a target's
+name is not its recipe.
+
 2026-09-28, sixth revision. Supplements the fifth with the measurement that
 closes the gap it left open: CI.
 
