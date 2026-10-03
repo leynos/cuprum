@@ -1756,9 +1756,13 @@ stages, arms the idle heartbeat once the first stage is actually running, and
 owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
 `cuprum/_process_lifecycle.py` keeps the subprocess handles and the shared
 `_shielded_cleanup` primitive, and executes the fail-fast, timeout, and error
-teardown decisions the waiter makes. Splitting startup from termination keeps
-each module within the Pylint module ceiling while leaving every helper that
-existing importers reach importable from its previous definition site.
+teardown decisions the waiter makes. It delegates the two per-process questions
+teardown asks — what a signal is delivered to, and what a completed teardown
+waits for — to `cuprum/_process_signal.py`, which is the only module that has
+to know whether a run owns its child's process group. Splitting startup from
+termination keeps each module within the Pylint module ceiling while leaving
+every helper that existing importers reach importable from its previous
+definition site.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout

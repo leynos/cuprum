@@ -5920,8 +5920,10 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. Pipeline
 startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
 stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
-termination and the shared `_shielded_cleanup` primitive. The two
-idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
+termination and the shared `_shielded_cleanup` primitive, while
+`cuprum/_process_signal.py` owns the two decisions teardown makes about a
+single process — what a signal is delivered to, and what a completed teardown
+waits for. The two idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
 `cuprum/_idle_diagnostic.py`, are private to the same seam. See
 [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
@@ -5939,9 +5941,13 @@ spawning, deciding which streams are consumed, and assembling the result —
 belongs in `_subprocess_execution`. On the pipeline side, starting stages — and
 cleaning up whatever a failed startup left running — belongs in
 `_pipeline_spawn`, while terminating stages that are already running belongs in
-`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
-belongs in `_idle_heartbeat` and its rendering and write-failure policy in
-`_idle_diagnostic`.
+`_process_lifecycle` alongside `_shielded_cleanup`. Deciding *when* to signal —
+the two-phase grace and its escalation — is `_process_lifecycle`'s; deciding
+*what* the signal reaches (`_signal_child`), and what a completed teardown
+waits for (`_settlement`, `_terminate_process_with_wait`,
+`_settle_after_escalation`), belongs in `_process_signal`. The idle heartbeat's
+timing belongs in `_idle_heartbeat` and its rendering and write-failure policy
+in `_idle_diagnostic`.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
 `_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so

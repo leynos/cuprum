@@ -30,7 +30,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ECHO, _process_lifecycle, _subprocess_context, _wait4_process, sh
+from cuprum import ECHO, _process_signal, _subprocess_context, _wait4_process, sh
 from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
@@ -338,7 +338,7 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
     # Patched where it is looked up rather than where it is defined: the
     # teardown calls the name it imported, so patching the defining module
     # would leave the real poll loop running and the test would pass on it.
-    monkeypatch.setattr(_process_lifecycle, "_await_group_exit", refusing_group_wait)
+    monkeypatch.setattr(_process_signal, "_await_group_exit", refusing_group_wait)
 
     async def run_case() -> None:
         """Escalate against a group that will never settle."""
@@ -366,7 +366,7 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
         # complete without ever suspending, which would settle the run on the
         # first phase and skip the bounded wait this test exists to pin.
         started = time.monotonic()
-        with caplog.at_level(logging.WARNING, logger=_process_lifecycle.__name__):
+        with caplog.at_level(logging.WARNING, logger=_process_signal.__name__):
             await _terminate_all_shielded(
                 (process,),
                 _TeardownPolicy(0.1, owns_group=True),
@@ -422,8 +422,8 @@ def test_inherited_policy_spawns_no_new_session() -> None:
     slipped into the default path would change process topology for every
     existing caller.
     """
-    assert (
-        _subprocess_context._ownership_spawn_kwargs(ProcessGroupPolicy.INHERIT) == {}
+    assert not _subprocess_context._ownership_spawn_kwargs(
+        ProcessGroupPolicy.INHERIT
     ), "INHERIT must not alter how a child is spawned"
 
 

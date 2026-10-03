@@ -1045,8 +1045,8 @@ The guarantee is bounded, and the bound is a property of the kernel rather than
 of this option: a descendant that calls `setsid()` or `setpgid()` leaves the
 group deliberately, and no non-privileged mechanism can contain it. Ancestors
 and siblings are outside the group for the same reason. Containment of
-processes that actively escape needs a supervisor, a cgroup, or a container;
-a command runner cannot promise it.
+processes that actively escape needs a supervisor, a cgroup, or a container; a
+command runner cannot promise it.
 
 `OWN_GROUP` raises `ValueError` on Windows, where POSIX process groups do not
 exist. The nearest equivalent, a Job Object, cannot be assigned atomically with
