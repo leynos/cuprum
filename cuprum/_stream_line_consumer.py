@@ -15,6 +15,7 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
+from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._result_assembly import _require_bytes, _require_text
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
@@ -126,6 +127,31 @@ def _empty_capture(config: _StreamConfig) -> str | bytes | None:
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create the configured incremental decoder."""
+    """Create a line-splitting decoder that never fails on invalid bytes.
+
+    Line observation renders a *view* of the child's bytes; it is not where a
+    run reports its output, so it must not be able to end the run. The decode
+    therefore always replaces undecodable bytes, whatever policy the caller
+    chose for the capture. Under ``errors="strict"`` a caller has asked the
+    capture to reject invalid bytes, and the capture still does: a byte-exact
+    run hands back ``bytes`` untouched, and a text run raises when it decodes
+    its buffer in :func:`cuprum._stream_drain_finish._captured_payload`.
+
+    Reading the caller's policy here instead would let an ambient observer
+    change the outcome of a run it merely watches. A registered
+    ``sh.observe()`` hook, or the line feeder the idle partition attaches,
+    supplies a line sink the caller never asked for, and under
+    ``errors="strict"`` the resulting :class:`UnicodeDecodeError` would escape
+    from the drain's read loop and kill a ``run_bytes()`` that would otherwise
+    have returned the child's bytes intact.
+
+    See :data:`cuprum._constants.OBSERVER_ERROR_POLICY` for the shared
+    rationale.
+
+    Returns
+    -------
+    codecs.IncrementalDecoder
+        A decoder that replaces undecodable bytes rather than raising.
+    """
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)
+    return decoder_factory(errors=OBSERVER_ERROR_POLICY)

@@ -512,15 +512,47 @@ def test_line_emission_matches_splitlines_for_every_supported_boundary(
     )
 
 
-def _byte_config(sink: typ.IO[str], *, capture: bool = True) -> _StreamConfig:
+def _byte_config(
+    sink: typ.IO[str],
+    *,
+    capture: bool = True,
+    echo: bool = False,
+    errors: str = "replace",
+) -> _StreamConfig:
     """Build a byte-exact UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
         capture_output=capture,
-        echo_output=False,
+        echo_output=echo,
         sink=sink,
         encoding="utf-8",
-        errors="replace",
+        errors=errors,
         capture_bytes=True,
+    )
+
+
+def test_byte_exact_echo_survives_a_strict_capture_policy() -> None:
+    """Echo renders a view, so its decode cannot end a strict byte run.
+
+    The echo channel decodes the child's bytes for a text-only sink. Reading
+    the caller's ``errors="strict"`` here would raise from the drain's read
+    loop on the invalid tail, so a run that only asked to be mirrored would
+    lose the bytes it had already captured. The capture keeps the caller's
+    policy and still hands those bytes back untouched.
+    """
+    payload = b"first\nsecond\xff\nthird"
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _consume_stream(
+            _reader((payload,)),
+            _byte_config(sink, echo=True, errors="strict"),
+        )
+    )
+
+    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
+    assert sink.getvalue() == "first\nsecond�\nthird", (
+        "the mirror must render the replacement view rather than raise, got "
+        f"{sink.getvalue()!r}"
     )
 
 

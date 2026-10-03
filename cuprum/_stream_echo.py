@@ -24,6 +24,7 @@ import codecs
 import logging
 import typing as typ
 
+from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._echo_truncation import _split_echo_segments
 from cuprum.echo_events import (
     BrokenPipePolicy,
@@ -52,6 +53,12 @@ def _write_chunk(
 
     For stdio echo this blocking write is acceptable; future slow-sink handling
     can layer on a background writer if needed.
+
+    A text-only sink is given a decoded *view*, so an undecodable byte is
+    replaced rather than left to raise: a mirror is not where a run's capture
+    is reported, and under ``errors="strict"`` the caller's policy still
+    governs the capture, which decodes its own buffer. See
+    :data:`cuprum._constants.OBSERVER_ERROR_POLICY`.
     """
     buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
@@ -59,7 +66,7 @@ def _write_chunk(
         buffer.flush()
         return
     text = (
-        chunk.decode(config.encoding, errors=config.errors)
+        chunk.decode(config.encoding, errors=OBSERVER_ERROR_POLICY)
         if decoder is None
         else decoder.decode(chunk, final=final)
     )
@@ -69,9 +76,19 @@ def _write_chunk(
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create an incremental decoder configured for a stream invocation."""
+    """Create a view decoder for the echo channel.
+
+    Echo renders a *view* of the child's bytes, so it replaces undecodable
+    bytes whatever policy the caller chose for the capture, as
+    :data:`cuprum._constants.OBSERVER_ERROR_POLICY` records.
+
+    Returns
+    -------
+    codecs.IncrementalDecoder
+        A decoder that replaces undecodable bytes rather than raising.
+    """
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)
+    return decoder_factory(errors=OBSERVER_ERROR_POLICY)
 
 
 def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
@@ -126,7 +143,17 @@ def _write_finished_echo_line(
     limiter: _EchoLineLimiter,
     ending: bytes,
 ) -> None:
-    """Write one finalized bounded echo line and observe a successful trim."""
+    """Write one finalized bounded echo line and observe a successful trim.
+
+    The limiter keeps the caller's error policy, which is safe rather than
+    merely conventional: bounded echo is gated by
+    :func:`cuprum._echo_truncation._validate_bounded_echo_encoding` to an
+    ASCII-compatible stateless codec, and every encode on this path — the
+    truncation marker and its ASCII fallback — carries ASCII-only text. A
+    strict policy therefore has nothing to refuse. The decode that can meet
+    the child's own bytes is the one in :func:`_write_chunk`, and that one
+    already renders a view.
+    """
     finished = limiter.finish_line(
         ending=ending,
         encoding=state.config.encoding,

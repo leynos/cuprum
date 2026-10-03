@@ -275,13 +275,19 @@ def test_observe_hooks_do_not_break_byte_exact_capture(
     asked for, so a run that merely *has* a hook registered must still return
     the child's bytes. Both channels must hold at once: the capture stays
     byte-exact, and the observer receives the decoded line.
+
+    The observer half is asserted against an independently derived oracle
+    rather than by truthiness, which would pass against a hook handed the
+    wrong stream or an undecoded payload. The payload carries invalid UTF-8,
+    so the lines also prove the observer renders a replacement view — the
+    capture's policy governs the capture alone.
     """
-    observed: list[str] = []
+    observed: list[tuple[str, str]] = []
 
     def hook(event: ExecEvent) -> None:
-        """Record the decoded line the run publishes."""
+        """Record the stream and decoded line the run publishes."""
         if event.line is not None:
-            observed.append(event.line)
+            observed.append((event.phase, event.line))
 
     with scoped(ScopeConfig(allowlist=observe_scope.allowlist)), sh.observe(hook):
         result = _run_bytes_sync(observe_scope.cmd, {})
@@ -292,7 +298,56 @@ def test_observe_hooks_do_not_break_byte_exact_capture(
     assert result.stderr == _FAILING_PAYLOAD, (
         f"stderr must stay byte-exact beside a hook, got {result.stderr!r}"
     )
-    assert observed, "the observe hook must still receive decoded lines"
+
+    oracle = _FAILING_PAYLOAD.decode("utf-8", errors="replace").splitlines()
+    for stream in ("stdout", "stderr"):
+        assert [line for phase, line in observed if phase == stream] == oracle, (
+            f"the observer must receive the child's decoded {stream} lines, "
+            f"got {observed!r}"
+        )
+
+
+def test_observe_hooks_cannot_end_a_strict_byte_run(
+    byte_entry_point: BytesExecuteFn,
+    observe_scope: ObserveScope,
+) -> None:
+    """An observer renders a view, so its decode cannot decide a byte run's fate.
+
+    Reading the caller's error policy in the observer's decoder would let a
+    hook the caller never asked for end the run: under ``errors="strict"`` the
+    invalid tail raises :class:`UnicodeDecodeError` from the drain's read loop
+    before the captured bytes are returned. The capture is the only place the
+    policy governs, so the byte run must survive an ambient observer and still
+    hand back the child's own bytes. Both entry points are exercised, since the
+    defect lived in the shared drain rather than in either wrapper.
+    """
+    observed: list[tuple[str, str]] = []
+
+    def hook(event: ExecEvent) -> None:
+        """Record each decoded line, which must not raise on the invalid tail."""
+        if event.line is not None:
+            observed.append((event.phase, event.line))
+
+    with scoped(ScopeConfig(allowlist=observe_scope.allowlist)), sh.observe(hook):
+        result = byte_entry_point(
+            observe_scope.cmd,
+            {"context": ExecutionContext(errors="strict")},
+        )
+
+    assert result.stdout == _FAILING_PAYLOAD, (
+        "a strict byte run must survive an ambient observer and keep the child's "
+        f"stdout bytes, got {result.stdout!r}"
+    )
+    assert result.stderr == _FAILING_PAYLOAD, (
+        f"a strict byte run must keep the child's stderr bytes, got {result.stderr!r}"
+    )
+
+    oracle = _FAILING_PAYLOAD.decode("utf-8", errors="replace").splitlines()
+    for stream in ("stdout", "stderr"):
+        assert [line for phase, line in observed if phase == stream] == oracle, (
+            "the observer must render the whole replacement view even under the "
+            f"strict capture policy, got {observed!r}"
+        )
 
 
 def test_bytes_entry_point_accepts_a_text_stdin_input(
