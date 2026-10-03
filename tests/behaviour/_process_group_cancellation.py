@@ -122,7 +122,11 @@ async def _cancel_run(
             raised = "CancelledError"
         except TimeoutError:
             raised = "TimeoutError"
-        except BaseException as exc:  # ruff: ignore[blind-except] - report what it saw
+        # Ordinary failures are recorded so a scenario reports what the run
+        # ended on. KeyboardInterrupt and SystemExit are not caught: those abort
+        # the suite, and swallowing one would report an interruption as this
+        # scenario's outcome.
+        except Exception as exc:  # ruff: ignore[blind-except] - record the run's own failure
             raised = type(exc).__name__
         else:
             raised = "returned"
