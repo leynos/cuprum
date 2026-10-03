@@ -1322,9 +1322,29 @@ than discovering the gap months later.
     reports `10.00/10` on the file with the full rule set enabled. The
     failing-before property survives the rewrite: against the pre-fix config
     the test still fails on the letter-leading assertion.
-  - *Not yet claimed as cleared.* The hosted check is the only authority for
-    this finding and the new head has not been pushed, so this entry records
-    the repair and the local evidence and does not claim CodeScene passes.
+  - *Cleared at `1a206ab7`, quoted.* The repair was committed as `1a206ab7`,
+    pushed, and the hosted check run at that head reads `status: completed`,
+    `conclusion: success`, title `CodeScene PR Check`, body `**Quality Gate
+    Passed**` with `6 Quality Gates Passed` — up from the 5 passed and 1
+    failed at `77b3411b` — and details
+    `https://codescene.io/projects/74471/delta/results/7794306`. The gate that
+    had failed, `Enforce advisory code health rules`, now passes. This is the
+    hosted output, not an inference from a green status.
+  - *The gate timeline, recorded because this entry's own edit interrupted it.*
+    The five gates were started against clean `1a206ab7` and the first four
+    completed in this order: `check-fmt` at 02:46:52, `typecheck` at 02:47:10,
+    `lint` at 02:48:46, `markdownlint` at 02:49:15. This paragraph was then
+    written at 02:49:39 while `make test` was still running, so the test gate
+    began clean at the right commit but finished at 02:54:53 with the tree
+    already dirty from an uncommitted edit. All five gates exited 0. The test
+    figures are summed from the eleven pytest session summaries in the log —
+    3689 passed, 86 skipped, 0 failed — plus 127 of 127 nextest and three
+    ignored doctests with none failing, and no line matching `warning:` in any
+    of the five logs. But the first four gates speak only for the commit,
+    `markdownlint` never saw this prose, and the test run covered a tree that
+    changed underneath it. None of the five is carried forward as evidence for
+    the head that ships: the whole sequence is re-run against the revision that
+    carries this paragraph, and only that run speaks for it.
 
 ## Surprises & discoveries
 
