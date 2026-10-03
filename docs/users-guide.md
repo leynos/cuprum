@@ -1017,9 +1017,12 @@ command = sh.make(Program(sys.executable), catalogue=catalogue)(
 owned = ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)
 assert owned.process_group is ProcessGroupPolicy.OWN_GROUP
 assert command.run_sync(context=owned).stdout == "True\n"
-# The default is unchanged: a run that says nothing keeps the caller's group.
 assert ExecutionContext().process_group is ProcessGroupPolicy.INHERIT
 ```
+
+That last assertion is the compatibility promise: a context that says nothing
+about the policy keeps the child in the caller's group, so no existing run is
+affected. Only a caller that names `OWN_GROUP` gets a new group.
 
 Under `OWN_GROUP` the child's process-group identifier is its own PID, because
 the spawn made it a session and process-group leader. Teardown signals exactly
