@@ -25,6 +25,16 @@ _PROBE_INTERVAL = 0.01
 # period, so the grace window is still sampled several times over rather than
 # being overshot by a single slow poll.
 _MAX_PROBE_INTERVAL = 0.1
+# The escalation's own bound, and deliberately not derived from
+# ``cancel_grace``. ``cancel_grace`` bounds how long a member is *asked* to
+# leave; this bounds how long teardown waits to see the result once every
+# member has been compelled with ``SIGKILL``. A reaped child that is not a
+# group leader can leave its group with an un-reaped adopted descendant — one
+# whose parent died before it did — and that member cannot exit until an init
+# process reaps it, which is out of this run's hands. Waiting unbounded there
+# is what would strand a teardown, so the group wait is capped and the
+# outstanding members reported instead.
+_POST_KILL_SETTLEMENT_S = 1.0
 
 
 def _group_has_members(pgid: int) -> bool:

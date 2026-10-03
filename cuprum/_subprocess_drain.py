@@ -47,12 +47,6 @@ type _EofGraceWaiter = cabc.Callable[
 ]
 
 
-type _EofGraceWaiter = cabc.Callable[
-    [tuple[asyncio.Task[str | None], asyncio.Task[str | None]]],
-    cabc.Awaitable[object],
-]
-
-
 @dc.dataclass(frozen=True, slots=True)
 class _DrainContext:
     """Capture and observability context for one consumer drain."""

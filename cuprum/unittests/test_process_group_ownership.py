@@ -21,14 +21,17 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import logging
 import os
 import signal
 import sys
+import time
 import typing as typ
 
 import pytest
 
-from cuprum import ECHO, _subprocess_context, _wait4_process, sh
+from cuprum import ECHO, _process_lifecycle, _subprocess_context, _wait4_process, sh
+from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
@@ -291,6 +294,102 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             )
 
     asyncio.run(run_case())
+
+
+def test_an_unreapable_group_member_does_not_stall_the_escalation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The post-``SIGKILL`` group wait is bounded, and reports what it left.
+
+    A group member whose parent died first can be re-parented outside this
+    run, so its exit is recorded only when something else reaps it. Waiting
+    for that without a bound would let a teardown outlive its grace period
+    indefinitely, so the wait is capped and the outstanding members reported
+    instead. The bound is deliberately not derived from ``cancel_grace``: that
+    bounds how long a member is *asked* to leave, not how long the run waits
+    after compelling it.
+
+    The direct child is still awaited without a bound, and that is the
+    important half. A run must reap the process it spawned even when the group
+    around it cannot settle, or the caller is left with a zombie it owns.
+
+    The child ignores ``SIGTERM`` so the grace period genuinely times out and
+    the escalation is reached, and it announces itself only once its handler
+    is installed. Both halves matter: a cooperative child would exit on the
+    first signal and settle the run before the bound ever applied, and an
+    immune child signalled during interpreter start-up would die on the
+    default disposition instead of the one this test needs it to take.
+    """
+
+    async def refusing_group_wait(pgid: int) -> None:
+        """Stand in for a group that never reports itself empty.
+
+        The parameter matches the real probe's single argument. A double that
+        asked for more would raise on the call rather than be waited on, and
+        the teardown gathers its targets with ``return_exceptions=True``, so
+        the mismatch would be swallowed and the test would pass without the
+        bound ever engaging.
+        """
+        del pgid
+        await asyncio.sleep(3600)
+
+    # Patched where it is looked up rather than where it is defined: the
+    # teardown calls the name it imported, so patching the defining module
+    # would leave the real poll loop running and the test would pass on it.
+    monkeypatch.setattr(_process_lifecycle, "_await_group_exit", refusing_group_wait)
+
+    async def run_case() -> None:
+        """Escalate against a group that will never settle."""
+        ready = tmp_path / "immune.ready"
+        process = await asyncio.create_subprocess_exec(
+            python_interpreter(),
+            "-c",
+            "import os, pathlib, signal, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
+            "time.sleep(300)",
+            str(ready),
+            start_new_session=True,
+        )
+        # Signalling before this point would reach the interpreter's default
+        # disposition rather than the installed handler, and the child would
+        # die on SIGTERM — taking the escalation path with it.
+        await asyncio.to_thread(
+            wait_for_pid_file,
+            ready,
+            context="immune child readiness",
+        )
+        # The grace period has to be short enough to take the escalation
+        # promptly but non-zero: a zero-length wait is a corner case that can
+        # complete without ever suspending, which would settle the run on the
+        # first phase and skip the bounded wait this test exists to pin.
+        started = time.monotonic()
+        with caplog.at_level(logging.WARNING, logger=_process_lifecycle.__name__):
+            await _terminate_all_shielded(
+                (process,),
+                _TeardownPolicy(0.1, owns_group=True),
+            )
+        elapsed = time.monotonic() - started
+
+        assert process.returncode is not None, (
+            "the direct child must be reaped even when its group cannot settle"
+        )
+        assert elapsed < _POST_KILL_SETTLEMENT_S * 3, (
+            "the group wait must be bounded rather than waiting for a member "
+            f"this run cannot reap; took {elapsed:.3f}s"
+        )
+
+    asyncio.run(run_case())
+
+    assert any(
+        "process_group_settlement_timeout" in record.getMessage()
+        for record in caplog.records
+    ), (
+        "members left outstanding must be reported rather than passed over "
+        f"silently, got {caplog.messages}"
+    )
 
 
 def test_owned_policy_is_rejected_where_posix_groups_do_not_exist(
