@@ -166,7 +166,7 @@ def _positional_binding(
     The binding must be a *command* — so `echo set -- $$p` is not one. Raises
     `AssertionError` when nothing in the span binds, or when the last binding
     is not the loop variable's.
-    """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
+    """  # ruff: ignore[docstring-missing-returns] - the summary names the return
     bindings = [
         (start, words)
         for start, words in command_segments(tokens)
@@ -270,9 +270,7 @@ def require_selector_drives_pytest(
     invocation = _pytest_command(
         tokens, pytest_variable=pytest_variable, after=loop, body_end=body_end
     )
-    _positional_binding(
-        tokens, variable=variable, after=loop, before=invocation
-    )
+    _positional_binding(tokens, variable=variable, after=loop, before=invocation)
 
 
 def require_module_runs_under_pytest(
