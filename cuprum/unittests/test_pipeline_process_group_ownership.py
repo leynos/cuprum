@@ -173,6 +173,23 @@ def test_inherited_pipeline_stages_are_signalled_directly(
     )
 
 
+class _SpawnOptions(typ.TypedDict, total=False):
+    """The spawn options the pipeline passes, as the spawn call receives them.
+
+    Declared once so the partial-spawn double can forward them verbatim
+    without re-listing them as parameters. Each entry is checked against the
+    real ``create_subprocess_exec`` parameter it lands on, so the declaration
+    is what keeps the forward honest.
+    """
+
+    stdin: int
+    stdout: int
+    stderr: int
+    env: dict[str, str] | None
+    cwd: str | None
+    start_new_session: bool
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _PartialSpawnCase:
     """A two-stage owned pipeline whose second stage refuses to start."""
@@ -218,21 +235,16 @@ def _install_failing_second_spawn(
     async def failing_second_spawn(
         program: str,
         *args: str,
-        stdin: int,
-        stdout: int,
-        stderr: int,
-        env: dict[str, str] | None,
-        cwd: str | None,
-        start_new_session: bool = False,
+        **kwargs: typ.Unpack[_SpawnOptions],
     ) -> asyncio.subprocess.Process:
         """Spawn the first stage for real, then fail the second conditionally.
 
-        The parameters mirror the spawn call the pipeline makes, so the real
-        spawn receives exactly what it would have received unpatched. They are
-        written out rather than absorbed into ``**kwargs`` because a spawn that
-        passed an option this double does not name should fail loudly here —
-        this test exists to observe the spawn path, so a change to that path
-        is something it should notice rather than silently forward.
+        The options the pipeline passes are declared in ``_SpawnOptions`` and
+        forwarded verbatim, so the real spawn receives exactly what it would
+        have received unpatched while this double keeps a call signature small
+        enough to read. The declaration is a check rather than documentation:
+        ``ty`` validates each entry against the real parameter it lands on, so
+        an option given the wrong type fails here.
 
         Returns
         -------
@@ -254,16 +266,7 @@ def _install_failing_second_spawn(
             )
             msg = "the second stage refused to start"
             raise FileNotFoundError(msg)
-        return await real_spawn(
-            program,
-            *args,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            env=env,
-            cwd=cwd,
-            start_new_session=start_new_session,
-        )
+        return await real_spawn(program, *args, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_second_spawn)
 
@@ -294,7 +297,7 @@ def test_a_partial_spawn_leaves_no_owned_group_running(
 
     asyncio.run(run_case())
 
-    grandchild_pid = int(case.pid_file.read_text().strip())
+    grandchild_pid = int(case.pid_file.read_text(encoding="utf-8").strip())
     assert not process_is_running(grandchild_pid), (
         "a partial spawn must tear down the owned group it already created, "
         "grandchild included"
