@@ -80,7 +80,6 @@ async def _spawn_owned_run(tmp_path: Path) -> _OwnedRun:
         process started alongside it.
     """
     pid_file = tmp_path / "grandchild.pid"
-    marker = tmp_path / "grandchild.ready"
     unrelated = await asyncio.create_subprocess_exec(
         python_interpreter(),
         "-c",
@@ -88,7 +87,7 @@ async def _spawn_owned_run(tmp_path: Path) -> _OwnedRun:
     )
     process = await asyncio.create_subprocess_exec(
         python_interpreter(),
-        *pipe_holding_child_argv(pid_file, marker),
+        *pipe_holding_child_argv(pid_file),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
