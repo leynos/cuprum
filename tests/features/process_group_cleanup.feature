@@ -8,7 +8,7 @@ Feature: Opt-in process-group cleanup
   Scenario: An owned run reclaims a grandchild that ignores termination
     Given a command whose child leaves a SIGTERM-immune grandchild
     And the command is run under the ownership process-group policy
-    When the run is cancelled
+    When the run is cancelled once
     Then the grandchild is gone after the run settles
     And the run's streams have settled
     And a process outside the run's group is untouched
@@ -16,7 +16,7 @@ Feature: Opt-in process-group cleanup
   Scenario: An inheriting run leaves its grandchild alone
     Given a command whose child leaves a SIGTERM-immune grandchild
     And the command is run under the inherited process-group policy
-    When the run is cancelled
+    When the run is cancelled once
     Then the run's direct child is gone
     And the grandchild is still running
 

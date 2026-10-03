@@ -102,6 +102,42 @@ async def _spawn_owned_run(tmp_path: Path) -> _OwnedRun:
     return _OwnedRun(process, grandchild_pid, unrelated.pid)
 
 
+async def _spawn_immune_child(ready: Path) -> asyncio.subprocess.Process:
+    """Start a child that ignores ``SIGTERM``, once it announces it is armed.
+
+    Spawned as its own session leader, so the group a teardown signals is one
+    this process created rather than the one the test runner belongs to.
+
+    The child writes ``ready`` only after installing its handler, so waiting on
+    that file is waiting for a genuinely immune child. Both halves matter: a
+    cooperative child would exit on the first signal and settle the run before
+    the escalation was ever reached, and an immune child signalled during
+    interpreter start-up would die on the default disposition instead of the
+    one this needs it to take.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The running child, armed and ready to be signalled.
+    """
+    process = await asyncio.create_subprocess_exec(
+        python_interpreter(),
+        "-c",
+        "import os, pathlib, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
+        "time.sleep(300)",
+        str(ready),
+        start_new_session=True,
+    )
+    await asyncio.to_thread(
+        wait_for_pid_file,
+        ready,
+        context="immune child readiness",
+    )
+    return process
+
+
 async def _terminate_owned_run(run: _OwnedRun) -> None:
     """Tear the run down through the ordinary teardown entry."""
     await _terminate_all_shielded((run.process,), _TeardownPolicy(0.5, owns_group=True))
@@ -342,24 +378,17 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
 ) -> None:
     """The post-``SIGKILL`` group wait is bounded, and reports what it left.
 
-    A group member whose parent died first can be re-parented outside this
-    run, so its exit is recorded only when something else reaps it. Waiting
-    for that without a bound would let a teardown outlive its grace period
-    indefinitely, so the wait is capped and the outstanding members reported
-    instead. The bound is deliberately not derived from ``cancel_grace``: that
-    bounds how long a member is *asked* to leave, not how long the run waits
-    after compelling it.
+    A group member whose parent died first can be re-parented outside this run,
+    so its exit is recorded only when something else reaps it. Waiting for that
+    without a bound would let a teardown outlive its grace period indefinitely,
+    so the wait is capped and the outstanding members reported instead. The
+    bound is deliberately not derived from ``cancel_grace``: that bounds how
+    long a member is *asked* to leave, not how long the run waits after
+    compelling it.
 
     The direct child is still awaited without a bound, and that is the
     important half. A run must reap the process it spawned even when the group
     around it cannot settle, or the caller is left with a zombie it owns.
-
-    The child ignores ``SIGTERM`` so the grace period genuinely times out and
-    the escalation is reached, and it announces itself only once its handler
-    is installed. Both halves matter: a cooperative child would exit on the
-    first signal and settle the run before the bound ever applied, and an
-    immune child signalled during interpreter start-up would die on the
-    default disposition instead of the one this test needs it to take.
     """
 
     async def refusing_group_wait(pgid: int) -> None:
@@ -374,32 +403,10 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
         del pgid
         await asyncio.sleep(3600)
 
-    # Patched where it is looked up rather than where it is defined: the
-    # teardown calls the name it imported, so patching the defining module
-    # would leave the real poll loop running and the test would pass on it.
-    monkeypatch.setattr(_process_signal, "_await_group_exit", refusing_group_wait)
-
-    async def run_case() -> None:
-        """Escalate against a group that will never settle."""
-        ready = tmp_path / "immune.ready"
-        process = await asyncio.create_subprocess_exec(
-            python_interpreter(),
-            "-c",
-            "import os, pathlib, signal, sys, time; "
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
-            "time.sleep(300)",
-            str(ready),
-            start_new_session=True,
-        )
-        # Signalling before this point would reach the interpreter's default
-        # disposition rather than the installed handler, and the child would
-        # die on SIGTERM — taking the escalation path with it.
-        await asyncio.to_thread(
-            wait_for_pid_file,
-            ready,
-            context="immune child readiness",
-        )
+    async def escalate_against_a_group_that_never_settles(
+        process: asyncio.subprocess.Process,
+    ) -> float:
+        """Tear the child down and return how long the escalation took."""
         # The grace period has to be short enough to take the escalation
         # promptly but non-zero: a zero-length wait is a corner case that can
         # complete without ever suspending, which would settle the run on the
@@ -410,8 +417,17 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
                 (process,),
                 _TeardownPolicy(0.1, owns_group=True),
             )
-        elapsed = time.monotonic() - started
+        return time.monotonic() - started
 
+    # Patched where it is looked up rather than where it is defined: the
+    # teardown calls the name it imported, so patching the defining module
+    # would leave the real poll loop running and the test would pass on it.
+    monkeypatch.setattr(_process_signal, "_await_group_exit", refusing_group_wait)
+
+    async def run_case() -> None:
+        """Escalate against a group that will never settle."""
+        process = await _spawn_immune_child(tmp_path / "immune.ready")
+        elapsed = await escalate_against_a_group_that_never_settles(process)
         assert process.returncode is not None, (
             "the direct child must be reaped even when its group cannot settle"
         )
