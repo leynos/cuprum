@@ -15,7 +15,6 @@ so its callers can run it under ``_shielded_cleanup`` as one unit.
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 import typing as typ
 
@@ -30,13 +29,6 @@ from cuprum._timeout_reporting import (
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import ExecutionContext
-
-
-# A capturing drain gives readers a short bounded chance to observe the EOF
-# created by process termination. A grandchild may keep a pipe open, so teardown
-# must never wait indefinitely.
-_CAPTURE_EOF_GRACE_S = 0.25
-_DRAIN_LOGGER = logging.getLogger(__name__)
 
 
 async def _wait_for_exit_code(
