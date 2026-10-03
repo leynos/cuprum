@@ -180,6 +180,25 @@ Two behaviours are worth noting before migrating:
   cancellation still re-raises `asyncio.CancelledError` rather than being
   converted into a timeout.
 
+### Strict decoding now governs the capture alone
+
+`ExecutionContext(errors="strict")` used to govern every decode, so a strict
+run raised `UnicodeDecodeError` from any undecodable byte it read — including
+one read only to emit a line event on a run that captured nothing. Line
+observation and echo render a *view* of the child's bytes rather than
+reporting them, so from 0.2.0 they always replace undecodable input and the
+policy applies to the capture.
+
+In practice the capturing text run is unchanged: `run()`, `run_sync()`, and
+`SafeCmd.lines()` still raise, because each decodes its capture buffer. What
+changed is that a run with `capture=False` raises nothing, and `on_line`
+callbacks, `lines()` events, and echo sinks receive `U+FFFD` rather than
+raising. If you used strict decoding as stream validation, validate the
+captured value instead — `result.stdout` still raises under a strict capture,
+and `run_bytes()` hands you the child's bytes to validate yourself. An ambient
+`sh.observe()` hook can no longer end a run under a strict policy either,
+which is what makes a strict `run_bytes()` return the bytes it captured.
+
 Callers who previously worked around decoding by round-tripping through a
 surrogate encoding can now drop it and request the byte mode directly. See the
 [binary output section in the users' guide](users-guide.md#binary-output) for
