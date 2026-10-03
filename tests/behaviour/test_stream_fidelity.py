@@ -151,10 +151,10 @@ def test_pipeline_preserves_binary_data() -> None:
 def given_binary_payload() -> _BinaryCase:
     """Build a pipeline whose payload survives only if nothing decodes it.
 
-    Every byte value is followed by a lone continuation byte, a byte no UTF-8
-    sequence starts with, and a NUL. A text-mode run of this payload would
-    replace the three invalid bytes, so the capture can only match if the
-    pipeline relayed and captured it without decoding.
+    Every byte value, then a byte no UTF-8 sequence can start with, a NUL, a
+    second such byte, and a lone continuation byte. A text-mode run would
+    replace every invalid sequence the payload holds, so the capture can only
+    match if the pipeline relayed and captured it without decoding.
 
     Returns
     -------

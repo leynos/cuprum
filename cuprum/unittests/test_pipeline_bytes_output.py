@@ -30,10 +30,11 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
 
-# Every byte value, then a lone continuation byte, a byte no UTF-8 sequence
-# starts with, and a NUL. A pipeline that decoded anywhere along the way —
-# relaying, capturing, or fanning out to a sink — would replace the invalid
-# ones, so each stream's check can tell the modes apart.
+# Every byte value, then a byte no UTF-8 sequence can start with, a NUL, a
+# second such byte, and a lone continuation byte. A pipeline that decoded
+# anywhere along the way — relaying, capturing, or fanning out to a sink —
+# would replace the invalid sequences, so each stream's check can tell the
+# modes apart.
 _BYTE_RANGE = bytes(range(256))
 _INVALID_TAIL = b"\xff\x00\xfe\x80"
 
