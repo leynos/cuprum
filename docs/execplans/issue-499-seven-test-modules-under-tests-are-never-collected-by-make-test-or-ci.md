@@ -1532,6 +1532,74 @@ than discovering the gap months later.
     commit follows it. Recording this matters because the opposite impulse —
     one commit per stale body sentence — is what opened the gap twice in a
     single session.
+- [x] (2026-10-03) Gave `01c10105` its own head-level gate evidence and
+  re-pointed the pull request body at it, closing the loop the previous entry
+  described.
+  - *Why the previous run's evidence did not carry.* The three-gate run
+    recorded above certified the execplan file while it was still modified in
+    the working tree, and the digest it recorded does equal the blob later
+    committed. But its logs say `HEAD_AT_START = 09facd90`, so they are
+    working-tree evidence at one revision, not head-level evidence at another.
+    A digest match proves the bytes are the same; it does not make the log
+    head-level evidence for a commit that did not exist when the gate ran.
+    Those are two different claims and only the weaker one was ever true, so
+    the gates were run again at `01c10105`.
+  - *The gates.* `make check-fmt`, `make markdownlint`, and `make nixie`, all
+    rc 0, sequential, each with `PRE_HEAD == POST_HEAD ==
+    01c101054f9cf9bb7df23a02ef62f1a473f161ea` and `git status --porcelain`
+    empty before and after. Durations 0.7 s, 17.1 s, 1.2 s. Every recipe
+    reached its final line, so no gate aborted early. Logs:
+    `/tmp/<gate>-issue499-01c10105.out` with rc and duration sidecars, plus
+    state captures at `/tmp/state-issue499-01c10105-{00-initial,99-final}.txt`.
+    `make test`, `make typecheck`, and `make lint` are unrun for this revision
+    and the body now says so rather than leaving their absence implicit.
+  - *One gate could have dirtied the tree and did not.* `make markdownlint`
+    depends on `make spelling`, which regenerates `typos.toml`. Here it
+    announced `current: typos.toml` and wrote nothing: the worktree blob
+    (`2f9d6c50`) equals the committed blob and the file's mtime predates the
+    run. This is worth recording because the same target has previously left
+    the tree dirty, and a gate that dirties the tree it certified would
+    invalidate its own evidence.
+  - *One detail the previous entry left open.* It recorded that the file
+    "contributed nothing to validate", which is right, but not whether nixie
+    skipped it or read it and found nothing. It reads it: the file appears in
+    the walk as an `==>` line immediately followed by `<==`, which is what
+    nixie emits for a file with no diagrams, and the 19 validated diagrams all
+    come from `docs/cuprum-design.md` and
+    `docs/documentation-style-guide.md`. The distinction matters for reading
+    the gate honestly — a file enumerated with zero diagrams and a file never
+    opened are both consistent with a green run, and only one of them means
+    the tool looked.
+  - *Hosted CI at this head, settled.* 27 check runs: 22 `success`, 5
+    `skipped`, 0 failures, 0 pending. The skipped five are `Loom model smoke
+    test`, `Kody Code Review`, `Sourcery review`, `automerge`, and `extended`.
+    `mergeStateStatus` reads `CLEAN` here, where it read `BLOCKED` at
+    `09facd90`; both readings coincide with a `CHANGES_REQUESTED` decision, so
+    the flip is not explained by the review state and I record the observation
+    without a cause. `gh pr checks` exits 0 with every check `pass` or
+    `skipping`. `reviewDecision` is `CHANGES_REQUESTED` under GraphQL, which
+    is the field REST reports as `review_decision: null` — the two API
+    surfaces disagreed until I read both.
+  - *CodeScene at this head, quoted.* Check run `111107305126`: `status`
+    `completed`, `conclusion` `success`, `output.title` "CodeScene PR Check",
+    details <https://codescene.io/projects/74471/delta/results/7794837>. The
+    delta result again differs from the previous revision's (`7794653`), which
+    is the third distinct CodeScene analysis observed across
+    `87383cd2`/`09facd90`/`01c10105` and the reason the body quotes the ID per
+    revision instead of reusing a green status.
+  - *The body, re-pointed and read back.* The live body was read back through
+    `gh api` with `Cache-Control: no-cache` and compared byte-for-byte against
+    the submitted file: 18,996 bytes, an exact match. It names `01c10105` in
+    eight places, states plainly that the three code-bearing gates are unrun
+    for that revision, and carries the CodeScene delta for the head it
+    describes. It no longer mentions `87383cd2` at all.
+  - *What remains, and what it is not.* The only outstanding PR signal is
+    `reviewDecision: CHANGES_REQUESTED`, anchored at `92f17d25` by
+    CodeRabbit's review of 2026-10-02. No commit can clear it and no local
+    evidence can substitute for it: reducing it needs a CodeRabbit review
+    submission, which is the queued request's job. Recording it as the
+    remaining blocker rather than as a gate failure keeps the two separate —
+    every gate and every required check is green at this head.
 
 ## Surprises & discoveries
 
