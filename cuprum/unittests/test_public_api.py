@@ -174,12 +174,36 @@ def test_bytes_entry_points_are_statically_typed_apart_from_text() -> None:
     ``BytesCommandResult`` does not subclass ``CommandResult``, so the two
     entry points are distinguishable before the code runs — which is the whole
     point of a typed mode. The checks live in the two coroutines above, whose
-    bodies ``ty check`` reads without this test ever awaiting them; what the
-    test asserts is that those bodies are still there to be read, so deleting
-    the checks cannot quietly turn the distinction back into a comment.
+    bodies ``ty check`` reads without this test ever awaiting them. Because
+    nothing here awaits them, a check that was deleted would fail no test at
+    all, so this reads each coroutine's source and asserts every entry point's
+    ``assert_type`` is still in the body it belongs to. A count alone would let
+    a swap pass: four ``assert_type`` calls naming the wrong classes read the
+    same as the right ones until a checker actually compares the names.
     """
-    for checker in (_assert_text_results_are_text, _assert_bytes_results_are_bytes):
-        assert checker.__doc__, f"{checker.__name__} must keep its rationale"
+    expected_pairs = {
+        _assert_text_results_are_text: {
+            ("await command.run()", "sh.CommandResult"),
+            ("command.run_sync()", "sh.CommandResult"),
+            ("await pipeline.run()", "sh.PipelineResult"),
+            ("pipeline.run_sync()", "sh.PipelineResult"),
+        },
+        _assert_bytes_results_are_bytes: {
+            ("await command.run_bytes()", "sh.BytesCommandResult"),
+            ("command.run_bytes_sync()", "sh.BytesCommandResult"),
+            ("await pipeline.run_bytes()", "sh.BytesPipelineResult"),
+            ("pipeline.run_bytes_sync()", "sh.BytesPipelineResult"),
+        },
+    }
+
+    for checker, expected in expected_pairs.items():
+        source = inspect.getsource(checker)
+        for expr, annotation in expected:
+            fragment = f"assert_type({expr}, {annotation})"
+            assert fragment in source, (
+                f"{checker.__name__} must still assert_type {expr!r} as "
+                f"{annotation}, but {fragment!r} is not in its body"
+            )
 
 
 def test_exec_hook_uses_events_as_its_definition_site() -> None:
