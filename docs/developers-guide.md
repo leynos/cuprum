@@ -432,16 +432,24 @@ in any workflow, by the command rather than a step name, and requires the guard
 as one `&&` term of a condition with no `||`.
 
 Each start also logs one bounded line: `metric setup-sccache.server=started`,
-`metric setup-sccache.server=start-failed` when the server would not start, or
-`metric setup-sccache.server=zero-stats-failed` when it started but
-`--zero-stats` then failed. The two failures share the `sccache-fallback` title
-and the run-page line, so one detector counts both, and differ in warning text
+or one of three failures. A server left from an earlier step is stopped first,
+because it holds the backend it bound then. On a fresh runner there is none and
+`sccache --stop-server` exits 1 with "couldn't connect to server", the expected
+case, so the start carries on. Any other stop failure means a server may still
+be running with the old configuration, which would silently defeat the 60 s
+timeout and the chosen backend, so it logs
+`metric setup-sccache.server=stop-failed`, prints what sccache said, and takes
+the fallback without attempting a start. `start-failed` is a server that would
+not start, and `zero-stats-failed` is one that started but whose `--zero-stats`
+then failed. The three failures share the `sccache-fallback` title and the
+run-page line, so one detector counts all of them, and differ in warning text
 and metric value so a maintainer can tell which operation failed. A count can
 be taken from the logs with the same estate convention as `setup-rust`'s
 `metric setup-rust.sccache.server=` line.
 `test_ci_setup_sccache_server_start.py` snapshots the log, run-page line,
-outputs and wrapper for all three outcomes, so a wording change to a search key
-is a reviewed diff.
+outputs and wrapper for all four outcomes, and tests the expected no-server
+stop, a stop that succeeds and an unexpected stop error, so a wording change to
+a search key is a reviewed diff.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,

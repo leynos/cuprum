@@ -36,8 +36,18 @@ FALLBACK_TITLE = "::warning title=sccache-fallback::"
 FALLBACK_SUMMARY = "sccache: FALLBACK (cache disabled for this job)"
 
 
+#: What the fake `--stop-server` does, keyed by the situation it stands for. The
+#: messages are sccache's own: with no server it prints "couldn't connect to
+#: server" and exits 1, which is the expected case on a fresh runner.
+STOP_BEHAVIOURS: typ.Final = {
+    "no-server": (1, "Error: couldn't connect to server"),
+    "stopped": (0, "Stopping sccache server..."),
+    "error": (1, "Error: Failed to send data to or receive data from server"),
+}
+
+
 def _run_start(
-    tmp_path: Path, *, starts: bool, zeroes: bool = True
+    tmp_path: Path, *, starts: bool, zeroes: bool = True, stop: str = "no-server"
 ) -> tuple[StepResult, Path, Path]:
     """Run the start step against a fake binary that does or does not start.
 
@@ -46,7 +56,9 @@ def _run_start(
     asked to start a server, so a test can tell whether the timeout reached the
     process that needed it and not merely ``GITHUB_ENV``. ``zeroes=False``
     makes ``--zero-stats`` fail, as it can when the server died after starting.
-    ``--stop-server`` always fails, as it does when no server is running.
+    ``stop`` picks what ``--stop-server`` does: ``no-server`` fails with
+    sccache's own "couldn't connect to server" as on a fresh runner, ``stopped``
+    succeeds, and ``error`` fails for any other reason.
 
     Returns
     -------
@@ -60,6 +72,7 @@ def _run_start(
     start_status = 0 if starts else 1
     zero_status = 0 if zeroes else 1
     seen_conf = tmp_path / "sccache-start-conf"
+    stop_status, stop_message = STOP_BEHAVIOURS[stop]
     binary.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$1" >> "{calls}"\n'
@@ -68,9 +81,10 @@ def _run_start(
         f"  exit {start_status}\n"
         "fi\n"
         f'[ "$1" = "--zero-stats" ] && exit {zero_status}\n'
-        # No server is running yet when the step first stops one, so a real
-        # `--stop-server` fails; the step must carry on regardless.
-        '[ "$1" = "--stop-server" ] && exit 1\n'
+        'if [ "$1" = "--stop-server" ]; then\n'
+        f'  echo "{stop_message}" >&2\n'
+        f"  exit {stop_status}\n"
+        "fi\n"
         "exit 0\n",
         encoding="utf-8",
     )
@@ -162,6 +176,7 @@ class Fallback(typ.NamedTuple):
     touches_server_again: bool
     metric: str
     warning: str
+    stop: str = "no-server"
 
 
 #: The two failed operations. The annotation title and summary line are shared,
@@ -175,6 +190,14 @@ FALLBACKS: typ.Final = {
         touches_server_again=False,
         metric="metric setup-sccache.server=start-failed",
         warning="sccache server did not start within 60 s",
+    ),
+    "stop-fails": Fallback(
+        starts=True,
+        zeroes=True,
+        touches_server_again=False,
+        metric="metric setup-sccache.server=stop-failed",
+        warning="sccache server could not be stopped",
+        stop="error",
     ),
     "zero-stats-fails-after-start": Fallback(
         starts=True,
@@ -198,13 +221,19 @@ def test_a_server_that_cannot_be_used_falls_back_without_failing(
     worked and must be absorbed the same way, but named for what failed.
     """
     result, outputs, calls = _run_start(
-        tmp_path, starts=fallback.starts, zeroes=fallback.zeroes
+        tmp_path, starts=fallback.starts, zeroes=fallback.zeroes, stop=fallback.stop
     )
 
     assert result.returncode == 0, (
         f"a cache is an optimization; the step must not fail the job: {result.stderr}"
     )
-    _assert_timeout_reached_the_server(tmp_path, result)
+    if fallback.stop == "error":
+        assert "--start-server" not in _calls(calls), (
+            "a server that could not be stopped must not be followed by a start "
+            f"that would leave two configurations in play; calls {_calls(calls)}"
+        )
+    else:
+        _assert_timeout_reached_the_server(tmp_path, result)
     assert FALLBACK_TITLE in result.stdout, (
         f"the annotation title must be sccache-fallback, got {result.stdout!r}"
     )
@@ -251,14 +280,18 @@ def test_the_stale_server_is_stopped_before_the_start(
     )
 
 
-def test_a_stop_that_finds_no_server_does_not_stop_the_start(tmp_path: Path) -> None:
-    """The first stop of a job has no server to stop, and its failure is expected.
+@pytest.mark.parametrize("stop", ["no-server", "stopped"])
+def test_a_stop_that_is_expected_does_not_stop_the_start(
+    tmp_path: Path, stop: str
+) -> None:
+    """A stop that finds no server, or stops one, lets the start carry on.
 
-    ``--stop-server`` exits non-zero when nothing is running, which is the normal
-    case on a fresh runner. The step runs under ``set -e``, so dropping the
-    ``|| true`` that absorbs it would fail every healthy job at its first step.
+    ``--stop-server`` exits non-zero with "couldn't connect to server" when
+    nothing is running, which is the normal case on a fresh runner and must not
+    fail or fall back a healthy job. Only that message is expected: any other
+    failure is the fallback tested above.
     """
-    result, outputs, calls = _run_start(tmp_path, starts=True)
+    result, outputs, calls = _run_start(tmp_path, starts=True, stop=stop)
 
     assert result.returncode == 0, result.stderr
     assert _calls(calls)[:2] == ["--stop-server", "--start-server"], (
@@ -269,17 +302,18 @@ def test_a_stop_that_finds_no_server_does_not_stop_the_start(tmp_path: Path) -> 
     )
 
 
-#: The three outcomes whose user-visible output is a stable contract.
+#: The four outcomes whose user-visible output is a stable contract.
 OUTCOMES: typ.Final = {
-    "started": {"starts": True, "zeroes": True},
-    "start-fails": {"starts": False, "zeroes": True},
-    "zero-stats-fails": {"starts": True, "zeroes": False},
+    "started": (True, True, "no-server"),
+    "start-fails": (False, True, "no-server"),
+    "zero-stats-fails": (True, False, "no-server"),
+    "stop-fails": (True, True, "error"),
 }
 
 
 @pytest.mark.parametrize("outcome", OUTCOMES.values(), ids=OUTCOMES.keys())
 def test_the_user_visible_output_is_stable(
-    tmp_path: Path, outcome: dict[str, bool], snapshot: SnapshotAssertion
+    tmp_path: Path, outcome: tuple[bool, bool, str], snapshot: SnapshotAssertion
 ) -> None:
     """Snapshot what a person or a detector sees: log, run page and outputs.
 
@@ -287,7 +321,8 @@ def test_the_user_visible_output_is_stable(
     keys, so a wording change to any of them should be a reviewed diff, not an
     incidental one. Nothing here is nondeterministic: the log carries no path.
     """
-    result, outputs, _ = _run_start(tmp_path, **outcome)
+    starts, zeroes, stop = outcome
+    result, outputs, _ = _run_start(tmp_path, starts=starts, zeroes=zeroes, stop=stop)
 
     visible = {
         "log": result.stdout.splitlines(),

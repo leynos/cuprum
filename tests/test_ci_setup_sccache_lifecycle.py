@@ -77,7 +77,10 @@ def test_the_server_process_sees_what_the_install_exported(
         'if [ "$1" = "--start-server" ]; then\n'
         f'  env > "{seen}"\n'
         "fi\n"
-        'if [ "$1" = "--stop-server" ]; then exit 1; fi\n'
+        'if [ "$1" = "--stop-server" ]; then\n'
+        '  echo "Error: couldn\'t connect to server" >&2\n'
+        "  exit 1\n"
+        "fi\n"
         "exit 0\n",
         encoding="utf-8",
     )
