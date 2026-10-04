@@ -3,8 +3,8 @@
 sccache reads its cache configuration once, when the server starts, and never
 rebinds it. So the start has to be the action's last step, after the backend
 selection and the wrapper export, or the server binds whatever was configured
-before them. `test_setup_sccache_server_start.py` runs the start step alone and
-cannot see where it sits in the manifest; `test_setup_sccache_action.py` runs
+before them. `test_ci_setup_sccache_server_start.py` runs the start step alone and
+cannot see where it sits in the manifest; `test_ci_setup_sccache_action.py` runs
 the install step alone and cannot see whether a later step receives what it
 exported. These do both.
 
@@ -22,7 +22,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.composite_actions import action_document, run_step, step_script
-from tests.test_setup_sccache_action import (
+from tests.test_ci_setup_sccache_action import (
     ACTION,
     INSTALL_STEP,
     PROXY_CREDENTIALS,
