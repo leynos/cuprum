@@ -5,9 +5,8 @@ two are bounded by a compilation. `trybuild` builds a scratch crate for
 each UI case, and the scratch workspace is a target directory of its own,
 so neither nextest's warm build nor the coverage lane's cache can serve
 it. They also inherit `RUSTFLAGS` from the `cargo` that invoked them,
-which makes `make test`'s dev-fast flags (`--jobs 1`, `-C
-codegen-units=1`, `CARGO_BUILD_JOBS=1`) several times slower than the
-coverage lane's plain `-D warnings`.
+which makes `make test`'s dev-fast flags (`-C codegen-units=1`) several
+times slower than the coverage lane's plain `-D warnings`.
 
 The profile's per-test allowance is sized for tests that do work, so these
 two need an override. This module holds the override to that, and holds
@@ -186,7 +185,7 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     `trybuild` compiles a scratch crate for each UI case, so these tests
     are bounded by a build rather than by test work, and they inherit
     `RUSTFLAGS` from the `cargo` that invoked them. `make test` passes
-    `--jobs 1`, `-C codegen-units=1` and `CARGO_BUILD_JOBS=1`, and the
+    `-C codegen-units=1` and leaves Cargo's job count at its default, and the
     scratch workspace is a separate target directory that nextest's own
     warm build cannot serve, so the build is several times slower there
     than in the coverage lane's plain `-D warnings`.

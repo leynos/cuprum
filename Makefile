@@ -55,7 +55,7 @@ DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
 DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) CARGO=$(DEV_FAST_CARGO_BRIDGE))
 DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG_RELATIVE)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG_RELATIVE)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
 DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
-DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
+DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
 RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28
 RUSTFMT_CARGO ?= $(CARGO) +$(RUSTFMT_TOOLCHAIN)
 WHITAKER ?= whitaker
@@ -65,7 +65,6 @@ RUSTDOC_FLAGS ?= --cfg docsrs -D warnings
 DOCTEST_RUSTDOC_FLAGS = $(RUSTDOC_FLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Zunstable-options --display-doctest-warnings --doctest-build-arg=-D --doctest-build-arg=warnings)
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
-DOC_FLAGS ?= --jobs 1
 # nextest's test-thread count. One by default so a developer's laptop keeps a
 # core for the editor; CI raises it to the vCPU count of the runner the job is
 # billed for, and never above it.
@@ -114,7 +113,7 @@ override WHITAKER_PACKAGE_FLAGS := $(foreach package,$(WHITAKER_PACKAGES),--pack
 # quietly acquire the development fragment on a route that must stay
 # fragment-free. The flags below are the whole of what Whitaker may receive.
 override WHITAKER_CARGO_FLAGS := $(WHITAKER_PACKAGE_FLAGS) \
-	--all-targets --all-features --jobs 1
+	--all-targets --all-features
 # Extra flags for the `maturin develop` invocation in the `develop` target.
 # Empty by default: a debug build is what contributors and the extension-tests
 # job want. The benchmark ratchet needs an optimized build, and an optimized
@@ -136,9 +135,7 @@ WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 # must be stated. Keep it in step with the `python-version` the Windows job in
 # .github/workflows/build-wheels.yml builds against.
 WINDOWS_PYTHON_VERSION ?= 3.13
-PYTEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_RUSTFLAGS ?= -C codegen-units=1
-TEST_CARGO_BUILD_JOBS ?= 1
 # Keep pytest serial by default: each batch may compile or reuse Rust artefacts,
 # and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
@@ -446,7 +443,7 @@ python-lint: ruff uv pylint-integration pylint-classic verify-df12-pylint ## Run
 rust-lint: lint-clippy lint-whitaker spelling ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 
 lint-clippy: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation and Clippy
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
 
 lint-whitaker: ## Run Whitaker for every Rust workspace package
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
@@ -499,7 +496,7 @@ test: makeutil test-selection test-python test-rust ## Run the Python and Rust s
 test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
-	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
+	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
@@ -528,12 +525,12 @@ test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, 
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
-	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
-	cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV
 	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features

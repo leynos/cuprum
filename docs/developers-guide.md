@@ -771,10 +771,13 @@ own.
 ### Concurrency
 
 `ci.yml` declares one constant, `LINUX_RUNNER_VCPUS`, equal to the vCPU count of
-`ubicloud-standard-2`. `make test` takes `TEST_JOBS`, `TEST_CARGO_BUILD_JOBS`,
-and `PYTEST_CARGO_BUILD_JOBS` from it, and the two jobs that compile outside
-`make test` set `CARGO_BUILD_JOBS` from it. Raising the label means raising the
-constant in the same change.
+`ubicloud-standard-2`. The Makefile pins no Cargo job count, so Cargo uses its
+default (every core) or the caller's `CARGO_BUILD_JOBS`, and the jobs that
+compile on the 2-vCPU runner set `CARGO_BUILD_JOBS` from the constant. No
+workflow carries a literal count, and `tests/test_ci_worker_bounds.py` refuses
+one, along with any `--jobs 1` or `CARGO_BUILD_JOBS` assignment in the Makefile.
+`TEST_JOBS` stays: it is nextest's test-thread count, not a Cargo build limit.
+Raising the label means raising the constant in the same change.
 
 pytest stays serial. `PYTEST_WORKERS` defaults to `0` and the coverage action
 runs with `pytest-workers: ''`, because the batches compile and reuse the same

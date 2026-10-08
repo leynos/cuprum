@@ -39,7 +39,6 @@ jobs:
         shell: bash
         working-directory: rust
     env:
-      CARGO_BUILD_JOBS: '2'
       RUSTFLAGS: '-D warnings'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -188,8 +187,6 @@ jobs:
       max-parallel: 1
       matrix:
         check: [kani, miri]
-    env:
-      CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

@@ -22,10 +22,11 @@ from tests.helpers.ci_runners import (
 
 MAKEFILE = ROOT / "Makefile"
 VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
-#: Make variables that carry the runner's vCPU count into the test command.
-#: Only the pytest one remains here: the Rust suite moved to the coverage job,
-#: which bounds itself through `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`.
-PARALLELISM_OVERRIDES = ("PYTEST_CARGO_BUILD_JOBS",)
+#: A Cargo job count handed to a command: a Makefile assignment, a `--jobs`
+#: flag, or a `CARGO_BUILD_JOBS` value in a workflow. Cargo defaults to every
+#: core, so a pin below the runner's vCPU count only starves a billed runner.
+CARGO_JOBS_VALUE = re.compile(r"CARGO_BUILD_JOBS\s*[:=][ \t]*([^\n]*)")
+SERIAL_CARGO_JOBS = re.compile(r"(?<!pylint )--jobs[ =]1\b")
 
 
 def test_the_vcpu_constant_matches_the_assigned_label() -> None:
@@ -38,17 +39,51 @@ def test_the_vcpu_constant_matches_the_assigned_label() -> None:
 
 
 def test_python_tests_derive_their_worker_counts_from_that_constant() -> None:
-    """Size the matrix suite's Cargo work from the constant, not a literal."""
+    """Size the matrix suite's Cargo work from the constant, not a literal.
+
+    `make test-python` sets no job count of its own, so the step hands the
+    runner's vCPU count to Cargo through the environment it inherits.
+    """
     script = next(
         step["run"]
         for step in steps("ci.yml", "typecheck-test")
         if step.get("name") == "Run tests"
     )
     assert isinstance(script, str), "ci.yml:typecheck-test must run a test script"
-    for variable in PARALLELISM_OVERRIDES:
-        assert f'{variable}="${{{VCPU_CONSTANT}}}"' in script, (
-            f"ci.yml:typecheck-test must pass {variable} from {VCPU_CONSTANT}"
-        )
+    assert f'CARGO_BUILD_JOBS="${{{VCPU_CONSTANT}}}" make test-python' in script, (
+        f"ci.yml:typecheck-test must pass CARGO_BUILD_JOBS from {VCPU_CONSTANT}"
+    )
+
+
+def test_the_makefile_pins_no_cargo_job_count() -> None:
+    """Leave Cargo's job count to the caller and to Cargo's own default.
+
+    A hard-coded single job serialises every build behind one core while a
+    billed runner sits idle, and it overrides a caller's `CARGO_BUILD_JOBS`.
+    `TEST_JOBS` is nextest's test-thread count, not a Cargo build limit, so
+    it stays. pylint's `--jobs=1` is not Cargo, so the pattern skips it.
+    """
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    assert not SERIAL_CARGO_JOBS.search(makefile), "no Cargo command may be --jobs 1"
+    assert not CARGO_JOBS_VALUE.search(makefile), (
+        "the Makefile must not assign CARGO_BUILD_JOBS; callers own it"
+    )
+    for retired in ("PYTEST_CARGO_BUILD_JOBS", "TEST_CARGO_BUILD_JOBS", "DOC_FLAGS"):
+        assert retired not in makefile, f"{retired} pinned Cargo to one job"
+
+
+def test_every_workflow_cargo_job_count_derives_from_the_constant() -> None:
+    """Refuse a literal `CARGO_BUILD_JOBS`, which pins a runner's cores by hand.
+
+    Each value must name `LINUX_RUNNER_VCPUS`, so raising the label raises the
+    count in one place. A workflow with no value uses Cargo's default.
+    """
+    for path, source in workflow_sources():
+        for match in CARGO_JOBS_VALUE.finditer(source):
+            assert VCPU_CONSTANT in match.group(1), (
+                f"{path}: CARGO_BUILD_JOBS must derive from {VCPU_CONSTANT}, "
+                f"got {match.group(1)!r}"
+            )
 
 
 def test_extension_and_benchmark_builds_are_bounded_too() -> None:
