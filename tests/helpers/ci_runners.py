@@ -252,11 +252,20 @@ MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
 #: `typecheck-test` is absent: one of its legs only typechecks, so the wrapper
 #: is installed conditionally there and a job-wide contract cannot describe it.
 #: `test_the_typecheck_only_leg_installs_no_wrapper` covers that case instead.
+#: The guard every statistics step carries. With no server, `sccache
+#: --show-stats` prints empty default statistics rather than starting one, so
+#: reading statistics after the composite fell back would publish misleading
+#: zeroes; the guard prevents that.
+NOT_FALLEN_BACK: typ.Final = "steps.sccache.outputs.status != 'fallback'"
+#: The step id every `setup-sccache` call carries, which the guard above reads.
+SCCACHE_STEP_ID: typ.Final = "sccache"
 SCCACHE_JOBS: typ.Final = (
+    ("rust-boundaries.yml", "native"),
     ("rust-boundaries.yml", "verus"),
     ("ci.yml", "lint-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),
+    ("ci.yml", "loom-smoke"),
     ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
     ("loom.yml", "loom"),

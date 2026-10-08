@@ -23,9 +23,11 @@ from tests.helpers.ci_runners import (
     CACHE_KEYS_ACTION_FILE,
     CACHED_JOBS,
     FORBIDDEN_CACHE_PATHS,
+    NOT_FALLEN_BACK,
     ROOT,
     SCCACHE_ACTION,
     SCCACHE_JOBS,
+    SCCACHE_STEP_ID,
     SETUP_RUST,
     cache_paths,
     cache_steps,
@@ -38,6 +40,7 @@ from tests.helpers.ci_runners import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+
 KEY_RENDERER_SOURCE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
 SCCACHE_ACTION_SOURCE = ROOT / ".github" / "actions" / "setup-sccache" / "action.yml"
 KEY_FAMILIES = ("CARGO_CACHE_KEY", "TOOL_CACHE_KEY", "SCCACHE_CACHE_KEY")
@@ -45,7 +48,7 @@ KEY_FAMILIES = ("CARGO_CACHE_KEY", "TOOL_CACHE_KEY", "SCCACHE_CACHE_KEY")
 #: them, or the statistics describe a window that ends before the work they
 #: claim to measure. Some entries also match steps that compile nothing, such
 #: as `Check out repository`; that is harmless because only the last index is
-#: used, and the lower bound is enforced by the reset's adjacency to setup.
+#: used.
 MEASURED_STEP_PREFIXES = (
     "install",
     "build",
@@ -73,25 +76,28 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
         f"{workflow_name}:{job_name} compiles Rust, so it must install the "
         "checksum-verified wrapper exactly once"
     )
-    reset_index = next(
-        index
-        for index, step in enumerate(job_steps)
-        if step.get("name") == "Reset compiler-cache counters"
+    # The composite starts the server and zeroes its counters itself, so no
+    # workflow step may do it again: a second zeroing after other work would
+    # drop requests from the measured window, and a separate start step would
+    # reintroduce the 10 s hard fail this composite exists to remove.
+    zeroing = [
+        step.get("name")
+        for step in job_steps
+        if "--zero-stats" in str(step.get("run", ""))
+        or "--start-server" in str(step.get("run", ""))
+    ]
+    assert not zeroing, (
+        f"{workflow_name}:{job_name} must leave starting and zeroing the "
+        f"server to the setup-sccache composite, found {zeroing}"
+    )
+    assert job_steps[setup_indices[0]].get("id") == SCCACHE_STEP_ID, (
+        f"{workflow_name}:{job_name} must give the setup step id "
+        f"{SCCACHE_STEP_ID!r}, which the statistics guard reads"
     )
     stats_index = next(
         index
         for index, step in enumerate(job_steps)
-        if step.get("name") == "Record compiler-cache effectiveness"
-    )
-    # Immediately after setup, not merely somewhere before the report. Any step
-    # in between may compile: `lint-test` builds the cranelift Whitaker suite
-    # while installing it, and those requests were zeroed away before the
-    # report while a weaker ordering assertion still passed.
-    assert reset_index == setup_indices[0] + 1, (
-        f"{workflow_name}:{job_name} must zero the counters in the step "
-        f"immediately after installing the wrapper, so no compilation escapes "
-        f"the measured window; reset is at {reset_index}, setup at "
-        f"{setup_indices[0]}"
+        if "--show-stats" in str(step.get("run", ""))
     )
     measured = [
         index
@@ -99,17 +105,27 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
         if str(step.get("name", "")).lower().startswith(MEASURED_STEP_PREFIXES)
     ]
     assert measured, f"{workflow_name}:{job_name} must do some measurable work"
-    # The lower bound is already covered, and more strictly, by the adjacency
-    # assertion above: nothing at all sits between the wrapper and the reset.
-    # This is the upper bound, so no compilation happens after the report.
+    # The report comes after every step that can invoke the compiler, so no
+    # compilation happens after it.
     assert stats_index > max(measured), (
         f"{workflow_name}:{job_name} must report the counters after "
         f"{job_steps[max(measured)].get('name')!r}, the last step that can "
         "invoke the compiler"
     )
     stats = job_steps[stats_index]
-    assert ungated(workflow_name, job_name, stats.get("if")) == "always()", (
-        f"{workflow_name}:{job_name} must report the counters even when the build fails"
+    # Whole-guard comparison. `always()` keeps the report after a failed
+    # build; the second conjunct stops it reading statistics from a server the
+    # composite could not start: with no server `--show-stats` prints empty
+    # default statistics, so the report would describe a job that never used
+    # the cache.
+    guard = ungated(workflow_name, job_name, stats.get("if"))
+    expected = f"always() && {NOT_FALLEN_BACK}"
+    if workflow_name == "rust-boundaries.yml" and job_name == "native":
+        expected = f"always() && runner.os == 'Linux' && {NOT_FALLEN_BACK}"
+    assert guard == expected, (
+        f"{workflow_name}:{job_name} must report the counters even when the "
+        f"build fails, and never after a fallback: expected {expected!r}, "
+        f"got {guard!r}"
     )
     script = stats.get("run")
     assert isinstance(script, str), (
