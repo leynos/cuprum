@@ -75,32 +75,34 @@ def _run_verify(
     )
 
 
+class Scenario(typ.NamedTuple):
+    """What the stand-in reports, and whether the verify step should pass."""
+
+    version: str
+    status: str
+    passes: bool
+
+
+SCENARIOS: typ.Final = {
+    "matching-and-complete": Scenario(REPORTED_VERSION, "complete", passes=True),
+    "version-differs": Scenario("1.2.3", "complete", passes=False),
+    "parse-incomplete": Scenario(REPORTED_VERSION, "recovered", passes=False),
+}
+
+
 @pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
-@pytest.mark.parametrize(
-    ("version", "status", "passes"),
-    [
-        (REPORTED_VERSION, "complete", True),
-        ("1.2.3", "complete", False),
-        (REPORTED_VERSION, "recovered", False),
-    ],
-    ids=["matching-and-complete", "version-differs", "parse-incomplete"],
-)
+@pytest.mark.parametrize("scenario", SCENARIOS.values(), ids=SCENARIOS.keys())
 def test_the_verify_script_accepts_only_the_reported_version_and_a_complete_parse(
-    workflow_name: str,
-    job_name: str,
-    version: str,
-    status: str,
-    passes: bool,
-    tmp_path: Path,
+    workflow_name: str, job_name: str, scenario: Scenario, tmp_path: Path
 ) -> None:
     """The step succeeds only for the reported version and a complete parse."""
     result = _run_verify(
         _verify_script(workflow_name, job_name),
         tmp_path,
         installed=REPORTED_VERSION,
-        version=version,
-        status=status,
+        version=scenario.version,
+        status=scenario.status,
     )
-    assert (result.returncode == 0) is passes, (
+    assert (result.returncode == 0) is scenario.passes, (
         f"{workflow_name}:{job_name} returned {result.returncode}: {result.stderr}"
     )
