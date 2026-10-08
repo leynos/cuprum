@@ -48,6 +48,11 @@ INTERVAL = "daily"
 #: each one arrives in a pull request of its own.
 GROUPED_UPDATE_TYPES = frozenset({"minor", "patch"})
 
+#: Narrow groups an ecosystem's stanza lists ahead of the catch-all. A bump of a
+#: ``leynos/shared-actions`` pin moves one commit SHA to another and has no
+#: semver level, so the typed catch-all never takes it; this group does.
+NARROW_GROUPS = {"github-actions": {"shared-actions": ["leynos/shared-actions*"]}}
+
 #: The `applies-to` value a routine-update group must carry, when it names one.
 VERSION_UPDATES = "version-updates"
 
@@ -293,11 +298,22 @@ def test_each_stanza_batches_minor_and_patch_updates_only(
         declared.get("groups"),
         f"the {stanza.ecosystem} stanza must declare `groups` to batch updates",
     )
-    assert len(groups) == 1, (
-        "one catch-all group keeps routine bumps in a single pull request; "
-        f"got {sorted(groups)}"
+    narrow = NARROW_GROUPS.get(stanza.ecosystem, {})
+    for name, patterns in narrow.items():
+        assert groups.get(name) == {"patterns": patterns}, (
+            f"the {stanza.ecosystem} {name} group must be exactly patterns "
+            f"{patterns}; got {groups.get(name)}"
+        )
+    assert list(groups)[: len(narrow)] == list(narrow), (
+        f"the {stanza.ecosystem} narrow groups must precede the catch-all; "
+        f"got {list(groups)}"
     )
-    for name, raw_group in groups.items():
+    catch_all_groups = {name: raw for name, raw in groups.items() if name not in narrow}
+    assert len(catch_all_groups) == 1, (
+        "one catch-all group keeps routine bumps in a single pull request; "
+        f"got {sorted(catch_all_groups)}"
+    )
+    for name, raw_group in catch_all_groups.items():
         group = _mapping(raw_group, f"group {name!r} must be a mapping")
         patterns = _sequence(
             group.get("patterns"), f"group {name!r} must declare `patterns`"
