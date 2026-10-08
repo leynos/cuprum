@@ -69,7 +69,7 @@ def executable_lines(script: str) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        One whitespace-normalised string per command line.
+        One whitespace-normalized string per command line.
 
     Examples
     --------
