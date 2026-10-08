@@ -36,7 +36,7 @@ INSTALL_STEP: typ.Final = "Install makeutil"
 VERIFY_STEP: typ.Final = "Verify makeutil"
 #: What the verify step reads from the install step, which carries this id.
 INSTALL_ID: typ.Final = "makeutil"
-INSTALLED_VERSION: typ.Final = "${{ steps.makeutil.outputs.version }}"
+VERSION_OUTPUT: typ.Final = "${{ steps.makeutil.outputs.version }}"
 
 #: The verify script, as the shell would run it: strict mode, the version
 #: comparison, and a complete parse of the repository Makefile.
@@ -108,12 +108,9 @@ def assert_installation(
     contract : str
         Names the workflow and job, so a failure says where it happened.
 
-    Raises
-    ------
-    AssertionError
-        If the step does not use the pinned action, has no `id`, carries a
-        `run` or `with` key, can fail without failing the job, or has any guard
-        beyond the job's leg flag.
+    Raises ``AssertionError`` if the step does not use the pinned action, has
+    no `id`, carries a `run` or `with` key, can fail without failing the job,
+    or has any guard beyond the job's leg flag.
 
     Examples
     --------
@@ -155,12 +152,9 @@ def assert_verification(
     contract : str
         Names the workflow and job, so a failure says where it happened.
 
-    Raises
-    ------
-    AssertionError
-        If the step is guarded beyond the leg flag, can fail without failing the
-        job, does not read the version the action reports, runs anything but
-        the expected commands, or names a literal version.
+    Raises ``AssertionError`` if the step is guarded beyond the leg flag, can
+    fail without failing the job, does not read the version the action reports,
+    runs anything but the expected commands, or names a literal version.
 
     Examples
     --------
@@ -181,7 +175,7 @@ def assert_verification(
     _require(isinstance(environment, dict), f"{contract} verify step needs an env")
     _require(
         typ.cast("dict[str, object]", environment).get("INSTALLED_VERSION")
-        == INSTALLED_VERSION,
+        == VERSION_OUTPUT,
         f"{contract} must read the version the install action reports",
     )
     script = step.get("run")
@@ -212,10 +206,8 @@ def assert_verification_follows_install(
     contract : str
         Names the workflow and job, so a failure says where it happened.
 
-    Raises
-    ------
-    AssertionError
-        If there is no install step, or the step after it is not the verify step.
+    Raises ``AssertionError`` if there is no install step, or the step after it
+    is not the verify step.
 
     Examples
     --------
