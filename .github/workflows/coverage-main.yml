@@ -44,7 +44,7 @@ concurrency:
 env:
   CACHE_GENERATION: v1
   UBUNTU_RELEASE: ubuntu2404
-  MDTABLEFIX_VERSION: '0.6.0'
+  MDTABLEFIX_VERSION: '0.6.1'
   # This job now compiles and runs the Rust suite under instrumentation, so it
   # is bounded by the same vCPU budget as the pull-request coverage job.
   LINUX_RUNNER_VCPUS: '2'

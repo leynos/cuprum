@@ -4817,7 +4817,7 @@ Install the pinned prebuilt version locally with `cargo-binstall` so formatter
 output matches CI:
 
 ```bash
-MDTABLEFIX_VERSION=0.6.0
+MDTABLEFIX_VERSION=0.6.1
 cargo binstall --no-confirm --locked --disable-strategies compile \
   --install-path "$HOME/.local/bin" "mdtablefix@${MDTABLEFIX_VERSION}"
 ```

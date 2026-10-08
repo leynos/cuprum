@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: 60
     env:
       MBAKE_VERSION: '1.4.6'
-      MDTABLEFIX_VERSION: '0.6.0'
+      MDTABLEFIX_VERSION: '0.6.1'
       UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
       UV_TOOL_DIR: ${{ github.workspace }}/.uv-tools
       UV_TOOL_BIN_DIR: ${{ github.workspace }}/.uv-bin
@@ -416,7 +416,7 @@ jobs:
       # doing anything. It still runs on push to `main` and on dispatch; only
       # the push writes its compiler family, since the saves need a push.
       LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}
-      MDTABLEFIX_VERSION: '0.6.0'
+      MDTABLEFIX_VERSION: '0.6.1'
       DEV_FAST_TOOLCHAIN: 'nightly-2026-08-23'
     strategy:
       fail-fast: false
@@ -992,7 +992,7 @@ jobs:
       RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
-      MDTABLEFIX_VERSION: '0.6.0'
+      MDTABLEFIX_VERSION: '0.6.1'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

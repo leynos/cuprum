@@ -60,8 +60,8 @@ def test_full_python_test_jobs_install_mdtablefix_before_running_tests(
         if isinstance(job_environment, dict) and "MDTABLEFIX_VERSION" in job_environment
         else workflow_env(workflow_name)
     )
-    assert environment.get("MDTABLEFIX_VERSION") == "0.6.0", (
-        f"{workflow_name}:{job_name} must pin MDTABLEFIX_VERSION to 0.6.0"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.6.1", (
+        f"{workflow_name}:{job_name} must pin MDTABLEFIX_VERSION to 0.6.1"
     )
     assert declared_steps.index(installer) < declared_steps.index(
         next(step for step in declared_steps if step.get("name") == test_step_name)
