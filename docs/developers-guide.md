@@ -4882,16 +4882,16 @@ restored binary before trusting it, so this repository's tool cache neither
 carries makeutil nor skips its install. Each install step takes the action's
 defaults, with no `with` or `run` key, so the version is the one the action
 ships; the step after it, `Verify makeutil`, requires `makeutil --version` to
-equal the version the action reports and a complete parse of the `Makefile`.
-It never names a version. `tests/test_ci_makeutil_install.py` holds the
+equal the version the action reports and a complete parse of the `Makefile`. It
+never names a version. `tests/test_ci_makeutil_install.py` holds the
 arrangement, using the step shapes in `tests/helpers/ci_makeutil.py`: bump the
 pinned action reference there and in the workflows together. It also refuses
 any other route that fetches or builds makeutil, and any job-level copy of a
 pin.
 
 For local test runs, put `makeutil` on `PATH` before running `make test`:
-download `makeutil-x86_64-unknown-linux-musl` (or the `aarch64` build) from
-the release of the version the `install-makeutil` action defaults to, listed at
+download `makeutil-x86_64-unknown-linux-musl` (or the `aarch64` build) from the
+release of the version the `install-makeutil` action defaults to, listed at
 <https://github.com/leynos/makeutil/releases>, verify it against the matching
 `.sha256` file, and install it as `makeutil`.
 

@@ -59,8 +59,8 @@ it with the shared `install-makeutil` action, which keeps its own cache keyed
 on the pinned digest and re-verifies a restored binary. The tool cache
 therefore does not carry makeutil, the install is never skipped on a hit, and a
 writer of a tool family need not install it before saving.
-`tests/test_ci_makeutil_install.py` holds that arrangement, and refuses a
-local copy of the action or a second route that fetches makeutil.
+`tests/test_ci_makeutil_install.py` holds that arrangement, and refuses a local
+copy of the action or a second route that fetches makeutil.
 
 ## Why the lane is in every key
 
