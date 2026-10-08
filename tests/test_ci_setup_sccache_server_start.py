@@ -43,6 +43,10 @@ STOP_BEHAVIOURS: typ.Final = {
     "no-server": (1, "Error: couldn't connect to server"),
     "stopped": (0, "Stopping sccache server..."),
     "error": (1, "Error: Failed to send data to or receive data from server"),
+    # A server that accepts the connection and never replies: sccache's client
+    # has no read timeout, so only the step's own bound ends it. `exec` keeps it
+    # one process, as the real client is, so the bound's signal ends it.
+    "stalls": (0, "Stopping sccache server..."),
 }
 
 
@@ -82,7 +86,8 @@ def _run_start(
         "fi\n"
         f'[ "$1" = "--zero-stats" ] && exit {zero_status}\n'
         'if [ "$1" = "--stop-server" ]; then\n'
-        f'  echo "{stop_message}" >&2\n'
+        + ("  exec sleep 60\n" if stop == "stalls" else "")
+        + f'  echo "{stop_message}" >&2\n'
         f"  exit {stop_status}\n"
         "fi\n"
         "exit 0\n",
@@ -99,6 +104,7 @@ def _run_start(
         environment={
             "RUNNER_TEMP": str(runner_temp),
             "GITHUB_OUTPUT": str(outputs),
+            "SETUP_SCCACHE_STOP_TIMEOUT": "1",
         },
     )
     return result, outputs, calls
@@ -199,6 +205,14 @@ FALLBACKS: typ.Final = {
         warning="sccache server could not be stopped",
         stop="error",
     ),
+    "stop-stalls": Fallback(
+        starts=True,
+        zeroes=True,
+        touches_server_again=False,
+        metric="metric setup-sccache.server=stop-failed",
+        warning="sccache server could not be stopped",
+        stop="stalls",
+    ),
     "zero-stats-fails-after-start": Fallback(
         starts=True,
         zeroes=False,
@@ -227,7 +241,7 @@ def test_a_server_that_cannot_be_used_falls_back_without_failing(
     assert result.returncode == 0, (
         f"a cache is an optimization; the step must not fail the job: {result.stderr}"
     )
-    if fallback.stop == "error":
+    if fallback.stop in {"error", "stalls"}:
         assert "--start-server" not in _calls(calls), (
             "a server that could not be stopped must not be followed by a start "
             f"that would leave two configurations in play; calls {_calls(calls)}"

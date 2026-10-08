@@ -216,8 +216,17 @@ runs:
         # carries on. Any other failure means a server may still be running with
         # the old configuration, which would silently defeat the 60 s timeout and
         # the backend chosen above, so it takes the explicit fallback instead of
-        # being discarded.
-        if ! stop_output="$("${binary}" --stop-server 2>&1)"; then
+        # being discarded. The stop is bounded too: sccache's shutdown client
+        # waits for the server's reply with no read timeout, so a server that
+        # accepts the connection and never answers would block the job. A
+        # timeout is a failed stop and takes the same fallback. Without a GNU
+        # `timeout` (macOS, Windows) the stop runs unbounded, as before.
+        stop_timeout="${SETUP_SCCACHE_STOP_TIMEOUT:-30}"
+        bounded=()
+        if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+          bounded=(timeout "${stop_timeout}")
+        fi
+        if ! stop_output="$(${bounded[@]+"${bounded[@]}"} "${binary}" --stop-server 2>&1)"; then
           case "${stop_output}" in
             *"couldn't connect to server"*) ;;
             *)

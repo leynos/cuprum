@@ -439,7 +439,11 @@ case, so the start carries on. Any other stop failure means a server may still
 be running with the old configuration, which would silently defeat the 60 s
 timeout and the chosen backend, so it logs
 `metric setup-sccache.server=stop-failed`, prints what sccache said, and takes
-the fallback without attempting a start. `start-failed` is a server that would
+the fallback without attempting a start. The stop is bounded at 30 s
+(`SETUP_SCCACHE_STOP_TIMEOUT` overrides it, which the tests use) when a GNU
+`timeout` exists, because sccache's shutdown client has no read timeout and a
+server that never answers would otherwise block the job; a timeout is a failed
+stop. `start-failed` is a server that would
 not start, and `zero-stats-failed` is one that started but whose `--zero-stats`
 then failed. The three failures share the `sccache-fallback` title and the
 run-page line, so one detector counts all of them, and differ in warning text
