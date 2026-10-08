@@ -4873,35 +4873,27 @@ the ceilings and what to do about them.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
-available before running the test suite. In CI the pin lives only in
-`.github/actions/install-makeutil`: a release version, its musl target, and the
-release binary's SHA-256. The action downloads the binary into a scratch
-directory, checks it against that digest, and only then installs it into
-`~/.cargo/bin`. The digest is pinned here rather than read from the release's
-own `.sha256` file, which comes from the same place as the binary. A job runs
-the action only when its tool cache missed. The tool family's key hashes the
-action, and `~/.cargo/bin` is in the family, so an exact hit already holds the
-pinned release, and changing the pin changes the key so the next run misses and
-downloads. `tests/test_ci_makeutil_install.py` holds the arrangement as text,
-`tests/test_ci_install_makeutil_action.py` runs the action's step against a
-stand-in download with the real digest check, and
-`tests/integration/test_makeutil_cache_integration.py` (in `make test-act`)
-evaluates each consumer's guard under `act` for an exact hit, a restore-key hit
-and a miss.
+available before running the test suite. In CI the jobs that run the Makefile
+contracts install it with the shared `install-makeutil` action, pinned by
+commit, which installs makeutil's prebuilt static binary and verifies it
+against a digest table pinned in the action. The action keeps its own cache of
+the binary, keyed on the version, target and pinned digest, and re-verifies a
+restored binary before trusting it, so this repository's tool cache neither
+carries makeutil nor skips its install. Each install step takes the action's
+defaults, with no `with` or `run` key, so the version is the one the action
+ships; the step after it, `Verify makeutil`, requires `makeutil --version` to
+equal the version the action reports and a complete parse of the `Makefile`.
+It never names a version. `tests/test_ci_makeutil_install.py` holds the
+arrangement, using the step shapes in `tests/helpers/ci_makeutil.py`: bump the
+pinned action reference there and in the workflows together. It also refuses
+any other route that fetches or builds makeutil, and any job-level copy of a
+pin.
 
-For local test runs, install the same pinned release before running
-`make test`. Each command runs only if the one before it succeeded, so a
-rejected checksum installs nothing:
-
-```bash
-curl --fail --location --output makeutil \
-  https://github.com/leynos/makeutil/releases/download/v0.1.0/makeutil-x86_64-unknown-linux-musl &&
-  printf '%s  %s\n' \
-    99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d makeutil |
-  sha256sum --check &&
-  install -D --mode=0755 makeutil ~/.cargo/bin/makeutil &&
-  make test
-```
+For local test runs, put `makeutil` on `PATH` before running `make test`:
+download `makeutil-x86_64-unknown-linux-musl` (or the `aarch64` build) from
+the release of the version the `install-makeutil` action defaults to, listed at
+<https://github.com/leynos/makeutil/releases>, verify it against the matching
+`.sha256` file, and install it as `makeutil`.
 
 ### Spelling policy
 

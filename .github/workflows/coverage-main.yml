@@ -204,13 +204,20 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
-      # Skipped on an exact tool-cache hit. The tool key hashes the action,
-      # which holds the pin, so the restored `~/.cargo/bin/makeutil` is
-      # already the pinned build and neither the nightly nor the compile is
-      # needed.
-      - name: Install Makefile parser
-        if: steps.tool-cache.outputs.cache-hit != 'true'
-        uses: ./.github/actions/install-makeutil
+      # The shared action owns its own cache and re-verifies a restored
+      # binary, so the tool cache neither carries nor skips this install.
+      - name: Install makeutil
+        id: makeutil
+        uses: leynos/shared-actions/.github/actions/install-makeutil@ebe2f3105334283441f4c915eb979a0f4b9f2c04
+
+      - name: Verify makeutil
+        shell: bash
+        env:
+          INSTALLED_VERSION: ${{ steps.makeutil.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(makeutil --version)" = "makeutil ${INSTALLED_VERSION}"
+          makeutil parse Makefile | python3 -c 'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
 
       - name: Install code
         run: make build

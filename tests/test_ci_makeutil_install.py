@@ -1,97 +1,53 @@
-"""Contracts for installing the Makefile parser from the tool cache.
+"""Contracts for installing the Makefile parser through the shared action.
 
-`makeutil` parses the Makefile for the contract tests. CI downloads a pinned
-release binary and checks it against a digest pinned beside the version; it no
-longer compiles makeutil. The binary lands in `~/.cargo/bin`, which the tool
-cache already carries, so a job whose tool cache hit exactly already holds it.
-Skipping the download on that hit is safe only while the hit implies the pin,
-and these contracts hold the three things that make it so:
+`makeutil` parses the Makefile for the contract tests. CI installs its prebuilt
+release binary with the shared `install-makeutil` action, pinned by commit, and
+never compiles it or downloads it by hand. The action owns the cache of its own
+binary and re-verifies a restored one against its pinned digest, so this
+repository's tool cache neither carries the parser nor skips its install. The
+contracts hold what that arrangement needs:
 
-* the pin lives in one place, `.github/actions/install-makeutil`, and nothing
-  else in the workflows fetches or builds makeutil;
-* the tool family's key hashes that action, so changing the pin misses and
-  downloads rather than keeping a stale binary; and
-* every consumer restores the tool cache, with `~/.cargo/bin` in it, before an
-  install step that runs through the action and only on a miss; and
-* every job that writes a tool family installs the parser before it saves,
-  so an exact hit never restores an archive that lacks it.
+* every job that runs the Makefile contracts installs through the action, with
+  no `with` or `run` key, so the version is the action's own default;
+* the next step verifies the install, comparing the binary's version with the
+  one the action reports and requiring a complete parse of the `Makefile`; and
+* nothing else in the workflows or local actions fetches or builds makeutil,
+  and no job restates a pin.
+
+The step shapes live in `tests/helpers/ci_makeutil.py`.
 """
 
 from __future__ import annotations
 
 import re
-import shlex
 import typing as typ
 from pathlib import Path
 
 import pytest
 
-from tests.helpers.ci_leg_gate import ungated
-from tests.helpers.ci_runners import CACHE_FAMILY_WRITERS, CACHE_KEYS_ACTION_FILE
-from tests.helpers.ci_workflows import (
-    ROOT,
-    cache_paths,
-    job_env,
-    read_workflow,
-    steps,
-    workflow_sources,
+from tests.helpers.ci_makeutil import (
+    INSTALL_ID,
+    INSTALL_STEP,
+    VERIFY_STEP,
+    assert_installation,
+    assert_verification,
+    assert_verification_follows_install,
 )
+from tests.helpers.ci_workflows import ROOT, job_env, steps, workflow_sources
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from tests.helpers.workflow_types import Step
 
-INSTALL_ACTION: typ.Final = "./.github/actions/install-makeutil"
-INSTALL_ACTION_PATH: typ.Final = ".github/actions/install-makeutil/action.yml"
-INSTALL_STEP: typ.Final = "Install Makefile parser"
-TOOL_CACHE_ID: typ.Final = "tool-cache"
-#: The install step's whole guard: run only when the tool cache missed.
-MISS_GUARD: typ.Final = f"steps.{TOOL_CACHE_ID}.outputs.cache-hit != 'true'"
-#: Where the action installs the binary, and so what the tool cache must hold.
-CARGO_BIN: typ.Final = "~/.cargo/bin"
-#: The makeutil source, which only the action may name.
+#: The makeutil source, which only the shared action may name.
 MAKEUTIL_SOURCE_URL: typ.Final = "https://github.com/leynos/makeutil"
-
-#: The pin, as the action declares it.
-PIN: typ.Final = {
-    "MAKEUTIL_VERSION": "v0.1.0",
-    "MAKEUTIL_TARGET": "x86_64-unknown-linux-musl",
-    "MAKEUTIL_SHA256": (
-        "99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d"
-    ),
-}
-#: The action's whole command, tokenized: download into a scratch directory,
-#: check the pinned digest, and only then install.
-INSTALL_TOKENS: typ.Final = (
-    "set",
-    "-euo",
-    "pipefail",
-    "download=$(mktemp -d)/makeutil",
-    "curl",
-    "--fail",
-    "--location",
-    "--show-error",
-    "--silent",
-    "--output",
-    "${download}",
-    (
-        f"{MAKEUTIL_SOURCE_URL}/releases/download/${{MAKEUTIL_VERSION}}"
-        "/makeutil-${MAKEUTIL_TARGET}"
-    ),
-    "printf",
-    "%s  %s\\n",
-    "${MAKEUTIL_SHA256}",
-    "${download}",
-    "|",
-    "sha256sum",
-    "--check",
-    "install",
-    "-D",
-    "--mode=0755",
-    "${download}",
-    "${HOME}/.cargo/bin/makeutil",
+#: What a retired local action or pin variable would have left behind.
+RETIRED_PIN_KEYS: typ.Final = (
+    "MAKEUTIL_VERSION",
+    "MAKEUTIL_TARGET",
+    "MAKEUTIL_SHA256",
 )
+#: The local action this repository retired in favour of the shared one.
+RETIRED_LOCAL_ACTION: typ.Final = ".github/actions/install-makeutil"
 
 #: Every job that runs the Makefile contracts, and so needs the parser.
 CONSUMERS: typ.Final = (
@@ -101,75 +57,51 @@ CONSUMERS: typ.Final = (
 )
 
 
-def _action_step() -> Step:
-    """Return the install action's one step."""
-    action = read_workflow(ROOT / INSTALL_ACTION_PATH)
-    runs = action.get("runs")
-    assert isinstance(runs, dict), f"{INSTALL_ACTION_PATH} must declare runs"
-    action_steps = typ.cast("dict[str, object]", runs).get("steps")
-    assert isinstance(action_steps, list), f"{INSTALL_ACTION_PATH} must have steps"
-    assert len(action_steps) == 1, f"{INSTALL_ACTION_PATH} must have one step"
-    return typ.cast("Step", action_steps[0])
-
-
-#: The step that publishes a tool family.
-TOOL_SAVE_STEP: typ.Final = "Save the installed tools"
-#: Every job that writes a Ubicloud tool family, which consumers then restore.
-TOOL_WRITERS: typ.Final = tuple(
-    sorted({
-        writer
-        for (key, lane, _), writer in CACHE_FAMILY_WRITERS.items()
-        if key == "TOOL_CACHE_KEY" and lane == "self-hosted"
-    })
-)
-
-
-def _position(
-    job_steps: list[Step], *, what: str, predicate: cabc.Callable[[Step], bool]
-) -> int:
-    """Return the index of the one step matching ``predicate``."""
-    matches = [index for index, step in enumerate(job_steps) if predicate(step)]
-    assert len(matches) == 1, f"expected one {what}, found {len(matches)}"
+def _only(job_steps: list[Step], name: str, *, where: str) -> Step:
+    """Return the one step called ``name``."""
+    matches = [step for step in job_steps if step.get("name") == name]
+    assert len(matches) == 1, f"{where} must have exactly one {name!r} step"
     return matches[0]
 
 
-def test_the_action_installs_the_checked_release() -> None:
-    """The action's one step is the checked download, with the pin in its ``env``."""
-    step = _action_step()
-    assert step.get("env") == PIN, (
-        f"{INSTALL_ACTION_PATH} must pin {PIN}, got {step.get('env')!r}"
-    )
-    command = step.get("run")
-    assert isinstance(command, str), f"{INSTALL_ACTION_PATH} must run a command"
-    assert tuple(shlex.split(command.replace("\\\n", ""))) == INSTALL_TOKENS, (
-        f"{INSTALL_ACTION_PATH} must run exactly the checked download, got {command!r}"
-    )
+@pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
+def test_a_consumer_installs_through_the_shared_action(
+    workflow_name: str, job_name: str
+) -> None:
+    """The install step is the pinned action, defaults only, with an id."""
+    where = f"{workflow_name}:{job_name}"
+    step = _only(steps(workflow_name, job_name), INSTALL_STEP, where=where)
+    assert_installation(workflow_name, job_name, step, contract=where)
 
 
-def test_the_pin_is_a_release_and_a_full_digest() -> None:
-    """A floating version or a short digest could admit a different binary.
-
-    The pin is read from the action rather than from ``PIN``.
-    """
-    environment = _action_step().get("env")
-    assert isinstance(environment, dict), f"{INSTALL_ACTION_PATH} must pin in env"
-    pin = typ.cast("dict[str, object]", environment)
-    version = str(pin.get("MAKEUTIL_VERSION"))
-    digest = str(pin.get("MAKEUTIL_SHA256"))
-    assert re.fullmatch(r"v\d+\.\d+\.\d+", version), (
-        f"the makeutil pin must be an exact release, got {version!r}"
-    )
-    assert re.fullmatch(r"[0-9a-f]{64}", digest), (
-        f"the makeutil digest must be a full SHA-256, got {digest!r}"
-    )
+@pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
+def test_a_consumer_verifies_the_install_straight_away(
+    workflow_name: str, job_name: str
+) -> None:
+    """The verify step compares versions and parses the Makefile, never naming one."""
+    job_steps = steps(workflow_name, job_name)
+    where = f"{workflow_name}:{job_name}"
+    verify = _only(job_steps, VERIFY_STEP, where=where)
+    assert_verification(workflow_name, job_name, verify, contract=where)
+    assert_verification_follows_install(job_steps, contract=where)
 
 
-def test_the_tool_key_hashes_the_pin() -> None:
-    """Without this, a changed pin would hit the old key and skip the rebuild."""
-    source = CACHE_KEYS_ACTION_FILE.read_text(encoding="utf-8")
-    assert f"'{INSTALL_ACTION_PATH}'" in source, (
-        f"the tool key's hashFiles must include {INSTALL_ACTION_PATH}"
-    )
+@pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
+def test_no_consumer_restates_a_pin(workflow_name: str, job_name: str) -> None:
+    """A job-level copy of a pin would read as the pin while pinning nothing."""
+    restated = sorted(set(RETIRED_PIN_KEYS) & set(job_env(workflow_name, job_name)))
+    assert restated == [], f"{workflow_name}:{job_name} restates {restated}"
+
+
+def test_the_install_id_is_unique_in_each_consumer() -> None:
+    """The verify step reads the install step's id, so a second one would shadow it."""
+    for workflow_name, job_name in CONSUMERS:
+        ids = [
+            step.get("id")
+            for step in steps(workflow_name, job_name)
+            if step.get("id") == INSTALL_ID
+        ]
+        assert ids == [INSTALL_ID], f"{workflow_name}:{job_name} ids: {ids}"
 
 
 #: A command that builds or installs makeutil by package name rather than by
@@ -185,27 +117,39 @@ def _installs_makeutil_elsewhere(source: str) -> bool:
     return MAKEUTIL_SOURCE_URL in joined or bool(_PACKAGE_INSTALL.search(joined))
 
 
-def _other_actions() -> list[tuple[str, str]]:
-    """Return every local composite action except the install action."""
+def _local_actions() -> list[tuple[str, str]]:
+    """Return every local composite action's name and source."""
     return [
         (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
         for path in sorted(Path(ROOT, ".github", "actions").glob("*/action.y*ml"))
-        if str(path.relative_to(ROOT)) != INSTALL_ACTION_PATH
     ]
 
 
-def test_only_the_action_fetches_makeutil() -> None:
-    """A second fetch or build elsewhere would carry a pin the key does not hash.
+def test_nothing_in_ci_fetches_makeutil_itself() -> None:
+    """A fetch or build outside the shared action would carry an unchecked pin.
 
     Both routes count: a fetch of the repository URL, and a package install
     such as `cargo install makeutil`, which names no URL at all.
     """
     builders = [
         name
-        for name, source in [*workflow_sources(), *_other_actions()]
+        for name, source in [*workflow_sources(), *_local_actions()]
         if _installs_makeutil_elsewhere(source)
     ]
-    assert builders == [], f"only {INSTALL_ACTION_PATH} may fetch makeutil: {builders}"
+    assert builders == [], f"only the shared action may fetch makeutil: {builders}"
+
+
+def test_the_retired_local_action_is_gone_and_unreferenced() -> None:
+    """A leftover local action, or a `uses:` of it, would be a second install path."""
+    assert not (ROOT / RETIRED_LOCAL_ACTION).exists(), (
+        f"{RETIRED_LOCAL_ACTION} was retired for the shared action"
+    )
+    users = [
+        name
+        for name, source in workflow_sources()
+        if f"./{RETIRED_LOCAL_ACTION}" in source
+    ]
+    assert users == [], f"workflows still use the retired local action: {users}"
 
 
 @pytest.mark.parametrize(
@@ -229,87 +173,3 @@ def test_the_refusal_ignores_other_tools() -> None:
     assert not _installs_makeutil_elsewhere("cargo install cargo-nextest --locked"), (
         "installing another crate must not read as a makeutil install"
     )
-
-
-@pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
-def test_a_consumer_installs_through_the_action_only_on_a_tool_miss(
-    workflow_name: str, job_name: str
-) -> None:
-    """The install runs the action, on a miss, after the restore that decides it.
-
-    A guard reading a step that runs later would always see an empty output,
-    so the install would run every time and save nothing.
-    """
-    job_steps = steps(workflow_name, job_name)
-    where = f"{workflow_name}:{job_name}"
-    install = _position(
-        job_steps,
-        what=f"{where} {INSTALL_STEP!r} step",
-        predicate=lambda step: step.get("name") == INSTALL_STEP,
-    )
-    restore = _position(
-        job_steps,
-        what=f"{where} step with id {TOOL_CACHE_ID!r}",
-        predicate=lambda step: step.get("id") == TOOL_CACHE_ID,
-    )
-    step = job_steps[install]
-    assert step.get("uses") == INSTALL_ACTION, (
-        f"{where} must install through {INSTALL_ACTION}, got {step.get('uses')!r}"
-    )
-    # `typecheck-test` also ends every guard with its leg flag; `ungated`
-    # requires that conjunct there and removes it, and leaves other jobs' guards
-    # whole.
-    guard = ungated(workflow_name, job_name, step.get("if"))
-    assert guard == MISS_GUARD, f"{where} install must be guarded {MISS_GUARD!r}"
-    assert restore < install, f"{where} must restore the tool cache before install"
-    assert CARGO_BIN in cache_paths(job_steps[restore], f"{where} tool cache"), (
-        f"{where}'s tool cache must carry {CARGO_BIN}, where makeutil is installed"
-    )
-
-
-@pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
-def test_no_consumer_restates_the_pin(workflow_name: str, job_name: str) -> None:
-    """A job-level copy of the pin would read as the pin while pinning nothing."""
-    restated = sorted(set(PIN) & set(job_env(workflow_name, job_name)))
-    assert restated == [], f"{workflow_name}:{job_name} restates {restated}"
-
-
-@pytest.mark.parametrize(("workflow_name", "job_name"), TOOL_WRITERS)
-def test_a_tool_family_writer_installs_the_parser_before_saving(
-    workflow_name: str, job_name: str
-) -> None:
-    """A writer that skipped the parser would publish an archive without it.
-
-    Consumers skip their own install on an exact hit, so a family written by a
-    job that never installed makeutil leaves them with no parser at all.
-    """
-    job_steps = steps(workflow_name, job_name)
-    where = f"{workflow_name}:{job_name}"
-    install = _position(
-        job_steps,
-        what=f"{where} {INSTALL_STEP!r} step",
-        predicate=lambda step: step.get("name") == INSTALL_STEP,
-    )
-    save = _position(
-        job_steps,
-        what=f"{where} {TOOL_SAVE_STEP!r} step",
-        predicate=lambda step: step.get("name") == TOOL_SAVE_STEP,
-    )
-    step = job_steps[install]
-    assert step.get("uses") == INSTALL_ACTION, (
-        f"{where} must install through {INSTALL_ACTION}, got {step.get('uses')!r}"
-    )
-    guard = ungated(workflow_name, job_name, step.get("if"))
-    assert guard == MISS_GUARD, f"{where} install must be guarded {MISS_GUARD!r}"
-    assert install < save, f"{where} must install the parser before saving"
-    # Installing first is not enough if the save leaves out the directory the
-    # parser lands in.
-    assert CARGO_BIN in cache_paths(job_steps[save], f"{where} tool save"), (
-        f"{where}'s tool save must archive {CARGO_BIN}, where makeutil is installed"
-    )
-
-
-def test_the_writer_rule_covers_every_tool_family() -> None:
-    """The rule must not pass by finding no writers."""
-    assert ("ci.yml", "extension-tests") in TOOL_WRITERS, TOOL_WRITERS
-    assert ("ci.yml", "typecheck-test") in TOOL_WRITERS, TOOL_WRITERS

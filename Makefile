@@ -149,7 +149,6 @@ PYTEST_WORKERS ?= 0
 ACT_PARSER_TARGETS ?= tests/integration/test_act_stream_parsing.py
 # The scenario half, run by `test-act` rather than by `test-python`.
 ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py \
-  tests/integration/test_makeutil_cache_integration.py \
   tests/integration/test_experimental_leg_integration.py \
   tests/integration/test_extension_typecheck_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
