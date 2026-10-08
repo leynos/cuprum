@@ -443,14 +443,13 @@ the fallback without attempting a start. The stop is bounded at 30 s
 (`SETUP_SCCACHE_STOP_TIMEOUT` overrides it, which the tests use) when a GNU
 `timeout` exists, because sccache's shutdown client has no read timeout and a
 server that never answers would otherwise block the job; a timeout is a failed
-stop. `start-failed` is a server that would
-not start, and `zero-stats-failed` is one that started but whose `--zero-stats`
-then failed. The three failures share the `sccache-fallback` title and the
-run-page line, so one detector counts all of them, and differ in warning text
-and metric value so a maintainer can tell which operation failed. A count can
-be taken from the logs with the same estate convention as `setup-rust`'s
-`metric setup-rust.sccache.server=` line.
-`test_ci_setup_sccache_server_start.py` snapshots the log, run-page line,
+stop. `start-failed` is a server that would not start, and `zero-stats-failed`
+is one that started but whose `--zero-stats` then failed. The three failures
+share the `sccache-fallback` title and the run-page line, so one detector
+counts all of them, and differ in warning text and metric value so a maintainer
+can tell which operation failed. A count can be taken from the logs with the
+same estate convention as `setup-rust`'s `metric setup-rust.sccache.server=`
+line. `test_ci_setup_sccache_server_start.py` snapshots the log, run-page line,
 outputs and wrapper for all four outcomes, and tests the expected no-server
 stop, a stop that succeeds and an unexpected stop error, so a wording change to
 a search key is a reviewed diff.
