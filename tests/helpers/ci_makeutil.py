@@ -134,7 +134,7 @@ def assert_installation(
         f"{contract} install must fail the job when it fails",
     )
     _require(
-        _guard(workflow_name, job_name, step) == "",
+        not _guard(workflow_name, job_name, step),
         f"{contract} install must run on every leg the job runs, with no guard",
     )
 
@@ -170,7 +170,7 @@ def assert_verification(
     AssertionError: c verify step needs an env
     """
     _require(
-        _guard(workflow_name, job_name, step) == "",
+        not _guard(workflow_name, job_name, step),
         f"{contract} verify must run on every leg the job runs, with no guard",
     )
     _require(
