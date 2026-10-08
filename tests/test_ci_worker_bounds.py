@@ -9,6 +9,7 @@ for. Nothing in a passing run says whether that constant and the label agree.
 from __future__ import annotations
 
 import re
+import typing as typ
 
 from tests.helpers.ci_runners import (
     ROOT,
@@ -16,6 +17,7 @@ from tests.helpers.ci_runners import (
     UBICLOUD_VCPUS,
     step_inputs,
     steps,
+    workflow_document,
     workflow_env,
     workflow_sources,
 )
@@ -25,7 +27,15 @@ VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
 #: A Cargo job count handed to a command: a Makefile assignment, a `--jobs`
 #: flag, or a `CARGO_BUILD_JOBS` value in a workflow. Cargo defaults to every
 #: core, so a pin below the runner's vCPU count only starves a billed runner.
-CARGO_JOBS_VALUE = re.compile(r"CARGO_BUILD_JOBS\s*[:=][ \t]*([^\n]*)")
+CARGO_JOBS_VALUE = re.compile(
+    r"CARGO_BUILD_JOBS\s*(?:[?+!:]?:?=|:)[ \t]*([^\n]*)"
+)
+#: Any Make assignment to the variable, whatever its operator or modifiers: a
+#: caller's `CARGO_BUILD_JOBS` must reach Cargo untouched.
+MAKE_CARGO_JOBS_ASSIGNMENT = re.compile(
+    r"^[ \t]*(?:(?:override|export)[ \t]+)*CARGO_BUILD_JOBS[ \t]*[?+!:]*:?=",
+    re.MULTILINE,
+)
 SERIAL_CARGO_JOBS = re.compile(r"(?<!pylint )--jobs[ =]1\b")
 
 
@@ -65,8 +75,11 @@ def test_the_makefile_pins_no_cargo_job_count() -> None:
     """
     makefile = MAKEFILE.read_text(encoding="utf-8")
     assert not SERIAL_CARGO_JOBS.search(makefile), "no Cargo command may be --jobs 1"
-    assert not CARGO_JOBS_VALUE.search(makefile), (
+    assert not MAKE_CARGO_JOBS_ASSIGNMENT.search(makefile), (
         "the Makefile must not assign CARGO_BUILD_JOBS; callers own it"
+    )
+    assert not CARGO_JOBS_VALUE.search(makefile), (
+        "no recipe may set CARGO_BUILD_JOBS inline; callers own it"
     )
     for retired in ("PYTEST_CARGO_BUILD_JOBS", "TEST_CARGO_BUILD_JOBS", "DOC_FLAGS"):
         # `RUSTDOC_FLAGS` is a different variable, so match whole words only.
@@ -86,6 +99,37 @@ def test_every_workflow_cargo_job_count_derives_from_the_constant() -> None:
             assert VCPU_CONSTANT in match.group(1), (
                 f"{path}: CARGO_BUILD_JOBS must derive from {VCPU_CONSTANT}, "
                 f"got {match.group(1)!r}"
+            )
+
+
+def _cargo_job_values(node: object) -> typ.Iterator[object]:
+    """Yield the value of every `CARGO_BUILD_JOBS` key in a parsed workflow."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "CARGO_BUILD_JOBS":
+                yield value
+            yield from _cargo_job_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _cargo_job_values(item)
+
+
+def test_every_parsed_env_cargo_job_count_derives_from_the_constant() -> None:
+    """Check the parsed `env` mappings too, not only the workflow text.
+
+    The text scan reads shell assignments; this walk reads the YAML, so a
+    literal in a job, step, or matrix `env` mapping cannot hide behind
+    formatting the pattern does not expect, and a non-string value (`2`) is
+    refused as the hand-pinned count it is.
+    """
+    for path, _ in workflow_sources():
+        for value in _cargo_job_values(workflow_document(path)):
+            assert isinstance(value, str), (
+                f"{path}: CARGO_BUILD_JOBS must be an expression, got {value!r}"
+            )
+            assert VCPU_CONSTANT in value, (
+                f"{path}: CARGO_BUILD_JOBS must derive from {VCPU_CONSTANT}, "
+                f"got {value!r}"
             )
 
 

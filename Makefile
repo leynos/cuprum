@@ -55,7 +55,7 @@ DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
 DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) CARGO=$(DEV_FAST_CARGO_BRIDGE))
 DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG_RELATIVE)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG_RELATIVE)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
 DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
-DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
+DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(NEXTEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS) -- --test-threads=$(TEST_JOBS); fi
 RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28
 RUSTFMT_CARGO ?= $(CARGO) +$(RUSTFMT_TOOLCHAIN)
 WHITAKER ?= whitaker
@@ -65,11 +65,14 @@ RUSTDOC_FLAGS ?= --cfg docsrs -D warnings
 DOCTEST_RUSTDOC_FLAGS = $(RUSTDOC_FLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Zunstable-options --display-doctest-warnings --doctest-build-arg=-D --doctest-build-arg=warnings)
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
-# nextest's test-thread count. One by default so a developer's laptop keeps a
-# core for the editor; CI raises it to the vCPU count of the runner the job is
-# billed for, and never above it.
+# The test-thread count, for nextest and for the `cargo test` fallback alike. It
+# is never a Cargo build limit: `cargo test --jobs` would cap compilation and
+# ignore a caller's `CARGO_BUILD_JOBS`. One by default so a developer's laptop
+# keeps a core for the editor; CI raises it to the vCPU count of the runner the
+# job is billed for, and never above it.
 TEST_JOBS ?= 1
-TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
+TEST_FLAGS ?= $(CARGO_FLAGS)
+NEXTEST_FLAGS ?= $(TEST_FLAGS) --test-threads $(TEST_JOBS)
 # The oldest nextest that understands `global-timeout`, the whole-run budget
 # `rust/.config/nextest.toml` declares. Nextest warns about keys it does not
 # recognize and keeps going, so an older release drops that tier silently
@@ -525,10 +528,10 @@ test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, 
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
-	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(NEXTEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS) -- --test-threads=$(TEST_JOBS); \
 	fi
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
 

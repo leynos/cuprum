@@ -185,7 +185,8 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     `trybuild` compiles a scratch crate for each UI case, so these tests
     are bounded by a build rather than by test work, and they inherit
     `RUSTFLAGS` from the `cargo` that invoked them. `make test` passes
-    `-C codegen-units=1` and leaves Cargo's job count at its default, and the
+    `-C codegen-units=1`; Cargo's job count is its default, or the caller's
+    `CARGO_BUILD_JOBS` when that is set, and the
     scratch workspace is a separate target directory that nextest's own
     warm build cannot serve, so the build is several times slower there
     than in the coverage lane's plain `-D warnings`.

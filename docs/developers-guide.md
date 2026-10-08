@@ -2007,9 +2007,12 @@ Hypothesis properties and redacted per-phase syrupy snapshots.
 ### Build and test worker controls
 
 `make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
-worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
-count to Rust test commands and, through `CARGO_JOB_ENV`, to both
-`RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
+worker count to enable xdist explicitly. Set `CARGO_BUILD_JOBS=N` to bound
+Cargo's build parallelism; `make` passes it through unchanged, and Cargo uses
+every core when it is unset. Set `TEST_JOBS=N` for the test-thread count, which
+nextest takes as `--test-threads` and the `cargo test` fallback takes after
+`--`. `BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no
+longer sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
 
 ## Tracing adapter span lifecycle
 

@@ -65,9 +65,10 @@ coverage lane passes only `-D warnings`.
 `make test` once also pinned Cargo to a single job (`--jobs 1` and
 `CARGO_BUILD_JOBS=1`), and the figures below were measured under that pin. The
 pin is gone: Cargo now uses its default job count, or the caller's
-`CARGO_BUILD_JOBS`. Parallel builds can only shorten a cold compile, so the
-figures stay an upper bound and the allowance sized from them stays safe; no
-tier depends on serial builds.
+`CARGO_BUILD_JOBS`. The figures remain measurements under the former pin. They
+have not been re-measured without it, and concurrent compilations can contend
+for resources, so they are not a guaranteed bound on the new behaviour. The
+allowance sized from them is unchanged, and no tier depends on serial builds.
 
 The scratch directory does persist, and a repeat run with it warm took 1.271 s
 here. A cold one is the cost that matters, because it recurs on every fresh
