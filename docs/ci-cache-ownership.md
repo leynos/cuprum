@@ -58,7 +58,9 @@ may treat an exact hit as proof that a pinned executable is already present.
 it with the shared `install-makeutil` action, which keeps its own cache keyed
 on the pinned digest and re-verifies a restored binary. The tool cache
 therefore does not carry makeutil, the install is never skipped on a hit, and a
-writer of a tool family need not install it before saving.
+writer of a tool family need not install it before saving. Each install step
+sets `bin-dir` to a directory under `runner.temp`: the action's default,
+`~/.local/bin`, is one of the paths the tool cache archives.
 `tests/test_ci_makeutil_install.py` holds that arrangement, and refuses a local
 copy of the action or a second route that fetches makeutil.
 

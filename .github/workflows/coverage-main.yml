@@ -199,10 +199,13 @@ jobs:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
       # The shared action owns its own cache and re-verifies a restored
-      # binary, so the tool cache neither carries nor skips this install.
+      # binary, so the tool cache neither carries nor skips this install. The
+      # binary goes outside `~/.local/bin`, which the tool cache archives.
       - name: Install makeutil
         id: makeutil
         uses: leynos/shared-actions/.github/actions/install-makeutil@ebe2f3105334283441f4c915eb979a0f4b9f2c04
+        with:
+          bin-dir: ${{ runner.temp }}/makeutil/bin
 
       - name: Verify makeutil
         shell: bash

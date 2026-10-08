@@ -4937,9 +4937,11 @@ commit, which installs makeutil's prebuilt static binary and verifies it
 against a digest table pinned in the action. The action keeps its own cache of
 the binary, keyed on the version, target and pinned digest, and re-verifies a
 restored binary before trusting it, so this repository's tool cache neither
-carries makeutil nor skips its install. Each install step takes the action's
-defaults, with no `with` or `run` key, so the version is the one the action
-ships; the step after it, `Verify makeutil`, requires `makeutil --version` to
+carries makeutil nor skips its install. Each install step sets one input,
+`bin-dir`, to a directory under `runner.temp`, because the action's default,
+`~/.local/bin`, is archived by this repository's tool cache. It has no `run`
+key and names no version, so the version is the one the action ships; the step
+after it, `Verify makeutil`, requires `makeutil --version` to
 equal the version the action reports and a complete parse of the `Makefile`. It
 never names a version. `tests/test_ci_makeutil_install.py` holds the
 arrangement, using the step shapes in `tests/helpers/ci_makeutil.py`: bump the
@@ -4950,8 +4952,12 @@ pin.
 For local test runs, put `makeutil` on `PATH` before running `make test`:
 download `makeutil-x86_64-unknown-linux-musl` (or the `aarch64` build) from the
 release of the version the `install-makeutil` action defaults to, listed at
-<https://github.com/leynos/makeutil/releases>, verify it against the matching
-`.sha256` file, and install it as `makeutil`.
+<https://github.com/leynos/makeutil/releases>, and verify it against the digest
+for that version and target in the `_DIGESTS` table of `makeutil_plan.py` at the
+pinned action revision (under `.github/actions/install-makeutil/scripts/`).
+That table is immutable at the pinned commit; the release's own `.sha256`
+asset is replaceable together with the binary, so it is no independent anchor.
+Then install the binary as `makeutil`.
 
 ### Spelling policy
 

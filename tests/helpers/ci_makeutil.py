@@ -5,11 +5,13 @@ verifies it in the next step. The helpers here hold both halves, so the
 contract in `tests/test_ci_makeutil_install.py` stays short and every job is
 held to the same shape.
 
-The install step carries no `with`, `run` or `continue-on-error`, so the
-version is the action's own default and a from-source install cannot creep
-back. The verify step compares the binary's version with the one the action
-reports and requires a complete parse of the repository `Makefile`; it never
-names a version. In `typecheck-test` both steps end with the leg flag, which
+The install step carries no `run` or `continue-on-error` and a `with` of
+`bin-dir` alone, so the version is the action's own default and a from-source
+install cannot creep back. `bin-dir` sits under the runner's temporary
+directory because the action's default, `~/.local/bin`, is archived by the
+tool cache. The verify step compares the binary's version with the one the
+action reports and requires a complete parse of the repository `Makefile`; it
+never names a version. In `typecheck-test` both steps end with the leg flag, which
 :func:`tests.helpers.ci_leg_gate.ungated` strips exactly, so no other guard can
 hide behind it.
 
@@ -36,6 +38,9 @@ INSTALL_STEP: typ.Final = "Install makeutil"
 VERIFY_STEP: typ.Final = "Verify makeutil"
 #: What the verify step reads from the install step, which carries this id.
 INSTALL_ID: typ.Final = "makeutil"
+#: Where the action puts the binary: outside ``~/.local/bin``, which the tool
+#: cache archives, so the tool archive never carries makeutil.
+BIN_DIR: typ.Final = "${{ runner.temp }}/makeutil/bin"
 VERSION_OUTPUT: typ.Final = "${{ steps.makeutil.outputs.version }}"
 
 #: The verify script, as the shell would run it: strict mode, the version
@@ -98,8 +103,9 @@ def assert_installation(
     """Assert that ``step`` runs the pinned install action, defaults only.
 
     Raises ``AssertionError`` if the step does not use the pinned action, has
-    no `id`, carries a `run` or `with` key, can fail without failing the job,
-    or has any guard beyond the job's leg flag.
+    no `id`, carries a `run` key, sets anything but `bin-dir` or puts it
+    elsewhere, can fail without failing the job, or has any guard beyond the
+    job's leg flag.
 
     Parameters
     ----------
@@ -125,7 +131,11 @@ def assert_installation(
     )
     _require(step.get("id") == INSTALL_ID, f"{contract} install step needs an id")
     _require("run" not in step, f"{contract} must not also run an install command")
-    _require("with" not in step, f"{contract} must take the action's default version")
+    _require(
+        step.get("with") == {"bin-dir": BIN_DIR},
+        f"{contract} must set only bin-dir, outside the tool cache, and so "
+        "take the action's default version",
+    )
     _require(
         not _DISABLING_KEYS & step.keys(),
         f"{contract} install must fail the job when it fails",

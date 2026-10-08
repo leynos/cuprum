@@ -8,7 +8,8 @@ repository's tool cache neither carries the parser nor skips its install. The
 contracts hold what that arrangement needs:
 
 * every job that runs the Makefile contracts installs through the action, with
-  no `with` or `run` key, so the version is the action's own default;
+  no `run` key and only a `bin-dir` input, so the version is the action's own
+  default and the binary stays out of the tool cache;
 * the next step verifies the install, comparing the binary's version with the
   one the action reports and requiring a complete parse of the `Makefile`; and
 * nothing else in the workflows or local actions fetches or builds makeutil,
@@ -68,7 +69,7 @@ def _only(job_steps: list[Step], name: str, *, where: str) -> Step:
 def test_a_consumer_installs_through_the_shared_action(
     workflow_name: str, job_name: str
 ) -> None:
-    """The install step is the pinned action, defaults only, with an id."""
+    """The install step is the pinned action, `bin-dir` only, with an id."""
     where = f"{workflow_name}:{job_name}"
     step = _only(steps(workflow_name, job_name), INSTALL_STEP, where=where)
     assert_installation(workflow_name, job_name, step, contract=where)
