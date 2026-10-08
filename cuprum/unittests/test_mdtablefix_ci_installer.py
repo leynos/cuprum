@@ -7,7 +7,7 @@ import pytest
 from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import job, steps, workflow_env
 
-_SHARED_ACTION_REVISION = "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+_SHARED_ACTION_REVISION = "0606ca899ce2995a0c4bc78e660e80832e6e8855"
 _INSTALL_MDTABLEFIX = (
     "leynos/shared-actions/.github/actions/install-mdtablefix@"
     f"{_SHARED_ACTION_REVISION}"
