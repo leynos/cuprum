@@ -35,6 +35,14 @@ esac
 """
 
 
+class Scenario(typ.NamedTuple):
+    """What the stand-in reports, and whether the verify step should pass."""
+
+    version: str
+    status: str
+    passes: bool
+
+
 def _verify_script(workflow_name: str, job_name: str) -> str:
     """Return the `run` text of the consumer's verify step."""
     matches = [
@@ -49,9 +57,9 @@ def _verify_script(workflow_name: str, job_name: str) -> str:
 
 
 def _run_verify(
-    script: str, tmp_path: Path, *, installed: str, version: str, status: str
+    script: str, tmp_path: Path, scenario: Scenario
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``script`` with the stand-in binary on ``PATH``, or none at all."""
+    """Run ``script`` with the stand-in binary on ``PATH``."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stand_in = bin_dir / "makeutil"
@@ -59,9 +67,9 @@ def _run_verify(
     stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
     environment = {
         **os.environ,
-        "INSTALLED_VERSION": installed,
-        "STUB_VERSION": version,
-        "STUB_STATUS": status,
+        "INSTALLED_VERSION": REPORTED_VERSION,
+        "STUB_VERSION": scenario.version,
+        "STUB_STATUS": scenario.status,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
     }
     # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
@@ -73,14 +81,6 @@ def _run_verify(
         env=environment,
         text=True,
     )
-
-
-class Scenario(typ.NamedTuple):
-    """What the stand-in reports, and whether the verify step should pass."""
-
-    version: str
-    status: str
-    passes: bool
 
 
 SCENARIOS: typ.Final = {
@@ -96,13 +96,7 @@ def test_the_verify_script_accepts_only_the_reported_version_and_a_complete_pars
     workflow_name: str, job_name: str, scenario: Scenario, tmp_path: Path
 ) -> None:
     """The step succeeds only for the reported version and a complete parse."""
-    result = _run_verify(
-        _verify_script(workflow_name, job_name),
-        tmp_path,
-        installed=REPORTED_VERSION,
-        version=scenario.version,
-        status=scenario.status,
-    )
+    result = _run_verify(_verify_script(workflow_name, job_name), tmp_path, scenario)
     assert (result.returncode == 0) is scenario.passes, (
         f"{workflow_name}:{job_name} returned {result.returncode}: {result.stderr}"
     )
