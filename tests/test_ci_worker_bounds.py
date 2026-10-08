@@ -58,8 +58,8 @@ def test_python_tests_derive_their_worker_counts_from_that_constant() -> None:
 def test_the_makefile_pins_no_cargo_job_count() -> None:
     """Leave Cargo's job count to the caller and to Cargo's own default.
 
-    A hard-coded single job serialises every build behind one core while a
-    billed runner sits idle, and it overrides a caller's `CARGO_BUILD_JOBS`.
+    A hard-coded single job forces every build onto one core while a billed
+    runner sits idle, and it overrides a caller's `CARGO_BUILD_JOBS`.
     `TEST_JOBS` is nextest's test-thread count, not a Cargo build limit, so
     it stays. pylint's `--jobs=1` is not Cargo, so the pattern skips it.
     """
@@ -69,7 +69,10 @@ def test_the_makefile_pins_no_cargo_job_count() -> None:
         "the Makefile must not assign CARGO_BUILD_JOBS; callers own it"
     )
     for retired in ("PYTEST_CARGO_BUILD_JOBS", "TEST_CARGO_BUILD_JOBS", "DOC_FLAGS"):
-        assert retired not in makefile, f"{retired} pinned Cargo to one job"
+        # `RUSTDOC_FLAGS` is a different variable, so match whole words only.
+        assert not re.search(rf"\b{retired}\b", makefile), (
+            f"{retired} pinned Cargo to one job"
+        )
 
 
 def test_every_workflow_cargo_job_count_derives_from_the_constant() -> None:
