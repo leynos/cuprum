@@ -58,14 +58,14 @@ def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
     Three things the text cannot tell apart, and this asserts. A step gated on
     the pre-release leg would appear to run on every pull request while the
     job-level `LEG_RUNS` flag switched it off on exactly that event; see
-    `tests/helpers/ci_leg_gate.py`. The estate's own gate,
-    `matrix.python-suite`, is false on the 3.13 leg because the coverage job
-    already runs pytest there, so the step is admitted by two of the job's
-    four legs. That count is the claim: it is what says a selector break in
-    one interpreter cannot pass unobserved. And a step gated on a single leg
-    satisfies "at least one leg" while running on no other interpreter at all,
-    which is why the lane count is asserted separately rather than inferred
-    from the first assertion. Matching the command by its leading shell
+    `tests/helpers/ci_leg_gate.py`. The matrix has no 3.13 leg, because the
+    coverage job already runs pytest there and `extension-tests` runs its
+    typechecker, so every leg a pull request enables runs the suite. That
+    equality is the claim: it is what says a selector break in any interpreter
+    cannot pass unobserved. And a step gated on a single leg satisfies "at
+    least one leg" while running on no other interpreter at all, which is why
+    the lane count is asserted separately rather than inferred from the
+    equality. Matching the command by its leading shell
     tokens, and resolving its guard against the legs, is what makes this a
     claim about execution rather than about text.
     """
@@ -82,20 +82,19 @@ def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
     )
     # The denominator is the legs the flag leaves enabled for this event, not
     # every leg the job declares: the experimental leg is never enabled on a
-    # pull request, so counting it would let an admit-everything guard satisfy
-    # `admitted < total` and this assertion would prove nothing.
+    # pull request, so counting it would make a guard that excluded a real leg
+    # look as though it covered the rest.
     enabled = [
         leg
         for leg in matrix_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
         if flag_holds_on(CI_SUITE_WORKFLOW, CI_SUITE_JOB, leg, "pull_request")
     ]
-    assert admitted < len(enabled), (
-        f"the suite step is admitted by all {len(enabled)} legs the flag leaves "
-        f"enabled on a pull request, so its guard excludes none of them. The "
-        "3.13 leg is meant to be excluded — it sets `python-suite: false` "
-        "because the coverage job already runs pytest there — so this "
-        "assertion is now vacuous and the lane count above proves nothing. "
-        f"Got {lanes!r}"
+    assert admitted == len(enabled), (
+        f"the suite step is admitted by {admitted} of the {len(enabled)} legs "
+        "the flag leaves enabled on a pull request. No leg is meant to be "
+        "excluded, since the coverage job covers only the interpreter the "
+        "matrix no longer has, so a selector break on an excluded leg would "
+        f"pass unobserved. Got {lanes!r}"
     )
 
 
@@ -159,7 +158,7 @@ def test_a_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
     )
     monkeypatch.setattr(
         "tests.helpers.ci_leg_gate.steps",
-        lambda _workflow, _job: suite_step_under("matrix.python-suite"),
+        lambda _workflow, _job: suite_step_under("matrix.python-version"),
     )
     assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
         "a step gated on a key a pull-request leg does set must be reported, "
@@ -179,7 +178,7 @@ def test_an_event_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
     pull request.
 
     The seeded fault is the exact guard from that report:
-    ``github.event_name == 'push' && matrix.python-suite && env.LEG_RUNS ==
+    ``github.event_name == 'push' && matrix.python-version && env.LEG_RUNS ==
     'true'``. The matrix half and the leg flag are satisfied on a pull request,
     so only the event clause decides the answer, and the check must report
     nothing. The second half re-gates the same step on the pull-request event
@@ -197,7 +196,7 @@ def test_an_event_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
             for step in faulted
             if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
         )
-        suite["if"] = f"{event_clause} && matrix.python-suite && {flag}"
+        suite["if"] = f"{event_clause} && matrix.python-version && {flag}"
         return faulted
 
     assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
