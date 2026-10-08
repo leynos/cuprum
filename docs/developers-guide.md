@@ -396,6 +396,64 @@ An unknown backend fails the step before anything is exported.
 `tests/test_ci_setup_sccache_action.py` runs the step's own shell for each case
 and asserts the exit status and the exported variables.
 
+The action also starts the server, as its last step, and that start is
+fail-open. The server's first act is to probe its cache backend, and on
+Ubicloud that probe intermittently outlasts sccache's fixed 10 s startup
+timeout, which used to fail the whole job at a bare `sccache --zero-stats`. The
+timeout is settable only through the config file `SCCACHE_CONF` names, so the
+step writes one with `server_startup_timeout_ms = 60000` and exports it. If the
+server still does not start, the job compiles with plain rustc: the step
+succeeds, clears `RUSTC_WRAPPER` (an empty value counts as unset for Cargo),
+and leaves four stable signals. They are the annotation
+`::warning title=sccache-fallback::`, the run-page line
+`sccache: FALLBACK (cache disabled for this job)`, the `status` output set to
+`fallback` (`started` otherwise), and the empty wrapper. The annotation title
+and the summary line are what `~/docs/bin/sccache-fallbacks.py` searches for,
+so renaming either is a contract change.
+
+Workflows therefore carry no separate step that starts or zeroes the server.
+Every call gives the setup step `id: sccache`, and every
+`Record compiler-cache effectiveness` step is guarded on
+`steps.sccache.outputs.status != 'fallback'`. With no server,
+`sccache --show-stats` prints empty default statistics instead of starting one,
+so the guard keeps the report from describing a job that never used the cache.
+The command that does start a server when none is running is
+`sccache --zero-stats`, so the start step treats a failing `--zero-stats` as
+the same loss and falls back rather than failing the job.
+`tests/test_ci_setup_sccache_server_start.py` runs the start step against a
+fake binary and asserts each signal, and that the server process itself sees
+the 60 s `SCCACHE_CONF` rather than only `GITHUB_ENV`.
+`tests/test_ci_setup_sccache_lifecycle.py` holds the order (the start is the
+last step, after the install) and that the server process sees what the install
+exported. `tests/test_ci_compiler_cache.py` asserts the setup-step id, the
+absence of a workflow-level start or zeroing step, and the per-job report guard.
+`tests/test_ci_statistics_guard.py` finds every step that runs `--show-stats`
+in any workflow, by the command rather than a step name, and requires the guard
+as one `&&` term of a condition with no `||`.
+
+Each start also logs one bounded line: `metric setup-sccache.server=started`,
+or one of three failures. A server left from an earlier step is stopped first,
+because it holds the backend it bound then. On a fresh runner there is none and
+`sccache --stop-server` exits 1 with "couldn't connect to server", the expected
+case, so the start carries on. Any other stop failure means a server may still
+be running with the old configuration, which would silently defeat the 60 s
+timeout and the chosen backend, so it logs
+`metric setup-sccache.server=stop-failed`, prints what sccache said, and takes
+the fallback without attempting a start. The stop is bounded at 30 s
+(`SETUP_SCCACHE_STOP_TIMEOUT` overrides it, which the tests use) when a GNU
+`timeout` exists, because sccache's shutdown client has no read timeout and a
+server that never answers would otherwise block the job; a timeout is a failed
+stop. `start-failed` is a server that would not start, and `zero-stats-failed`
+is one that started but whose `--zero-stats` then failed. The three failures
+share the `sccache-fallback` title and the run-page line, so one detector
+counts all of them, and differ in warning text and metric value so a maintainer
+can tell which operation failed. A count can be taken from the logs with the
+same estate convention as `setup-rust`'s `metric setup-rust.sccache.server=`
+line. `test_ci_setup_sccache_server_start.py` snapshots the log, run-page line,
+outputs and wrapper for all four outcomes, and tests the expected no-server
+stop, a stop that succeeds and an unexpected stop error, so a wording change to
+a search key is a reviewed diff.
+
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,
 so a content-addressed key would hit forever and absorb nothing new. Each

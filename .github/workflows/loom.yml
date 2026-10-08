@@ -92,10 +92,8 @@ jobs:
           install-binstall: 'false'
 
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
-
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Run full Loom models
         run: uv run scripts/run_loom.py --mode full --summary loom-summary.md
@@ -111,7 +109,7 @@ jobs:
           fi
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail

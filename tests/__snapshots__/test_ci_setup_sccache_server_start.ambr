@@ -1,0 +1,60 @@
+# serializer version: 1
+# name: test_the_user_visible_output_is_stable[start-fails]
+  dict({
+    'log': list([
+      'metric setup-sccache.server=start-failed',
+      '::warning title=sccache-fallback::sccache server did not start within 60 s; this job compiled without the compiler cache',
+    ]),
+    'outputs': list([
+      'status=fallback',
+    ]),
+    'run_page': list([
+      'sccache: FALLBACK (cache disabled for this job)',
+    ]),
+    'wrapper': 'cleared',
+  })
+# ---
+# name: test_the_user_visible_output_is_stable[started]
+  dict({
+    'log': list([
+      'metric setup-sccache.server=started',
+    ]),
+    'outputs': list([
+      'status=started',
+    ]),
+    'run_page': list([
+    ]),
+    'wrapper': 'kept',
+  })
+# ---
+# name: test_the_user_visible_output_is_stable[stop-fails]
+  dict({
+    'log': list([
+      'sccache --stop-server said: Error: Failed to send data to or receive data from server',
+      'metric setup-sccache.server=stop-failed',
+      '::warning title=sccache-fallback::sccache server could not be stopped; a stale server would keep the backend it bound earlier, so this job compiled without the compiler cache',
+    ]),
+    'outputs': list([
+      'status=fallback',
+    ]),
+    'run_page': list([
+      'sccache: FALLBACK (cache disabled for this job)',
+    ]),
+    'wrapper': 'cleared',
+  })
+# ---
+# name: test_the_user_visible_output_is_stable[zero-stats-fails]
+  dict({
+    'log': list([
+      'metric setup-sccache.server=zero-stats-failed',
+      '::warning title=sccache-fallback::sccache server started but could not be zeroed; this job compiled without the compiler cache',
+    ]),
+    'outputs': list([
+      'status=fallback',
+    ]),
+    'run_page': list([
+      'sccache: FALLBACK (cache disabled for this job)',
+    ]),
+    'wrapper': 'cleared',
+  })
+# ---

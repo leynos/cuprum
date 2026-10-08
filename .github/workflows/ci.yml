@@ -237,14 +237,8 @@ jobs:
       # zero compile requests and `Local disk` here, meaning the wrapper never
       # reached the clippy and Whitaker builds at all.
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
-
-      # Immediately after the wrapper exists, so nothing between setup and
-      # the build can compile outside the measured window. `lint-test` built
-      # the cranelift Whitaker suite before this ran, and those requests were
-      # zeroed away before the report.
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Install CLI tools
         run: |
@@ -353,7 +347,7 @@ jobs:
         run: make lint-windows
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail
@@ -528,16 +522,9 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
+        id: sccache
         if: env.LEG_RUNS == 'true'
         uses: ./.github/actions/setup-sccache
-
-      # Immediately after the wrapper exists, so nothing between setup and
-      # the build can compile outside the measured window. `lint-test` built
-      # the cranelift Whitaker suite before this ran, and those requests were
-      # zeroed away before the report.
-      - name: Reset compiler-cache counters
-        if: env.LEG_RUNS == 'true'
-        run: sccache --zero-stats
 
       - name: Set up Python
         if: env.LEG_RUNS == 'true'
@@ -606,7 +593,7 @@ jobs:
             PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
       - name: Record compiler-cache effectiveness
-        if: always() && env.LEG_RUNS == 'true'
+        if: always() && steps.sccache.outputs.status != 'fallback' && env.LEG_RUNS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -762,14 +749,8 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
-
-      # Immediately after the wrapper exists, so nothing between setup and
-      # the build can compile outside the measured window. `lint-test` built
-      # the cranelift Whitaker suite before this ran, and those requests were
-      # zeroed away before the report.
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -841,7 +822,7 @@ jobs:
         run: make typecheck
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail
@@ -1108,6 +1089,7 @@ jobs:
           export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
 
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
         with:
           # Ubicloud's own cache proxy, reached through the credentials the
@@ -1117,13 +1099,6 @@ jobs:
           # directory backend and compiles cold, as every fork arm does. The
           # arms are read by position, like the runner's.
           backend: ${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}
-
-      # Immediately after the wrapper exists, so nothing between setup and
-      # the build can compile outside the measured window. `lint-test` built
-      # the cranelift Whitaker suite before this ran, and those requests were
-      # zeroed away before the report.
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -1205,7 +1180,7 @@ jobs:
           doctests: 'true'
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail
@@ -1534,10 +1509,8 @@ jobs:
           install-binstall: 'false'
 
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
-
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Run Loom smoke models
         run: uv run scripts/run_loom.py --mode smoke --summary loom-summary.md
@@ -1553,7 +1526,7 @@ jobs:
           fi
 
       - name: Report compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail
@@ -1672,14 +1645,8 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
+        id: sccache
         uses: ./.github/actions/setup-sccache
-
-      # Immediately after the wrapper exists, so nothing between setup and
-      # the build can compile outside the measured window. `lint-test` built
-      # the cranelift Whitaker suite before this ran, and those requests were
-      # zeroed away before the report.
-      - name: Reset compiler-cache counters
-        run: sccache --zero-stats
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -2031,7 +1998,7 @@ jobs:
           fi
 
       - name: Record compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail
