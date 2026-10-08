@@ -217,7 +217,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(makeutil --version)" = "makeutil ${INSTALLED_VERSION}"
-          makeutil parse Makefile | python3 -c 'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
+          makeutil parse Makefile | python3 -c \
+            'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
 
       - name: Install code
         run: make build

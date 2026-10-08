@@ -576,7 +576,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(makeutil --version)" = "makeutil ${INSTALLED_VERSION}"
-          makeutil parse Makefile | python3 -c 'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
+          makeutil parse Makefile | python3 -c \
+            'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
 
       # The full Python suite exercises the native mdtablefix file selector.
       # Restoring the tool cache is an optimization, not a prerequisite.
@@ -1164,7 +1165,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(makeutil --version)" = "makeutil ${INSTALLED_VERSION}"
-          makeutil parse Makefile | python3 -c 'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
+          makeutil parse Makefile | python3 -c \
+            'import json, sys; assert json.load(sys.stdin)["parse"]["status"] == "complete"'
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
