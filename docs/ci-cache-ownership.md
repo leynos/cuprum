@@ -54,20 +54,15 @@ placement and cache ownership contract when the workflow changes.
 
 The tool family's key hashes the actions that pin what it installs, so a job
 may treat an exact hit as proof that a pinned executable is already present.
-`makeutil` is the one that relies on it: `.github/actions/install-makeutil`
-holds its release version and digest, and `typecheck-test`, `coverage` and
-`coverage-upload` run that action only when the tool cache missed. A pin that
-lived anywhere the key does not hash would let a hit skip the download and run
-a stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a
-second copy.
-
-The proof holds only if the archive's writer installed the executable. A hit
-restores what the writer saved, so a writer that never ran the install would
-publish an archive without the parser, and every consumer would skip its own
-install and fail. Every writer of a tool family therefore installs makeutil
-before it saves, including `extension-tests`, which writes the 3.13 family and
-runs no Makefile contract itself. The same test module requires that of every
-writer in the family registry.
+`makeutil` is not one of them: the jobs that run the Makefile contracts install
+it with the shared `install-makeutil` action, which keeps its own cache keyed
+on the pinned digest and re-verifies a restored binary. The tool cache
+therefore does not carry makeutil, the install is never skipped on a hit, and a
+writer of a tool family need not install it before saving. Each install step
+sets `bin-dir` to a directory under `runner.temp`: the action's default,
+`~/.local/bin`, is one of the paths the tool cache archives.
+`tests/test_ci_makeutil_install.py` holds that arrangement, and refuses a local
+copy of the action or a second route that fetches makeutil.
 
 ## Why the lane is in every key
 

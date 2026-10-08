@@ -375,8 +375,8 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
 def test_ci_runs_the_lint_target() -> None:
     """CI must run the same lint target.
 
-    The Makefile parser CI provides for these contracts is pinned and cached
-    under ``tests/test_ci_makeutil_install.py``.
+    The Makefile parser CI provides for these contracts is installed through
+    the shared action and verified under ``tests/test_ci_makeutil_install.py``.
     """
     lint_step = _sole_workflow_step(
         "lint-test", "Run lint, including Skylos dead-code detection"
