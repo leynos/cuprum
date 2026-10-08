@@ -4941,23 +4941,22 @@ carries makeutil nor skips its install. Each install step sets one input,
 `bin-dir`, to a directory under `runner.temp`, because the action's default,
 `~/.local/bin`, is archived by this repository's tool cache. It has no `run`
 key and names no version, so the version is the one the action ships; the step
-after it, `Verify makeutil`, requires `makeutil --version` to
-equal the version the action reports and a complete parse of the `Makefile`. It
-never names a version. `tests/test_ci_makeutil_install.py` holds the
-arrangement, using the step shapes in `tests/helpers/ci_makeutil.py`: bump the
-pinned action reference there and in the workflows together. It also refuses
-any other route that fetches or builds makeutil, and any job-level copy of a
-pin.
+after it, `Verify makeutil`, requires `makeutil --version` to equal the version
+the action reports and a complete parse of the `Makefile`. It never names a
+version. `tests/test_ci_makeutil_install.py` holds the arrangement, using the
+step shapes in `tests/helpers/ci_makeutil.py`: bump the pinned action reference
+there and in the workflows together. It also refuses any other route that
+fetches or builds makeutil, and any job-level copy of a pin.
 
 For local test runs, put `makeutil` on `PATH` before running `make test`:
 download `makeutil-x86_64-unknown-linux-musl` (or the `aarch64` build) from the
 release of the version the `install-makeutil` action defaults to, listed at
 <https://github.com/leynos/makeutil/releases>, and verify it against the digest
-for that version and target in the `_DIGESTS` table of `makeutil_plan.py` at the
-pinned action revision (under `.github/actions/install-makeutil/scripts/`).
-That table is immutable at the pinned commit; the release's own `.sha256`
-asset is replaceable together with the binary, so it is no independent anchor.
-Then install the binary as `makeutil`.
+for that version and target in the `_DIGESTS` table of `makeutil_plan.py` at
+the pinned action revision (under `.github/actions/install-makeutil/scripts/`).
+That table is immutable at the pinned commit; the release's own `.sha256` asset
+is replaceable together with the binary, so it is no independent anchor. Then
+install the binary as `makeutil`.
 
 ### Spelling policy
 
