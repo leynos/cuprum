@@ -97,6 +97,10 @@ def assert_installation(
 ) -> None:
     """Assert that ``step`` runs the pinned install action, defaults only.
 
+    Raises ``AssertionError`` if the step does not use the pinned action, has
+    no `id`, carries a `run` or `with` key, can fail without failing the job,
+    or has any guard beyond the job's leg flag.
+
     Parameters
     ----------
     workflow_name : str
@@ -107,10 +111,6 @@ def assert_installation(
         The parsed step named "Install makeutil".
     contract : str
         Names the workflow and job, so a failure says where it happened.
-
-    Raises ``AssertionError`` if the step does not use the pinned action, has
-    no `id`, carries a `run` or `with` key, can fail without failing the job,
-    or has any guard beyond the job's leg flag.
 
     Examples
     --------
@@ -141,6 +141,10 @@ def assert_verification(
 ) -> None:
     """Assert the step that proves the installed binary is usable.
 
+    Raises ``AssertionError`` if the step is guarded beyond the leg flag, can
+    fail without failing the job, does not read the version the action reports,
+    runs anything but the expected commands, or names a literal version.
+
     Parameters
     ----------
     workflow_name : str
@@ -151,10 +155,6 @@ def assert_verification(
         The parsed step named "Verify makeutil".
     contract : str
         Names the workflow and job, so a failure says where it happened.
-
-    Raises ``AssertionError`` if the step is guarded beyond the leg flag, can
-    fail without failing the job, does not read the version the action reports,
-    runs anything but the expected commands, or names a literal version.
 
     Examples
     --------
@@ -199,15 +199,15 @@ def assert_verification_follows_install(
 ) -> None:
     """Assert the verify step directly follows the install step.
 
+    Raises ``AssertionError`` if there is no install step, or the step after it
+    is not the verify step.
+
     Parameters
     ----------
     job_steps : list[Step]
         The job's parsed steps, in order.
     contract : str
         Names the workflow and job, so a failure says where it happened.
-
-    Raises ``AssertionError`` if there is no install step, or the step after it
-    is not the verify step.
 
     Examples
     --------
