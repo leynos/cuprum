@@ -958,11 +958,17 @@ focused, small, and easy to review.
 
 `.github/dependabot.yml` declares one stanza per package ecosystem
 (`github-actions`, `uv` and `cargo`). Each stanza checks for updates daily.
-Each has exactly one group: a catch-all matching `*`, limited to `minor` and
-`patch` updates, with no `exclude-patterns` and no `applies-to` other than
+Each has one catch-all group matching `*`, limited to `minor` and `patch`
+updates, with no `exclude-patterns` and no `applies-to` other than
 `version-updates`. Routine bumps therefore arrive as one pull request per
 ecosystem, and every major update arrives in its own pull request, where it can
 be reviewed and built on its own.
+
+The `github-actions` stanza also lists a `shared-actions` group
+(`leynos/shared-actions*`, no `update-types`) ahead of the catch-all. A bump of
+a shared-actions pin moves one commit SHA to another and has no semver level,
+so the typed catch-all never takes it; the group puts those bumps in one pull
+request instead of one per pinned action.
 
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
