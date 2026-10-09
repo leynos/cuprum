@@ -56,9 +56,7 @@ def test_no_recipe_pins_cargo_to_a_job_count(target: str) -> None:
 def test_the_nextest_path_takes_test_threads_not_a_build_limit() -> None:
     """`TEST_JOBS` reaches nextest as test threads and nowhere as build jobs."""
     recipe = _recipe("test-rust", "TEST_JOBS=3")
-    nextest_line = next(
-        line for line in recipe.splitlines() if " nextest run " in line
-    )
+    nextest_line = next(line for line in recipe.splitlines() if " nextest run " in line)
 
     assert "--test-threads 3" in nextest_line, "nextest must take TEST_JOBS as threads"
     assert "--jobs" not in nextest_line, "nextest must not be given --jobs"

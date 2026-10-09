@@ -22,14 +22,15 @@ from tests.helpers.ci_runners import (
     workflow_sources,
 )
 
+if typ.TYPE_CHECKING:
+    from collections import abc as cabc
+
 MAKEFILE = ROOT / "Makefile"
 VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
 #: A Cargo job count handed to a command: a Makefile assignment, a `--jobs`
 #: flag, or a `CARGO_BUILD_JOBS` value in a workflow. Cargo defaults to every
 #: core, so a pin below the runner's vCPU count only starves a billed runner.
-CARGO_JOBS_VALUE = re.compile(
-    r"CARGO_BUILD_JOBS\s*(?:[?+!:]?:?=|:)[ \t]*([^\n]*)"
-)
+CARGO_JOBS_VALUE = re.compile(r"CARGO_BUILD_JOBS\s*(?:[?+!:]?:?=|:)[ \t]*([^\n]*)")
 #: Any Make assignment to the variable, whatever its operator or modifiers: a
 #: caller's `CARGO_BUILD_JOBS` must reach Cargo untouched.
 MAKE_CARGO_JOBS_ASSIGNMENT = re.compile(
@@ -102,7 +103,7 @@ def test_every_workflow_cargo_job_count_derives_from_the_constant() -> None:
             )
 
 
-def _cargo_job_values(node: object) -> typ.Iterator[object]:
+def _cargo_job_values(node: object) -> cabc.Iterator[object]:
     """Yield the value of every `CARGO_BUILD_JOBS` key in a parsed workflow."""
     if isinstance(node, dict):
         for key, value in node.items():
