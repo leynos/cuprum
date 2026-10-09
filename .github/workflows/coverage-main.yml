@@ -158,8 +158,7 @@ jobs:
         # end of a double-quoted YAML scalar elides the break and the next
         # line's indentation, so the value is the single reference it
         # reads as, not two joined by a space.
-        uses: "leynos/shared-actions/.github/actions/\
-          export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
+        uses: "leynos/shared-actions/.github/actions/export-ubicloud-cache-credentials@0606ca899ce2995a0c4bc78e660e80832e6e8855"
 
       - name: Set up sccache
         id: sccache
@@ -184,7 +183,7 @@ jobs:
       # same pinned toolchain the pull-request coverage job uses rather than
       # whatever the runner image ships.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@6cec89bac47a21cf756d68d638a9a510998e57f8
+        uses: leynos/shared-actions/.github/actions/setup-rust@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -194,7 +193,7 @@ jobs:
       # Trunk coverage runs the same native selector parity test as PR coverage.
       # The restored tool cache is optional, so provision the pinned binary.
       - name: Install mdtablefix
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
@@ -203,7 +202,7 @@ jobs:
       # binary goes outside `~/.local/bin`, which the tool cache archives.
       - name: Install makeutil
         id: makeutil
-        uses: leynos/shared-actions/.github/actions/install-makeutil@ebe2f3105334283441f4c915eb979a0f4b9f2c04
+        uses: leynos/shared-actions/.github/actions/install-makeutil@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           bin-dir: ${{ runner.temp }}/makeutil/bin
 
@@ -249,7 +248,7 @@ jobs:
       # and without the check `always` would publish its coverage as the
       # authoritative baseline.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/generate-coverage@0606ca899ce2995a0c4bc78e660e80832e6e8855
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
@@ -293,7 +292,7 @@ jobs:
         # A dispatch may start from any branch, and CodeScene accepts uploads
         # only for the branch it analyses, so the ref is part of the guard.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@0606ca899ce2995a0c4bc78e660e80832e6e8855
         with:
           format: cobertura
           mode: upload
