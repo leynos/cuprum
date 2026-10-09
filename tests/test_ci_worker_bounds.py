@@ -105,14 +105,17 @@ def test_every_workflow_cargo_job_count_derives_from_the_constant() -> None:
 
 def _cargo_job_values(node: object) -> cabc.Iterator[object]:
     """Yield the value of every `CARGO_BUILD_JOBS` key in a parsed workflow."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "CARGO_BUILD_JOBS":
-                yield value
-            yield from _cargo_job_values(value)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _cargo_job_values(item)
+    match node:
+        case dict():
+            for key, value in node.items():
+                if key == "CARGO_BUILD_JOBS":
+                    yield value
+                yield from _cargo_job_values(value)
+        case list():
+            for item in node:
+                yield from _cargo_job_values(item)
+        case _:
+            return
 
 
 def test_every_parsed_env_cargo_job_count_derives_from_the_constant() -> None:
