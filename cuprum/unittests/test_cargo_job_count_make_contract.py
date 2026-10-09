@@ -62,13 +62,36 @@ def test_the_nextest_path_takes_test_threads_not_a_build_limit() -> None:
     assert "--jobs" not in nextest_line, "nextest must not be given --jobs"
 
 
-def test_the_cargo_test_fallback_leaves_build_jobs_to_the_caller() -> None:
-    """The fallback caps test threads after `--`, never Cargo's build jobs."""
-    recipe = _recipe("test-rust", "TEST_JOBS=3")
+@pytest.mark.parametrize(
+    "cargo_flags",
+    [
+        pytest.param(None, id="default-flags"),
+        pytest.param("CARGO_FLAGS=--all-features", id="override-without-all-targets"),
+    ],
+)
+def test_the_cargo_test_fallback_leaves_build_jobs_to_the_caller(
+    cargo_flags: str | None,
+) -> None:
+    """The fallback caps test threads after `--`, never Cargo's build jobs.
+
+    The override case drops `--all-targets`, which a matcher keyed on the
+    default flags would miss, so it guards the anchoring on stable tokens.
+    """
+    recipe = _recipe(
+        "test-rust", "TEST_JOBS=3", *([cargo_flags] if cargo_flags else [])
+    )
+    # Anchor on the `test` subcommand and the thread cap, not on `CARGO_FLAGS`,
+    # which a caller may override.
     fallback_line = next(
-        line
-        for line in recipe.splitlines()
-        if " test --all-targets" in line and "nextest" not in line
+        (
+            line
+            for line in recipe.splitlines()
+            if " test " in line and "--test-threads=" in line and "nextest" not in line
+        ),
+        None,
+    )
+    assert fallback_line is not None, (
+        "the cargo test fallback must cap test threads with --test-threads="
     )
     before, separator, after = fallback_line.partition(" -- ")
 
