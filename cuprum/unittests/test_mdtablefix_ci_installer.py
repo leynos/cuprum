@@ -7,7 +7,7 @@ import pytest
 from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import job, steps, workflow_env
 
-_SHARED_ACTION_REVISION = "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+_SHARED_ACTION_REVISION = "0606ca899ce2995a0c4bc78e660e80832e6e8855"
 _INSTALL_MDTABLEFIX = (
     "leynos/shared-actions/.github/actions/install-mdtablefix@"
     f"{_SHARED_ACTION_REVISION}"
@@ -60,8 +60,8 @@ def test_full_python_test_jobs_install_mdtablefix_before_running_tests(
         if isinstance(job_environment, dict) and "MDTABLEFIX_VERSION" in job_environment
         else workflow_env(workflow_name)
     )
-    assert environment.get("MDTABLEFIX_VERSION") == "0.6.0", (
-        f"{workflow_name}:{job_name} must pin MDTABLEFIX_VERSION to 0.6.0"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.6.1", (
+        f"{workflow_name}:{job_name} must pin MDTABLEFIX_VERSION to 0.6.1"
     )
     assert declared_steps.index(installer) < declared_steps.index(
         next(step for step in declared_steps if step.get("name") == test_step_name)
