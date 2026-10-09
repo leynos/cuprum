@@ -59,8 +59,16 @@ scratch crate for each UI case into a target directory of its own,
 `rust/target/tests/trybuild/`, so the artefacts nextest builds in
 `rust/target/` cannot serve that compilation. These tests also inherit
 `RUSTFLAGS` from the `cargo` that invoked them, and `make test` passes
-`--jobs 1`, `-C codegen-units=1` and `CARGO_BUILD_JOBS=1`, which trybuild's
-nested `cargo` obeys in turn; the coverage lane passes only `-D warnings`.
+`-C codegen-units=1`, which trybuild's nested `cargo` obeys in turn; the
+coverage lane passes only `-D warnings`.
+
+`make test` once also pinned Cargo to a single job (`--jobs 1` and
+`CARGO_BUILD_JOBS=1`), and the figures below were measured under that pin. The
+pin is gone: Cargo now uses its default job count, or the caller's
+`CARGO_BUILD_JOBS`. The figures remain measurements under the former pin. They
+have not been re-measured without it, and concurrent compilations can contend
+for resources, so they are not a guaranteed bound on the new behaviour. The
+allowance sized from them is unchanged, and no tier depends on serial builds.
 
 The scratch directory does persist, and a repeat run with it warm took 1.271 s
 here. A cold one is the cost that matters, because it recurs on every fresh

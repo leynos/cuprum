@@ -61,8 +61,6 @@ def _expected_cargo_arguments() -> list[str]:
         ],
         "--all-targets",
         "--all-features",
-        "--jobs",
-        "1",
     ]
 
 

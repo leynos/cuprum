@@ -21,12 +21,13 @@ global-timeout = "20m"
 # `trybuild` compiles a scratch crate per UI case into `rust/target/tests/`,
 # so its tests are bounded by a build rather than by test work. They inherit
 # RUSTFLAGS from the invoking `cargo`, which makes them several times slower
-# under `make test`'s dev-fast flags (`--jobs 1`, `-C codegen-units=1`) than
-# under the coverage lane's plain `-D warnings`. A cold scratch tree cost
+# under `make test`'s dev-fast flags (`-C codegen-units=1`) than under the
+# coverage lane's plain `-D warnings`. A cold scratch tree cost
 # `compile_time_ui` 124.884 s on a full `make test` and 277.049 s on a
-# single-test run, against 62 s in CI with its caches warm, so the default
-# 300 s allowance is too tight for them. The allowance is sized for the
-# larger figure.
+# single-test run (both measured when `make test` still pinned Cargo to one
+# job, and not re-measured since), against 62 s in CI with its caches warm, so
+# the default 300 s allowance is too tight for them. The allowance is sized for
+# the larger figure.
 [[profile.default.overrides]]
 filter = 'binary(compile_tests)'
 slow-timeout = { period = "60s", terminate-after = 10 }

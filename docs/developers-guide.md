@@ -829,10 +829,13 @@ own.
 ### Concurrency
 
 `ci.yml` declares one constant, `LINUX_RUNNER_VCPUS`, equal to the vCPU count of
-`ubicloud-standard-2`. `make test` takes `TEST_JOBS`, `TEST_CARGO_BUILD_JOBS`,
-and `PYTEST_CARGO_BUILD_JOBS` from it, and the two jobs that compile outside
-`make test` set `CARGO_BUILD_JOBS` from it. Raising the label means raising the
-constant in the same change.
+`ubicloud-standard-2`. The Makefile pins no Cargo job count, so Cargo uses its
+default (every core) or the caller's `CARGO_BUILD_JOBS`, and the jobs that
+compile on the 2-vCPU runner set `CARGO_BUILD_JOBS` from the constant. No
+workflow carries a literal count, and `tests/test_ci_worker_bounds.py` refuses
+one, along with any `--jobs 1` or `CARGO_BUILD_JOBS` assignment in the Makefile.
+`TEST_JOBS` stays: it is nextest's test-thread count, not a Cargo build limit.
+Raising the label means raising the constant in the same change.
 
 pytest stays serial. `PYTEST_WORKERS` defaults to `0` and the coverage action
 runs with `pytest-workers: ''`, because the batches compile and reuse the same
@@ -2068,9 +2071,12 @@ Hypothesis properties and redacted per-phase syrupy snapshots.
 ### Build and test worker controls
 
 `make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
-worker count to enable xdist explicitly. Set `BUILD_JOBS=-jN` to pass the same
-count to Rust test commands and, through `CARGO_JOB_ENV`, to both
-`RAYON_NUM_THREADS` and `CARGO_BUILD_JOBS`.
+worker count to enable xdist explicitly. Set `CARGO_BUILD_JOBS=N` to bound
+Cargo's build parallelism; `make` passes it through unchanged, and Cargo uses
+every core when it is unset. Set `TEST_JOBS=N` for the test-thread count, which
+nextest takes as `--test-threads` and the `cargo test` fallback takes after
+`--`. `BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no
+longer sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
 
 ## Tracing adapter span lifecycle
 

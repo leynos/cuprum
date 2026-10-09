@@ -203,7 +203,7 @@ working on the Rust portions of the project:
 
     ```sh
     cd rust && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" \
-      $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && \
+      $(RUST_DEBUG_CARGO) doc --no-deps && \
       $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
     cd rust && $(LOCAL_TOOL_ENV) \
       RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \

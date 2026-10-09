@@ -593,17 +593,16 @@ jobs:
       # has no leg on the interpreter the coverage job already runs, because
       # that would be the same suite on the same interpreter twice.
       #
-      # `make test-python` defaults Cargo's job count to 1 for a developer
-      # laptop sharing its cores with an editor. On a dedicated runner the job
-      # is billed for `LINUX_RUNNER_VCPUS` vCPUs whether or not it uses them.
+      # `make test-python` sets no Cargo job count, so Cargo takes whatever
+      # `CARGO_BUILD_JOBS` says. The job is billed for `LINUX_RUNNER_VCPUS`
+      # vCPUs whether or not it uses them, so name that count explicitly.
       # pytest itself stays serial: its batches compile and reuse the same
       # Cargo target directory, so xdist workers would contend on one build
       # lock rather than overlap.
       - name: Run tests
         if: env.LEG_RUNS == 'true'
         run: |
-          make test-python \
-            PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
+          CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make test-python
 
       - name: Record compiler-cache effectiveness
         if: always() && steps.sccache.outputs.status != 'fallback' && env.LEG_RUNS == 'true'
