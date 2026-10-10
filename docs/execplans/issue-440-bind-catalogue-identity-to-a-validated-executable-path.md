@@ -1024,6 +1024,32 @@ escalation, not a workaround.
   carries it, and this one is no exception. The terminal evidence for the final
   head lives in GitHub's run list, not in this file, and the workflow ends by
   reading it there rather than by adding another entry.
+- [x] (2026-10-10 13:05Z) **Four statements in `Verification plan` were
+  corrected against the shipped code before the proof assessment was posted.**
+  Verifying the claims that were about to be published found them describing
+  tests that do not exist in the form claimed. O5's statement asserted a
+  path-separator rule that lives in `advisory_path_rejection`
+  (`cuprum/executable_paths.py:264`) rather than in `resolve_binding`; the
+  shipped `resolve_binding` (`cuprum/executable_binding.py:283-288`) tests only
+  `is_absolute()`, so it anchors *any* non-absolute binding — bare name
+  included — at `cwd` when one is supplied. O3, O4, and O5 each described a
+  single test body carrying a paired assertion where the repository has two
+  tests. The code, the `resolve_binding` docstring, and the named tests agree
+  with each other in every case; only this plan's prose was wrong, and nothing
+  in the feature changed. The `PurePath.parts` axiom was corrected on the same
+  grounds: `resolve_binding` depends on the separator facts by declining to
+  guess, not by testing for a separator.
+- [x] (2026-10-10 13:05Z) **O5's strategy was measured rather than assumed, and
+  the first figure was discarded as unstable.** The property module carries no
+  assertion that both relative-path shapes were generated, unlike O2's real
+  guard, so the obligation's non-vacuity rests on the strategy's construction
+  and on measurement. A first 200-draw sample gave 164 separator-bearing and 36
+  bare names; re-running the same 200 draws gave 118/82, and 2000 draws gave
+  1123/877, so the single sample was not reproducible and was not recorded. The
+  plan now cites the 2000-draw distribution and states the weaker non-vacuity
+  position explicitly. Separately, `_CWD` draws an absolute path four times
+  more often than `None` (360/40 in 400 draws), so the no-`cwd` branch is
+  reached but is the rarer of the two.
 
 ## Surprises & discoveries
 
@@ -1763,10 +1789,12 @@ O3 — Resolution ordering: enforcement precedes resolution.
 - Evidence: `make test-python` passes; the denial test asserts
   `calls == []`, and the happy-path test asserts the child observed its own
   `sys.executable` while `result.program` is still the logical name.
-- Non-vacuity: the same test runs the allowlisted case first and asserts
-  `calls == [1]`, proving the counter works; the denial case then asserts
-  `calls == []`, proving the ordering. Without the paired positive case the
-  empty list would be indistinguishable from a broken counter.
+- Non-vacuity: the control is a pair of tests, not one body.
+  `test_a_resolver_runs_once_per_execution_not_once_per_event` asserts
+  `len(calls) == 1` for the allowlisted run, proving the counter works;
+  `test_a_bound_but_unlisted_program_is_refused_without_resolving` then
+  asserts `len(calls) == 0`, proving the ordering. Without the positive case
+  the empty list would be indistinguishable from a broken counter.
 
 O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 
@@ -1784,16 +1812,22 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
   locked in `cuprum/unittests/test_adapter_projection.py`.
 - Evidence: `make test-python` passes; the metrics test asserts the label set
   equals `{"program", "project"}` and would fail if a path were added.
-- Non-vacuity: the same test asserts the *unbound* case carries
-  `resolved_path is None` and that no `cuprum_resolved_path` key is present, so
-  an adapter that unconditionally emitted the key would fail.
+- Non-vacuity: two tests carry the unbound case.
+  `test_an_unbound_program_runs_under_its_catalogued_name` asserts
+  `resolved_path is None`, and `test_the_unbound_case_emits_no_path_key_at_all`
+  asserts no `cuprum_resolved_path` key is present, so an adapter that
+  unconditionally emitted the key would fail.
 
 O5 — Resolver invocation count and relative-path resolution.
 
 - Statement: `resolve_binding` calls a resolver at most once per execution and
-  returns its result verbatim; a relative binding that contains a path
-  separator is resolved against the supplied `cwd`, while a bare name is
-  returned unchanged for the platform to `PATH`-resolve.
+  returns its result verbatim; an absolute binding is returned unchanged
+  whatever the working directory, and any other binding — a relative path or
+  a bare name alike — is anchored at the supplied `cwd`, or returned
+  unchanged when there is no `cwd` so the platform resolves it. The separator
+  distinction belongs to `advisory_path_rejection`, which skips its
+  filesystem probe for a bare name because Cuprum does not replicate the
+  platform's `PATH` search; it is not part of the resolution rule.
 - Method: property test over generated binding/cwd/relative-path combinations,
   plus one end-to-end named example.
 - Rationale: the relative-path rule is a total function over three small
@@ -1803,10 +1837,17 @@ O5 — Resolver invocation count and relative-path resolution.
   `cuprum/unittests/test_executable_binding_execution.py`.
 - Evidence: `make test-python` passes; the end-to-end case asserts the child's
   own `sys.executable` and the recorded `resolved_path` are equal.
-- Non-vacuity: the property's strategy is constructed so that at least one
-  generated case has `cwd` set and a relative path with a separator, and the
-  test asserts that combination was exercised. The invocation counter shares
-  O3's paired positive/negative control.
+- Non-vacuity: the property's strategy is constructed so that both shapes are
+  reachable rather than relying on the generator to find them — measured over
+  2000 draws of `_RELATIVE_PATH`, 1123 contain a separator and 877 are bare
+  names, and `_CWD` draws `None` and an absolute path. This obligation is
+  weaker than O2's: the property module carries no assertion that both shapes
+  were generated, so its non-vacuity rests on the strategy's construction and
+  on that measurement rather than on a guard that fails when the shapes go
+  ungenerated. The invocation counter shares O3's positive/negative control,
+  which is a `len(calls) == 1` assertion in one test paired with a
+  `len(calls) == 0` assertion in the refusal test rather than a single body
+  carrying both.
 
 Axioms relied on, and why they are not verified here:
 
@@ -1817,8 +1858,14 @@ Axioms relied on, and why they are not verified here:
   interface rather than a stub.
 - `PurePath.parts` splits on the platform separator, and a POSIX path
   containing no separator is `PATH`-searched rather than looked up relative to
-  the working directory. Repository-owned logic that depends on these facts is
-  `resolve_binding`, which is verified directly against both.
+  the working directory. Two pieces of repository-owned logic depend on these
+  facts. `advisory_path_rejection` relies on the separator test to decide
+  whether a filesystem probe is meaningful at all; `resolve_binding` relies on
+  them by *declining* to guess, anchoring a relative binding at `cwd` when one
+  is supplied and otherwise returning it unchanged for the platform to
+  resolve. Both are verified directly, and `resolve_binding`'s two branches are
+  pinned by named tests (`test_resolve_anchors_a_bare_relative_name_in_the_same_way`
+  and `test_resolve_leaves_a_bare_name_alone_when_there_is_no_cwd`).
 - `ContextVar` isolation across threads and tasks is the mechanism every
   existing scoped policy already relies on; it is not re-derived here, but the
   new bindings are tested through it rather than assumed to inherit it.
