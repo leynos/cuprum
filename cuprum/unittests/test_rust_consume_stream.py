@@ -58,6 +58,11 @@ _CONSUME_SETTINGS = settings(
     max_examples=50,
 )
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
+
 
 def _consume_payload(
     streams: ModuleType,

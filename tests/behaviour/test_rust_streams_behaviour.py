@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import typing as typ
 
+import pytest
 from pytest_bdd import given, scenario, then, when
 
 from tests.helpers.stream_pipes import (
@@ -25,6 +26,12 @@ from tests.helpers.stream_pipes import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
 
 
 def _expose_rust_stream_function(

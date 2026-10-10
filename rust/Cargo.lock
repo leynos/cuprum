@@ -97,6 +97,7 @@ dependencies = [
  "cap-std",
  "libc",
  "rstest",
+ "trybuild",
  "windows-sys 0.61.2",
 ]
 
