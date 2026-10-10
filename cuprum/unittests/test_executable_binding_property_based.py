@@ -80,11 +80,21 @@ def _relative_path(draw: st.DrawFn) -> str:
 
 _ABSOLUTE_PATH = _absolute_path()
 _RELATIVE_PATH = _relative_path()
-# ``ExecutionContext`` accepts a relative working directory, and that spelling is
-# what the double-anchoring defect lived in: the resolution base and the spawn
+# ``ExecutionContext`` accepts a relative working directory, and that spelling
+# is where the double-anchoring defect lived: the resolution base and the spawn
 # directory were the same relative string, so the child resolved a relative
-# ``argv[0]`` against the directory it had already been placed in. A strategy
-# that drew only ``None`` or an absolute path could never have reached it.
+# ``argv[0]`` against the directory it had already been placed in.
+#
+# This strategy draws a relative directory, but it does **not** reach that
+# defect and must not be read as doing so. It feeds only the absolute-binding
+# properties below, whose claim is that no working directory displaces an
+# absolute binding; a static relative binding composed with a relative
+# directory is covered by
+# ``test_relative_binding_joins_a_relative_directory_verbatim``, which draws
+# its own relative directory, and the execution-path defect is reached by the
+# named execution regression rather than by any property here. The distinction
+# matters because the augmentation above once looked like coverage of the
+# defect it could not observe.
 _CWD = st.one_of(st.none(), _ABSOLUTE_PATH, _RELATIVE_PATH)
 
 # Inputs that provoke each category reachable from string input alone, paired

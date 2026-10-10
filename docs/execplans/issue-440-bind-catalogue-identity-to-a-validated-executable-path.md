@@ -1233,8 +1233,14 @@ escalation, not a workaround.
   fail-fast case (recorded at `18:22Z`) and had its real-execution event test
   rewritten off the phase-keyed mapping that could hide an earlier wrong event.
   O5's relative-path property now asserts exact equality with the composed path
-  using native `Path` comparisons, and the `_CWD` strategy generates relative
-  directories so the anchoring defect is reachable from the generator.
+  using native `Path` comparisons. This sentence originally continued "and the
+  `_CWD` strategy generates relative directories so the anchoring defect is
+  reachable from the generator", which is **false** and is corrected here
+  rather than deleted, because it was the basis of a closure claim: the
+  anchoring defect lives in the execution path, not in `resolve_binding`, and
+  `_CWD` feeds only the absolute-binding properties. What reaches the defect is
+  the named execution regression, not the generator; see the `20:15Z` entry
+  below.
 
   Two evidence errors in the request comment itself were raised by the
   correctness reply and are corrected in a separate comment posted at `16:58Z`:
@@ -1363,6 +1369,27 @@ escalation, not a workaround.
   `.../bound0/failing.py`. The produced value still ends in `failing.py`, which
   is the demonstration the reply asked for that the suffix form could not have
   detected it.
+
+  A second pass over the same reply found **two further findings it raised that
+  the `19:40Z` entry had also claimed closed**, both about what the generator
+  actually reaches. The first is that the `_CWD` comment in
+  `test_executable_binding_property_based.py` still implied the strategy
+  reaches the anchoring defect. It does not, and the comment is the mechanism
+  by which that false belief spread: `_CWD` feeds only the absolute-binding
+  properties (verified by enumerating every decorator that names it —
+  `test_absolute_binding_resolves_to_itself`, `test_resolution_is_idempotent`,
+  and `test_resolver_is_invoked_once_per_resolution`), so its relative branch
+  raises a claim about absolute bindings rather than exercising relative
+  resolution. The comment now states what the strategy feeds, what covers the
+  relative case, and why the distinction matters. The second is O2's method,
+  which described the state machine as "model checking"; Hypothesis drives it
+  with generated rules, so it is sampled state-machine testing and the plan now
+  says so, with the guard's corresponding weakness restated beside it. The O5
+  line in the `19:40Z` entry carried the same false generator claim and is
+  corrected in place rather than deleted, because it was the stated basis of a
+  closure claim. The lesson repeats the one already recorded above: I checked
+  the reply's *headline* findings against the source and stopped, when the
+  graded obligations were where the unverified claims were.
 
 ## Surprises & discoveries
 
@@ -2289,8 +2316,10 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
   absent outside it; a child scope overrides a parent binding for the same
   program and leaves the parent's other bindings intact; two threads, and two
   asyncio tasks, never observe each other's bindings.
-- Method: named pytest examples for the nested case; state-machine model
-  checking for the register/detach sequences; named examples with a
+- Method: named pytest examples for the nested case; **sampled** state-machine
+  testing for the register/detach sequences — Hypothesis drives the machine
+  with generated rules, so this is sampling, not exhaustive model checking, and
+  the guard below is correspondingly weaker; named examples with a
   `threading.Barrier` and with `asyncio.gather` for the concurrency cases.
 - Rationale: the nesting behaviour is a small finite set of transitions that
   the existing Hypothesis state machine already models for every other handle
@@ -2309,9 +2338,13 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
   samples the new entry would otherwise pass vacuously). What that guard
   establishes is at least one binding factory ran, not that all three did, and
   not that same-key override and distinct-key merge both occurred; those are
-  sampled. The machine's own invariant is object identity of the restored
-  context — `active_context_matches_stack_top` compares with `is` — and it does
-  not independently model binding *contents*: its expected context comes from
+  sampled. The guard depends on generated coverage and can therefore fail on a
+  valid run that happens to sample no recorded binding; making it deterministic
+  would need required transitions rather than generated rules, which is a
+  change to the machine's contract and not one this work makes. The machine's
+  own invariant is object identity of the restored context —
+  `active_context_matches_stack_top` compares with `is` — and it does not
+  independently model binding *contents*: its expected context comes from
   `current_context()` after production registration, so a registration that
   installed a wrong mapping would still satisfy it. Binding-content evidence
   comes from the named tests in `test_context_isolation.py`, notably
