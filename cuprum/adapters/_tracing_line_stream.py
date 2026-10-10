@@ -15,10 +15,7 @@ class _LineStreamTracingMixin:
     def record_line_stream_event(self, event: LineStreamEvent) -> None:
         """Record one correlated lifecycle event when the execution span is open."""
         hook = typ.cast("TracingHook", self)
-        with hook._lock:
-            active = hook._span_states.get(event.exec_id)
-            if active is not None:
-                hook._active_spans.move_to_end(event.exec_id)
+        active = hook._lookup_active_span(event.exec_id, touch=True)
         if active is None:
             return
         attributes = _line_stream_attributes(event)

@@ -1,0 +1,11 @@
+# serializer version: 1
+# name: TestGateCommands.test_check_reports_blocking_findings
+  '''
+  duplicate code: 1 unsuppressed family/families
+    cuprum/a.py:1-20 ~ cuprum/b.py:30-49 beta (copy-paste, value 22.1)
+  Extract the shared logic into one helper, or record a considered exception:
+    make duplication-allow FIRST='<path[::name]>' [MEMBERS='<path[::name]> ...'] REASON='<why this stays>'
+  MEMBERS carries every location past the first, space-separated; `unit` entries need only FIRST.
+  
+  '''
+# ---

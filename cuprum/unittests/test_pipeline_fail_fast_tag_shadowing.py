@@ -1,7 +1,7 @@
 """That the fail-fast event reports the coordinator's stage, not the caller's.
 
 ``ExecutionContext.tags`` are merged *last* when a pipeline builds its per-stage
-observations (``cuprum._pipeline_internals._build_pipeline_observations``), so a
+observations (``cuprum._pipeline_observations._build_pipeline_observations``), so a
 caller is free to supply a ``pipeline_stage_index`` tag that overwrites the
 coordinator's own. Shadowing is allowed — the tags are the caller's metadata
 namespace — which is precisely why the fail-fast decision travels on the typed

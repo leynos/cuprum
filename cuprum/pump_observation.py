@@ -19,14 +19,13 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
-from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+from cuprum._scope_registration import _TokenTupleRegistration
+from cuprum.pump_events import PumpEvent, PumpHook, RustPumpHandoffOutcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from contextvars import Token
 
     from cuprum.events import ExecId
-    from cuprum.pump_events import PumpHook
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,7 +75,7 @@ def current_pump_hooks() -> tuple[PumpHook, ...]:
     return _pump_hooks.get()
 
 
-class PumpHookRegistration:
+class PumpHookRegistration(_TokenTupleRegistration[PumpHook]):
     """Registration handle for a Rust-pump observation hook.
 
     Supports ``detach()`` and context-manager use. The handle captures a
@@ -92,36 +91,11 @@ class PumpHookRegistration:
     out of order restores a tuple that discards later registrations.
     """
 
-    __slots__ = ("_detached", "_hook", "_token")
+    __slots__ = ()
 
     def __init__(self, hook: PumpHook) -> None:
         """Append ``hook`` to the current context's pump hooks."""
-        self._hook = hook
-        self._detached = False
-        self._token: Token[tuple[PumpHook, ...]] = _pump_hooks.set((
-            *_pump_hooks.get(),
-            hook,
-        ))
-
-    def detach(self) -> None:
-        """Restore the pump hooks that preceded this registration."""
-        if self._detached:
-            return
-        _pump_hooks.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        super().__init__(_pump_hooks, hook)
 
 
 def observe_pump(hook: PumpHook) -> PumpHookRegistration:

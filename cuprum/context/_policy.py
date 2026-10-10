@@ -3,13 +3,16 @@
 Low-level, side-effect-free helpers that implement the context narrowing and
 validation policy shared by :class:`cuprum.context.core.CuprumContext` and
 :class:`~cuprum.context.core.ScopeConfig`: allowlist narrowing and
-restriction tracking, timeout validation and resolution, and generic hook
-merging.
+restriction tracking, timeout validation and resolution, the shared post-init
+normalization of the scope fields, and generic hook merging.
 
 This module is deliberately dependency-light. It must not import
 ``CuprumContext``, the registration handles, or the ``ContextVar`` state
 plumbing so the dependency direction stays acyclic: ``core`` (and the wider
 ``cuprum.context`` package) depend on it, never the reverse.
+:func:`_normalize_scope_fields` reaches only into
+:mod:`cuprum.context.env_overlay`, which itself has no ``ContextVar``
+dependency, so that direction still holds.
 """
 
 from __future__ import annotations
@@ -17,10 +20,42 @@ from __future__ import annotations
 import math
 import typing as typ
 
-from cuprum.context.env_overlay import EnvMode, EnvOverlay, merge_env_overlays
+from cuprum.context.env_overlay import (
+    EnvMode,
+    EnvOverlay,
+    _coerce_env_overlay,
+    merge_env_overlays,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
+
+
+def _normalize_scope_fields(instance: object, class_name: str) -> None:
+    """Validate and coerce the timeout and env overlay of a frozen dataclass.
+
+    The scope-bearing frozen dataclasses share this post-init contract: the
+    class name is what distinguishes the two timeout diagnostics, so it is a
+    parameter rather than something derived from ``type(instance).__name__``,
+    which would silently change the message a subclass reports. Both writes go
+    through :func:`object.__setattr__` because the caller's dataclass is frozen.
+
+    Parameters
+    ----------
+    instance:
+        The frozen dataclass instance, read for ``timeout`` and ``env_overlay``.
+    class_name:
+        The name used in the timeout diagnostic for *instance*.
+
+    """
+    validated = _validate_timeout(instance.timeout, class_name)  # ty: ignore[unresolved-attribute] - the shared post-init contract is this helper's premise.
+    # Use object.__setattr__ because the dataclass is frozen
+    object.__setattr__(instance, "timeout", validated)
+    object.__setattr__(
+        instance,
+        "env_overlay",
+        _coerce_env_overlay(instance.env_overlay),  # ty: ignore[unresolved-attribute] - same contract as the timeout read above.
+    )
 
 
 def _validate_timeout(timeout: float | None, class_name: str) -> float | None:

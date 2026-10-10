@@ -1,0 +1,37 @@
+# serializer version: 1
+# name: TestBuildCommand.test_default_surface_omits_the_all_term
+  list([
+    'nose',
+    'query',
+    '--root',
+    'cuprum',
+    '--mode',
+    'syntax',
+    '--min-size',
+    '24',
+    '--format',
+    'json',
+  ])
+# ---
+# name: TestBuildCommand.test_pins_every_configured_setting
+  list([
+    'nose',
+    'query',
+    '--root',
+    'cuprum',
+    '--root',
+    'openai_test_types.py',
+    'all',
+    'top=30',
+    '--mode',
+    'semantic',
+    '--min-size',
+    '40',
+    '--exclude',
+    '**/generated/**',
+    '--exclude',
+    '**/_vendor/**',
+    '--format',
+    'json',
+  ])
+# ---

@@ -9,6 +9,7 @@ import time
 import typing as typ
 from weakref import WeakKeyDictionary
 
+from cuprum._scope_registration import _ScopeRegistration
 from cuprum.context import HookRegistration, after, before
 
 if typ.TYPE_CHECKING:
@@ -18,43 +19,29 @@ if typ.TYPE_CHECKING:
 
 
 @dc.dataclass(slots=True)
-class LoggingHookRegistration:
+class LoggingHookRegistration(_ScopeRegistration):
     """Registration handle for paired logging hooks.
 
     Detaches both the start (before) and exit (after) hooks together to avoid
     leaking state across tests or calling code. Detach order is reversed from
-    registration to respect ContextVar token stacking.
+    registration to respect ContextVar token stacking. The idempotent detach
+    guard and context-manager protocol come from :class:`_ScopeRegistration`;
+    ``_detached`` stays a field so the generated ``__init__`` initializes it.
     """
 
     start_registration: HookRegistration | None
     exit_registration: HookRegistration | None
     _detached: bool = False
 
-    def detach(self) -> None:
-        """Detach both logging hooks idempotently."""
-        if self._detached:
-            return
+    def _release(self) -> None:
+        """Detach the paired hooks and drop the references to them."""
         # Detach in reverse registration order to satisfy ContextVar token use.
         if self.exit_registration is not None:
             self.exit_registration.detach()
         if self.start_registration is not None:
             self.start_registration.detach()
-        self._detached = True
         self.exit_registration = None
         self.start_registration = None
-
-    def __enter__(self) -> LoggingHookRegistration:
-        """Return self to support context manager usage."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach hooks when leaving a context manager block."""
-        self.detach()
 
 
 def logging_hook(

@@ -1,37 +1,42 @@
 """Internal pipeline execution coordination and fail-fast semantics.
 
 This module is the private machinery behind ``cuprum.sh``'s
-``Pipeline.run``/``run_sync``. It ties together allowlist enforcement
-and hook collection, stage process spawning, inter-stage pipe wiring,
-completion waiting with optional timeouts, and per-stage
-``CommandResult`` assembly. It exists chiefly to centralize
-finalization: when a stage fails or an after-hook raises, pending
-observe-hook tasks must still be drained and every independent
-failure preserved, grouping after-hook and task failures into a
-``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
-``cuprum._pipeline_collect``, ``cuprum._pipeline_sink`` (the pipeline's
-result mapping), ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``Pipeline.run``/``run_sync``. It owns the lifetime of a running pipeline:
+stage process spawning, inter-stage pipe wiring, completion waiting with
+optional timeouts, and per-stage ``CommandResult`` assembly. It exists chiefly
+to centralize finalization: when a stage fails or an after-hook raises, pending
+observe-hook tasks must still be drained and every independent failure
+preserved, grouping after-hook and task failures into a ``BaseExceptionGroup``.
+
+Building *observation state* for those stages — allowlist enforcement, hook
+collection, and tag assembly — belongs to ``cuprum._pipeline_observations``,
+which this module calls before spawning. The split keeps a pure query that the
+single-command path reuses separate from the run's own event traffic.
+
+Following the precedent of ``cuprum._pipeline_types`` and
+``cuprum._pipeline_collect``, this module re-exports what it imports from its
+siblings rather than only consuming it. That keeps ``cuprum._subprocess_stdin``,
+``cuprum._execution_tracking``, ``cuprum._testing``, ``cuprum.sh``, and the
+unit-test suite resolving the dataclasses through their established location
+after the definitions moved out.
+
+It collaborates with ``cuprum._pipeline_spawn``, ``cuprum._pipeline_collect``,
+``cuprum._pipeline_sink`` (the pipeline's result mapping),
+``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 ``cuprum._pipeline_wait``, ``cuprum._process_lifecycle``,
 ``cuprum._sink_lifecycle`` (the sink session it brackets the run with),
-``cuprum._observability``, and
-``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``.
+``cuprum._observability``, and ``cuprum.context``, and is invoked by
+``cuprum.sh`` and ``cuprum._subprocess_execution``.
 """
 
 from __future__ import annotations
 
-import time
 import typing as typ
-from pathlib import Path
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
-    _base_stage_tags,
     _drain_tasks_during_cleanup,
-    _merge_tags,
-    _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
-    _without_env_mode_tag,
 )
 from cuprum._pipeline_collect import (
     _await_pipeline_wait_result,
@@ -39,6 +44,12 @@ from cuprum._pipeline_collect import (
     _collect_pipeline_inputs,
     _gather_pipeline_outputs,
     _sh_module,
+)
+from cuprum._pipeline_observations import (
+    _build_pipeline_observations,
+    _collect_hooks,
+    _emit_plan_events_and_run_before_hooks,
+    _enforce_allowlist,
 )
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
@@ -56,92 +67,34 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
+from cuprum._sink_lifecycle import (
+    _close_sink_and_drain_after_failure,
+    _outcome_for_error,
+    _SinkBracket,
+)
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
-from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
 __all__ = [
+    "_EventDetails",
+    "_ExecutionHooks",
+    "_StageObservation",
     "_await_pipeline_wait_result",
     "_build_timeout_expired_error",
+    "_collect_hooks",
     "_collect_pipeline_inputs",
+    "_enforce_allowlist",
     "_gather_pipeline_outputs",
     "_sh_module",
 ]
 
 _MIN_PIPELINE_STAGES = 2
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
-
-
-def _enforce_allowlist(cmd: SafeCmd) -> None:
-    """Reject ``cmd`` when the active context forbids its program."""
-    current_context().check_allowed(cmd.program)
-
-
-def _collect_hooks(ctx: CuprumContext) -> _ExecutionHooks:
-    """Return the before/after/observe hooks registered on ``ctx``."""
-    return _ExecutionHooks(
-        before_hooks=ctx.before_hooks,
-        after_hooks=ctx.after_hooks,
-        observe_hooks=ctx.observe_hooks,
-    )
-
-
-def _build_pipeline_observations(
-    parts: tuple[SafeCmd, ...],
-    config: _PipelineRunConfig,
-    *,
-    pending_tasks: list[asyncio.Task[None]],
-) -> tuple[_StageObservation, ...]:
-    """Build per-stage observation state for every command in the pipeline."""
-    for cmd in parts:
-        _enforce_allowlist(cmd)
-    ctx = current_context()
-    hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
-    cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    env_overlay, env_mode = _resolve_env_overlay(config.ctx.env, config.ctx.env_mode)
-    return tuple(
-        _StageObservation(
-            cmd=cmd,
-            hooks=hooks,
-            tags=_merge_tags(
-                _base_stage_tags(
-                    cmd,
-                    capture=config.capture,
-                    echo_stdout=config.echo_stdout,
-                    echo_stderr=config.echo_stderr,
-                ),
-                {
-                    "pipeline_stage_index": idx,
-                    "pipeline_stages": len(parts),
-                },
-                _without_env_mode_tag(config.ctx.tags),
-                {"env_mode": env_mode} if env_mode is EnvMode.REPLACE else None,
-            ),
-            cwd=cwd,
-            env_overlay=env_overlay,
-            pending_tasks=pending_tasks,
-            wall_clock=time.time,
-            env_mode=env_mode,
-        )
-        for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
-    )
-
-
-def _emit_plan_events_and_run_before_hooks(
-    observations: tuple[_StageObservation, ...],
-) -> None:
-    """Emit plan events and run before hooks for every stage."""
-    for obs in observations:
-        obs.emit("plan", _EventDetails(pid=None))
-        for hook in obs.hooks.before_hooks:
-            hook(obs.cmd)
 
 
 async def _finalize_pipeline_execution(
@@ -171,11 +124,11 @@ async def _finalize_pipeline_execution(
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        sink_bracket.close(outcome=_outcome_for_error(after_hook_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
+        await _close_sink_and_drain_after_failure(
+            sink_bracket,
+            pending_tasks,
+            after_hook_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
@@ -281,17 +234,15 @@ async def _run_spawned_pipeline(
             inputs=inputs,
         )
     except BaseException as result_error:
-        sink_bracket.close(outcome=_outcome_for_error(result_error))
         # The stage-result build sits between the spawn and finalization, so
         # the observe-hook tasks this pipeline owns are nobody else's yet: the
-        # run owes the drain here for the same reason the spawn-failure branch
-        # above does, and for the same reason the close comes first.
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks,
-                result_error,
-                message=_PIPELINE_FINALIZATION_ERROR,
-            )
+        # run owes the same close and drain the spawn-failure branch above and
+        # the after-hook failure in _finalize_pipeline_execution owed.
+        await _close_sink_and_drain_after_failure(
+            sink_bracket,
+            pending_tasks,
+            result_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     # Finalization owns the close, after the after-hooks have run: a failing
@@ -374,11 +325,11 @@ async def _spawn_and_drive_pipeline(
             idle=config.idle,
         )
     except BaseException as spawn_error:
-        config.sink_bracket.close(outcome=_outcome_for_error(spawn_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
+        await _close_sink_and_drain_after_failure(
+            config.sink_bracket,
+            pending_tasks,
+            spawn_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     return await _run_spawned_pipeline(

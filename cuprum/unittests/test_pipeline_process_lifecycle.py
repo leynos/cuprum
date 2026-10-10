@@ -8,7 +8,7 @@ import pytest
 
 from cuprum import (
     ECHO,
-    _pipeline_internals,
+    _pipeline_observations,
     _pipeline_spawn,
     _pipeline_stage_streams,
     sh,
@@ -240,8 +240,9 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     # The stage observation builder installs ``time.time`` as each stage's
     # ``wall_clock`` callable, so the injected wall clock must be patched where
     # that attribute is read from — not in ``sh``, which no longer imports
-    # ``time`` now that observation construction lives in ``_pipeline_internals``.
-    monkeypatch.setattr(_pipeline_internals.time, "time", wall_clock)
+    # ``time`` now that observation construction lives in
+    # ``_pipeline_observations``.
+    monkeypatch.setattr(_pipeline_observations.time, "time", wall_clock)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(
         _pipeline_stage_streams,

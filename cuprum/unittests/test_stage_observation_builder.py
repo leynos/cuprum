@@ -30,7 +30,7 @@ from cuprum._command_internals import (
     _prepare_execution_observation,
 )
 from cuprum._observability import _base_stage_tags, _resolve_env_overlay
-from cuprum._pipeline_internals import (
+from cuprum._pipeline_observations import (
     _build_pipeline_observations,
     _collect_hooks,
     _enforce_allowlist,
