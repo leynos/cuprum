@@ -44,6 +44,8 @@ def test_snapshot_copies_its_group_mapping() -> None:
         pytest.param({"duration_seconds": -1.0}, id="negative-duration"),
         pytest.param({"duration_seconds": float("inf")}, id="infinite-duration"),
         pytest.param({"duration_seconds": float("nan")}, id="nan-duration"),
+        pytest.param({"duration_seconds": 10**400}, id="overflowing-duration"),
+        pytest.param({"duration_seconds": float("-inf")}, id="negative-infinite"),
     ],
 )
 def test_snapshot_discards_invalid_serialized_group(
@@ -64,6 +66,24 @@ def test_snapshot_discards_invalid_serialized_group(
 
     assert not snapshot.groups, f"invalid telemetry must be discarded: {group}"
     assert snapshot.totals == StreamTelemetryGroup()
+
+
+def test_snapshot_keeps_counters_beyond_the_float_range() -> None:
+    """Integer counters are boundaries, so values beyond binary64 survive."""
+    huge = 10**400
+
+    snapshot = StreamTelemetrySnapshot.from_dict({
+        "groups": {"stream_drain": {"eof": _group_payload(bytes_consumed=huge)}}
+    })
+
+    assert snapshot.groups == {
+        (StreamOperation.DRAIN, StreamOperationOutcome.EOF): StreamTelemetryGroup(
+            bytes_consumed=huge,
+            read_operations=2,
+            operation_count=1,
+            duration_seconds=0.25,
+        )
+    }, "byte and operation counters must not be narrowed to a float range"
 
 
 def _group_payload(**overrides: int | float) -> dict[str, int | float]:
@@ -206,13 +226,188 @@ def test_snapshot_recalculates_totals_from_accepted_groups() -> None:
     )
 
 
-def test_accumulator_discards_unknown_operation_and_outcome() -> None:
-    """Accumulator groups only events using the closed operation vocabulary."""
+def _event(
+    operation: StreamOperation,
+    outcome: StreamOperationOutcome,
+    *,
+    bytes_consumed: int,
+    read_operations: int,
+    duration_s: float,
+) -> StreamOperationEvent:
+    """Return one completed-operation event for accumulator coverage."""
+    return StreamOperationEvent(
+        operation=operation,
+        outcome=outcome,
+        bytes_consumed=bytes_consumed,
+        read_operations=read_operations,
+        duration_s=duration_s,
+    )
+
+
+def test_accumulator_merges_events_within_and_across_groups() -> None:
+    """Repeated events accumulate into their own group, leaving others alone."""
+    accumulator = StreamTelemetryAccumulator()
+    drain_eof = (StreamOperation.DRAIN, StreamOperationOutcome.EOF)
+
+    for event in (
+        _event(*drain_eof, bytes_consumed=4, read_operations=2, duration_s=0.25),
+        _event(*drain_eof, bytes_consumed=6, read_operations=3, duration_s=0.5),
+        # A distinct outcome must stay separate from the same operation's EOF
+        # group rather than being folded into it.
+        _event(
+            StreamOperation.DRAIN,
+            StreamOperationOutcome.CANCELLED,
+            bytes_consumed=1,
+            read_operations=1,
+            duration_s=0.125,
+        ),
+        # A distinct operation must stay separate from the drain group.
+        _event(
+            StreamOperation.PIPELINE_TRANSFER,
+            StreamOperationOutcome.EOF,
+            bytes_consumed=8,
+            read_operations=4,
+            duration_s=1.0,
+        ),
+    ):
+        accumulator(event)
+
+    snapshot = accumulator.snapshot()
+    assert snapshot.groups == {
+        drain_eof: StreamTelemetryGroup(
+            bytes_consumed=10,
+            read_operations=5,
+            operation_count=2,
+            duration_seconds=0.75,
+        ),
+        (StreamOperation.DRAIN, StreamOperationOutcome.CANCELLED): (
+            StreamTelemetryGroup(
+                bytes_consumed=1,
+                read_operations=1,
+                operation_count=1,
+                duration_seconds=0.125,
+            )
+        ),
+        (StreamOperation.PIPELINE_TRANSFER, StreamOperationOutcome.EOF): (
+            StreamTelemetryGroup(
+                bytes_consumed=8,
+                read_operations=4,
+                operation_count=1,
+                duration_seconds=1.0,
+            )
+        ),
+    }, "each group must accumulate independently of the others"
+    assert snapshot.totals == StreamTelemetryGroup(
+        bytes_consumed=19,
+        read_operations=10,
+        operation_count=4,
+        duration_seconds=1.875,
+    ), "totals must sum every accumulated group"
+    assert snapshot.as_dict()["totals"] == snapshot.totals.as_dict(), (
+        "the serialized totals must describe the accumulated groups"
+    )
+
+
+def test_accumulator_merges_snapshots_into_existing_groups() -> None:
+    """Snapshot merging adds to the groups an accumulator already holds."""
+    accumulator = StreamTelemetryAccumulator()
+    accumulator(
+        _event(
+            StreamOperation.DRAIN,
+            StreamOperationOutcome.EOF,
+            bytes_consumed=4,
+            read_operations=2,
+            duration_s=0.25,
+        )
+    )
+
+    accumulator.add_snapshot(
+        StreamTelemetrySnapshot(
+            groups={
+                (StreamOperation.DRAIN, StreamOperationOutcome.EOF): (
+                    StreamTelemetryGroup(
+                        bytes_consumed=6,
+                        read_operations=3,
+                        operation_count=2,
+                        duration_seconds=0.5,
+                    )
+                ),
+                (StreamOperation.PIPELINE_TRANSFER, StreamOperationOutcome.EOF): (
+                    StreamTelemetryGroup(
+                        bytes_consumed=8,
+                        read_operations=4,
+                        operation_count=1,
+                        duration_seconds=1.0,
+                    )
+                ),
+            },
+            totals=StreamTelemetryGroup(operation_count=999),
+        )
+    )
+
+    assert accumulator.snapshot().groups == {
+        (StreamOperation.DRAIN, StreamOperationOutcome.EOF): StreamTelemetryGroup(
+            bytes_consumed=10,
+            read_operations=5,
+            operation_count=3,
+            duration_seconds=0.75,
+        ),
+        (StreamOperation.PIPELINE_TRANSFER, StreamOperationOutcome.EOF): (
+            StreamTelemetryGroup(
+                bytes_consumed=8,
+                read_operations=4,
+                operation_count=1,
+                duration_seconds=1.0,
+            )
+        ),
+    }, "merged groups must add to the matching group and leave others intact"
+
+
+def test_accumulator_reset_discards_prior_measurements() -> None:
+    """Reset returns the accumulator to an empty snapshot."""
+    accumulator = StreamTelemetryAccumulator()
+    accumulator(
+        _event(
+            StreamOperation.DRAIN,
+            StreamOperationOutcome.EOF,
+            bytes_consumed=4,
+            read_operations=2,
+            duration_s=0.25,
+        )
+    )
+
+    accumulator.reset()
+
+    assert accumulator.snapshot() == StreamTelemetrySnapshot.empty(), (
+        "reset must discard every previously accumulated group"
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "outcome"),
+    [
+        pytest.param(
+            typ.cast("StreamOperation", "unknown_operation"),
+            StreamOperationOutcome.EOF,
+            id="unknown-operation",
+        ),
+        pytest.param(
+            StreamOperation.DRAIN,
+            typ.cast("StreamOperationOutcome", "unknown_outcome"),
+            id="unknown-outcome",
+        ),
+    ],
+)
+def test_accumulator_discards_unknown_operation_or_outcome(
+    operation: StreamOperation,
+    outcome: StreamOperationOutcome,
+) -> None:
+    """Accumulator rejects each invalid label without relying on the other."""
     accumulator = StreamTelemetryAccumulator()
     accumulator(
         StreamOperationEvent(
-            operation=typ.cast("StreamOperation", "unknown_operation"),
-            outcome=typ.cast("StreamOperationOutcome", "unknown_outcome"),
+            operation=operation,
+            outcome=outcome,
             bytes_consumed=1,
             read_operations=1,
             duration_s=1.0,

@@ -215,6 +215,55 @@ class TestWorkerStreamTelemetry:
 
         _assert_positive_stream_telemetry(result, expected_operations)
 
+    def test_worker_accumulates_stream_telemetry_across_repeats(
+        self,
+        tmp_path: pth.Path,
+    ) -> None:
+        """Telemetry observes every repeat, not just the first, across the loop."""
+        fixture = tmp_path / "fixture_stream_telemetry_repeats.b64"
+        fixture.write_text("YWJjZGVm\n")
+        config = TeeProfileWorkerConfig(
+            fixture_path=fixture,
+            stages=1,
+            mode="tee",
+            sink_kind="devnull",
+            with_line_callbacks=False,
+            backend="python",
+            repeat_count=1,
+        )
+
+        single = run_tee_profile_worker(config)
+        tripled = run_tee_profile_worker(
+            TeeProfileWorkerConfig(
+                fixture_path=fixture,
+                stages=1,
+                mode="tee",
+                sink_kind="devnull",
+                with_line_callbacks=False,
+                backend="python",
+                repeat_count=3,
+            ),
+        )
+
+        _assert_positive_stream_telemetry(single, {StreamOperation.DRAIN})
+        _assert_positive_stream_telemetry(tripled, {StreamOperation.DRAIN})
+        # The observer is registered around the whole repeat loop, so a worker
+        # that recorded only the first repeat, or reset the accumulator between
+        # repeats, would report the single-repeat counters here.
+        single_totals = single["stream_telemetry"]["totals"]
+        tripled_totals = tripled["stream_telemetry"]["totals"]
+        for counter in ("bytes_consumed", "read_operations", "operation_count"):
+            assert tripled_totals[counter] == 3 * single_totals[counter], (
+                f"{counter} must scale with repeat_count, got {tripled_totals}"
+            )
+        # Durations are measured from the monotonic clock, so two separate runs
+        # cannot be compared by an exact factor. Their presence and sign are
+        # still asserted, and ``_assert_positive_stream_telemetry`` above
+        # reconciles each duration total against its own groups.
+        assert tripled_totals["duration_seconds"] > 0.0, (
+            f"every repeat must contribute a measured duration, got {tripled_totals}"
+        )
+
 
 def test_worker_uses_configured_read_size(tmp_path: pth.Path) -> None:
     """Worker results report the configured private stream read size."""

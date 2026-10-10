@@ -248,12 +248,26 @@ def _integer_from_value(value: object) -> int | None:
 
 
 def _duration_from_value(value: object) -> float | None:
-    """Return a serialized duration as a float while excluding booleans."""
+    """Return a serialized duration as a float while excluding booleans.
+
+    An integer magnitude beyond the binary64 range cannot become a duration at
+    all, so it discards the group like any other malformed value rather than
+    letting the ``OverflowError`` escape into sweep-report assembly.
+
+    Returns
+    -------
+    float | None
+        The duration, or ``None`` when the value is not a finite, non-negative
+        number representable as a binary64 float.
+    """
     match value:
         case bool():
             return None
         case (int() | float()) as numeric_duration:
-            duration = float(numeric_duration)
+            try:
+                duration = float(numeric_duration)
+            except OverflowError:
+                return None
             return duration if math.isfinite(duration) and duration >= 0.0 else None
         case _:
             return None
