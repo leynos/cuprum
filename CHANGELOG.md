@@ -461,6 +461,27 @@
 
 ### Changed
 
+- **`Pipeline` moves to `cuprum.sh.pipeline`:** The `Pipeline` class left
+  `cuprum/sh/safe_cmd.py`, which now holds only `SafeCmd` and `SafeCmdBuilder`.
+  Nothing observable changes: `cuprum.sh.Pipeline`, `cuprum.Pipeline`, the `|`
+  operator, and type resolution all still work as before, and the only visible
+  difference is the module a traceback names and the extra file in the wheel.
+  The split is what keeps `safe_cmd.py` under the 400-line module ceiling once
+  `SafeCmd.start()` joins it. See the
+  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-10-11 for the deferred-import direction the two classes now take.
+
+- **The spawn seam moves to `cuprum._subprocess_spawn`:**
+  `_SubprocessExecution`, `_spawn_subprocess`, and `_start_owned_process` left
+  `cuprum/_subprocess_execution.py`, which had grown past the 400-line module
+  ceiling, and `cuprum._subprocess_execution` re-exports the bundle and the
+  stream-wiring names so existing importers are unaffected. `_spawn_subprocess`
+  is deliberately *not* re-exported: the name is resolved from its own module's
+  globals, so a patch applied to a copy would leave the real spawn running.
+  Code that refuses a spawn patches `cuprum._subprocess_spawn`. See the
+  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-10-11.
+
 - **`sh.make` resolves the active scoped catalogue:** The `catalogue` parameter
   now defaults to `None` and is resolved as an explicit argument, then the
   innermost active `scoped(catalogue=...)`, then `DEFAULT_CATALOGUE`. Call

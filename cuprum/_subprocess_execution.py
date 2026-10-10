@@ -5,33 +5,39 @@ stream consumers, and assembling the ``CommandResult``. The rules for ending a
 run — applying the deadline, terminating the process, and draining the stream
 consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
 run loop that waits for exit and reconciles the consumer tasks lives in
-``cuprum._subprocess_stream_run``, and the consumer construction those two
-drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
-importers of this module keep working unchanged. Timing and child resource
-usage are measured here, with ``cuprum._wait4_process`` owning the direct
-child's ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps
-the three pre-spawn readings together so their shared ordering cannot drift.
+``cuprum._subprocess_stream_run``, the consumer construction those two drive
+lives in ``cuprum._subprocess_streams``, and the spawn seam itself lives in
+``cuprum._subprocess_spawn``. All three are re-exported here so importers of
+this module keep working unchanged. Timing and child resource usage are
+measured here, with ``cuprum._wait4_process`` owning the direct child's
+``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps the three
+pre-spawn readings together so their shared ordering cannot drift.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import time
 import typing as typ
 
 from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_spawn import _start_owned_process, _SubprocessExecution
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 from cuprum._subprocess_streams import (
-    _build_stream_config,
-    _create_stream_callback,
-    _spawn_stream_consumers,
-    _StreamConsumerSpawnContext,
+    _build_stream_config as _build_stream_config,
+)
+from cuprum._subprocess_streams import (
+    _create_stream_callback as _create_stream_callback,
+)
+from cuprum._subprocess_streams import (
+    _spawn_stream_consumers as _spawn_stream_consumers,
+)
+from cuprum._subprocess_streams import (
+    _StreamConsumerSpawnContext as _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
@@ -40,81 +46,18 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
 )
-from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
-
-# Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
-# dataclass's own default value, so the name must resolve when the class body
-# executes.
-from cuprum.echo_events import BrokenPipePolicy
+from cuprum._subprocess_wait import (
+    _wait_for_exit_code_within_timeout as _wait_for_exit_code_within_timeout,
+)
 
 if typ.TYPE_CHECKING:
-    from cuprum._idle_heartbeat import _IdleMonitor
+    import asyncio
+
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
-    from cuprum.lines import _LineHookFn
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-    from cuprum.sinks.base import OutputSession
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SubprocessExecution:
-    """Execution context bundle for subprocess spawning."""
-
-    cmd: SafeCmd
-
-    ctx: ExecutionContext
-
-    capture: bool
-
-    echo_stdout: bool
-
-    echo_stderr: bool
-
-    max_echo_line_bytes: int | None
-
-    sink_session: OutputSession | None
-
-    timeout: float | None
-
-    observation: _StageObservation
-
-    stdin_data: bytes | None
-    on_line: _LineHookFn | None = None
-    # Defaulted for the tests that build this bundle directly, and resolved by
-    # ``RunOutputOptions.__post_init__`` on the production path, so the value
-    # reaching the stream config is always a member, never a raw spelling.
-    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
-    # Monotonic reference the per-line ``at`` stamps are measured from; taken
-    # once at spawn so every line of a run shares one time base.
-    started_at: float = 0.0
-    idle: _IdleMonitor | None = None
-
-    @property
-    def consumes_stdout(self) -> bool:
-        """Whether the parent must consume stdout, rather than discard it.
-
-        A registered ``on_line`` observes both streams, so it keeps the pipe
-        open and the consumer running even when capture and echo are both off.
-        Without that, ``run(output=RunOutputOptions(on_line=...))`` would attach
-        stdout to ``DEVNULL`` and silently deliver nothing.
-        """
-        return (
-            self.capture
-            or self.echo_stdout
-            or self.idle is not None
-            or self.on_line is not None
-        )
-
-    @property
-    def consumes_stderr(self) -> bool:
-        """Whether the parent must consume stderr, rather than discard it."""
-        return (
-            self.capture
-            or self.echo_stderr
-            or self.idle is not None
-            or self.on_line is not None
-        )
+    from cuprum.sh import CommandResult
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -160,32 +103,6 @@ class _DirectCompletion:
     stdout_text: str | None
     stderr_text: str | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
-
-
-async def _spawn_subprocess(
-    execution: _SubprocessExecution,
-) -> asyncio.subprocess.Process:
-    """Spawn an async subprocess with configured I/O and environment."""
-    # ``consumes_stdout``/``consumes_stderr`` fold in the idle monitor as well as
-    # capture and echo, so a run the watchdog narrates keeps its pipes.
-    return await _wait4_process.spawn_direct_process(
-        _wait4_process.DirectProcessConfig(
-            argv=(execution.observation.argv0, *execution.cmd.argv),
-            stdout=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stdout
-                else asyncio.subprocess.DEVNULL
-            ),
-            stderr=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stderr
-                else asyncio.subprocess.DEVNULL
-            ),
-            stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
-            env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
-            cwd=_cwd_arg(execution.ctx.cwd),
-        )
-    )
 
 
 async def _run_subprocess_without_streams(
@@ -303,23 +220,18 @@ async def _await_direct_completion(
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
-    # All three pre-spawn readings are taken here, before the spawn await, so
-    # a run's recorded duration includes the time its spawn blocked and the
-    # rusage bracket spans the child's whole life. ``started_at`` is the
-    # monotonic reference the duration and every line stamp are measured
-    # against; ``wall_clock_started_at`` is the separate wall-clock instant the
-    # result reports to callers.
+    # All three pre-spawn readings are taken here, before the spawn await, so a
+    # run's recorded duration includes the time its spawn blocked and the rusage
+    # bracket spans the child's whole life. ``started_at`` is the monotonic
+    # reference the duration and every line stamp are measured against;
+    # ``wall_clock_started_at`` is the separate wall-clock instant the result
+    # reports to callers.
     run_start = _sample_run_start(execution.observation)
     started_at = run_start.monotonic_started_at
-    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
-    # consumers read ``started_at`` off it when stamping each ``LineEvent``.
-    # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
-    # uptime rather than seconds since this command started. Stamping the
-    # bundle reads no clock, so it does not disturb the sampling order above.
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
+    started = await _start_owned_process(execution, started_at)
+    process = started.process
+    execution = started.execution
     pid = process.pid
-    execution.observation.emit("start", _EventDetails(pid=pid))
     completion = await _await_direct_completion(
         process,
         execution,
@@ -369,5 +281,6 @@ __all__ = [
     "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
-    "_spawn_subprocess",
+    "_start_owned_process",
+    "_wait_for_exit_code_within_timeout",
 ]

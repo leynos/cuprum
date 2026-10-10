@@ -451,3 +451,67 @@ Publishing the alias is what lets callers annotate their own wrappers with the
 same domain the builders enforce, without repeating the union or reaching for
 `object`. The contract itself, including which values are rejected at run time,
 is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
+
+## Addendum (2026-10-11): split `Pipeline` out of `cuprum/sh/safe_cmd.py`
+
+The 2026-09-25 addendum -- and, for `Pipeline` alone, the typed `sh.make`
+addendum above -- recorded `cuprum/sh/safe_cmd.py` as holding both `SafeCmd` and
+`Pipeline`. That is no longer so: `Pipeline` now lives in
+`cuprum/sh/pipeline.py`, and `safe_cmd.py` no longer imports it. `SafeCmdBuilder`
+is unaffected by this split and remains in `cuprum/sh/builder.py`.
+
+The reference between the two classes was always mutual and always deferred on
+one side. `Pipeline` names `SafeCmd` as its stage type, while `SafeCmd.__or__`
+resolved `Pipeline` at call time regardless, so the only reason both classes
+sat in one module was to keep that deferred name resolvable. A separate module
+makes the dependency one-way and explicit: `Pipeline` imports `SafeCmd` for
+real, and `SafeCmd.__or__` imports `Pipeline` from inside the operator body,
+where the package is already imported and the lookup costs one `sys.modules`
+read.
+
+`SafeCmd.__or__`'s annotations — `other: SafeCmd | Pipeline` and
+``-> Pipeline`` — name `Pipeline` under `typing.TYPE_CHECKING` only. They are
+quoted strings, and `typing.get_type_hints` is never called on `SafeCmd.__or__`;
+`cuprum/unittests/test_public_api.py` resolves `SafeCmd`'s field annotations
+and `Pipeline`'s own methods, which is exactly the set this deferral leaves
+resolvable. A future test that asks for hints on either `__or__` would get a
+`NameError` for `Pipeline` from `safe_cmd`, so add the name to the module's
+runtime imports at that point rather than assuming it resolves.
+
+`cuprum/sh/__init__.py` imports `Pipeline` from the new module and `SafeCmd`
+from the old one, so `cuprum.sh.Pipeline`, `cuprum.sh.SafeCmd`, and
+`cuprum.Pipeline` keep their object identity and their `__module__` moves to
+where the class is now defined. The
+`from cuprum.sh.safe_cmd import asyncio as asyncio` attribute compatibility
+shim is unaffected: `asyncio` is still imported there for `run_sync`.
+
+## Addendum (2026-10-11): split the spawn seam into `cuprum/_subprocess_spawn.py`
+
+`cuprum/_subprocess_execution.py` had grown past the repository's 400-line
+module ceiling. Rather than compress the comments that explain the timing
+invariants, the spawn step moved into its own module, taking with it the three
+names that describe it: `_SubprocessExecution`, the bundle that decides how a
+child is wired; `_spawn_subprocess`, the seam that creates it; and
+`_start_owned_process`, the only place a child is announced.
+
+These belong together because the spawn is what the bundle describes. A test
+that needs to refuse a spawn patches `_spawn_subprocess`, and keeping the
+bundle in the same module means such a test never has to reach across a module
+boundary to build the value it refuses to spawn with.
+
+`_subprocess_execution` re-exports `_SubprocessExecution` and the stream-wiring
+names it no longer defines, so importers keep working. It does not re-export
+`_spawn_subprocess`: `_start_owned_process` resolves that name from
+`_subprocess_spawn`'s globals, so a re-exported copy would be a name no call
+path reads. Patching it there would rebind the copy and leave the real spawn
+running — a test that still passes while exercising nothing. The two tests that
+refuse a spawn therefore patch `cuprum._subprocess_spawn`, and the line-stream
+coordinator imports the seam from that module too rather than through the old
+one, so a single patch covers both driving paths.
+
+The module boundary is by responsibility, not by call depth:
+`_subprocess_spawn` creates a child and announces it; `_subprocess_execution`
+samples the clocks, waits, and assembles the result. The one invariant the
+split must not disturb is the pre-spawn sampling order, which is why
+`_start_owned_process` still takes `started_at` as an argument instead of
+reading a clock itself — the callers keep owning _when_ their reading is taken.

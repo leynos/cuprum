@@ -43,8 +43,8 @@ from cuprum._line_stream.telemetry import (
 )
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_execution import (
-    _relay_fallbacks_for_result,
+from cuprum._subprocess_execution import _relay_fallbacks_for_result
+from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
