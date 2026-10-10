@@ -1269,6 +1269,71 @@ escalation, not a workaround.
   misspelled word verbatim in a backticked span, which the spelling gate
   checks. It now describes the word instead of repeating it.
 
+- [x] (2026-10-10 19:40Z) **Both assessments were rejected at `16:06Z` and five
+  defects are now closed, four of them mine.** The correctness reply accepted
+  the production repair on static evidence but declined to accept the
+  verification work; the proof reply accepted the sampled evidence as
+  substantive without accepting it as exhaustive. The three evidence findings
+  and one wording correction are actioned here.
+
+  The central finding was the sharpest and I had it wrong twice over. I had
+  claimed that widening `_CWD` to draw relative directories extended
+  relative-binding coverage. It does not: `_CWD` is consumed only by the
+  *absolute*-binding properties (`cwd=_CWD` at three decorators), while
+  `test_relative_binding_resolves_inside_the_working_directory` is decorated
+  `@given(path=_RELATIVE_PATH, cwd=_ABSOLUTE_PATH)`. A strategy feeding the
+  properties I never touched cannot extend a property I did. Worse, the
+  widening was *actively misleading*: those absolute-binding properties assert
+  the resolution is absolute, so a relative directory there would break them,
+  and the same claim in O5's text made the augmented strategy look like
+  relative-resolution evidence when it was evidence for the opposite rule. The
+  fix is a property of its own,
+  `test_relative_binding_joins_a_relative_directory_verbatim`, asserting the
+  join is relative — deliberately the *opposite* claim, so each contract is
+  falsifiable alone. A mutation making `resolve_binding` anchor the directory
+  itself (`Path(cwd).resolve() / resolved`) fails the new property with
+  `A relative directory is joined, not anchored` while the absolute-directory
+  property still passes, which is the proof that the absolute strategy was
+  structurally blind to the defect. O5's text now describes the split and says
+  why a widened decorator would have been the wrong fix.
+
+  O3 named `test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage` as the
+  positive control for the pipeline's resolvers. It is not: that test binds two
+  static string paths and counts nothing, so it can never fail on a
+  resolver-count regression. The new
+  `test_a_permitted_pipeline_resolves_each_stage_exactly_once` is that control
+  — the same pipeline shape as the refusal test, differing only in whether the
+  later stage is allowlisted, with a counting resolver per stage. A mutation
+  evaluating each resolver twice per resolution failed it with
+  `the producing stage must resolve exactly once, ran 2 times`, an assertion
+  the refusal test cannot reach; the first probe I tried tripped a `zip()`
+  `ValueError` instead, which is a weaker signal and was not accepted as the
+  non-vacuity evidence.
+
+  F3 replaced a pipeline test that asserted only each stage's `resolved_path`
+  with one that runs a relaying script and asserts the child's own stdout in
+  exact stage order. Under a double anchoring `resolved_path` still names the
+  singly-anchored file, so the path assertions alone could pass while the
+  impostor under the doubled prefix did the work; the stdout assertion is what
+  makes the divergence observable. Reverting the pipeline's anchoring makes it
+  fail with both stages reporting `IMPOSTOR:`.
+
+  F4 corrected `Validation and acceptance` clause 6, which stated that a
+  non-`str` resolver result raises `TypeError` without naming the boundary.
+  Both behaviours are tested and both are now stated: `TypeError` from a direct
+  `resolve_binding` call, `ExecutableResolutionError` with that `TypeError` as
+  `__cause__` from `CuprumContext.resolve_executable` and from execution. The
+  module docstring's resolution-shape bullet was corrected for the same reason
+  the property was split: it claimed a relative binding "yields an absolute
+  path inside that directory", which is true only for an absolute directory.
+
+  The lesson worth keeping is that a misleading test claim is worse than a
+  missing one. `_CWD` drawing relative paths *looked* like coverage of the
+  defect that had just been fixed, and I reported it as coverage in both the
+  request comment and the plan; the augmentation was real, the inference from
+  it was not, and only checking which decorators consume the strategy showed
+  the difference.
+
 ## Surprises & discoveries
 
 - Observation: there are three spawn call sites but only two `argv[0]`
@@ -1996,6 +2061,20 @@ escalation, not a workaround.
   their own arrangement say that plainly. Date/Author: 2026-10-10, implementing
   agent.
 
+- Decision: the relative-path resolution rule is verified by two properties
+  asserting opposite claims, not by one property whose `cwd` strategy draws
+  both spellings. Rationale: the contract *is* opposite in the two cases — a
+  relative binding under an absolute directory resolves absolute, under a
+  relative directory it stays relative — so a single property would have to
+  abandon its absoluteness assertion, and that assertion is exactly what pins
+  the anchoring. Splitting keeps each claim falsifiable alone; the mutation
+  evidence is that a helper anchoring its own directory fails the
+  relative-directory property and passes the absolute-directory one. The
+  rejected alternative was widening `_CWD`, which I had already done and
+  reported as relative-binding coverage; it extends only the absolute-binding
+  properties, and in them a relative directory would violate the assertion
+  rather than exercise the defect. Date/Author: 2026-10-10, implementing agent.
+
 ## Outcomes & retrospective
 
 Filled in at EP-M5, comparing the shipped surface against the issue's
@@ -2228,8 +2307,16 @@ O3 — Resolution ordering: enforcement precedes resolution.
   times`,
   which is precisely the interleaving it exists to catch — the direct refusal
   test cannot detect that pipeline-specific regression.
-  `test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage` supplies the
-  positive control for the pipeline's resolvers.
+  `test_a_permitted_pipeline_resolves_each_stage_exactly_once` supplies the
+  positive control for the pipeline's resolvers: the same pipeline shape with
+  every stage permitted, each stage bound to a counting resolver, asserting
+  `len(calls) == 1` per stage and each stage's reported path. It is the direct
+  counterpart to the refusal test — the two differ only in whether the later
+  stage is allowlisted — so a pipeline-wide resolver regression must fail one
+  of them whichever direction it errs in. A mutation that evaluated each
+  resolver twice per resolution failed it with
+  `the producing stage must resolve exactly once, ran 2 times`, an assertion
+  the refusal test cannot reach.
 
 O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 
@@ -2304,22 +2391,39 @@ O5 — Resolver invocation count and relative-path resolution.
   `cuprum/unittests/test_executable_binding_execution.py`.
 - Evidence: `make test-python` passes; the end-to-end case asserts the child's
   own `sys.executable` and the recorded `resolved_path` are equal.
-- Non-vacuity: the relative-path property asserts **exact equality** with
-  `str(Path(cwd) / str(binding.path))` rather than a prefix or containment
-  test, because a resolution returning some other executable under the same
-  directory would satisfy "lives under `cwd`" while running a file the binding
-  never named. Both sides are composed through `Path`, so the comparison speaks
-  the platform's separator instead of assuming `/`. `_CWD` draws `None`, an
-  absolute path, **and** a relative path: the relative spelling is the one the
-  double-anchoring defect lived in, and a strategy confined to `None` and
-  absolute paths could not have reached it. The property's strategy is
-  constructed so both binding shapes are reachable, but the module carries no
-  assertion that both were generated, so this obligation is weaker than O2's:
-  its non-vacuity rests on the strategy's construction rather than on a guard
-  that fails when a shape goes ungenerated. The invocation counter shares O3's
-  positive/negative control, a `len(calls) == 1` assertion in one test paired
-  with a `len(calls) == 0` assertion in the refusal test rather than a single
-  body carrying both.
+- Non-vacuity: the relative-path rule is split across **two** properties, one
+  per directory spelling, and the split is load-bearing rather than
+  presentational. `test_relative_binding_resolves_inside_the_working_directory`
+  draws `@given(path=_RELATIVE_PATH, cwd=_ABSOLUTE_PATH)` and asserts the
+  result *is* absolute;
+  `test_relative_binding_joins_a_relative_directory_verbatim` draws
+  `@given(path=_RELATIVE_PATH, cwd=_RELATIVE_PATH)` and asserts the result is
+  **not** absolute. These are opposite claims about the same helper, so a
+  single property over a `cwd` strategy drawing both spellings would have to
+  drop the absoluteness assertion to accommodate one of them, and the join
+  could then regress to a double anchoring unnoticed. Both properties assert
+  **exact equality** with `str(Path(cwd) / str(binding.path))` rather than a
+  prefix or containment test, because a resolution returning some other
+  executable under the same directory would satisfy "lives under `cwd`" while
+  running a file the binding never named. Both sides are composed through
+  `Path`, so the comparison speaks the platform's separator instead of assuming
+  `/`. The separation is what makes each falsifiable alone. A mutation making
+  `resolve_binding` anchor the directory itself
+  (`Path(cwd).resolve() / resolved`) fails the relative-directory property with
+  `A relative directory is joined, not anchored` while the absolute-directory
+  property still passes — the absolute strategy could never have detected that
+  defect, which is why the relative case needed a property of its own rather
+  than a widened decorator on an existing one. `_CWD` separately draws `None`,
+  an absolute path, **and** a relative path for the absolute-binding
+  properties, where a relative directory must never displace an absolute
+  binding; that covers a different claim and is not the relative-resolution
+  evidence. Neither relative-path property asserts that both binding shapes
+  were generated, so this obligation is weaker than O2's: its non-vacuity rests
+  on the strategy's construction rather than on a guard that fails when a shape
+  goes ungenerated. The invocation counter shares O3's positive/negative
+  control, a `len(calls) == 1` assertion in one test paired with a
+  `len(calls) == 0` assertion in the refusal test rather than a single body
+  carrying both.
 
 Axioms relied on, and why they are not verified here:
 
@@ -2562,13 +2666,20 @@ each is asserted by a named test:
 5. TOCTOU limits are documented. Assert `docs/cuprum-design.md` contains a
    section stating that the check is advisory and naming filesystem ownership,
    permissions, and read-only deployment as the operator's responsibility.
-6. A resolver that breaks its contract is reported rather than obeyed. Assert
-   that a resolver returning a non-`str` raises `TypeError` — `None` in
-   particular, because the execution layer reads it as *unbound* and would
-   otherwise run the catalogued name instead — and that a resolver which raises
-   surfaces as `ExecutableResolutionError` naming the logical program, with the
-   original exception chained and a resolver's own `ExecutableResolutionError`
-   propagated unwrapped. Asserted by
+6. A resolver that breaks its contract is reported rather than obeyed. The
+   error type depends on the boundary, and the acceptance evidence
+   distinguishes them. A direct call to `resolve_binding` with a resolver
+   returning a non-`str` raises `TypeError` naming the returned type — `None`
+   in particular, because the execution layer reads it as *unbound* and would
+   otherwise run the catalogued name instead. The context method
+   `CuprumContext.resolve_executable` and execution through a command instead
+   raise `ExecutableResolutionError` naming the logical program, with that
+   `TypeError` chained as `__cause__`: the execution boundary keeps one handler
+   for every resolver failure, and an unwrapped `TypeError` there would be
+   indistinguishable from an unrelated programming error nearby. A resolver
+   that raises surfaces as `ExecutableResolutionError` at both boundaries, with
+   the original exception chained, and a resolver's own
+   `ExecutableResolutionError` is propagated unwrapped. Asserted by
    `cuprum/unittests/test_executable_binding_failures.py`.
 
 Quality criteria:

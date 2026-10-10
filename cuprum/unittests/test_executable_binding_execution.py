@@ -66,16 +66,42 @@ _SCRIPT = (
     "sys.stdout.write('{marker}:' + sys.argv[0] + '\\n')\n"
 )
 
+# A middle pipeline stage that forwards its predecessor's report *and* adds its
+# own. A pipeline's captured stdout belongs to the last stage alone, so a
+# consumer that consumed its stdin without echoing it would leave the producer's
+# identity observable only through metadata. Forwarding makes both stages'
+# reports readable from one captured stream, which is what lets the pipeline
+# regression assert each stage's executable independently rather than inferring
+# the producer from the consumer's success.
+_RELAY_SCRIPT = (
+    "#!/usr/bin/env python3\n"
+    "import sys\n"
+    "relayed = sys.stdin.read()\n"
+    "sys.stdout.write(relayed)\n"
+    "sys.stdout.write('{marker}:' + sys.argv[0] + '\\n')\n"
+)
 
-def _write_script(path: Path, marker: str) -> Path:
+
+def _write_script(path: Path, marker: str, template: str = _SCRIPT) -> Path:
     """Write an executable script reporting ``marker`` and its own ``argv[0]``.
+
+    Parameters
+    ----------
+    path : Path
+        Destination for the generated script.
+    marker : str
+        Marker the script writes ahead of its own ``argv[0]``.
+    template : str
+        Script body, which must carry a ``{marker}`` placeholder. Defaults to
+        the reporting script; pass :data:`_RELAY_SCRIPT` for a stage that also
+        forwards its stdin.
 
     Returns
     -------
     Path
         The script's path, so assertions can name it without re-deriving it.
     """
-    path.write_text(_SCRIPT.format(marker=marker), encoding="utf-8")
+    path.write_text(template.format(marker=marker), encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
 
@@ -377,6 +403,71 @@ def test_a_pipeline_refused_at_a_later_stage_resolves_no_stage(
     )
 
 
+def test_a_permitted_pipeline_resolves_each_stage_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """An allowed pipeline runs each stage's resolver once and reports its path.
+
+    This is the positive control for the pair above. That test asserts zero
+    calls on both stages of a refused pipeline; zero is also what a broken
+    counter, an unregistered binding, or a resolver that never runs at all
+    would produce, so on its own it cannot distinguish "correctly withheld"
+    from "never wired up".
+
+    Running the same shape with every stage permitted supplies the other half:
+    the resolvers *do* run, exactly once each, and each stage reports the path
+    its own resolver returned. Both halves together make the ordering claim
+    falsifiable in each direction — a regression that resolved before
+    enforcing fails the refusal test, and one that resolved per event rather
+    than per stage fails this one.
+    """
+    producer_path = _write_script(tmp_path / "counted-producer.py", _APPROVED)
+    consumer_path = _write_script(tmp_path / "counted-consumer.py", _APPROVED)
+    catalogue, (producer_prog, consumer_prog) = _catalogue_for(
+        "counted-producer",
+        "counted-consumer",
+    )
+    producer_calls: list[int] = []
+    consumer_calls: list[int] = []
+
+    def producer_resolver() -> str:
+        """Record evaluation of the producing stage."""
+        producer_calls.append(len(producer_calls))
+        return str(producer_path)
+
+    def consumer_resolver() -> str:
+        """Record evaluation of the consuming stage."""
+        consumer_calls.append(len(consumer_calls))
+        return str(consumer_path)
+
+    pipeline = (
+        sh.make(producer_prog, catalogue=catalogue)()
+        | sh.make(consumer_prog, catalogue=catalogue)()
+    )
+
+    with (
+        scoped(
+            ScopeConfig(allowlist=frozenset([producer_prog, consumer_prog])),
+        ),
+        bind_executable(producer_prog, producer_resolver),
+        bind_executable(consumer_prog, consumer_resolver),
+    ):
+        result = _run_pipeline_capturing(pipeline)
+
+    assert len(producer_calls) == 1, (
+        f"the producing stage must resolve exactly once, ran "
+        f"{len(producer_calls)} times"
+    )
+    assert len(consumer_calls) == 1, (
+        f"the consuming stage must resolve exactly once, ran "
+        f"{len(consumer_calls)} times"
+    )
+    paths = [stage.resolved_path for stage in result.stages]
+    assert paths == [str(producer_path), str(consumer_path)], (
+        f"each stage must report the path its own resolver returned, got {paths!r}"
+    )
+
+
 def test_the_bound_path_reaches_every_event_of_the_execution(tmp_path: Path) -> None:
     """Every lifecycle event of a bound run reports the same executable.
 
@@ -561,11 +652,15 @@ def test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage(
     workdir = tmp_path / "srv" / "work"
     (workdir / "bin").mkdir(parents=True)
     producer = _write_script(workdir / "bin" / "producer.py", _APPROVED)
-    consumer = _write_script(workdir / "bin" / "consumer.py", _APPROVED)
+    consumer = _write_script(
+        workdir / "bin" / "consumer.py",
+        _APPROVED,
+        template=_RELAY_SCRIPT,
+    )
     doubled = workdir / "srv" / "work" / "bin"
     doubled.mkdir(parents=True)
     _write_script(doubled / "producer.py", _IMPOSTOR)
-    _write_script(doubled / "consumer.py", _IMPOSTOR)
+    _write_script(doubled / "consumer.py", _IMPOSTOR, template=_RELAY_SCRIPT)
     catalogue, (producer_prog, consumer_prog) = _catalogue_for(
         "relative-pipeline-producer",
         "relative-pipeline-consumer",
@@ -585,12 +680,17 @@ def test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage(
             context=ExecutionContext(cwd=_RELATIVE_CWD),
         )
 
+    # Both reports are asserted, in order, against the file each stage was
+    # bound to. The consumer forwards the producer's line, so a producer that
+    # ran its decoy is visible here even though a pipeline's captured stdout
+    # belongs to the last stage alone.
+    assert result.stdout == (f"{_APPROVED}:{producer}\n{_APPROVED}:{consumer}\n"), (
+        f"each stage must run the file it was bound to; the pipeline reported "
+        f"{result.stdout!r}"
+    )
     paths = [stage.resolved_path for stage in result.stages]
     assert paths == [str(producer), str(consumer)], (
         f"each stage must report its singly-anchored path, got {paths!r}"
-    )
-    assert _IMPOSTOR not in (result.stdout or ""), (
-        f"no stage may run its doubly-anchored decoy, got {result.stdout!r}"
     )
 
 

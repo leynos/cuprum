@@ -16,8 +16,9 @@ The invariants checked here are:
 - Round trip: a valid value classifies as ``None`` again after normalization,
   and normalizing twice is idempotent.
 - Resolution shape: resolving an absolute binding is the identity; resolving a
-  relative binding against a working directory yields an absolute path inside
-  that directory; resolving without a working directory preserves the
+  relative binding composes it with the working directory and returns the join
+  verbatim, so an absolute directory yields an absolute path and a relative one
+  yields a relative path; resolving without a working directory preserves the
   binding's own spelling.
 - Resolver invocation: a resolver is called exactly once per resolution, and
   its result is passed through unchanged.
@@ -249,7 +250,7 @@ def test_relative_binding_resolves_inside_the_working_directory(
     path: str,
     cwd: str,
 ) -> None:
-    """A relative binding with a working directory becomes an absolute path.
+    """A relative binding under an absolute working directory becomes absolute.
 
     The assertion is exact equality with the composed path, not a prefix test:
     a resolution that returned some *other* executable under the same directory
@@ -263,6 +264,44 @@ def test_relative_binding_resolves_inside_the_working_directory(
     assert Path(resolved).is_absolute(), "A cwd-anchored resolution must be absolute"
     assert resolved == expected, (
         f"{resolved!r} must be exactly the anchored binding {expected!r}"
+    )
+
+
+@given(path=_RELATIVE_PATH, cwd=_RELATIVE_PATH)
+def test_relative_binding_joins_a_relative_directory_verbatim(
+    path: str,
+    cwd: str,
+) -> None:
+    """A relative directory composes without being made absolute.
+
+    This is the pure-helper side of the rule the execution path depends on, and
+    it is deliberately the *opposite* claim to the property above: given a
+    relative ``cwd``, ``resolve_binding`` joins and returns a relative result,
+    because it is a pure join with no knowledge of where the process is running.
+    Making the directory absolute is the execution path's job, performed once by
+    ``_execution_cwd`` before resolution is called.
+
+    Splitting the two keeps each contract falsifiable on its own. A single
+    property over ``_CWD`` would have to drop the ``is_absolute`` assertion to
+    accommodate relative directories, and the join could then regress to a
+    double anchoring unnoticed. Here the join is pinned relative and the
+    anchoring is pinned separately, so neither can silently absorb the other's
+    failure.
+
+    What this cannot show is that any caller anchors *before* composing; that is
+    an ordering property about callers, and it is witnessed end-to-end by
+    ``test_a_relative_execution_cwd_anchors_a_relative_binding_once`` in the
+    named-example module.
+    """
+    binding = executable_binding(PROGRAM, path, allow_relative=True)
+    resolved = resolve_binding(binding, cwd=cwd)
+    expected = str(Path(cwd) / str(binding.path))
+    assert not Path(resolved).is_absolute(), (
+        "A relative directory is joined, not anchored: the pure helper does not "
+        "know where the process is running"
+    )
+    assert resolved == expected, (
+        f"{resolved!r} must be exactly the joined binding {expected!r}"
     )
 
 
