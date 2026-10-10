@@ -18,6 +18,7 @@ from cuprum.context._policy import _validate_timeout
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
+    from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecHook
     from cuprum.program import Program
     from cuprum.sh import CommandResult, SafeCmd
@@ -82,6 +83,11 @@ class ScopeConfig:
         is applied within the scope.
     env_mode:
         Policy used to render the composed environment for child processes.
+    catalogue:
+        Catalogue this scope activates for command construction. When ``None``,
+        the active catalogue is inherited. A named catalogue replaces the
+        inherited one outright; see
+        :func:`~cuprum.context._policy._resolve_narrowed_catalogue`.
 
     """
 
@@ -92,6 +98,7 @@ class ScopeConfig:
     timeout: float | None = None
     env_overlay: EnvOverlay | None = None
     env_mode: EnvMode = EnvMode.OVERLAY
+    catalogue: ProgramCatalogue | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""

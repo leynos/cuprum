@@ -7,7 +7,7 @@ import concurrent.futures
 import threading
 import typing as typ
 
-from cuprum.catalogue import ECHO, LS
+from cuprum.catalogue import ECHO, LS, ProgramCatalogue
 from cuprum.context import (
     EnvMode,
     ScopeConfig,
@@ -108,4 +108,66 @@ def test_environment_policies_are_isolated_per_async_task() -> None:
     )
     assert results["second"] == {"mode": EnvMode.REPLACE, "overlay": {second: "two"}}, (
         "the second task must not observe the first task's replacement policy"
+    )
+
+
+def test_scoped_catalogue_is_isolated_per_thread() -> None:
+    """Each thread resolves the catalogue of its own scope."""
+    echo_catalogue = ProgramCatalogue.from_programs(ECHO)
+    ls_catalogue = ProgramCatalogue.from_programs(LS)
+    # Both workers rendezvous inside their scoped blocks so the two scopes
+    # provably overlap; the bounded wait keeps a wedged worker from stalling
+    # the suite indefinitely.
+    scopes_overlap = threading.Barrier(2)
+
+    def thread_worker(catalogue: ProgramCatalogue) -> ProgramCatalogue | None:
+        """Return the catalogue observed inside the worker thread."""
+        with scoped(catalogue=catalogue):
+            scopes_overlap.wait(timeout=5.0)
+            return current_context().catalogue
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(thread_worker, echo_catalogue)
+        f2 = executor.submit(thread_worker, ls_catalogue)
+        observed = {"thread1": f1.result(), "thread2": f2.result()}
+
+    assert observed["thread1"] is echo_catalogue, (
+        "thread 1 must retain its own scoped catalogue"
+    )
+    assert observed["thread2"] is ls_catalogue, (
+        "thread 2 must retain its own scoped catalogue"
+    )
+    assert current_context().catalogue is None, (
+        "worker catalogues must not leak into the calling thread's context"
+    )
+
+
+def test_scoped_catalogue_is_isolated_per_async_task() -> None:
+    """Each async task resolves the catalogue of its own scope."""
+    echo_catalogue = ProgramCatalogue.from_programs(ECHO)
+    ls_catalogue = ProgramCatalogue.from_programs(LS)
+
+    async def task_worker(catalogue: ProgramCatalogue) -> ProgramCatalogue | None:
+        """Return the catalogue observed inside the async task."""
+        with scoped(catalogue=catalogue):
+            await asyncio.sleep(0.01)  # Yield to allow interleaving
+            return current_context().catalogue
+
+    async def run_tasks() -> tuple[ProgramCatalogue | None, ProgramCatalogue | None]:
+        """Run both task workers concurrently to interleave their scopes."""
+        return await asyncio.gather(
+            task_worker(echo_catalogue),
+            task_worker(ls_catalogue),
+        )
+
+    task1_catalogue, task2_catalogue = asyncio.run(run_tasks())
+
+    assert task1_catalogue is echo_catalogue, (
+        "task 1 must retain its own scoped catalogue"
+    )
+    assert task2_catalogue is ls_catalogue, (
+        "task 2 must retain its own scoped catalogue"
+    )
+    assert current_context().catalogue is None, (
+        "task catalogues must not leak into the calling context"
     )

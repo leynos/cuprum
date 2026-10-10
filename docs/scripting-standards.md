@@ -200,6 +200,15 @@ allowlisted `Program` values, run via `run_sync()`/`run()`, and inspect
 - Migration note: this is a breaking behaviour change from Plumbum, where
   commands were implicitly available.
 
+Enforcement has two points. `sh.make()` resolves a catalogue and raises
+`UnknownProgramError` if the program is absent from it; that check happens when
+the builder is created. The active context's allowlist is checked separately,
+when the command runs, and raises `ForbiddenProgramError`. Prefer building
+inside `with scoped(catalogue=CATALOGUE):` so `sh.make()` picks the catalogue
+up from the scope and the two sets cannot drift apart through a repeated
+argument. A builder created outside the scope, or from a different catalogue,
+still constructs, but the scope decides at run time whether it may execute.
+
 ### Program declarations and command builders
 
 `ProgramCatalogue.from_programs()` builds the single-project catalogue that
@@ -216,6 +225,13 @@ CATALOGUE = ProgramCatalogue.from_programs(GIT, GREP)
 git = sh.make(GIT, catalogue=CATALOGUE)
 grep = sh.make(GREP, catalogue=CATALOGUE)
 ```
+
+A builder created outside a catalogue scope needs an explicit `catalogue=`
+argument only when the program lives in an application catalogue rather than
+`DEFAULT_CATALOGUE`; `sh.make()` without one falls back to that default. Inside
+`with scoped(catalogue=CATALOGUE):` the argument is redundant, because
+`sh.make()` resolves the innermost scoped catalogue when the call does not name
+one.
 
 The default project name joins the programs' base names with `-`, giving
 `git-grep` here; pass `name=` to supply an explicit project name, and

@@ -18,6 +18,7 @@ such a flag still receives it as a positional ``"--cwd=..."`` argument.
 import dataclasses as dc
 
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProgramCatalogue
+from cuprum.context import current_context
 from cuprum.program import Program
 from cuprum.sh.argv import _ArgValue, build_argv
 from cuprum.sh.execution import ExecutionContext
@@ -57,20 +58,50 @@ def _reject_reserved_options(kwargs: dict[str, _ArgValue]) -> None:
             raise TypeError(msg)
 
 
+def _resolve_catalogue(catalogue: ProgramCatalogue | None) -> ProgramCatalogue:
+    """Return the catalogue named explicitly, scoped or defaulted."""
+    if catalogue is not None:
+        return catalogue
+    scoped_catalogue = current_context().catalogue
+    if scoped_catalogue is not None:
+        return scoped_catalogue
+    return DEFAULT_CATALOGUE
+
+
 def make(
     program: Program,
     *,
-    catalogue: ProgramCatalogue = DEFAULT_CATALOGUE,
+    catalogue: ProgramCatalogue | None = None,
 ) -> SafeCmdBuilder:
     """Build a callable that produces ``SafeCmd`` instances for ``program``.
+
+    The catalogue is resolved once, when this function is called, in this
+    order:
+
+    1. an explicit ``catalogue`` argument;
+    2. the innermost active ``scoped(catalogue=...)``;
+    3. ``DEFAULT_CATALOGUE``, outside any catalogue scope.
+
+    The resolved catalogue is bound to the returned builder, so the builder
+    keeps working after the scope that supplied it exits. Passing a scope with
+    only an allowlist (``ScopeConfig(allowlist=...)``) does not change which
+    catalogue is active.
+
+    Membership is checked here, at construction. Permission is a separate
+    check: the allowlist of whichever context is active when the command runs
+    decides whether it may execute. A command built from a catalogue the
+    enclosing scope does not allow therefore constructs successfully and
+    raises :class:`ForbiddenProgramError` at ``run`` or ``run_sync`` time.
 
     Parameters
     ----------
     program : Program
         The program the built ``SafeCmd`` instances invoke; it must exist in
-        ``catalogue``.
-    catalogue : ProgramCatalogue
+        the resolved catalogue.
+    catalogue : ProgramCatalogue | None, optional
         The catalogue used to validate ``program`` and resolve its entry.
+        Defaults to the innermost scoped catalogue, then
+        ``DEFAULT_CATALOGUE``.
 
     Returns
     -------
@@ -80,9 +111,9 @@ def make(
     Raises
     ------
     UnknownProgramError
-        If ``program`` does not exist in ``catalogue``.
+        If ``program`` does not exist in the resolved catalogue.
     """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from catalogue.lookup
-    entry = catalogue.lookup(program)
+    entry = _resolve_catalogue(catalogue).lookup(program)
 
     def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
         """Coerce ``args``/``kwargs`` into a ``SafeCmd`` for the program.
