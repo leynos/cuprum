@@ -1334,6 +1334,36 @@ escalation, not a workaround.
   it was not, and only checking which decorators consume the strategy showed
   the difference.
 
+- [x] (2026-10-10 20:15Z) **Three proof findings survived the `19:40Z` closure
+  claim, and cross-checking the reply against the source is what found them.**
+  The entry above says all five obligations are closed; two of the three
+  remaining were prose claims I had written as closed without verifying, and
+  the third was a test assertion the reply asked be strengthened. This is the
+  same failure mode the earlier entries record — asserting closure from intent
+  rather than from the artefact — and it is recorded here rather than quietly
+  repaired.
+
+  The two prose defects were in O1 and O2 of the verification plan. O1 said the
+  universal claim "is discharged for the shapes the alphabet can form", which
+  overstates sampled evidence as discharge and contradicts the sentence
+  immediately before it; it now says the evidence covers sampled inputs from
+  the alphabet and the deterministic boundary cases the named table pins. O2
+  said a generator guard "establishes is exactly one binding factory ran" where
+  the guard asserts at least one did; "exactly one" was an overclaim in the
+  opposite direction from O1's, overstating a lower bound as an exact count.
+
+  The third was `test_bound_fail_fast_event.py`'s lifecycle assertion, which
+  accepted any path ending in `failing.py`. The path is now exposed by a
+  sibling module-scoped fixture — `bound_failing_script`, consumed by the
+  events fixture so both describe the same run — and the assertion is equality
+  with that path. A fourth mutation probe rewrites only the reported path to a
+  sibling directory under the same basename, leaving the spawn to run the
+  genuinely bound file: it failed the assertion, reporting
+  `.../bound0/elsewhere/failing.py` against the expected
+  `.../bound0/failing.py`. The produced value still ends in `failing.py`, which
+  is the demonstration the reply asked for that the suffix form could not have
+  detected it.
+
 ## Surprises & discoveries
 
 - Observation: there are three spawn call sites but only two `argv[0]`
@@ -2074,6 +2104,18 @@ escalation, not a workaround.
   reported as relative-binding coverage; it extends only the absolute-binding
   properties, and in them a relative directory would violate the assertion
   rather than exercise the defect. Date/Author: 2026-10-10, implementing agent.
+- Decision: the bound fail-fast module exposes the failing script through a
+  sibling module-scoped fixture, and the lifecycle assertion compares by
+  equality rather than by filename suffix. Rationale: the assertion's claim is
+  that each event names *the executable the stage was bound to*, and a suffix
+  accepts any file of that basename anywhere under the doubled prefix — the
+  precise divergence the assertion exists to catch. The alternative of
+  returning a tuple from the events fixture was rejected because it would
+  change three tests' signatures to serve one, and returning a tuple from the
+  script writer was rejected because it couples the writer to the reader's
+  needs. A sibling fixture consumed by the events fixture states the dependency
+  in the direction it actually runs: the script is written first and both
+  describe the same run. Date/Author: 2026-10-10, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -2224,10 +2266,11 @@ O1 — Classification totality and first-match order.
 - Scope of the generated domain: `_FUZZ_TEXT` draws from a fixed 9-character
   alphabet with `max_size=12`, so the sampled domain is finite while the stated
   domain — every `str` — is infinite. The property therefore constitutes
-  sampled evidence for the universal claim, not a proof of it; the claim is
-  discharged for the shapes the alphabet can form and for the boundaries the
-  named table pins, and no further. `_CWD` likewise draws `None`, an absolute
-  path, and a relative path rather than every string a caller might pass.
+  sampled evidence for the universal claim, not a proof of it: the evidence
+  covers sampled inputs drawn from the alphabet and the deterministic boundary
+  cases the named table pins, and no further. `_CWD` likewise draws `None`, an
+  absolute path, and a relative path rather than every string a caller might
+  pass.
 - Platform scope of the filesystem witnesses: on Windows,
   `advisory_path_rejection` returns `None` by design, because the execute bit
   is not part of a file's identity there and Cuprum will not guess at ACL-based
@@ -2264,7 +2307,7 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
   `bind-nested`, and `bind-two` entries, and a check asserts that at least one
   generated sequence actually installed a binding (a generator that never
   samples the new entry would otherwise pass vacuously). What that guard
-  establishes is exactly one binding factory ran, not that all three did, and
+  establishes is at least one binding factory ran, not that all three did, and
   not that same-key override and distinct-key merge both occurred; those are
   sampled. The machine's own invariant is object identity of the restored
   context — `active_context_matches_stack_top` compares with `is` — and it does
@@ -2371,6 +2414,22 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
   `FileNotFoundError: 'bound-failing-stage'`, because the child cannot start at
   all. That is a genuine detection, but it is not an assertion doing the work,
   and it is recorded as the weaker of the two kinds.
+
+  A fourth probe was run after the proof assessment observed that this module's
+  lifecycle assertion accepted any path *ending* in `failing.py`. The assertion
+  is now equality against the path the module wrote, and the probe corrupts
+  only the *reported* path — the spawn still runs the bound file — by rewriting
+  it to a sibling directory under the same basename. It failed
+  `test_a_bound_failing_stage_reports_its_path_on_its_own_events` on its own
+  assertion, reporting `.../bound0/elsewhere/failing.py` where
+  `.../bound0/failing.py` was expected. The value it produced still ends in
+  `failing.py`, so the suffix form this replaced would have accepted it: that
+  is the concrete demonstration that the weaker assertion could not have
+  detected this class of divergence, which is what the assessment asked be
+  strengthened. Restricting the corruption to the reported path matters — a
+  probe that also redirects the spawn dies with `FileNotFoundError` instead,
+  which is the weaker detection kind recorded above and would not have shown
+  the assertion doing the work.
 
 O5 — Resolver invocation count and relative-path resolution.
 

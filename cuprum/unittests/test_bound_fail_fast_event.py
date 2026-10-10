@@ -56,8 +56,24 @@ def _write_failing_script(path: Path) -> Path:
 
 
 @pytest.fixture(scope="module")
+def bound_failing_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Publish the executable the bound stage runs, for exact-path assertions.
+
+    The events fixture consumes this so both describe the same run, and a test
+    that needs to compare a reported path against the real one can do so by
+    equality rather than by suffix.
+
+    Returns
+    -------
+    Path
+        The failing script the first stage is bound to.
+    """
+    return _write_failing_script(tmp_path_factory.mktemp("bound") / "failing.py")
+
+
+@pytest.fixture(scope="module")
 def bound_fail_fast_events(
-    tmp_path_factory: pytest.TempPathFactory,
+    bound_failing_script: Path,
 ) -> tuple[ExecEvent, ...]:
     """Publish one bound fail-fast run to every test in this module.
 
@@ -66,17 +82,22 @@ def bound_fail_fast_events(
     repeated per test. The tuple is what makes the sharing safe: no test can
     leave the next one a shortened or reordered sequence.
 
+    Parameters
+    ----------
+    bound_failing_script : Path
+        Executable the first stage is bound to.
+
     Returns
     -------
     tuple[ExecEvent, ...]
         Events observed during the bound failing pipeline run.
     """
-    script = _write_failing_script(tmp_path_factory.mktemp("bound") / "failing.py")
-    return run_bound_failing_pipeline(script)
+    return run_bound_failing_pipeline(bound_failing_script)
 
 
 def test_a_bound_failing_stage_reports_its_path_on_its_own_events(
     bound_fail_fast_events: tuple[ExecEvent, ...],
+    bound_failing_script: Path,
 ) -> None:
     """The bound stage's plan, start, and exit all name the executable it ran.
 
@@ -85,6 +106,11 @@ def test_a_bound_failing_stage_reports_its_path_on_its_own_events(
     failed — or resolved it only on the success path — would leave the
     unbound-pipeline tests green, because none of their stages carries a path
     to lose.
+
+    The comparison is equality with the script this module wrote, not a
+    filename suffix. A suffix would accept any executable called
+    ``failing.py`` — including one the stage was never bound to, which is
+    exactly the divergence a path assertion exists to catch.
     """
     bound = [
         event
@@ -97,13 +123,11 @@ def test_a_bound_failing_stage_reports_its_path_on_its_own_events(
         f"the bound stage must report its whole lifecycle, got "
         f"{sorted(event.phase for event in bound)!r}"
     )
+    expected = str(bound_failing_script)
     for event in bound:
-        assert event.resolved_path is not None, (
-            f"the bound stage's {event.phase} event must carry a resolved path"
-        )
-        assert event.resolved_path.endswith("failing.py"), (
-            f"the bound stage's {event.phase} event must name the bound script, "
-            f"got {event.resolved_path!r}"
+        assert event.resolved_path == expected, (
+            f"the bound stage's {event.phase} event must name the executable "
+            f"it was bound to, {expected!r}, got {event.resolved_path!r}"
         )
 
 
