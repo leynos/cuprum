@@ -1,30 +1,14 @@
-"""Internal single-command execution coordination for ``cuprum.sh``.
+"""Private execution orchestration for ``SafeCmd.run`` and ``run_sync``.
 
-This module is the private machinery behind ``SafeCmd.run``/``run_sync``. It
-is the single-command counterpart of :mod:`cuprum._pipeline_internals`: it
-prepares one validated command's observation, bundles everything that run
-needs before it spawns, drives that bundle through the subprocess layer, and
-finalizes the run's presentation-sink session on every terminal path. The
-public command surface, the value types it exchanges, and pipeline
-orchestration stay in :mod:`cuprum.sh`; this module holds only the sequencing
-that a single command's execution owes.
+Like :mod:`cuprum._pipeline_internals`, this module prepares a validated
+command's observation, drives its subprocess execution, and finalizes the
+presentation-sink session. Public command types and pipeline orchestration
+remain in :mod:`cuprum.sh`.
 
-Finalization is the reason the sequence lives in one place. When execution
-fails or an after-hook raises, the sink session must be closed *before* the
-observe-hook tasks are drained: the drain aggregates a hook failure with the
-error that ended the run, so closing afterwards would record the aggregate —
-an ``error`` annotation standing in for a timeout — and a drain that raised
-would skip the close entirely. The drain itself runs through
-:func:`cuprum._process_lifecycle._shielded_cleanup` rather than a bare
-``await asyncio.shield(...)``, which keeps cancellation off the drain but
-still resumes the awaiting coroutine immediately and would leak exactly the
-tasks the drain exists to reconcile.
-
-It collaborates with :mod:`cuprum._sink_lifecycle` (the session bracket it
-owns), :mod:`cuprum._subprocess_execution`, :mod:`cuprum._subprocess_context`,
-:mod:`cuprum._observability`, :mod:`cuprum._idle_heartbeat`,
-:mod:`cuprum._pipeline_types`, :mod:`cuprum._pipeline_internals` (hook
-collection), and :mod:`cuprum.context`, and is invoked by :mod:`cuprum.sh`.
+On failure, finalization closes the sink before draining observer tasks so a
+drain error cannot replace a timeout annotation. Drains use
+:func:`cuprum._process_lifecycle._shielded_cleanup`, which waits through
+repeated caller cancellation.
 """
 
 from __future__ import annotations
@@ -208,28 +192,15 @@ async def _execute_with_hooks(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
 ) -> CommandResult:
-    """Execute *execution*, dispatch after-hooks, and handle cancellation.
+    """Run the subprocess and hooks, then settle after all observers finish.
 
-    Draining the observe-hook tasks during cleanup must not let a failing
-    background hook stand in for the error that triggered the cleanup: a caller
-    awaiting ``TimeoutExpired`` (or a cancellation) would otherwise see the
-    hook's exception instead. Both cleanup paths therefore drain through
-    :func:`_drain_tasks_during_cleanup`, which aggregates a drain failure with
-    the active error into a ``BaseExceptionGroup`` rather than replacing it —
-    matching the pipeline path. The drain on the success path still surfaces a
-    hook failure directly, because there is no primary error to preserve.
-
-    Every drain runs through :func:`_shielded_cleanup` rather than a bare
-    ``await asyncio.shield(...)``. The shield alone keeps the cancellation off
-    the drain, but the *awaiting* coroutine resumes immediately, so the run
-    would propagate its ``CancelledError`` while the hook tasks were still
-    settling — leaking exactly the tasks the drain exists to reconcile.
+    Cleanup aggregates observer failures with the active error; success-path
+    hook failures remain direct. Shielding waits through repeated cancellation.
 
     Returns
     -------
     CommandResult
-        The completed command's result, once every after-hook has run and the
-        observe-hook tasks have drained.
+        The completed command's result after every observe-hook task drains.
     """
     result: CommandResult | None = None
     try:
@@ -237,38 +208,68 @@ async def _execute_with_hooks(
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
-        # Close before the drain. The drain aggregates a hook failure with the
-        # error that ended the run, so closing afterwards would record the
-        # aggregate — an ``error`` annotation standing in for a timeout — and
-        # a drain that raised would skip the close entirely.
-        outcome = _outcome_for_error(run_error)
-        tracking.sink_bracket.close(outcome=outcome)
-        is_cancelled = outcome.outcome is TerminalOutcome.CANCELLED
-        _safe_emit_terminal(
-            execution.observation,
-            outcome.outcome,
-            _EventDetails(
-                pid=(
-                    None
-                    if is_cancelled
-                    else result.pid
-                    if result is not None
-                    else execution.observation.started_pid
-                ),
-                exit_code=(
-                    None if is_cancelled or result is None else result.exit_code
-                ),
-                duration_s=None if result is None else result.duration,
-            ),
-        )
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                run_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
+        await _finalize_command_run_failure(
+            execution,
+            tracking,
+            result,
+            run_error,
         )
         raise
+
+    await _finalize_command_run_success(execution, tracking, result)
+    return result
+
+
+async def _finalize_command_run_failure(
+    execution: _SubprocessExecution,
+    tracking: _ExecutionTracking,
+    result: CommandResult | None,
+    run_error: BaseException,
+) -> None:
+    """Settle and drain an observed command after execution or hook failure."""
+    # Close before the drain: its failure is grouped with the primary error.
+    outcome = _outcome_for_error(run_error)
+    tracking.sink_bracket.close(outcome=outcome)
+    _safe_emit_terminal(
+        execution.observation,
+        outcome.outcome,
+        _failed_command_details(
+            execution.observation.started_pid,
+            outcome.outcome,
+            result,
+        ),
+    )
+    await _shielded_cleanup(
+        _drain_tasks_during_cleanup(
+            tracking.pending_tasks,
+            run_error,
+            message=_COMMAND_FINALIZATION_ERROR,
+        )
+    )
+
+
+def _failed_command_details(
+    started_pid: int | None,
+    outcome: TerminalOutcome,
+    result: CommandResult | None,
+) -> _EventDetails:
+    """Retain only child details that remain valid after command failure."""
+    duration_s = None if result is None else result.duration
+    if outcome is TerminalOutcome.CANCELLED:
+        return _EventDetails(pid=None, duration_s=duration_s)
+    return _EventDetails(
+        pid=started_pid if result is None else result.pid,
+        exit_code=None if result is None else result.exit_code,
+        duration_s=duration_s,
+    )
+
+
+async def _finalize_command_run_success(
+    execution: _SubprocessExecution,
+    tracking: _ExecutionTracking,
+    result: CommandResult,
+) -> None:
+    """Settle a completed command, then drain every observe-hook task."""
     outcome = _outcome_for_result(result)
     tracking.sink_bracket.close(outcome=outcome)
     try:
@@ -290,7 +291,6 @@ async def _execute_with_hooks(
         )
         raise
     await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
-    return result
 
 
 async def _finalize_prepared_command_failure(

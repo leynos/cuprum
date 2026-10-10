@@ -163,46 +163,66 @@ class _SettlementStateMachine(RuleBasedStateMachine):
     @invariant()
     def each_stage_has_at_most_one_correlated_settlement(self) -> None:
         """Every stage obeys plan gating, first-outcome, and detail contracts."""
-        for stage, events in enumerate(self.events_by_stage):
-            phases = [event.phase for event in events]
-            assert phases.count("plan") == int(self.planned[stage]), (
-                "a planned stage must emit exactly one plan event"
-            )
-            assert phases.count("start") == int(self.started[stage]), (
-                "a stage may start only once after planning"
-            )
-            assert phases.count("exit") == int(self.exited[stage]), (
-                "a stage may report child exit only once after start"
-            )
-            settlements = [event for event in events if event.phase == "settled"]
-            expected = self.expected_settlements[stage]
-            if expected is None:
-                assert not settlements, "an unplanned stage cannot settle"
-            else:
-                assert len(settlements) == 1, "a planned stage must settle at most once"
-                assert events[-1].phase == "settled", (
-                    "settlement must be the final lifecycle event"
-                )
-                settlement = settlements[0]
-                assert settlement.terminal_outcome is expected[0], (
-                    "the first terminal outcome must remain authoritative"
-                )
-                assert settlement.pid == expected[1], (
-                    "settlement must retain only the modelled child PID"
-                )
-                assert settlement.exit_code == expected[2], (
-                    "settlement must retain only the modelled child status"
-                )
+        for stage in range(_STAGE_COUNT):
+            self._assert_stage_event_counts(stage)
+            self._assert_stage_settlement(stage)
+            self._assert_stage_correlation(stage)
 
-            observation = self.observations[stage]
-            assert all(event.exec_id == observation.exec_id for event in events), (
-                "every stage event must share its execution identity"
-            )
-            assert all(
-                event.tags["pipeline_stage_index"] == stage
-                and event.tags["pipeline_stages"] == _STAGE_COUNT
-                for event in events
-            ), "every event must retain its pipeline stage coordinates"
+    def _assert_stage_event_counts(self, stage: int) -> None:
+        """Check that modelled plan, start, and exit calls emit once."""
+        phases = [event.phase for event in self.events_by_stage[stage]]
+        assert phases.count("plan") == int(self.planned[stage]), (
+            "a planned stage must emit exactly one plan event"
+        )
+        assert phases.count("start") == int(self.started[stage]), (
+            "a stage may start only once after planning"
+        )
+        assert phases.count("exit") == int(self.exited[stage]), (
+            "a stage may report child exit only once after start"
+        )
+
+    def _assert_stage_settlement(self, stage: int) -> None:
+        """Check settlement presence, order, and first-outcome details."""
+        events = self.events_by_stage[stage]
+        settlements = [event for event in events if event.phase == "settled"]
+        expected = self.expected_settlements[stage]
+        if expected is None:
+            assert not settlements, "an unplanned stage cannot settle"
+            return
+        assert len(settlements) == 1, "a planned stage must settle at most once"
+        assert events[-1].phase == "settled", (
+            "settlement must be the final lifecycle event"
+        )
+        self._assert_settlement_details(settlements[0], expected)
+
+    @staticmethod
+    def _assert_settlement_details(
+        settlement: ExecEvent,
+        expected: tuple[TerminalOutcome, int | None, int | None],
+    ) -> None:
+        """Check that the first outcome and available child details are kept."""
+        assert settlement.terminal_outcome is expected[0], (
+            "the first terminal outcome must remain authoritative"
+        )
+        assert settlement.pid == expected[1], (
+            "settlement must retain only the modelled child PID"
+        )
+        assert settlement.exit_code == expected[2], (
+            "settlement must retain only the modelled child status"
+        )
+
+    def _assert_stage_correlation(self, stage: int) -> None:
+        """Check execution identity and pipeline coordinates on every event."""
+        events = self.events_by_stage[stage]
+        observation = self.observations[stage]
+        assert all(event.exec_id == observation.exec_id for event in events), (
+            "every stage event must share its execution identity"
+        )
+        assert all(
+            event.tags["pipeline_stage_index"] == stage
+            and event.tags["pipeline_stages"] == _STAGE_COUNT
+            for event in events
+        ), "every event must retain its pipeline stage coordinates"
 
 
 TestSettlementStateMachine = _SettlementStateMachine.TestCase
