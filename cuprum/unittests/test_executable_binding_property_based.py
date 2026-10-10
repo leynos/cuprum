@@ -292,9 +292,13 @@ def test_relative_binding_joins_a_relative_directory_verbatim(
     ``_execution_cwd`` before resolution is called.
 
     Splitting the two keeps each contract falsifiable on its own. A single
-    property over ``_CWD`` would have to drop the ``is_absolute`` assertion to
-    accommodate relative directories, and the join could then regress to a
-    double anchoring unnoticed. Here the join is pinned relative and the
+    property over ``_CWD`` could still express both contracts by checking
+    absoluteness conditionally on the spelling ``cwd`` drew, so the split is a
+    choice rather than a necessity. It is the better one because each domain
+    then gets its own run: inside one combined property the conditional
+    assertion is only exercised when the generator happens to draw the spelling
+    its branch needs, and a run that never draws it passes without testing that
+    domain at all. With two properties the join is pinned relative and the
     anchoring is pinned separately, so neither can silently absorb the other's
     failure.
 

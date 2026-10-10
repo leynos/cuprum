@@ -1457,6 +1457,48 @@ escalation, not a workaround.
   (digest unchanged before and after), because the run never reached the
   spelling stage that rewrites it; the green spelling result for this tree
   comes from `make markdownlint`'s prerequisite instead.
+- [x] (2026-10-10 21:40Z) **Both `92ab8f17` assessments returned accepted, and
+  the proof reply's three wording corrections were applied.** The completeness
+  reply
+  ([`6100996433`](https://github.com/leynos/cuprum/pull/571#issuecomment-6100996433))
+  closed all four findings and echoed
+  `EP440-COMPLETE-92ab8f1-20261010T201500Z` against head `92ab8f17`; the proof
+  reply
+  ([`6101015126`](https://github.com/leynos/cuprum/pull/571#issuecomment-6101015126))
+  accepted O1–O5 as sampled verification and echoed
+  `EP440-PROOF-92ab8f1-20261010T201500Z`. Neither started a formal review, and
+  neither reopened a repaired test gap. Two substantive assertions in these
+  corrections were verified against the tree before editing rather than taken
+  on the reviewer's word:
+
+  - The claimed construction "bind `sys.executable`, run
+    `print(sys.executable)`" **does not exist anywhere in `cuprum/`**. The
+    child-identity mechanism the tests actually use is the generated script
+    reporting its own `sys.argv[0]`, per `_SCRIPT`'s own comment. This was a
+    plan-prose defect, not a code defect, and it affected four descriptions
+    (O3's evidence, O5's evidence, EP-M3's acceptance line, and acceptance
+    clause 2), plus acceptance clause 2's preamble promise that *each* clause
+    "is asserted by a named test" — the `sys.executable` form named no test.
+  - The claim that a combined property "would have to drop the `is_absolute`
+    assertion" is **false**, and it appeared in three maintained places: the
+    property's docstring, O5's non-vacuity paragraph, and the Decision log
+    entry that recorded the split, where the same assertion read "would have to
+    abandon its absoluteness assertion" and so is easy to miss when sweeping
+    for only the one wording. A single property over `_CWD` could branch on
+    which spelling the generator drew. The split is still right, but for a
+    different reason: two properties give each domain its own run, whereas a
+    conditional assertion inside one property is unexercised on a run that
+    draws only the other spelling. All three texts now state the real
+    justification, so none overstates what the design forces.
+
+  The third correction separated the helper-level invocation guarantee
+  (`resolve_binding` calls a resolver once per *invocation*) from the
+  execution-level one, which the observation preparation supplies. O5's
+  statement had attributed the once-per-execution property to the helper alone.
+
+  These are documentation and docstring edits only: no production code changed
+  this round, which is why the tree needs a fresh gate run before it can be
+  published as a new head.
 
 ## Surprises & discoveries
 
@@ -2189,12 +2231,14 @@ escalation, not a workaround.
   asserting opposite claims, not by one property whose `cwd` strategy draws
   both spellings. Rationale: the contract *is* opposite in the two cases — a
   relative binding under an absolute directory resolves absolute, under a
-  relative directory it stays relative — so a single property would have to
-  abandon its absoluteness assertion, and that assertion is exactly what pins
-  the anchoring. Splitting keeps each claim falsifiable alone; the mutation
-  evidence is that a helper anchoring its own directory fails the
-  relative-directory property and passes the absolute-directory one. The
-  rejected alternative was widening `_CWD`, which I had already done and
+  relative directory it stays relative. A single property over `_CWD` could
+  express both by branching on the spelling the generator drew, so the split is
+  not forced by inexpressibility; it is preferred because it gives each domain
+  its own run, and an assertion inside a branch is not exercised by a run that
+  never draws that branch. Splitting therefore keeps each claim falsifiable
+  alone; the mutation evidence is that a helper anchoring its own directory
+  fails the relative-directory property and passes the absolute-directory one.
+  The rejected alternative was widening `_CWD`, which I had already done and
   reported as relative-binding coverage; it extends only the absolute-binding
   properties, and in them a relative directory would violate the assertion
   rather than exercise the defect. Date/Author: 2026-10-10, implementing agent.
@@ -2210,6 +2254,27 @@ escalation, not a workaround.
   needs. A sibling fixture consumed by the events fixture states the dependency
   in the direction it actually runs: the script is written first and both
   describe the same run. Date/Author: 2026-10-10, implementing agent.
+
+- Decision: the three wording corrections the proof reply requested are applied
+  at all sites carrying the disproved claim, not only the two it named.
+  Rationale: the reply asked to replace the `sys.executable` descriptions "in
+  O3 and O5", but the same false construction appears in EP-M3's acceptance
+  line and in acceptance clause 2 as well, so fixing only the named sites would
+  leave the claim standing where it was equally wrong. A disproved premise is
+  disproved wherever it appears. The same reasoning applies to the combined-
+  property argument: it is corrected in both the docstring and O5 rather than
+  in whichever one the review happened to cite. Date/Author: 2026-10-10,
+  implementing agent.
+- Decision: the corrections are applied rather than deferred, even though they
+  move the head after both assessments accepted `92ab8f17`. Rationale: "apply
+  the small wording corrections" is a request, and a request is a requirement
+  however small; the alternative — merging at a head known to contain text the
+  reviewer had just asked to correct — trades a bounded extra verification
+  cycle for a delivered document that states something false about its own
+  evidence. The corrections are prose and docstrings only, so the production
+  and test behaviour the assessments accepted is unchanged, but the tree is not
+  identical and therefore needs its own gate run and its own hosted CI.
+  Date/Author: 2026-10-10, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -2432,8 +2497,12 @@ O3 — Resolution ordering: enforcement precedes resolution.
   functions, which a counting side effect observes directly and precisely.
 - Artefact: `cuprum/unittests/test_executable_binding_execution.py`.
 - Evidence: `make test-python` passes; the denial test asserts
-  `calls == []`, and the happy-path test asserts the child observed its own
-  `sys.executable` while `result.program` is still the logical name.
+  `calls == []`; the happy-path test asserts `result.resolved_path` is the
+  resolver's value and `len(calls) == 1`. The ordering claim is separate from
+  the identity claim: what the child thinks it ran is the script's own
+  `sys.argv[0]` report, asserted in
+  `test_the_child_receives_the_bound_path_as_its_own_argv0`, and a bound run's
+  logical identity is asserted per lifecycle event as `event.program == tool`.
 - Non-vacuity: the control is a pair of tests, not one body.
   `test_a_resolver_runs_once_per_execution_not_once_per_event` asserts
   `len(calls) == 1` for the allowlisted run, proving the counter works;
@@ -2533,14 +2602,19 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 
 O5 — Resolver invocation count and relative-path resolution.
 
-- Statement: `resolve_binding` calls a resolver at most once per execution and
-  returns its result verbatim; an absolute binding is returned unchanged
+- Statement: `resolve_binding` calls a resolver at most once per *invocation*
+  and returns its result verbatim; an absolute binding is returned unchanged
   whatever the working directory, and any other binding — a relative path or a
   bare name alike — is anchored at the supplied `cwd`, or returned unchanged
   when there is no `cwd` so the platform resolves it. The separator distinction
   belongs to `advisory_path_rejection`, which skips its filesystem probe for a
   bare name because Cuprum does not replicate the platform's `PATH` search; it
-  is not part of the resolution rule.
+  is not part of the resolution rule. The helper guarantees one resolver call
+  per *helper* invocation only; the once-per-stage execution guarantee is
+  supplied by the observation preparation (`_prepare_execution_observation` and
+  `_build_pipeline_observations`), which each resolve once and reuse the
+  result. The end-to-end counter measures the composed property, and the
+  helper-level counter measures the helper's own.
 - Method: property test over generated binding/cwd/relative-path combinations,
   plus one end-to-end named example.
 - Rationale: the relative-path rule is a total function over three small
@@ -2549,7 +2623,9 @@ O5 — Resolver invocation count and relative-path resolution.
 - Artefact: `cuprum/unittests/test_executable_binding_property_based.py`,
   `cuprum/unittests/test_executable_binding_execution.py`.
 - Evidence: `make test-python` passes; the end-to-end case asserts the child's
-  own `sys.executable` and the recorded `resolved_path` are equal.
+  own `sys.argv[0]` report and the recorded `resolved_path` are equal, via
+  `test_a_relative_execution_cwd_anchors_a_relative_binding_once` and the
+  relative-`cwd` pipeline regression.
 - Non-vacuity: the relative-path rule is split across **two** properties, one
   per directory spelling, and the split is load-bearing rather than
   presentational. `test_relative_binding_resolves_inside_the_working_directory`
@@ -2557,16 +2633,21 @@ O5 — Resolver invocation count and relative-path resolution.
   result *is* absolute;
   `test_relative_binding_joins_a_relative_directory_verbatim` draws
   `@given(path=_RELATIVE_PATH, cwd=_RELATIVE_PATH)` and asserts the result is
-  **not** absolute. These are opposite claims about the same helper, so a
-  single property over a `cwd` strategy drawing both spellings would have to
-  drop the absoluteness assertion to accommodate one of them, and the join
-  could then regress to a double anchoring unnoticed. Both properties assert
-  **exact equality** with `str(Path(cwd) / str(binding.path))` rather than a
-  prefix or containment test, because a resolution returning some other
-  executable under the same directory would satisfy "lives under `cwd`" while
-  running a file the binding never named. Both sides are composed through
-  `Path`, so the comparison speaks the platform's separator instead of assuming
-  `/`. The separation is what makes each falsifiable alone. A mutation making
+  **not** absolute. These are opposite claims about the same helper. A single
+  property over a `cwd` strategy drawing both spellings *could* still express
+  both contracts by asserting exact equality and checking absoluteness
+  conditionally on which spelling `cwd` drew, so the split is not forced by
+  inexpressibility. It is kept because it gives each directory domain its own
+  run rather than one run whose branch is chosen by the generator: a
+  conditional assertion inside one property is not exercised when the strategy
+  happens not to draw the spelling its branch needs, whereas two properties
+  each fail on their own for their own domain. Both properties assert **exact
+  equality** with `str(Path(cwd) / str(binding.path))` rather than a prefix or
+  containment test, because a resolution returning some other executable under
+  the same directory would satisfy "lives under `cwd`" while running a file the
+  binding never named. Both sides are composed through `Path`, so the
+  comparison speaks the platform's separator instead of assuming `/`. The
+  separation is what makes each falsifiable alone. A mutation making
   `resolve_binding` anchor the directory itself
   (`Path(cwd).resolve() / resolved`) fails the relative-directory property with
   `A relative directory is joined, not anchored` while the absolute-directory
@@ -2733,8 +2814,9 @@ EP-M3 — the bound executable is what runs, and the path is observable.
 - Requirements and gaps: "configured approved paths run exactly", "keep the
   executed path inspectable", and "telemetry representation".
 - Acceptance evidence: `make test-python` passes; a real subprocess spawned
-  through a binding reports its own `sys.executable`; the observe stream carries
-  `resolved_path`; the metrics labels are unchanged.
+  through a binding reports its own `sys.argv[0]`, which is the bound path; the
+  observe stream carries `resolved_path` per event with `event.program` still
+  the logical `Program`; the metrics labels are unchanged.
 - Conformance check: on every path the resolution call site is textually after
   the enforcement call site for the same command, verified by reading the two
   functions and by the resolver-counting test; `ExecEvent` gains no field ahead
@@ -2811,9 +2893,16 @@ each is asserted by a named test:
    allowlist, and expect `ForbiddenProgramError` with the resolver never
    called. This is the issue's explicit rejection requirement.
 2. A configured approved path runs exactly. Bind an allowlisted logical
-   program to `sys.executable` with a distinct basename, run
-   `["-c", "import sys; print(sys.executable)"]`, and assert the child printed
-   exactly the bound path and `result.resolved_path` equals it.
+   program to a script whose catalogued name resolves to a different, working
+   script, and assert the child's own `sys.argv[0]` report names the bound file
+   and `result.resolved_path` equals it. The decoy is what makes this a witness
+   rather than a tautology: the assertion would still hold if the binding were
+   ignored and the catalogued program ran, because both report *some* path —
+   only the marker on the executed file distinguishes them. Asserted by
+   `test_a_bound_program_runs_the_bound_file_not_the_catalogued_one`,
+   `test_the_child_receives_the_bound_path_as_its_own_argv0`, and
+   `test_a_relative_execution_cwd_anchors_a_relative_binding_once` for the
+   relative-`cwd` spelling.
 3. Nested and concurrent bindings are isolated. Assert a child scope overrides
    for the same program while leaving sibling bindings intact, and that a
    binding installed in one thread or task is invisible in another.
