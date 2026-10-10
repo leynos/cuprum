@@ -1050,6 +1050,17 @@ escalation, not a workaround.
   position explicitly. Separately, `_CWD` draws an absolute path four times
   more often than `None` (360/40 in 400 draws), so the no-`cwd` branch is
   reached but is the rarer of the two.
+- [x] (2026-10-10 16:20Z) **The four corrections above tripped the Markdown
+  formatting gate and were reflowed.** Prose added by the O3/O4/O5 corrections
+  wrapped at a fill width `mdtablefix` disagrees with, so `make check-fmt`
+  failed `+12 -12` on this file and CI's `lint-test` job failed on the same
+  step; the local and hosted runs used the same `mdtablefix` 0.6.1, so the
+  failure was reproducible rather than environmental. `make fmt` reflowed the
+  affected paragraphs; the diff is pure line wrapping, with no change to
+  wording, code spans, or em-dashes. The lesson is that `mdtablefix`'s
+  effective fill width is narrower than 80 columns wherever a paragraph
+  contains inline code spans, so the repository's own wrapping convention is
+  not the gate's.
 
 ## Surprises & discoveries
 
@@ -1792,9 +1803,9 @@ O3 — Resolution ordering: enforcement precedes resolution.
 - Non-vacuity: the control is a pair of tests, not one body.
   `test_a_resolver_runs_once_per_execution_not_once_per_event` asserts
   `len(calls) == 1` for the allowlisted run, proving the counter works;
-  `test_a_bound_but_unlisted_program_is_refused_without_resolving` then
-  asserts `len(calls) == 0`, proving the ordering. Without the positive case
-  the empty list would be indistinguishable from a broken counter.
+  `test_a_bound_but_unlisted_program_is_refused_without_resolving` then asserts
+  `len(calls) == 0`, proving the ordering. Without the positive case the empty
+  list would be indistinguishable from a broken counter.
 
 O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 
@@ -1822,12 +1833,12 @@ O5 — Resolver invocation count and relative-path resolution.
 
 - Statement: `resolve_binding` calls a resolver at most once per execution and
   returns its result verbatim; an absolute binding is returned unchanged
-  whatever the working directory, and any other binding — a relative path or
-  a bare name alike — is anchored at the supplied `cwd`, or returned
-  unchanged when there is no `cwd` so the platform resolves it. The separator
-  distinction belongs to `advisory_path_rejection`, which skips its
-  filesystem probe for a bare name because Cuprum does not replicate the
-  platform's `PATH` search; it is not part of the resolution rule.
+  whatever the working directory, and any other binding — a relative path or a
+  bare name alike — is anchored at the supplied `cwd`, or returned unchanged
+  when there is no `cwd` so the platform resolves it. The separator distinction
+  belongs to `advisory_path_rejection`, which skips its filesystem probe for a
+  bare name because Cuprum does not replicate the platform's `PATH` search; it
+  is not part of the resolution rule.
 - Method: property test over generated binding/cwd/relative-path combinations,
   plus one end-to-end named example.
 - Rationale: the relative-path rule is a total function over three small
@@ -1862,9 +1873,9 @@ Axioms relied on, and why they are not verified here:
   facts. `advisory_path_rejection` relies on the separator test to decide
   whether a filesystem probe is meaningful at all; `resolve_binding` relies on
   them by *declining* to guess, anchoring a relative binding at `cwd` when one
-  is supplied and otherwise returning it unchanged for the platform to
-  resolve. Both are verified directly, and `resolve_binding`'s two branches are
-  pinned by named tests (`test_resolve_anchors_a_bare_relative_name_in_the_same_way`
+  is supplied and otherwise returning it unchanged for the platform to resolve.
+  Both are verified directly, and `resolve_binding`'s two branches are pinned
+  by named tests (`test_resolve_anchors_a_bare_relative_name_in_the_same_way`
   and `test_resolve_leaves_a_bare_name_alone_when_there_is_no_cwd`).
 - `ContextVar` isolation across threads and tasks is the mechanism every
   existing scoped policy already relies on; it is not re-derived here, but the
