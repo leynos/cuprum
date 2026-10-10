@@ -14,7 +14,11 @@ from cuprum import sh
 from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
-from cuprum.context import ScopeConfig, current_context, scoped
+from cuprum.context import (
+    ScopeConfig,
+    current_context,
+    scoped,
+)
 from cuprum.events import ResourceUsageMode
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext, RunOutputOptions
@@ -169,7 +173,6 @@ def test_observe_emits_stdout_stderr_timing_and_tags(tmp_path: Path) -> None:
 
     assert events[0].phase == "plan"
     assert events[1].phase == "start"
-    assert events[-1].phase == "exit"
 
     assert "out1" in {ev.line for ev in events if ev.phase == "stdout"}
     assert "out2" in {ev.line for ev in events if ev.phase == "stdout"}
@@ -182,7 +185,6 @@ def test_observe_emits_stdout_stderr_timing_and_tags(tmp_path: Path) -> None:
     assert exit_event.exit_code == 0
     assert exit_event.duration_s is not None
     assert exit_event.duration_s >= 0.0
-
     assert start_event.cwd == tmp_path
     assert start_event.env is not None
     assert start_event.env["CUPRUM_OBSERVE"] == "1"
@@ -465,6 +467,7 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
     assert phases.index("timeout") < phases.index("exit"), (
         f"the timeout event must precede exit, got phases {phases}"
     )
+    exit_event = next(ev for ev in events if ev.phase == "exit")
     timeout_event = timeout_events[0]
     assert timeout_event.timeout_mode == "non_positive_immediate", (
         "the immediate fast path must tag the event "
@@ -492,7 +495,6 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
     # and must leave the three figures unset rather than reporting a zero or a
     # sibling's usage. This is the producer-side counterpart to the tracing
     # adapter's projection test, which feeds the mode by hand.
-    exit_event = next(ev for ev in events if ev.phase == "exit")
     assert exit_event.resource_usage_mode == ResourceUsageMode.UNAVAILABLE, (
         "a signalled child has no attributable measurement, so the exit event "
         f"must report mode 'unavailable', got {exit_event.resource_usage_mode!r}"
@@ -516,16 +518,16 @@ class _ObserveHookError(Exception):
 
 
 def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None:
-    """An observe hook raising on the timeout event cannot replace TimeoutExpired.
+    """A settled hook failure cannot replace the timeout it reports.
 
-    The ``timeout`` event is emitted best-effort, so a hook failure there is
-    swallowed and the public ``TimeoutExpired`` still propagates.
+    The terminal event is emitted best-effort, so a hook failure cannot replace
+    the public ``TimeoutExpired`` that caused it to be emitted.
     """
     cmd, catalogue = _sleep_command()
 
     def hook(ev: ExecEvent) -> None:
-        """Fail only on the timeout event, mimicking a broken telemetry hook."""
-        if ev.phase == "timeout":
+        """Fail only on settlement, mimicking a broken telemetry hook."""
+        if ev.phase == "settled":
             raise _ObserveHookError
 
     with (

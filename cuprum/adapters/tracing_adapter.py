@@ -63,14 +63,12 @@ Example with OpenTelemetry::
 
 from __future__ import annotations
 
-import collections
 import dataclasses as dc
 import threading
 import typing as typ
 
 from cuprum.adapters._support import (
     _event_common_fields,
-    _log_span_eviction,
     _log_unhandled_phase,
     _prefixed,
     _project_tag,
@@ -79,16 +77,11 @@ from cuprum.adapters._tracing_fields import _SPAN_FIELDS, write_exit_attributes
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
+from cuprum.events import TerminalOutcome
 from cuprum.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
-
-
-# ``teardown_error`` can be the last event, so without a bound it could retain a
-# span for the hook's lifetime. See ``_evict_overflow_locked`` for the ordering
-# guarantee.
-_MAX_ACTIVE_SPANS = 1024
 
 
 @dc.dataclass(slots=True)
@@ -128,7 +121,6 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
         "_active_spans",
         "_lock",
         "_record_output",
-        "_span_states",
         "_tracer",
     )
 
@@ -136,11 +128,8 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
-        self._active_spans: collections.OrderedDict[ExecId, Span] = (
-            collections.OrderedDict()
-        )
+        self._active_spans: dict[ExecId, _ActiveSpan] = {}
         self._lock = threading.Lock()
-        self._span_states: dict[ExecId, _ActiveSpan] = {}
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
@@ -149,20 +138,22 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
                 pass
             case "start":
                 self._handle_start(event)
-            case "stdout" | "stderr":
-                if self._record_output:
-                    self._record_span_event(event)
             case (
-                "stdin_error"
+                "stdout"
+                | "stderr"
+                | "stdin_error"
                 | "timeout"
                 | "teardown_error"
                 | "capture_eof_grace_expired"
             ):
-                self._record_span_event(event)
+                if event.phase not in {"stdout", "stderr"} or self._record_output:
+                    self._record_span_event(event)
             case "pipeline_fail_fast":
                 self._record_fail_fast(event)
             case "exit":
                 self._handle_exit(event)
+            case "settled":
+                self._handle_settled(event)
             case _:
                 _log_unhandled_phase("tracing", event.phase)
 
@@ -206,21 +197,8 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             # and install the replacement in a single critical section, so a
             # concurrent handler for the same token sees either the old span or
             # the replacement, never a missing/partial entry.
-            stale = self._span_states.get(exec_id)
-            self._active_spans[exec_id] = active_span.span
-            self._span_states[exec_id] = active_span
-            abandoned = self._evict_overflow_locked()
-            # Read the size here rather than after the lock: another handler
-            # may register or end a span in between, and the record would then
-            # report a total that never accompanied this eviction.
-            active = len(self._active_spans)
-
-        if abandoned:
-            _log_span_eviction("tracing", evicted=len(abandoned), active=active)
-        for span_to_close in abandoned:
-            # Detached from the map, so exactly one handler ends each. Ended
-            # outside the lock for the same reason as the stale span below.
-            self._close_span(span_to_close, ok=False)
+            stale = self._active_spans.get(exec_id)
+            self._active_spans[exec_id] = active_span
 
         if stale is not None:
             # Duplicated/reused exec_id: the prior span is now detached from the
@@ -230,39 +208,13 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             # other execution's handler.
             self._close_span(stale, ok=False)
 
-    def _evict_overflow_locked(self) -> list[_ActiveSpan]:
-        """Detach least-recently-active overflow spans while holding the registry lock.
-
-        The caller ends the detached spans outside the lock because a backend
-        callback may block. Activity, rather than arrival, determines recency.
-
-        Returns
-        -------
-        list[_ActiveSpan]
-            Detached spans for the caller to close.
-        """
-        if len(self._active_spans) <= _MAX_ACTIVE_SPANS:
-            return []
-        overflow = len(self._active_spans) - _MAX_ACTIVE_SPANS
-        # ``popitem(last=False)`` takes the front — the least recently active
-        # end — without materializing the other thousand-odd keys the way a
-        # ``list(...)`` slice would.
-        abandoned: list[_ActiveSpan] = []
-        for _ in range(overflow):
-            exec_id, _ = self._active_spans.popitem(last=False)
-            abandoned.append(self._span_states.pop(exec_id))
-        return abandoned
-
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
-        active = self._lookup_active_span(event, touch=True)
+        active = self._lookup_active_span(event)
         if active is None:
             return
 
-        # The span is left open and unmarked. An ``exit`` event closes it when
-        # one arrives; ``teardown_error`` carries no such guarantee, so a span
-        # left open here is bounded by ``_evict_overflow_locked`` instead. An
-        # ancillary event arriving after ``exit`` finds no entry and is dropped.
+        # An ancillary event after a terminal event finds no entry and is dropped.
         event_attrs: dict[str, object] = {}
         for field in _SPAN_FIELDS:
             value = getattr(event, field)
@@ -273,15 +225,29 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
                 active.span.add_event(f"cuprum.{event.phase}", event_attrs)
 
     def _handle_exit(self, event: ExecEvent) -> None:
-        """End the span for command execution, correlated by ``exec_id``."""
+        """Record child-exit details while leaving closure to ``settled``."""
         exec_id = event.exec_id
         if exec_id is None:
             return
 
-        with self._lock:
-            self._active_spans.pop(exec_id, None)
-            active = self._span_states.pop(exec_id, None)
+        active = self._lookup_active_span(event)
+        if active is None:
+            return
 
+        with active.lock:
+            if active.is_closed:
+                return
+            write_exit_attributes(active.span, event)
+
+    def _handle_settled(self, event: ExecEvent) -> None:
+        """Close a remaining span using only the terminal category."""
+        exec_id = event.exec_id
+        outcome = event.terminal_outcome
+        if exec_id is None or outcome is None:
+            return
+
+        with self._lock:
+            active = self._active_spans.pop(exec_id, None)
         if active is None:
             return
 
@@ -289,15 +255,13 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             if active.is_closed:
                 return
             active.is_closed = True
-            write_exit_attributes(active.span, event)
-
-            ok = event.exit_code == 0 if event.exit_code is not None else True
-            active.span.set_status(ok=ok)
+            active.span.set_attribute("cuprum.terminal_outcome", str(outcome))
+            active.span.set_status(ok=outcome is TerminalOutcome.EXIT_ZERO)
             active.span.end()
 
     def _record_fail_fast(self, event: ExecEvent) -> None:
         """Note a pipeline fail-fast decision on the failing stage's span."""
-        active = self._lookup_active_span(event, touch=True)
+        active = self._lookup_active_span(event)
         if active is None:
             return
 
@@ -310,13 +274,8 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             if not active.is_closed:
                 active.span.add_event("cuprum.pipeline_fail_fast", attrs)
 
-    def _lookup_active_span(
-        self, event: ExecEvent, *, touch: bool = False
-    ) -> _ActiveSpan | None:
+    def _lookup_active_span(self, event: ExecEvent) -> _ActiveSpan | None:
         """Return the active span state for ``event``, when its token is known.
-
-        ``touch`` moves the span to the recently-active end of the registry, so
-        activity defers eviction; see ``_evict_overflow_locked``.
 
         Returns
         -------
@@ -328,10 +287,7 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
         if exec_id is None:
             return None
         with self._lock:
-            active = self._span_states.get(exec_id)
-            if touch and active is not None:
-                self._active_spans.move_to_end(exec_id)
-            return active
+            return self._active_spans.get(exec_id)
 
     @staticmethod
     def _close_span(active: _ActiveSpan, *, ok: bool) -> None:

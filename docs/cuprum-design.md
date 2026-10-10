@@ -896,8 +896,10 @@ Internally, command execution can be described in terms of events:
 - `pipeline_fail_fast` – a pipeline coordinator decision, emitted before it
   terminates remaining running stages after the first qualifying failure;
 - `exit` – process finished, with exit code and duration.
+- `settled` – execution reached its definitive terminal outcome, whether or
+  not a child process was spawned.
 
-These are the eleven declared `ExecPhase` values. Hooks must still handle
+These are the twelve declared `ExecPhase` values. Hooks must still handle
 unrecognized runtime values defensively: manually constructed or future events
 may carry a value such as `unheard-of`.
 
@@ -913,6 +915,7 @@ class ExecEvent:
         "stdout",
         "stderr",
         "exit",
+        "settled",
         "stdin",
         "stdin_error",
         "timeout",
@@ -1167,7 +1170,7 @@ fields that log processors can inspect, filter, and route.
 The same events can feed into metrics and tracing systems:
 
 - A metrics hook can increment counters and record durations based on
-  `start`/`exit` events (e.g. Prometheus or OpenTelemetry metrics).
+  `start`/`settled` events, while resource metrics use `exit` details.
 - A tracing hook can start and finish spans per command, attaching program
   name, argv, and exit code as span attributes.
 
@@ -1459,7 +1462,7 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, `exit`, `timeout`, `teardown_error`,
+  `stdin_error`, `exit`, `settled`, `timeout`, `teardown_error`,
   `capture_eof_grace_expired`, and `pipeline_fail_fast` phases for both single
   commands and pipeline stages — the declared `ExecPhase` values. `timeout`,
   `teardown_error`, and `capture_eof_grace_expired` are ancillary diagnostics
@@ -1485,8 +1488,8 @@ implemented with the following decisions:
   manually constructed events may omit `exec_id` (`None`); such events cannot
   be correlated. Consumers should ignore an uncorrelatable `start` and create
   no span for it, and likewise ignore ambiguous `stdout`, `stderr`, `timeout`,
-  `teardown_error`, `capture_eof_grace_expired`, `pipeline_fail_fast`, and
-  `exit` events rather than guess.
+  `teardown_error`, `capture_eof_grace_expired`, `pipeline_fail_fast`, `exit`,
+  and `settled` events rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
@@ -1507,9 +1510,10 @@ implemented with the following decisions:
   code. The logging adapter emits it as the `cuprum_env_mode` extra, the
   tracing adapter as the `cuprum.env_mode` span attribute, and the metrics
   adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
-  phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
-  so it records no failure sample at all; the typed field is the only signal
-  available for it. The typed policy and its composition rules are specified in
+  phase) and `cuprum_failures_total`. A spawn failure has no `exit` event or
+  child details, but its `settled(error)` event still records the terminal and
+  failure counters with the effective mode. The typed policy and its
+  composition rules are specified in
   [ADR-018](adr-018-typed-environment-policies.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
@@ -1848,21 +1852,22 @@ registered hooks without performing authorization, dispatching hooks, or
 mutating the context. Pipeline execution preserves this ordering for every
 stage before emitting its `plan` event and dispatching before-hooks.
 
-`cuprum._pipeline_internals` owns pipeline orchestration: it enforces the
-allowlist, collects hooks, builds stage observations, coordinates process
-execution and completion, and assembles stage results. `cuprum._pipeline_types`
-contains the passive shared dataclasses and types used by that coordination
-layer; it does not perform execution logic. `_pipeline_internals` re-exports
-selected `_pipeline_collect` helpers for backwards compatibility, not those
-types. Do not reintroduce the combined `_run_before_hooks` responsibility in
+`cuprum._pipeline_observation` owns pipeline preflight and event setup: it
+enforces the allowlist, collects hooks, builds stage observations, then emits
+each plan before dispatching its before-hooks. `cuprum._pipeline_internals`
+coordinates process execution and completion, finalizes the run, and assembles
+stage results. It re-exports the observation helpers for existing internal
+importers. `cuprum._pipeline_types` contains the passive shared dataclasses and
+types used by those modules; it does not perform execution logic. Do not
+reintroduce the combined `_run_before_hooks` responsibility in
 `_pipeline_types`.
 
 `cuprum._pipeline_results` owns per-stage *reporting*, split out of
 `_pipeline_internals` so that module stays about *running* a pipeline: the
-terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
-and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
-`_pipeline_internals` calls into `_pipeline_results` on both the success and
-the timeout paths, so a stage never reports a `timeout` and then falls silent.
+actual child `exit` event, the definitive `settled` outcome, and the
+`CommandResult` assembly alongside them. `_pipeline_internals` calls into
+`_pipeline_results` on both the success and timeout paths, so a stage never
+reports a `timeout` and then falls silent.
 
 `cuprum._sink_lifecycle` owns the presentation-sink session lifecycle the two
 runners share: the `_SinkBracket`, the take-once owner of one run's session,
@@ -2235,10 +2240,10 @@ design decisions guide these adapters:
   event fields, not labels. The resource-measurement counter belongs to the
   resource series and therefore carries `resource_usage_mode` alongside
   `program` and `project`.
-- Histogram metrics (`cuprum_duration_seconds`, `cuprum_child_max_rss_bytes`,
-  `cuprum_child_user_cpu_seconds`, `cuprum_child_system_cpu_seconds`) are
-  observed on `exit` events. The three `cuprum_child_*` histograms are observed
-  only where the figure was actually measured, while
+- The `cuprum_duration_seconds` histogram and terminal-category/failure
+  counters are emitted on `settled` events. Resource metrics remain on `exit`
+  events: the three `cuprum_child_*` histograms are observed only where the
+  figure was actually measured, while
   `cuprum_resource_usage_measurements_total` is emitted for every recorded
   mode, including `unavailable`.
 - All metrics carry `program` and `project` labels for multi‑dimensional
@@ -2250,7 +2255,8 @@ design decisions guide these adapters:
 
 **Tracing adapter specifics:**
 
-- Spans are started on `start` events and ended on `exit` events.
+- Spans are started on `start` events. `exit` records known child details, and
+  `settled` records the terminal category and ends the span.
 - Active spans are tracked in a dictionary keyed by the per-execution
   `ExecEvent.exec_id` correlation token, not by PID, so a recycled PID and
   delayed output/exit events cannot cross between executions. `pid` is kept
@@ -2269,14 +2275,13 @@ design decisions guide these adapters:
   `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
   its `eof_grace_s` and `pending_readers` fields. The grace-expiry event itself
   carries no captured stream payload.
-- Span status is set based on exit code (OK for 0, ERROR otherwise).
+- Span status is successful only for `exit_zero`; all other bounded terminal
+  outcomes set an error status.
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
-- The active-span registry is bounded (1024 entries) and evicts by recency of
-  activity rather than arrival order, because not every execution reaches
-  `exit` (cancellation and stdin-writer failures can leave a span open
-  indefinitely otherwise). Each eviction is logged at `WARNING` with counts
-  only, since an evicted span is ended as failed while its execution may still
-  be running.
+- The active-span registry has no eviction policy. Each planned execution
+  emits one `settled` event, and terminal dispatch attempts every observer even
+  after a synchronous hook failure, so the tracing hook can always retire its
+  state without ending a still-live span due to registry pressure.
 
 **Structured logging adapter specifics:**
 
@@ -2352,32 +2357,32 @@ over the operations, applying each: a `_CounterOp` calls
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp` calls
 `observe_histogram(name, value, labels)`.
 
-The loop is the contract, and it is deliberately **not** atomic. An `exit`
-event yields a sequence of operations, applied as independent collector calls
-in that order. For an `exit` event the sequence is: the failure counter (only
-for a known non-zero exit code), then the duration observation (only when a
-duration was measured), then the resource counter, and finally the resource
-histograms. Atomicity is not attempted: the collector wraps an arbitrary backend
+The loop is the contract, and it is deliberately **not** atomic. Each event
+yields a sequence of operations, applied as independent collector calls in that
+order. An `exit` event yields the resource counter and resource histograms. A
+`settled` event yields the terminal-category counter, a failure counter for
+every category except `exit_zero`, and the duration observation when measured.
+Atomicity is not attempted: the collector wraps an arbitrary backend
 (`prometheus_client`, statsd, OpenTelemetry) that this adapter cannot make
 transactional, and buffering the sequence to apply together would only move the
 problem while delaying when metrics appear.
 
 Three consequences follow, and collector implementations depend on them:
 
-- **Partial application is possible.** If the collector raises on the second
-  call, the first stays applied — a failure can be recorded without its
-  duration.
-- **The order is fixed.** For an `exit` event the failure counter is applied
-  before the duration observation, which is applied before the resource counter
-  and then the resource histograms, so a partial application is always the
-  prefix of that sequence, never the suffix.
+- **Partial application is possible.** If the collector raises part-way
+  through an event, earlier calls stay applied — a terminal category can be
+  recorded without its duration.
+- **The order is fixed.** For `settled`, the terminal-category counter is
+  applied before the failure counter and duration observation. For `exit`, the
+  resource counter precedes the resource histograms. A partial application is
+  always the prefix of that event's sequence.
 - **The exception propagates, and the command fails with it.**
-  `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
-  wraps the error in `_ExecEventEmissionError` so that observe-hook tasks
-  already scheduled survive cleanup; `_StageObservation.emit` unwraps that
-  wrapper and re-raises the collector's original exception. A broken metrics
-  backend therefore takes the user's command down rather than being absorbed,
-  so a collector that must not do that has to swallow its own errors.
+  `cuprum._observability._emit_exec_event` wraps the error so already-scheduled
+  observe tasks survive cleanup; for `settled`, it first attempts later hooks
+  so stateful adapters can release execution state. `_StageObservation.emit`
+  then re-raises the collector's original exception. A broken metrics backend
+  therefore takes the user's command down rather than being absorbed, so a
+  collector that must not do that has to swallow its own errors.
 
 So a collector must treat each call as independent and ordered, and must never
 assume that seeing a `cuprum_failures_total` increment guarantees a matching

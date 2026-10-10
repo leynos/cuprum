@@ -36,9 +36,9 @@ if typ.TYPE_CHECKING:
 # A fixed, JSON-like tag every scenario sets so correlation is checkable.
 RUN_TAG = "bdd"
 
-# The phases that carry output lines, and the lifecycle triple a run reports.
+# The phases that carry output lines, and the lifecycle events every run reports.
 LINE_PHASES = frozenset({"stdout", "stderr"})
-LIFECYCLE_PHASES = frozenset({"plan", "start", "exit"})
+LIFECYCLE_PHASES = frozenset({"plan", "start", "exit", "settled"})
 
 
 class CommandCatalogue(typ.Protocol):

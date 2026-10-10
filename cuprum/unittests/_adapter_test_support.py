@@ -96,7 +96,7 @@ def _make_exec_event(
     return dc.replace(_DEFAULT_EXEC_EVENT, **changes)
 
 
-def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
+def _cat_overrides(exec_id: ExecId, pid: int | None = 4321) -> dict[str, object]:
     """Return the identifying overrides for a traced ``cat`` execution.
 
     Span-lifecycle tests care about which execution an event belongs to, not
@@ -107,8 +107,8 @@ def _cat_overrides(exec_id: ExecId, pid: int = 4321) -> dict[str, object]:
     ----------
     exec_id : ExecId
         Correlation token minted for the execution.
-    pid : int, optional
-        Process identifier reported by the event.
+    pid : int or None, optional
+        Process identifier reported by the event, when one is available.
 
     Returns
     -------

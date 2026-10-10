@@ -11,6 +11,23 @@ Feature: Execution runtime
     When I cancel the command after it starts
     Then the subprocess stops cleanly
 
+  Scenario: Cancellation settles while observe-hook cleanup drains
+    Given a long running command for terminal outcome observation
+    When I cancel while terminal cleanup is observed
+    Then the terminal-outcome subprocess stops cleanly
+    And exactly one cancelled terminal outcome is observed
+
+  Scenario: Repeated cancellation settles while observe-hook cleanup drains
+    Given a long running command for terminal outcome observation
+    When I cancel repeatedly during terminal cleanup
+    Then the terminal-outcome subprocess stops cleanly
+    And exactly one cancelled terminal outcome is observed
+
+  Scenario: Spawn failure has a terminal execution outcome
+    Given a registered but absent terminal-outcome executable
+    When I run it with an observe hook
+    Then spawn failure emits one error terminal outcome
+
   Scenario: Timeout terminates running subprocess
     Given a long running safe command
     When I run the command with a timeout

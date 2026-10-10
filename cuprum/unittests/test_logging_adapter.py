@@ -34,7 +34,7 @@ class TestStructuredLoggingHook:
         )
 
     def test_logs_all_phases(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Hook logs plan, start, stdout, stderr, and exit events."""
+        """Hook logs execution events, including the terminal category."""
         builder, catalogue = _python_builder(project_name="logging-test")
         cmd = builder(
             "-c",
@@ -62,6 +62,17 @@ print('err1', file=sys.stderr)""",
         self._assert_output_logged(messages, "cuprum.stdout", "out1")
         self._assert_output_logged(messages, "cuprum.stderr", "err1")
         self._assert_phase_logged(messages, "cuprum.exit")
+        settled = next(
+            record
+            for record in caplog.records
+            if getattr(record, "cuprum_phase", None) == "settled"
+        )
+        assert "terminal_outcome=exit_zero" in settled.message, (
+            "settled records must include the terminal category in the message"
+        )
+        assert getattr(settled, "cuprum_terminal_outcome", None) == "exit_zero", (
+            "settled records must expose the terminal category as a field"
+        )
 
     def test_includes_extra_fields(self, caplog: pytest.LogCaptureFixture) -> None:
         """Hook attaches cuprum_* extra fields to log records."""

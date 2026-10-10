@@ -1,12 +1,11 @@
 """Span-lifecycle and attribute-contract tests for ``TracingHook``.
 
-A span is opened by ``start`` and closed by ``exit``. These tests cover what
-happens in between, and what happens when that closing event never comes: the
-ancillary ``stdin_error`` / ``timeout`` / ``teardown_error`` phases record a
-span event and deliberately leave the span open; a ``teardown_error`` arriving
-after ``exit`` finds no entry and is dropped; and an execution that never
-emits ``exit`` at all is bounded by the registry's least-recently-active
-eviction rather than leaking an entry for the life of the hook.
+A span is opened by ``start``. These tests cover what happens in between and
+what happens when ``settled`` never comes: the ancillary ``stdin_error`` /
+``timeout`` / ``teardown_error`` phases record a span event and deliberately
+leave the span open, while ``settled`` closes a remaining span with its bounded
+terminal category. A ``teardown_error`` arriving after ``settled`` finds no
+entry and is dropped.
 
 The documented span-attribute contract is checked here too, so the prose and
 the attributes the hook can actually emit cannot drift apart.
@@ -22,13 +21,11 @@ passes its ``pid``, ``exec_id``, and phase-specific fields through
 
 from __future__ import annotations
 
-import logging
 import typing as typ
 
 import pytest
 
-from cuprum.adapters.tracing_adapter import _MAX_ACTIVE_SPANS
-from cuprum.events import new_exec_id
+from cuprum.events import TerminalOutcome, new_exec_id
 from cuprum.unittests._adapter_test_support import (
     Traced,
     _cat_overrides,
@@ -95,13 +92,12 @@ class TestTracingSpanLifecycle:
     ) -> None:
         """Ancillary phases become span events and leave the span open.
 
-        ``stdin_error``, ``timeout``, and ``teardown_error`` are all diagnostics
-        that accompany rather than conclude an execution, so each must be
-        recorded as a ``cuprum.<phase>`` span event carrying the stable
-        attributes in ``expected_attributes`` — ``operation`` and
-        ``error_type`` for every phase, plus ``timeout_s`` / ``timeout_mode``
-        for ``timeout`` — while the span stays open for the subsequent
-        ``exit``.
+        ``stdin_error``, ``timeout``, and ``teardown_error`` are diagnostics that
+        accompany rather than conclude an execution. Each becomes a
+        ``cuprum.<phase>`` span event carrying the stable attributes in
+        ``expected_attributes`` — ``operation`` and ``error_type`` for every
+        phase, plus ``timeout_s`` / ``timeout_mode`` for ``timeout`` — while the
+        span stays open for the subsequent ``settled``.
         """
         tracer, hook = tracing_hook
 
@@ -134,12 +130,14 @@ class TestTracingSpanLifecycle:
             f"an ancillary {phase} event must not end the execution span"
         )
 
-    def test_teardown_error_after_exit_is_dropped(self, tracing_hook: Traced) -> None:
+    def test_teardown_error_after_settled_is_dropped(
+        self, tracing_hook: Traced
+    ) -> None:
         """A late ``teardown_error`` must not disturb a concluded execution.
 
         The drain runs after the process has been reaped, so its failure can be
-        reported once ``exit`` has already closed the span. The hook keys on
-        ``exec_id``, and ``exit`` removes the entry, so the late event finds no
+        reported once ``settled`` has already closed the span. The hook keys on
+        ``exec_id``, and ``settled`` removes the entry, so the late event finds no
         open span and is dropped rather than reopening or re-ending one.
         """
         tracer, hook = tracing_hook
@@ -155,175 +153,104 @@ class TestTracingSpanLifecycle:
         )
         hook(
             _make_exec_event(
+                phase="settled",
+                overrides={**base, "terminal_outcome": TerminalOutcome.EXIT_ZERO},
+            ),
+        )
+        hook(
+            _make_exec_event(
                 phase="teardown_error",
                 overrides={**base, "operation": "drain", "error_type": "ValueError"},
             ),
         )
 
         span = tracer.spans[0]
-        assert span.ended is True, "the exit event must still have closed the span"
+        assert span.ended is True, "the settled event must close the span"
         assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
-            "a teardown_error arriving after exit must not be recorded on the "
+            "a teardown_error arriving after settled must not be recorded on the "
             f"closed span, got {[name for name, _ in span.events]}"
         )
 
-    def test_abandoned_spans_are_evicted_once_the_registry_fills(
+    @pytest.mark.parametrize(
+        ("outcome", "status_ok"),
+        [
+            (TerminalOutcome.EXIT_ZERO, True),
+            (TerminalOutcome.EXIT_NONZERO, False),
+            (TerminalOutcome.TIMEOUT, False),
+            (TerminalOutcome.CANCELLED, False),
+            (TerminalOutcome.ERROR, False),
+        ],
+    )
+    def test_settled_closes_span_from_category_only(
         self,
         tracing_hook: Traced,
+        outcome: TerminalOutcome,
+        status_ok: bool,
     ) -> None:
-        """An execution that never emits ``exit`` must not accumulate forever.
-
-        Cleanup also runs on external cancellation and on a stdin-writer
-        failure, and on those paths the original exception propagates with no
-        ``exit`` — so a ``teardown_error`` can be the last event an execution
-        emits. Those spans have nothing left to close them, so the registry is
-        bounded and evicts the oldest, ending it as failed.
-        """
+        """A missing exit is finalized without inventing status or details."""
         tracer, hook = tracing_hook
-
-        abandoned = new_exec_id()
-        abandoned_overrides = _cat_overrides(abandoned, pid=1)
-        hook(_make_exec_event(phase="start", overrides=abandoned_overrides))
+        exec_id = new_exec_id()
+        hook(_make_exec_event(phase="start", overrides=_cat_overrides(exec_id)))
         hook(
             _make_exec_event(
-                phase="teardown_error",
+                phase="settled",
                 overrides={
-                    **abandoned_overrides,
-                    "operation": "drain",
-                    "error_type": "ValueError",
+                    **_cat_overrides(exec_id, pid=None),
+                    "terminal_outcome": outcome,
                 },
-            ),
-        )
-        assert tracer.spans[0].ended is False, (
-            "the abandoned span should still be open before the registry fills"
-        )
-
-        for index in range(_MAX_ACTIVE_SPANS):
-            hook(
-                _make_exec_event(
-                    phase="start",
-                    overrides=_cat_overrides(new_exec_id(), pid=index + 2),
-                ),
             )
-
-        assert tracer.spans[0].ended is True, (
-            "the oldest abandoned span must be ended once the cap is exceeded, "
-            "otherwise a run that never emits exit leaks one entry per execution"
-        )
-        assert len(hook._active_spans) == _MAX_ACTIVE_SPANS, (
-            f"the registry must stay bounded, got {len(hook._active_spans)}"
         )
 
-    def test_eviction_is_reported(
-        self,
-        tracing_hook: Traced,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Dropping a span must not be silent.
+        span = tracer.spans[0]
+        assert span.ended is True, "settlement must end the span"
+        assert span.status_ok is status_ok, (
+            "span status must follow the terminal category"
+        )
+        assert span.attributes["cuprum.terminal_outcome"] == str(outcome), (
+            "the span must record the bounded terminal category"
+        )
+        assert "cuprum.exit_code" not in span.attributes, (
+            "settlement must not synthesize an exit code"
+        )
+        assert exec_id not in hook._active_spans, (
+            "settled spans must be removed from the active registry"
+        )
 
-        An evicted span is ended as failed while its execution may still be
-        running, so its trace is lost — and without a signal that loss is
-        undiagnosable: the trace is simply missing and nothing says why.
-        """
-        hook = tracing_hook.hook
-
-        with caplog.at_level(logging.WARNING, logger="cuprum.adapters"):
-            for index in range(_MAX_ACTIVE_SPANS + 1):
-                hook(
-                    _make_exec_event(
-                        phase="start",
-                        overrides=_cat_overrides(new_exec_id(), pid=index + 1),
-                    ),
-                )
-
-        overflow = [r for r in caplog.records if "span_registry_overflow" in r.msg]
-        assert len(overflow) == 1, f"one eviction, one record; got {caplog.records}"
-        counts = vars(overflow[0])
-        assert (counts["cuprum_spans_evicted"], counts["cuprum_spans_active"]) == (
-            1,
-            _MAX_ACTIVE_SPANS,
-        ), f"the record must count what was dropped and what remains, got {counts}"
-
-    def test_eviction_spares_the_span_that_is_still_active(
+    def test_exit_records_child_status_until_settled_closes_span(
         self,
         tracing_hook: Traced,
     ) -> None:
-        """A span still receiving events outlives one that went quiet earlier.
-
-        Eviction order is recency of activity, not of arrival. Were it arrival
-        order, the execution that started first would be finalized as failed
-        even while it was demonstrably still producing output, and its real
-        ``exit`` would then find nothing to close.
-        """
-        # ``record_output`` defaults to True, so the fixture's hook records the
-        # stdout event this test relies on to keep the busy span active.
+        """The child exit stays visible while settlement decides span status."""
         tracer, hook = tracing_hook
-
-        busy, quiet = new_exec_id(), new_exec_id()
-        hook(_make_exec_event(phase="start", overrides=_cat_overrides(busy, pid=1)))
-        busy_span = tracer.spans[0]
-        hook(_make_exec_event(phase="start", overrides=_cat_overrides(quiet, pid=2)))
-        quiet_span = tracer.spans[1]
-
-        # The older execution is the one still doing work.
+        exec_id = new_exec_id()
+        base = _cat_overrides(exec_id)
+        hook(_make_exec_event(phase="start", overrides=base))
         hook(
             _make_exec_event(
-                phase="stdout",
-                overrides={**_cat_overrides(busy, pid=1), "line": "still here"},
-            ),
-        )
-
-        # One short of the cap, so exactly one of the two above is evicted and
-        # the assertions below can say which.
-        for index in range(_MAX_ACTIVE_SPANS - 1):
-            hook(
-                _make_exec_event(
-                    phase="start",
-                    overrides=_cat_overrides(new_exec_id(), pid=index + 3),
-                ),
+                phase="exit",
+                overrides={**base, "exit_code": 7, "duration_s": 0.5},
             )
-
-        assert quiet_span.ended is True, (
-            "the execution that went quiet is the one that should be evicted"
-        )
-        assert busy_span.ended is False, (
-            "an execution that was still emitting events must not be finalized "
-            "ahead of one that fell silent earlier"
         )
 
-    def test_fail_fast_event_refreshes_the_span_eviction_recency(
-        self,
-        tracing_hook: Traced,
-    ) -> None:
-        """A fail-fast decision keeps its span ahead of an idle one."""
-        tracer, hook = tracing_hook
-        busy, quiet = new_exec_id(), new_exec_id()
-        hook(_make_exec_event(phase="start", overrides=_cat_overrides(busy, pid=1)))
-        busy_span = tracer.spans[0]
-        hook(_make_exec_event(phase="start", overrides=_cat_overrides(quiet, pid=2)))
-        quiet_span = tracer.spans[1]
+        span = tracer.spans[0]
+        assert span.ended is False, "exit must leave the span open until settlement"
+        assert span.status_ok is None, "exit alone must not determine span status"
+        assert span.attributes["cuprum.exit_code"] == 7, (
+            "the exit event must retain the child's real status"
+        )
 
         hook(
             _make_exec_event(
-                phase="pipeline_fail_fast",
+                phase="settled",
                 overrides={
-                    **_cat_overrides(busy, pid=1),
-                    "exit_code": 1,
-                    "duration_s": 0.0,
-                    "stage_index": 0,
-                    "stage_count": 2,
+                    **base,
+                    "terminal_outcome": TerminalOutcome.EXIT_NONZERO,
                 },
-            ),
-        )
-        for index in range(_MAX_ACTIVE_SPANS - 1):
-            hook(
-                _make_exec_event(
-                    phase="start",
-                    overrides=_cat_overrides(new_exec_id(), pid=index + 3),
-                ),
             )
+        )
 
-        assert quiet_span.ended is True, "the idle span must be evicted first"
-        assert busy_span.ended is False, (
-            "a span touched by pipeline_fail_fast must remain active until exit"
+        assert span.ended is True, "settlement must close the span"
+        assert span.status_ok is False, "non-zero settlement must mark an error"
+        assert span.attributes["cuprum.terminal_outcome"] == "exit_nonzero", (
+            "the settled span must retain the final category"
         )

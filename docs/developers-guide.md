@@ -1278,8 +1278,11 @@ combined boundary in `_pipeline_types`.
 - `_emit_exec_event(hooks, event)` is a dispatcher query over hook return
   values. It invokes synchronous observe hooks inline, schedules awaitable hook
   results as `asyncio.Task` instances, and returns those tasks to the caller.
-  If a later hook raises, `_ExecEventEmissionError` carries the tasks scheduled
-  before the failure so cleanup can still await them.
+  If a later hook raises during an ordinary phase, `_ExecEventEmissionError`
+  carries the tasks scheduled before the failure so cleanup can still await
+  them. During `settled`, dispatch attempts every hook before surfacing the
+  first synchronous failure, so stateful adapters can release execution state;
+  the error carries all scheduled tasks for cleanup.
 - `_write_to_stream_writer(writer, chunk)` is a write command with a semantic
   result. It returns `_WriteOutcome.OPEN` after a successful write/drain and
   `_WriteOutcome.CLOSED` when the downstream pipe closes early. The caller
@@ -1288,9 +1291,10 @@ combined boundary in `_pipeline_types`.
 `SafeCmd.run()` enforces the allowlist, then collects hooks from the current
 context, emits the `plan` event, runs before-hooks, and delegates subprocess
 execution to `_execute_with_hooks`. Pipeline execution follows the same
-ordering per stage: `_build_pipeline_observations` enforces every stage before
-collecting hooks, then `_emit_plan_events_and_run_before_hooks` emits and
-dispatches.
+ordering per stage: `_build_pipeline_observations` in
+`cuprum/_pipeline_observation.py` enforces every stage before collecting hooks,
+then `_emit_plan_events_and_run_before_hooks` emits and dispatches. The
+`_pipeline_internals.py` compatibility exports do not own those setup helpers.
 
 Observe hooks can return awaitables. Single-command execution and pipeline
 execution both keep a `pending_tasks` list and pass it into every
@@ -1374,36 +1378,33 @@ Two consequences are worth preserving when changing the mapping. Labels are
 projected only when the reducer yields at least one operation, so a `plan`
 event never touches `event.program` or the project tag. And the reducer is
 total over `ExecPhase` — every declared phase has an arm, including
-`capture_eof_grace_expired`, with `plan`, `stdin`, and `exit` handled directly
-and the remaining phases routed through `_PHASE_COUNTERS` — and fail-closed
-beyond it: any other phase raises `_UnhandledMetricsPhaseError` rather than
-being silently dropped. That is deliberate, and its cost is worth stating
-plainly. A hook exception is not swallowed, so adding a value to `ExecPhase`
-without adding an arm here would raise for every caller that has already
-registered `MetricsHook`. A new phase therefore cannot reach metrics without a
-decision in this reducer. The structured logging adapter is fail-open by
-contrast, formatting an unrecognized phase generically.
+`capture_eof_grace_expired`, with `plan`, `stdin`, `exit`, and `settled`
+handled directly and the remaining phases routed through `_PHASE_COUNTERS` —
+and fail-closed beyond it: any other phase raises `_UnhandledMetricsPhaseError`
+rather than being silently dropped. That is deliberate, and its cost is worth
+stating plainly. A hook exception is not swallowed, so adding a value to
+`ExecPhase` without adding an arm here would raise for every caller that has
+already registered `MetricsHook`. A new phase therefore cannot reach metrics
+without a decision in this reducer. The structured logging adapter is fail-open
+by contrast, formatting an unrecognized phase generically.
 
 Applying the operations is deliberately non-atomic, and that is a contract
 collectors rely on rather than an implementation detail. An `exit` event yields
-up to six operations — the failure counter, then the duration observation, then
-the resource counter, and finally up to three resource histograms (maximum RSS,
-user CPU, and system CPU, each only where that figure was measured) — applied
-as separate collector calls in that order, so a collector that raises part-way
-through leaves the earlier calls applied. The exception propagates out of the
-hook and is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and
-wraps the error in `_ExecEventEmissionError` so already-scheduled observe tasks
-survive cleanup, then `_StageObservation.emit` unwraps it and re-raises the
-collector's original exception — so a raising collector fails the user's
-command. A collector that must not do that has to swallow its own errors. The
-labels are extracted once before the loop and are read-only within it. A
-collector must therefore treat each call as independent and never infer a
+the resource-measurement counter and up to three resource histograms (maximum
+RSS, user CPU, and system CPU, each only where that figure was measured).
+`settled` yields the terminal-category counter, the failure counter for every
+outcome except `exit_zero`, and the duration observation when measured. Each
+operation is a separate collector call, so a collector that raises part-way
+through leaves earlier calls applied. The exception propagates out of the hook;
+on `settled`, dispatch still gives later hooks a chance to release their state
+before `_StageObservation.emit` re-raises the first synchronous failure. A
+collector that must not fail the user's command has to swallow its own errors.
+Labels are extracted once before the operation loop and are read-only within
+it. A collector must treat each call as independent and must not infer a
 duration observation from a failure increment. No operation identifier is
-passed either, so a repeated call increments again — nothing here is
-idempotent, and the hook never retries. See the metrics-hook dispatch figure in
-[the design document](cuprum-design.md)
-for the full statement, and `test_metrics_adapter_stateful.py` for the case
-that pins it.
+passed, so a repeated call increments again; the hook does not retry. See the
+metrics-hook dispatch figure in [the design document](cuprum-design.md) and
+`test_metrics_adapter_stateful.py` for the contract.
 
 ### Choosing a test shape per observe hook
 
@@ -2108,14 +2109,14 @@ lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
-single `match`, and each phase falls into exactly one of four categories: span
-lifecycle (`start` opens a span, `exit` ends it), span event (`stdout`,
-`stderr`, `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired`, and `pipeline_fail_fast` record a `cuprum.<phase>`
-event on the already-open span), deliberately ignored (`plan` and `stdin` carry
-no tracing semantics), or unhandled (the `case _` logs via
-`_log_unhandled_phase` instead of failing silently or raising). A new phase
-should be slotted into this policy rather than given an ad-hoc side path.
+single `match`, and each phase falls into exactly four categories: span
+lifecycle (`start` opens a span, `exit` records child details, and `settled`
+closes the span), span event (`stdout`, `stderr`, `stdin_error`, `timeout`,
+`teardown_error`, and `capture_eof_grace_expired`, and `pipeline_fail_fast`
+record a `cuprum.<phase>` event on the already-open span), deliberately ignored
+(`plan` and `stdin` carry no tracing semantics), or unhandled (the `case _`
+logs via `_log_unhandled_phase` instead of failing silently or raising). A new
+phase should be slotted into this policy rather than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
@@ -2130,63 +2131,43 @@ internal `threading.Lock`:
   exactly once because it is already unreachable via the map.
 - **stdout/stderr/stdin_error/timeout/teardown_error/capture_eof_grace_expired**
   all route through the single `_record_span_event` helper: it looks up the
-  span for the event's `exec_id` under the lock — moving it to the
-  most-recently-active end of the registry as it does so, see "Bounded span
-  registry" below — then, outside the lock, copies whichever of the `line`,
-  `operation`, `error_type`, `note`, `timeout_s`, `timeout_mode`,
-  `eof_grace_s`, and `pending_readers` fields are set on the event onto a
-  `cuprum.<phase>` span event (for example `cuprum.stdout`, `cuprum.timeout`, or
-  `cuprum.teardown_error`). The grace-expiry event carries only `eof_grace_s`
-  and `pending_readers` in addition to the common correlation fields. New
-  event-recording phases should extend this shared field set rather than add a
-  bespoke per-phase method. The helper never sets the span status or ends the
-  span — only `exit` does that — so `stdin_error` (the child process may
-  legitimately ignore its stdin), `timeout`, `teardown_error`, and
-  `capture_eof_grace_expired` are all recorded as diagnostics without failing
-  or closing the execution span. `stdout`/`stderr` recording is gated by the
-  hook's `record_output` flag; ancillary diagnostics are recorded
-  unconditionally, so a stdin-write failure, a timeout, a teardown failure, or
-  an EOF-grace expiry stays diagnosable even when line-by-line output recording
-  is switched off. The grace-expiry event carries no captured stdout or stderr
-  payload. Because `teardown_error` can be an execution's last event — cleanup
-  also runs on external cancellation and on a stdin-writer failure, and on
-  those paths the original exception propagates with no `exit` — a span opened
-  by `start` can otherwise be left open indefinitely; that is what the bounded
-  registry below exists to contain.
-- **exit** removes (pops) the span for the event's `exec_id` under the lock,
-  then sets the exit attributes and status and ends the span outside the lock.
+  span for the event's `exec_id` under the lock, then, outside the lock, copies
+  whichever of the `line`, `operation`, `error_type`, `note`, `timeout_s`,
+  `timeout_mode`, `eof_grace_s`, and `pending_readers` fields are set on the
+  event onto a `cuprum.<phase>` span event (for example `cuprum.stdout`,
+  `cuprum.timeout`, or `cuprum.teardown_error`). The grace-expiry event carries
+  only `eof_grace_s` and `pending_readers` in addition to the common
+  correlation fields. New event-recording phases should extend this shared
+  field set rather than add a bespoke per-phase method. The helper never sets
+  the span status or ends the span — only `settled` does that — so
+  `stdin_error` (the child process may legitimately ignore its stdin),
+  `timeout`, `teardown_error`, and `capture_eof_grace_expired` are all recorded
+  as diagnostics without failing or closing the execution span.
+  `stdout`/`stderr` recording is gated by the hook's `record_output` flag;
+  ancillary diagnostics are recorded unconditionally, so a stdin-write failure,
+  a timeout, a teardown failure, or an EOF-grace expiry stays diagnosable even
+  when line-by-line output recording is switched off. The grace-expiry event
+  carries no captured stdout or stderr payload. Ancillary diagnostics leave the
+  span open until terminal settlement.
+- **exit** looks up the span for the event's `exec_id` and records known child
+  exit attributes while leaving the span open.
+- **settled** removes (pops) the span for the event's `exec_id` under the lock,
+  then records `terminal_outcome`, sets status, and ends the span. Status is
+  successful only for `exit_zero`; all other bounded outcomes are failures.
+  Settlement dispatch attempts every hook even if an earlier hook raises, so a
+  failing telemetry adapter cannot prevent this cleanup.
 
 Keying on `exec_id` rather than PID is what stops a recycled PID, or delayed
 output/exit from an earlier execution, from attaching to a later execution's
 span. `pid` is retained only as the `cuprum.pid` span attribute for
 observability.
 
-**Bounded span registry.** `_active_spans` is capped at `_MAX_ACTIVE_SPANS`
-(1024) because not every execution reaches `exit`: as noted above, cleanup also
-runs on external cancellation and on a stdin-writer failure, and on those paths
-the original exception propagates with no `exit`, so a `teardown_error` can be
-an execution's last event. Without a cap, those entries would accumulate for
-the lifetime of the hook. `_active_spans` is a `collections.OrderedDict`, and
-`_record_span_event` calls `move_to_end` whenever one of a span's events lands,
-so ordering reflects recency of *activity*, not of arrival — a long-running
-execution that is still producing output is not evicted ahead of one that fell
-silent. This is a heuristic, not a guarantee: a live but silent execution can
-still be evicted. When the cap is exceeded, `_evict_overflow_locked` detaches
-the overflow from the front of the registry with `popitem(last=False)`; each
-evicted span is then marked failed (`set_status(ok=False)`) and ended *outside*
-the lifecycle lock, for the same reason the stale-span replacement in `start`
-is — an arbitrary `Span` may block on I/O in those calls, and holding the lock
-across them would serialize every other execution's handler.
-
-Every eviction batch is reported once via `_log_span_eviction`
-(`cuprum/adapters/_support.py`), which logs a `WARNING` on the
-`cuprum.adapters` logger with message `span_registry_overflow` and structured
-extras `cuprum_adapter`, `cuprum_spans_evicted`, and `cuprum_spans_active`.
-Only counts are recorded — no span attributes (which carry command payloads)
-and no execution tokens (which are unbounded in cardinality). `WARNING` rather
-than `DEBUG` because an evicted span is ended as failed while its execution may
-still be running: the trace it would have carried is lost, and without a signal
-that loss is undiagnosable.
+`_active_spans` has no eviction policy: a live execution must not be ended
+merely because other commands ran. Each planned observation emits one `settled`
+event, and terminal dispatch attempts every hook even after a synchronous hook
+failure, so `TracingHook` receives the cleanup event and removes its entry. The
+stateful tracing test checks that the registry drains under interleaved event
+sequences.
 
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
@@ -2268,13 +2249,51 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
   only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
   per-call tags are merged over the base via `_merge_tags`.
 
-Re-use policy: the three call sites — `_prepare_execution_observation`
-(`cuprum/_command_internals.py`), `_build_pipeline_observations`
-(`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
-(`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
-adds only its no-observe-hooks assertion) — must route through these helpers. A
-new shared tag is added once, in `_base_stage_tags`, or it will silently
-diverge between the single-command and pipeline telemetry.
+Re-use policy: `_pipeline_observation.py` owns the shared pipeline setup
+boundary, including `_build_pipeline_observations`,
+`_build_spawn_observations`, and `_emit_plan_events_and_run_before_hooks`;
+`_pipeline_internals.py` retains compatibility re-exports and runtime
+coordination. The three call sites — `_prepare_execution_observation`
+(`cuprum/_command_internals.py`), the pipeline builder, and spawn observation
+setup — must route through the shared tag helpers. A new shared tag is added
+once, in `_base_stage_tags`, or it will silently diverge between the
+single-command and pipeline telemetry.
+
+`_StageObservation.emit_terminal()` is the take-once finalizer for a planned
+stage: attempts before `plan` are ignored, terminal ownership is marked before
+observer dispatch, and the first terminal category wins. Pipeline success
+settlements are emitted after after-hooks complete; when an after-hook raises,
+each planned stage settles as `error` while retaining any known child PID and
+exit code.
+
+Command finalization is split at the hand-off to `_execute_with_hooks`.
+`_finalize_prepared_command_failure` owns a prepared command that fails before
+that hand-off: it closes the sink, best-effort settles an emitted plan, and
+drains tasks scheduled by plan or before-hooks. After hand-off, after
+`_execute_with_hooks` completes after-hooks, `_finalize_command_run_success`
+closes the sink, emits the result's terminal outcome, and drains successful
+observers; `_finalize_command_run_failure` closes the sink, best-effort emits
+the outcome derived from the primary error, and drains observers without losing
+that error.
+
+The pipeline helpers split the corresponding paths in `_pipeline_internals.py`.
+`_finalize_pipeline_execution` settles successful results after after-hooks; if
+an after-hook fails, it closes the sink and attempts `error` settlement for
+every planned stage. On execution failure, `_finalize_pipeline_run_failure`
+cancels stream tasks, settles stages after process cleanup, then drains
+observer tasks. `_finalize_pipeline_timeout` reports timeout and exit details
+before settlement, while `_finalize_pipeline_stage_result_failure` settles
+after result assembly has failed. These paths close the sink before
+observer-task draining and retain the known child details only.
+
+Finalizer drains use `_shielded_cleanup`, which keeps waiting for the owned
+cleanup task through repeated caller cancellation before re-raising
+cancellation. `_drain_tasks_during_cleanup` groups an observer-task failure
+with the active execution error in a `BaseExceptionGroup`.
+`_safe_emit_terminal()` in `_timeout_reporting.py` suppresses ordinary
+`Exception` and `asyncio.CancelledError` during best-effort dispatch so they
+cannot replace an existing timeout or cleanup error; it does not suppress every
+`BaseException`.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
@@ -6477,7 +6496,7 @@ metrics adapter counts timeout and teardown phases as `cuprum_timeouts_total`
 and `cuprum_teardown_errors_total`, and counts `capture_eof_grace_expired` as
 `cuprum_capture_eof_grace_expired_total`; these counters use only the `program`
 and `project` labels. The tracing adapter records them as ancillary span events
-that leave the span open for the subsequent `exit`.
+and leaves the span open until `settled` closes it.
 
 The parallel `cuprum.timeout` log records use the same field names under the
 `cuprum_` prefix (`cuprum_operation`, `cuprum_pid`, `cuprum_timeout_s`,

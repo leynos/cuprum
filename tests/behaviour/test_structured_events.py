@@ -14,6 +14,7 @@ import typing as typ
 import pytest
 from pytest_bdd import parsers, scenario, then
 
+from cuprum.events import TerminalOutcome
 from tests.behaviour._structured_events_support import (
     LIFECYCLE_PHASES,
     LINE_PHASES,
@@ -127,12 +128,25 @@ def then_observe_sees_timing_and_tags(behaviour_state: dict[str, object]) -> Non
     events = retained_events(behaviour_state)
     start = next(ev for ev in events if ev.phase == "start")
     exit_ = next(ev for ev in events if ev.phase == "exit")
+    plans = [event for event in events if event.phase == "plan"]
+    settled = [event for event in events if event.phase == "settled"]
 
     assert start.pid is not None, "Expected start.pid is not None"
     assert start.pid > 0, "Expected start.pid > 0"
     assert exit_.exit_code == 0, "Expected exit_.exit_code == 0"
     assert exit_.duration_s is not None, "Expected exit_.duration_s is not None"
     assert exit_.duration_s >= 0.0, "Expected exit_.duration_s >= 0.0"
+    assert len(plans) == len(settled) == 1, (
+        "one observed run must produce one plan and one settlement"
+    )
+    assert settled[0].terminal_outcome is TerminalOutcome.EXIT_ZERO, (
+        "successful execution must be reported as exit_zero"
+    )
+    assert settled[0].exec_id == plans[0].exec_id, (
+        "settlement must correlate with its plan event"
+    )
+    assert settled[0].pid is not None, "successful execution must retain its PID"
+    assert settled[0].exit_code == 0, "successful execution must retain its status"
 
     for ev in (start, exit_):
         assert ev.tags["run_id"] == RUN_TAG, f"Expected {RUN_TAG!r} run tag"
@@ -313,9 +327,9 @@ def test_normalized_lifecycle_payload_is_stable(
 ) -> None:
     """A normalized *lifecycle* payload matches its snapshot.
 
-    The snapshot covers the plan/start/exit triple — the lifecycle contract the
-    per-line hoist must not disturb — rather than the line events, whose
-    ordering is asserted explicitly by the sequence step and whose exact
+    The snapshot covers the plan/start/exit/settled sequence — the lifecycle
+    contract the per-line hoist must not disturb — rather than line events,
+    whose ordering is asserted explicitly by the sequence step and whose exact
     interleaving across streams is not guaranteed. Only genuinely volatile
     values are masked; phases, defaults, tags, and stage ownership stay in the
     snapshot, because those are what a careless hoist would change.
@@ -323,8 +337,11 @@ def test_normalized_lifecycle_payload_is_stable(
     events = run_lifecycle_probe()
     lifecycle = [ev for ev in events if ev.phase in LIFECYCLE_PHASES]
 
-    assert [ev.phase for ev in lifecycle] == ["plan", "start", "exit"], (
-        "the probe must produce exactly one plan/start/exit triple"
+    assert [ev.phase for ev in lifecycle] == ["plan", "start", "exit", "settled"], (
+        "the probe must produce one ordered plan/start/exit/settled sequence"
+    )
+    assert lifecycle[-1].terminal_outcome is TerminalOutcome.EXIT_ZERO, (
+        "the lifecycle snapshot must include its successful terminal category"
     )
     assert [normalize_event(ev) for ev in lifecycle] == snapshot, (
         "the normalized lifecycle payload changed; confirm the change is "

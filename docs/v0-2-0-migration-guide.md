@@ -117,6 +117,23 @@ therefore not emitted as a line event. See the
 [line-level output section in the users' guide](users-guide.md#line-level-output)
 for ordering, timestamps, teardown, and capture/echo details.
 
+## Structured execution observers handle terminal settlement
+
+`ExecPhase` now includes `settled`. Update exhaustive observe-hook matches to
+handle this phase. It is emitted once for each execution whose `plan` event
+began observation, including spawn failure, timeout, cancellation, and other
+errors. `terminal_outcome` is one of `exit_zero`, `exit_nonzero`, `timeout`,
+`cancelled`, or `error`.
+
+The event reuses the plan's `exec_id`. It includes a `pid` and `exit_code` only
+when those child details are known; a spawn failure has neither, and no
+exception text is included. Catalogue and allowlist validation still happens
+before observation and produces no lifecycle events. Adapters now use `settled`
+for the terminal failure and duration metrics and to close tracing spans;
+`exit` remains the event for actual child status and resource data. See
+[structured execution events in the users' guide](users-guide.md#structured-execution-events)
+for the complete event and adapter contract.
+
 ## Single-project catalogue construction
 
 `ProjectSettings.documentation_locations` and `noise_rules` now default to
