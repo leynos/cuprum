@@ -1499,6 +1499,57 @@ escalation, not a workaround.
   These are documentation and docstring edits only: no production code changed
   this round, which is why the tree needs a fresh gate run before it can be
   published as a new head.
+- [x] (2026-10-10 22:53Z) **The corrections follow-up for `92656c79` was
+  answered: corrections 1 and 2 discharged, the four `sys.executable`
+  replacements accepted, and one remaining prose defect accepted and fixed.**
+  The reply
+  ([`6103000584`](https://github.com/leynos/cuprum/pull/571#issuecomment-6103000584),
+  `EP440-CORRECTIONS-92656c79-20261010T224545Z`) confirmed that the combined-
+  property argument is discharged at all three sites, that O5 now separates the
+  helper-level invocation count from the execution-level one, and that O3, O5,
+  EP-M3 and acceptance clause 2 all describe `sys.argv[0]` with their named
+  witnesses existing. It found no missed occurrence of the three original
+  claims *in the inspected correction areas* — a scope the reply states
+  explicitly, so this is not a whole-tree clearance — and it did not reopen the
+  accepted implementation or test evidence.
+
+  It did find a defect in the replacement text I wrote for acceptance clause 2,
+  and the finding is correct. The sentence read that an ignored binding "would
+  still hold" the assertion "because both report *some* path — only the marker
+  on the executed file distinguishes them". That understates the assertion:
+  clause 2 is not that the child reports *a* path, it is that the child's
+  report equals `f"{_APPROVED}:{approved}\n"`, an exact equality against the
+  bound path. A run that executed the decoy reports the decoy's own, different
+  path, so the assertion fails there — the exact comparison is itself the
+  discriminator, and a second distinguishing observation does not make it
+  weaker. The clause now states the real mechanism: the decoy is a working
+  executable, so ignoring the binding yields a successful but wrong run rather
+  than only a missing-file error, and the child's differing report is what the
+  exact-equality assertion catches. The named witnesses and every existing
+  assertion were retained, as the reply asked.
+
+  The replacement text was verified against the assertions before it was
+  written, not taken on the reviewer's word:
+  `test_a_bound_program_runs_the_bound_file_not_the_catalogued_one` asserts
+  `result.stdout == f"{_APPROVED}:{approved}\n"` and separately that the
+  decoy's marker is absent;
+  `test_the_child_receives_the_bound_path_as_its_own_argv0` asserts the same
+  stdout plus `result.argv == ("--flag",)`; and
+  `test_a_relative_execution_cwd_anchors_a_relative_binding_once` asserts the
+  child's report *first* and the audit path second, so a doubly-anchored spawn
+  is observed rather than masked by an agreeing `resolved_path`.
+
+  The sweep that preceded the edit returned a false negative and is worth
+  recording as a lesson: `grep ... 2>/dev/null || echo "(no matches)"` reports
+  an error as a clean result, and the pattern had a near-miss in `*some* path`,
+  whose emphasis markers a fixed-string probe for `some path` does not match.
+  Re-running with `git grep`, no stderr masking, and the exit code printed
+  found the live site on the first attempt. The corrected sweep is the reason
+  the fix is believed to be at the only remaining site.
+
+  This moves the head again by one commit, so the hosted CI observation that
+  was in flight for `92656c79` is superseded rather than failed, and the
+  corrected head needs its own.
 
 ## Surprises & discoveries
 
@@ -2275,6 +2326,18 @@ escalation, not a workaround.
   and test behaviour the assessments accepted is unchanged, but the tree is not
   identical and therefore needs its own gate run and its own hosted CI.
   Date/Author: 2026-10-10, implementing agent.
+- Decision: the clause-2 replacement text was itself corrected rather than
+  defended, because the reviewer's finding held against the assertion.
+  Rationale: my replacement said an ignored binding "would still hold" the
+  assertion "because both report *some* path", which is weaker than what clause
+  2 actually requires — exact equality with the bound path, so a decoy run
+  reports its own different path and fails. A reviewer's counter-claim deserves
+  the same evidence standard as the original text, so the assertions were read
+  before the sentence was rewritten, and the rewritten sentence now names the
+  exact comparison as the discriminator instead of crediting the marker alone.
+  The named witnesses and all assertions were kept, per the reply's explicit
+  instruction that this is prose, not a production or test gap. Date/Author:
+  2026-10-10, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -2896,9 +2959,13 @@ each is asserted by a named test:
    program to a script whose catalogued name resolves to a different, working
    script, and assert the child's own `sys.argv[0]` report names the bound file
    and `result.resolved_path` equals it. The decoy is what makes this a witness
-   rather than a tautology: the assertion would still hold if the binding were
-   ignored and the catalogued program ran, because both report *some* path —
-   only the marker on the executed file distinguishes them. Asserted by
+   rather than a tautology: the catalogued program is a working executable, so
+   ignoring the binding produces a successful but wrong run rather than only a
+   missing-file error, and the child reports the decoy's own different path, so
+   the exact-equality assertion fails. Assert the exact approved marker and
+   bound path in the child's report, and check `result.resolved_path`
+   separately. The child's report detects execution of the decoy even if the
+   parent reports the intended bound path. Asserted by
    `test_a_bound_program_runs_the_bound_file_not_the_catalogued_one`,
    `test_the_child_receives_the_bound_path_as_its_own_argv0`, and
    `test_a_relative_execution_cwd_anchors_a_relative_binding_once` for the
