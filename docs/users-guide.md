@@ -772,14 +772,23 @@ nothing was bound.
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
 
-A resolver must return a `str`. Returning anything else raises `TypeError`
-because `None` is reserved to mean "no binding"; a resolver returning it
-silently runs the catalogued name instead of the executable the caller
-selected. A resolver that raises is reported as `ExecutableResolutionError`,
+A resolver must return a `str`. Returning anything else is rejected, because
+`None` is reserved to mean "no binding"; a resolver returning it silently runs
+the catalogued name instead of the executable the caller selected.
+
+Which exception reports that rejection depends on the boundary, and the two are
+worth telling apart. Calling `resolve_binding()` directly raises `TypeError`
+naming the type the resolver returned. Reaching the same resolver through an
+execution — `CommandResult.resolved_path`, or any command that runs — raises
+`ExecutableResolutionError` instead, with that `TypeError` chained as
+`__cause__`, because the execution boundary reports every resolver failure the
+same way. The rule is therefore uniform rather than split: whatever a resolver
+raises or returns wrongly, an execution reports as `ExecutableResolutionError`,
 which names the logical program and chains the resolver's own exception as its
-`__cause__`; it subclasses `RuntimeError`, so `except FileNotFoundError` around
+`__cause__`. It subclasses `RuntimeError`, so `except FileNotFoundError` around
 the call no longer catches a resolver that failed to find its virtual
-environment.
+environment, and `except TypeError` does not catch a resolver that returned the
+wrong type.
 
 <!-- tested-example: executable-bindings -->
 

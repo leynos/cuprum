@@ -16,10 +16,9 @@ agreement:
 from __future__ import annotations
 
 import typing as typ
+from pathlib import Path
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, ExecutionContext, TimeoutExpired
 
@@ -57,6 +56,39 @@ def _current_context() -> CuprumContext:
 def _cwd_arg(cwd: str | Path | None) -> str | None:
     """Return the ``cwd`` argument for ``asyncio.create_subprocess_exec``."""
     return str(cwd) if cwd is not None else None
+
+
+def _execution_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the directory a *relative* binding may be anchored at, absolutely.
+
+    A caller may supply the working directory relative to the process's own, and
+    a relative binding is anchored at it. Composing those naively yields a
+    relative ``argv[0]``, which the child then resolves against the very
+    directory it was already anchored to — applying the same prefix a second
+    time. The child would execute one file while ``resolved_path`` named
+    another, disagreeing exactly where a caller audits which file ran.
+
+    Anchoring here makes the composed path absolute, so it is anchored once, by
+    us, and the child cannot re-anchor it. The spawn keeps its own spelling of
+    the same directory, which is what ``_cwd_arg`` already renders. ``""`` falls
+    through as any relative spelling does — ``Path("")`` is ``Path(".")`` — and
+    that answer is unobservable because ``asyncio`` refuses an empty ``cwd``
+    before a child starts; it is left as it falls rather than mapped to ``None``,
+    which would claim the caller named no directory when they named one.
+
+    Returns
+    -------
+    Path | None
+        The absolute anchoring base, or ``None`` when *cwd* is ``None``, since
+        an unspecified working directory means the process's own and both
+        consumers already apply that.
+    """
+    if cwd is None:
+        return None
+    path = Path(cwd)
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
 
 
 def _resolve_timeout(

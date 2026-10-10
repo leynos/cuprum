@@ -27,6 +27,7 @@ Three carry the weight:
 
 from __future__ import annotations
 
+import asyncio
 import stat
 import typing as typ
 
@@ -49,6 +50,11 @@ if typ.TYPE_CHECKING:
 
 _APPROVED = "APPROVED"
 _IMPOSTOR = "IMPOSTOR"
+
+# A working directory that is *relative* to the process's own rather than an
+# absolute one. ``ExecutionContext.cwd`` accepts either, and only the relative
+# spelling exposes a binding anchored once per consumer.
+_RELATIVE_CWD = "srv/work"
 
 # Each script reports the marker it was written with and the path it was
 # started as, so an assertion about which file ran reads the child's own
@@ -93,7 +99,7 @@ def _catalogue_for(*programs: str) -> tuple[ProgramCatalogue, tuple[Program, ...
     return catalogue, entries
 
 
-def _run_capturing(cmd: SafeCmd, *, cwd: Path | None = None) -> CommandResult:
+def _run_capturing(cmd: SafeCmd, *, cwd: str | Path | None = None) -> CommandResult:
     """Run one command capturing output, optionally in ``cwd``."""
     return cmd.run_sync(
         output=RunOutputOptions(capture=True, echo=False),
@@ -312,6 +318,65 @@ def test_a_bound_but_unlisted_program_is_refused_without_resolving(
     )
 
 
+def test_a_pipeline_refused_at_a_later_stage_resolves_no_stage(
+    tmp_path: Path,
+) -> None:
+    """A forbidden later stage stops the pipeline before any stage resolves.
+
+    A pipeline enforces every stage before it resolves any, and that ordering
+    is what this pins: the earlier stage *is* allowed, so a regression that
+    enforced and resolved stage by stage would run its resolver and only then
+    discover the refusal. That is not merely wasteful. A resolver may probe the
+    filesystem or consult a toolchain still being installed, and doing so for a
+    pipeline the caller is told was refused leaves side effects behind for a
+    run that never happened.
+
+    Both stages carry counting resolvers, so the assertion covers the allowed
+    stage as well as the refused one. The point is not only that the refusal
+    happens, but that nothing was resolved on the way to it.
+    """
+    approved = _write_script(tmp_path / "refused-pipeline.py", _APPROVED)
+    catalogue, (first_prog, later_prog) = _catalogue_for(
+        "refusal-producer",
+        "refusal-consumer",
+    )
+    first_calls: list[int] = []
+    later_calls: list[int] = []
+
+    def first_resolver() -> str:
+        """Record evaluation of the stage the allowlist *does* permit."""
+        first_calls.append(len(first_calls))
+        return str(approved)
+
+    def later_resolver() -> str:
+        """Record evaluation of the stage under refusal."""
+        later_calls.append(len(later_calls))
+        return str(approved)
+
+    pipeline = (
+        sh.make(first_prog, catalogue=catalogue)()
+        | sh.make(later_prog, catalogue=catalogue)()
+    )
+
+    with (
+        # Only the first stage is allowlisted, so the refusal under test is
+        # the later stage's and not a catalogue miss.
+        scoped(ScopeConfig(allowlist=frozenset([first_prog]))),
+        bind_executable(first_prog, first_resolver),
+        bind_executable(later_prog, later_resolver),
+        pytest.raises(ForbiddenProgramError, match=str(later_prog)),
+    ):
+        _run_pipeline_capturing(pipeline)
+
+    assert len(first_calls) == 0, (
+        f"the permitted stage's resolver must not run for a refused pipeline, "
+        f"ran {len(first_calls)} times"
+    )
+    assert len(later_calls) == 0, (
+        f"the refused stage's resolver must not run, ran {len(later_calls)} times"
+    )
+
+
 def test_the_bound_path_reaches_every_event_of_the_execution(tmp_path: Path) -> None:
     """Every lifecycle event of a bound run reports the same executable.
 
@@ -319,6 +384,14 @@ def test_the_bound_path_reaches_every_event_of_the_execution(tmp_path: Path) -> 
     correlating them needs the executable to agree across all three. A
     regression that annotated one phase but not the others would still pass the
     ``CommandResult`` assertions above.
+
+    Each event is checked individually rather than collapsed into a mapping
+    keyed by phase: a mapping keeps only the *last* event per phase, so an
+    earlier event carrying a wrong path would be silently overwritten by a
+    later correct one. The logical ``Program`` is asserted on every event too,
+    because a binding that replaced the identity with the executable string
+    would leave the path assertions passing while breaking the correlation the
+    path exists to support.
     """
     approved = _write_script(tmp_path / "events.py", _APPROVED)
     catalogue, (tool,) = _catalogue_for("event-tool")
@@ -332,13 +405,19 @@ def test_the_bound_path_reaches_every_event_of_the_execution(tmp_path: Path) -> 
         _run_capturing(sh.make(tool, catalogue=catalogue)())
 
     assert events, "a bound run must still emit its observation events"
-    reported = {event.phase: event.resolved_path for event in events}
-    assert {"plan", "start", "exit"} <= set(reported), (
-        f"the run must emit its full lifecycle, got {sorted(reported)}"
+    phases = {event.phase for event in events}
+    assert {"plan", "start", "exit"} <= phases, (
+        f"the run must emit its full lifecycle, got {sorted(phases)}"
     )
-    assert all(path == str(approved) for path in reported.values()), (
-        f"every phase must report the bound executable, got {reported!r}"
-    )
+    for event in events:
+        assert event.resolved_path == str(approved), (
+            f"the {event.phase} event must report the bound executable, "
+            f"got {event.resolved_path!r}"
+        )
+        assert event.program == tool, (
+            f"the {event.phase} event must keep the logical program, "
+            f"got {event.program!r}"
+        )
 
 
 def test_resolution_reads_the_scoped_context_not_the_module_global(
@@ -403,6 +482,160 @@ def test_a_relative_binding_resolves_against_the_execution_cwd(
     )
     assert result.stdout == f"{_APPROVED}:{script}\n", (
         f"the anchored script must be the one that ran, got {result.stdout!r}"
+    )
+
+
+def test_a_relative_execution_cwd_anchors_a_relative_binding_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``cwd`` anchors the binding once, not once per consumer.
+
+    The execution's working directory may be given *relative* to the process's
+    own, and a relative bound path is anchored at it. Those two facts compose
+    into a trap: composing them naively yields a relative ``argv[0]``, which the
+    child then resolves against the very directory it was already anchored to —
+    applying the same prefix a second time. ``resolved_path`` would still report
+    the singly-anchored path, so the audit surface and the child would disagree
+    about which file ran.
+
+    The decoy makes that divergence observable rather than a bare
+    ``FileNotFoundError``: a second anchoring runs the decoy and prints its
+    marker, while the reported path still names the intended script. The
+    ``monkeypatch.chdir`` is what makes the prefix relative at all — an absolute
+    ``cwd`` composes to an absolute ``argv[0]`` and hides the defect.
+    """
+    monkeypatch.chdir(tmp_path)
+    workdir = tmp_path / "srv" / "work"
+    (workdir / "bin").mkdir(parents=True)
+    script = _write_script(workdir / "bin" / "tool.py", _APPROVED)
+    # The file a doubly-anchored spawn would actually execute: the child's own
+    # directory, joined with the relative ``cwd`` it was handed, joined again
+    # with the relative binding.
+    doubled = workdir / "srv" / "work" / "bin"
+    doubled.mkdir(parents=True)
+    _write_script(doubled / "tool.py", _IMPOSTOR)
+    catalogue, (tool,) = _catalogue_for("relative-cwd-tool")
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([tool]))),
+        bind_executable(tool, "bin/tool.py", allow_relative=True),
+    ):
+        result = _run_capturing(
+            sh.make(tool, catalogue=catalogue)(),
+            cwd=_RELATIVE_CWD,
+        )
+
+    # The child's own report comes first: it is the witness that the file which
+    # ran is the file the audit surface names. Under a double anchoring the
+    # reported path is still the singly-anchored one, so asserting it first
+    # would leave the divergence itself unobserved here.
+    assert result.stdout == f"{_APPROVED}:{script}\n", (
+        f"a relative execution cwd must anchor exactly once; the child reported "
+        f"{result.stdout!r} while {result.resolved_path!r} was claimed"
+    )
+    assert result.resolved_path == str(script), (
+        f"a relative execution cwd must report the path it ran, got "
+        f"{result.resolved_path!r}"
+    )
+
+
+def test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``cwd`` anchors each pipeline stage exactly once.
+
+    The single-command path and the pipeline path build their observations in
+    different modules, so repairing one leaves the other latent. Both must
+    anchor: a pipeline is the harder case, because every stage composes the
+    same relative directory with the same relative binding, and a stage whose
+    composition stayed relative would run the doubly-anchored decoy while its
+    ``resolved_path`` named the intended file.
+
+    Each stage gets its own decoy under the doubled prefix, so a regression that
+    anchored only some stages is visible per stage rather than as a single pass
+    or fail.
+    """
+    monkeypatch.chdir(tmp_path)
+    workdir = tmp_path / "srv" / "work"
+    (workdir / "bin").mkdir(parents=True)
+    producer = _write_script(workdir / "bin" / "producer.py", _APPROVED)
+    consumer = _write_script(workdir / "bin" / "consumer.py", _APPROVED)
+    doubled = workdir / "srv" / "work" / "bin"
+    doubled.mkdir(parents=True)
+    _write_script(doubled / "producer.py", _IMPOSTOR)
+    _write_script(doubled / "consumer.py", _IMPOSTOR)
+    catalogue, (producer_prog, consumer_prog) = _catalogue_for(
+        "relative-pipeline-producer",
+        "relative-pipeline-consumer",
+    )
+    pipeline = (
+        sh.make(producer_prog, catalogue=catalogue)()
+        | sh.make(consumer_prog, catalogue=catalogue)()
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([producer_prog, consumer_prog]))),
+        bind_executable(producer_prog, "bin/producer.py", allow_relative=True),
+        bind_executable(consumer_prog, "bin/consumer.py", allow_relative=True),
+    ):
+        result = pipeline.run_sync(
+            output=RunOutputOptions(capture=True, echo=False),
+            context=ExecutionContext(cwd=_RELATIVE_CWD),
+        )
+
+    paths = [stage.resolved_path for stage in result.stages]
+    assert paths == [str(producer), str(consumer)], (
+        f"each stage must report its singly-anchored path, got {paths!r}"
+    )
+    assert _IMPOSTOR not in (result.stdout or ""), (
+        f"no stage may run its doubly-anchored decoy, got {result.stdout!r}"
+    )
+
+
+def test_line_iteration_anchors_a_relative_cwd_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The line-iteration path anchors the same way the capture path does.
+
+    ``SafeCmd.lines`` builds its observation through the same preparation as
+    ``run_sync``, but it is a separate public entry point with its own call
+    site, so a future change that special-cased one would leave the other
+    wrong. The witness is the same decoy: a doubly-anchored spawn iterates the
+    decoy's output, and the marker says which file produced it.
+    """
+    monkeypatch.chdir(tmp_path)
+    workdir = tmp_path / "srv" / "work"
+    (workdir / "bin").mkdir(parents=True)
+    script = _write_script(workdir / "bin" / "lined.py", _APPROVED)
+    doubled = workdir / "srv" / "work" / "bin"
+    doubled.mkdir(parents=True)
+    _write_script(doubled / "lined.py", _IMPOSTOR)
+    catalogue, (tool,) = _catalogue_for("relative-line-tool")
+
+    async def collect() -> tuple[list[str], CommandResult | None]:
+        command = sh.make(tool, catalogue=catalogue)()
+        async with command.lines(
+            output=RunOutputOptions(capture=True, echo=False),
+            context=ExecutionContext(cwd=_RELATIVE_CWD),
+        ) as stream:
+            lines = [event.text async for event in stream]
+            return lines, stream.result
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([tool]))),
+        bind_executable(tool, "bin/lined.py", allow_relative=True),
+    ):
+        lines, result = asyncio.run(collect())
+
+    assert lines == [f"{_APPROVED}:{script}"], (
+        f"the iterated line must come from the singly-anchored file, got {lines!r}"
+    )
+    assert result is not None, "line iteration must expose the final result"
+    assert result.resolved_path == str(script), (
+        f"the streamed run must report the path it ran, got {result.resolved_path!r}"
     )
 
 

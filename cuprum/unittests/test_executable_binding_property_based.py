@@ -79,7 +79,12 @@ def _relative_path(draw: st.DrawFn) -> str:
 
 _ABSOLUTE_PATH = _absolute_path()
 _RELATIVE_PATH = _relative_path()
-_CWD = st.one_of(st.none(), _ABSOLUTE_PATH)
+# ``ExecutionContext`` accepts a relative working directory, and that spelling is
+# what the double-anchoring defect lived in: the resolution base and the spawn
+# directory were the same relative string, so the child resolved a relative
+# ``argv[0]`` against the directory it had already been placed in. A strategy
+# that drew only ``None`` or an absolute path could never have reached it.
+_CWD = st.one_of(st.none(), _ABSOLUTE_PATH, _RELATIVE_PATH)
 
 # Inputs that provoke each category reachable from string input alone, paired
 # with the category they must provoke. The filesystem-dependent categories are
@@ -244,12 +249,20 @@ def test_relative_binding_resolves_inside_the_working_directory(
     path: str,
     cwd: str,
 ) -> None:
-    """A relative binding with a working directory becomes an absolute path."""
+    """A relative binding with a working directory becomes an absolute path.
+
+    The assertion is exact equality with the composed path, not a prefix test:
+    a resolution that returned some *other* executable under the same directory
+    would satisfy "lives under ``cwd``" while sending the child somewhere the
+    binding never named. Both sides are composed with ``Path`` so the comparison
+    speaks the platform's own separator rather than this module's.
+    """
     binding = executable_binding(PROGRAM, path, allow_relative=True)
     resolved = resolve_binding(binding, cwd=cwd)
+    expected = str(Path(cwd) / str(binding.path))
     assert Path(resolved).is_absolute(), "A cwd-anchored resolution must be absolute"
-    assert resolved.startswith(cwd.rstrip("/") + "/"), (
-        f"{resolved!r} must live under the working directory {cwd!r}"
+    assert resolved == expected, (
+        f"{resolved!r} must be exactly the anchored binding {expected!r}"
     )
 
 

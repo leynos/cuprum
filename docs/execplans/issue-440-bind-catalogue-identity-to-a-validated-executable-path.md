@@ -1125,6 +1125,149 @@ escalation, not a workaround.
   enumerates behaviour module filenames, so nothing else needed updating.
   `pylint --jobs=1 tests/behaviour` now reports 10.00/10 with no `C0302`, and
   `ruff check` and `ruff format --check` are clean on both modules.
+- [x] (2026-10-10 16:38Z) **The double anchoring the reassessment found is
+  repaired, and the repair is witnessed by the child rather than by the audit
+  surface.** `_execution_cwd` joins `_cwd_arg` in
+  `cuprum/_subprocess_context.py` as the absolute anchoring base for a relative
+  binding; both observation builders — `_prepare_execution_observation`
+  (`cuprum/_command_internals.py`) and `_build_pipeline_observations`
+  (`cuprum/_pipeline_internals.py`) — resolve against it, while the spawn keeps
+  the caller's own spelling through `_cwd_arg`, which stays a pure
+  pass-through. The three regression tests assert the child's reported path
+  *before* `resolved_path`, and that order is load-bearing: under a double
+  anchoring `resolved_path` still names the singly-anchored file, so an
+  assertion on it alone would pass while the divergence stood. Coverage spans
+  the single command, a two-stage pipeline with a per-stage decoy, and line
+  iteration through `SafeCmd.lines()`, which reaches the same fix by sharing
+  `_prepare_execution_observation`. Every witness was proven non-vacuous by a
+  mutation probe that failed it for its own stated reason — reverting
+  `_execution_cwd` to the pre-fix pass-through failed all three at once — and
+  each probe was restored with the restore verified by `sha256sum`.
+- [x] (2026-10-10 16:38Z) **The resolver-error contract was documented as one
+  thing and shipped as two, and both guides now distinguish the boundaries.**
+  `resolve_binding` raises `TypeError` for a non-`str` resolver result, but
+  `CuprumContext.resolve_executable` catches `Exception` and re-raises
+  `ExecutableResolutionError`, so a caller reaching a resolver through a
+  command never sees the `TypeError` that `docs/users-guide.md` and
+  `docs/v0-2-0-migration-guide.md` both named. Both now say which boundary
+  reports which error, and a new test pins the outer half — the only half
+  reachable from a command a caller actually runs — by requiring the run to
+  raise `ExecutableResolutionError` with the `TypeError` chained as `__cause__`.
+- [x] (2026-10-10 16:38Z) **A pipeline that is refused at a later stage now has
+  a test proving no stage resolves, and the empty working directory is pinned
+  where its behaviour is visible.** The refusal test attaches a counting
+  resolver to both an allowed first stage and a forbidden later one and asserts
+  `ForbiddenProgramError` with both counters at zero; a mutation probe that
+  interleaved enforcement with resolution made it fail with
+  `the permitted stage's resolver must not run for a refused pipeline, ran 1
+  times`,
+  which is the causality the test claims. For `""`, `Path("")` is `Path(".")`,
+  so it falls through `_execution_cwd`'s ordinary arithmetic and is left as it
+  falls; mapping it to `None` would claim the caller named no directory when
+  they named one, converting a loud `FileNotFoundError` at the spawn into a
+  silent run somewhere the caller never asked for. That answer is unobservable
+  in a run only because `asyncio` refuses an empty `cwd` before a child starts,
+  so it is pinned in `cuprum/unittests/test_stage_stream_fds.py` at the helper
+  level, beside the `_cwd_arg` row that renders the same spelling.
+
+- [x] (2026-10-10 18:22Z) **The bound fail-fast case the proof assessment asked
+  for now exists, and building it disproved the arrangement it first assumed.**
+  The gap was real: every fail-fast run in the suite binds nothing, so the
+  sanitized decision event's `resolved_path=None` was unexercised against a
+  stage that actually had a path to withhold. The first attempt reused the
+  existing three-stage helper and bound its failing stage, which is where the
+  arrangement failed — a binding is keyed by logical program, and all three
+  stages ran the same interpreter, so the binding captured all three. A probe
+  showed the consequence directly: no `pipeline_fail_fast` phase at all, just
+  three `exit 3` events, because three stages that all settle in one batch
+  leave nothing to terminate and the run latches a failure index silently.
+  `run_bound_failing_pipeline` therefore gives the failing stage a program of
+  its own, which is the only stage bound and the only one the two downstream
+  stages do not share. The new module
+  `cuprum/unittests/test_bound_fail_fast_event.py` then asserts both halves:
+  the bound stage reports its path on `plan`, `start`, and `exit`, while the
+  decision event withholds it and still names the logical program. The third
+  test is the negative control — the unbound siblings must carry no path, so a
+  regression that resolved every stage could not pass the module by accident.
+
+- [x] (2026-10-10 18:24Z) **The anchoring change pushed
+  `cuprum/_pipeline_internals.py` one line over the 400-line Pylint cap, and
+  the fix was to delete a comment rather than add a suppression.** The file sat
+  at 398 lines on `HEAD`; the new import and a three-line call-site comment
+  took it to 401, and `make pylint-classic` failed with
+  `C0302: Too many lines in module (401/400)`. The gate is real and the file
+  was already within two lines of it, so this was a latent trap rather than a
+  surprise — the next unrelated one-line addition would have hit it too. The
+  comment was the removable part: `_execution_cwd`'s own docstring already
+  carries the full rationale, down to why `""` falls through, so the call sites
+  only need to point at it. Both call sites now read
+  `# Anchored once, here, for the reason documented on ``_execution_cwd``.`,
+  which brings `_pipeline_internals.py` to 399 and `_command_internals.py` to
+  341. No lint was silenced, and `pylint-classic` rates 10.00/10.
+
+- [x] (2026-10-10 16:59Z) **Both pre-readiness assessments returned at `16:06Z`
+  and `16:07Z`, and all eight of their findings are actioned in the working
+  tree.** The completeness/correctness reply raised three findings and the
+  proof reply five obligation notes; the dispositions are recorded here so the
+  next reader can check them against the code rather than re-deriving them.
+
+  The correctness reply's first finding was the relative-`cwd` double anchoring
+  — the production defect — and its second was the pipeline refusal test the
+  plan's O3 promised but never carried. Both are now repaired, and the refusal
+  test asserts zero resolver calls on *both* stages, so a regression that
+  interleaved enforcement with resolution fails on the permitted stage rather
+  than passing on the refused one. Its third finding was documentation: the
+  guides described a resolver's wrong-type result as reaching the caller as
+  `TypeError`, which is true of `resolve_binding` directly but not of normal
+  execution, where `ExecutableResolutionError` is raised with the `TypeError`
+  chained. `docs/users-guide.md` and `docs/v0-2-0-migration-guide.md` now
+  distinguish the two boundaries, and the tested implementation was left
+  unchanged, which is what the finding asked for.
+
+  The proof reply's five obligations are each closed against the artefact it
+  named. O1 now separates the universal requirement from the sampled evidence
+  and scopes the `NOT_FOUND`/`NOT_EXECUTABLE` witnesses to POSIX. O2's
+  state-machine docstring gives up the coverage claim it could not support and
+  names the named tests as the binding-content evidence. O3's pipeline refusal
+  case is the same one the correctness reply asked for. O4 gained the bound
+  fail-fast case (recorded at `18:22Z`) and had its real-execution event test
+  rewritten off the phase-keyed mapping that could hide an earlier wrong event.
+  O5's relative-path property now asserts exact equality with the composed path
+  using native `Path` comparisons, and the `_CWD` strategy generates relative
+  directories so the anchoring defect is reachable from the generator.
+
+  Two evidence errors in the request comment itself were raised by the
+  correctness reply and are corrected in a separate comment posted at `16:58Z`:
+  the series is 51 commits rather than 50, and `_catalogue_binding_support.py`
+  has two `pytest.fail` call sites rather than three. Neither affects a finding.
+
+- [x] (2026-10-10 17:12Z) The six commit gates pass at tree `73d5d2a0`'s
+  contents once two Markdown files are reflowed and one word is corrected; no
+  entry here names the resulting tree, because this entry is itself part of it
+  and a digest written here would be false by the act of writing it. A first
+  gate sweep failed `make check-fmt` at its third stage (`mdtablefix --check`
+  wanted to reflow this document and `docs/users-guide.md`) and failed
+  `make markdownlint` and `make lint` on a single spelling violation at this
+  file's line 1229: the US-spelled form of "artefact", in a sentence about the
+  proof reply. Both were mine and both were mechanical, but they were found the
+  hard way, and the sweep also exposed that a `spelling` failure inside
+  `make lint` aborts before `github-actions-lint`, so `yamllint --strict` and
+  `actionlint` went unobserved until the re-run. The re-run fixes the word,
+  applies the reflow, and re-runs `check-fmt`, `markdownlint`, `nixie`, and
+  `lint`; all four exit 0, and `actionlint` is observed for the first time at
+  `17:12:05Z`. `make typecheck` and `env -u BASH_ENV make test` were not
+  re-run, and deliberately so: the two trees differ *only* in Markdown files,
+  so the cached results are valid for the unchanged Python and Rust inputs
+  rather than merely convenient. `nixie` was re-run anyway despite that
+  reasoning, because it is a Markdown-reading gate and the reasoning covered
+  only `typecheck` and `test`. The mdtablefix reflow was verified to be
+  whitespace-only before it was trusted: 24126 words before and after with zero
+  non-equal diff opcodes, and all 17 fenced blocks byte-identical, so
+  `--ellipsis` did not reach into a code span here. Landing this entry reflowed
+  a second time and re-ran `check-fmt`, `markdownlint`, `nixie`, and `lint`,
+  then caught one more self-inflicted defect: the entry had quoted the
+  misspelled word verbatim in a backticked span, which the spelling gate
+  checks. It now describes the word instead of repeating it.
 
 ## Surprises & discoveries
 
@@ -1547,6 +1690,95 @@ escalation, not a workaround.
   `tests/behaviour/` is real rather than nominal: every other module there
   respects it, `test_context_hooks.py` sitting at exactly 400. The repair is a
   cohesive split, not a suppression.
+- Observation: **a relative `ExecutionContext.cwd` double-anchored a relative
+  binding, and no test could see it.** `resolve_binding` composes
+  `Path(cwd) / resolved`, and when `cwd` is itself *relative* that composition
+  stays relative. The spawn then hands the same relative `cwd` to the child,
+  which resolves the relative `argv[0]` against the very directory it was
+  already placed in — applying the prefix twice. `resolved_path` still reported
+  the singly-anchored path, so the audit surface named the intended file while
+  the child executed a different one. An absolute `cwd` composes absolutely, so
+  every existing test was blind to it. Evidence: the RED regression test failed
+  with
+  `the child reported 'IMPOSTOR:srv/work/bin/tool.py\n' while
+  'srv/work/bin/tool.py' was claimed` —
+  the doubly-anchored spawn ran the decoy while `resolved_path` named the real
+  script. Impact: two independent assessments raised this, and it is a genuine
+  audit-surface divergence rather than a mere `FileNotFoundError`. The repair
+  anchors once, in `_execution_cwd`, at both observation builders.
+- Observation: the anchor belongs beside `_cwd_arg`, not inside it. `_cwd_arg`
+  is pinned as a pure pass-through by
+  `test_stage_stream_fds.py::test_cwd_arg_conversion`, including the `("", "")`
+  row, and the spawn must keep receiving the caller's own spelling while only
+  the *resolution base* is anchored. Evidence: that parametrization already
+  asserts `_cwd_arg(Path("relative/dir")) == "relative/dir"`. Impact:
+  `cuprum/_subprocess_context.py` gained `_execution_cwd` as a second,
+  separately-tested helper rather than changing the existing one.
+- Observation: **`""` as a working directory is unobservable, which is what
+  makes the fall-through safe.** `Path("")` is `Path(".")`, so `_execution_cwd`
+  answers an empty string with the process's own directory while `_cwd_arg`
+  still renders `""`. Those two only fail to compose because `asyncio` refuses
+  an empty `cwd` at the spawn, so the run raises `FileNotFoundError` before a
+  child starts and no resolved path reaches a caller. Mapping `""` to `None`
+  would have converted that loud failure into a silent run in a directory the
+  caller never named. Evidence: an
+  `asyncio.create_subprocess_exec(..., cwd="")` probe raises
+  `FileNotFoundError: [Errno 2] No such file or directory: ''`, and the same
+  happens through `SafeCmd.run_sync`. Impact: the empty string is left to fall
+  through the ordinary arithmetic and is pinned at the helper level, where the
+  behaviour is visible, rather than special-cased.
+- Observation: **the resolver-error contract is split by boundary, and both
+  guides documented only the inner half.** `resolve_binding` raises `TypeError`
+  for a non-`str` resolver result, but `CuprumContext.resolve_executable`
+  catches `except Exception` and re-raises `ExecutableResolutionError`. Every
+  caller reaching a resolver through a command therefore sees the binding
+  error, never the `TypeError` both guides named. Evidence: a probe calling
+  `resolve_binding` directly reported
+  `TypeError: ExecutableResolver must return str; got NoneType`, while the same
+  resolver reached through `SafeCmd.run_sync` reported
+  `ExecutableResolutionError: Program
+  'boundary-tool' cannot resolve its executable: TypeError`
+  with the `TypeError` chained as `__cause__`. Impact: `docs/users-guide.md`
+  and `docs/v0-2-0-migration-guide.md` now distinguish the two boundaries, and
+  a test pins the outer one because only it is reachable from a command.
+- Observation: **the mislabelled-`Z` defect is still present and has grown
+  since it was last measured.** The falsifiable check recorded above — a stamp
+  cannot post-date the true UTC time of the commit that first introduced it —
+  was re-run across the whole `Progress` section at 2026-10-10 16:38Z and found
+  **21 of 72** `Z` stamps later than their introducing commit, by 12 minutes at
+  the least and 237 at the most. The 2026-10-02 measurement found 31 and the
+  repair rounds did not hold, so the figure has moved but the fault has not
+  gone. Evidence: `git blame --line-porcelain HEAD -- <this plan>` maps every
+  stamp line to its introducing commit, and each commit's own `%aI` converted
+  to UTC is compared against the stamp; the four worst are `2026-10-10 17:40Z`
+  written by `de410302` at `15:24Z`, `17:35Z` by the same commit, and two at
+  `16:55Z` by `9e9b9315` at `15:00Z` — all roughly the CEST offset ahead, which
+  is the tell that they were transcribed from a local-time reading. Two of the
+  four post-date the wall clock itself at the moment of measurement. Impact:
+  the stamps from this round were written only after cross-checking the system
+  clock against GitHub's HTTP `Date` header, and the method generalizes — the
+  independent source matters more than the reading, because the system clock is
+  the very thing the error is measured against.
+
+- Observation: **binding the failing stage of the existing fail-fast helper
+  silently converted the run into a no-decision run, and only a probe showed
+  it.** The helper's three stages all run the same interpreter program, so a
+  binding for that program binds every stage. Each stage then runs the failing
+  script, all three settle inside one `FIRST_COMPLETED` batch, and
+  `should_terminate_others` finds no sibling left running — the run latches a
+  failure index and emits nothing. Evidence: a probe of that arrangement
+  printed ten events with no `pipeline_fail_fast` phase, just three `exit 3`
+  events; the corrected arrangement, with the failing stage on its own program,
+  prints the decision alongside stage 0's `plan`/`start`/`exit` and the
+  siblings' `exit -15`. Impact: the bound case is built by
+  `run_bound_failing_pipeline` rather than by a parameter on the shared helper,
+  and the reason is recorded on that helper so a later reader does not
+  "simplify" the two back together. The general lesson is that this helper's
+  run is sensitive to stage *topology* and not only to stage count: a change
+  that alters what any stage runs can quietly make the decision unreachable,
+  and the tests that read its output would not report an error — they would
+  report an empty decision and fail on a count, which is the harmless version
+  of the same trap.
 
 ## Decision log
 
@@ -1711,6 +1943,58 @@ escalation, not a workaround.
   `Extension-gated tests (Python/Rust boundary)` — and CodeScene is not among
   them. All twelve pass at `0ee8ba47`, so the failure does not gate the merge.
   Date/Author: 2026-10-02, implementing agent.
+- Decision: a relative execution working directory is anchored once, in a new
+  `_execution_cwd` helper beside `_cwd_arg`, rather than by changing `_cwd_arg`
+  or by making the spawn absolute. Rationale: the two consumers want different
+  things from the same value, and conflating them is what produced the defect.
+  The *resolution base* must be absolute so a relative binding composes to a
+  path the child cannot re-anchor; the *spawn argument* must stay exactly what
+  the caller spelled, which `test_stage_stream_fds.py::test_cwd_arg_conversion`
+  already pins, including its `("", "")` row. Anchoring in the spawn instead
+  would have changed what the child receives and broken that contract;
+  anchoring inside `_cwd_arg` would have coupled the two. Placing the helper in
+  `cuprum/_subprocess_context.py` follows the module's own docstring, which
+  already names that module as the shared home for both spawn sites'
+  working-directory handling, and it makes the helper reachable by the same
+  exhaustive finite-domain test style the module's other helper uses.
+  Date/Author: 2026-10-10, implementing agent.
+- Decision: `""` falls through `_execution_cwd`'s ordinary arithmetic rather
+  than being mapped to `None`. Rationale: `None` means *the caller named no
+  directory*, and the caller who passes `""` did name one — an empty one.
+  Returning `None` would silently substitute the process's own directory for a
+  directory the caller asked for, upgrading a loud spawn-time
+  `FileNotFoundError` into a run somewhere the caller never intended. The
+  fall-through keeps the failure loud and is unobservable in any run
+  regardless, because `asyncio` refuses an empty `cwd` before a child starts,
+  so there is no behaviour to protect by special-casing it. The choice is
+  pinned by a test row at the helper level, where it is the only place the
+  decision is visible. Date/Author: 2026-10-10, implementing agent.
+- Decision: the Progress stamps this work added are written from a clock
+  reading verified against an independent source, and the four stamps already
+  committed that post-date their own commits are left as written. Rationale:
+  the plan's earlier decision to leave mislabelled stamps alone applies here
+  and is the right call for the same reason — restamping destroys the evidence
+  of how the entries were produced, and a reader already has a stronger source
+  in the introducing commit. What this entry adds is the measurement: at
+  2026-10-10 the check was re-run across the whole `Progress` section and found
+  **21 of 72** `Z` stamps later than the commit that introduced them, by 12
+  minutes at the least and 237 at the most, uniformly by roughly the CEST
+  offset. So the defect did not merely persist; it grew. Every stamp in this
+  round's own entries was therefore read from a clock cross-checked against
+  GitHub's HTTP `Date` header and against the commit list before being written,
+  rather than transcribed from displayed local time. Date/Author: 2026-10-10,
+  implementing agent.
+- Decision: the bound fail-fast case gets its own support helper
+  (`run_bound_failing_pipeline`) rather than an optional parameter on the shared
+  `run_failing_pipeline`, and the failing stage gets a program of its own.
+  Rationale: an optional binding parameter on the shared helper is the tidier
+  API and is wrong, because the binding would capture all three stages and make
+  the decision unreachable. The two runs differ in topology, not just in a
+  flag, and encoding that as a parameter would present a knob that cannot be
+  turned — the parameter would have to be documented as "supply this and the
+  run stops producing the event you came for". Two helpers that each state
+  their own arrangement say that plainly. Date/Author: 2026-10-10, implementing
+  agent.
 
 ## Outcomes & retrospective
 
@@ -1858,6 +2142,24 @@ O1 — Classification totality and first-match order.
   that reordered the NUL check after the absolute check would be caught by
   `test_nul_check_precedes_the_parent_segment_check` and by
   `test_nul_pins_the_nul_category`.
+- Scope of the generated domain: `_FUZZ_TEXT` draws from a fixed 9-character
+  alphabet with `max_size=12`, so the sampled domain is finite while the stated
+  domain — every `str` — is infinite. The property therefore constitutes
+  sampled evidence for the universal claim, not a proof of it; the claim is
+  discharged for the shapes the alphabet can form and for the boundaries the
+  named table pins, and no further. `_CWD` likewise draws `None`, an absolute
+  path, and a relative path rather than every string a caller might pass.
+- Platform scope of the filesystem witnesses: on Windows,
+  `advisory_path_rejection` returns `None` by design, because the execute bit
+  is not part of a file's identity there and Cuprum will not guess at ACL-based
+  executability. The `NOT_FOUND` and `NOT_EXECUTABLE` rows of the witness table
+  — and the whole-enum coverage guard that depends on them — are therefore
+  POSIX expectations. Windows CI does not run these modules:
+  `EXTENSION_TEST_TARGETS` excludes the executable-binding test files, so the
+  Windows job is narrowly scoped to the Python/Rust boundary and these rows
+  never execute there. The scope is recorded rather than enforced with a
+  platform skip, because a skip would let the rows silently disappear on the
+  platform where they are meaningful.
 
 O2 — Binding isolation across nested scopes, threads, and tasks.
 
@@ -1879,12 +2181,22 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
 - Evidence: `make test-python` passes; the state machine's
   `active_context_matches_stack_top` invariant holds across generated sequences
   that include the new `bind` factory.
-- Non-vacuity: the state machine's `_FACTORIES` tuple gains `bind` and
-  `bind-nested` entries, and a check asserts that at least one generated
-  sequence actually installed a binding (a generator that never samples the new
-  entry would otherwise pass vacuously). The concurrency examples deliberately
-  assert the *other* context's binding is absent, so a test that leaked a
-  binding would fail rather than pass.
+- Non-vacuity: the state machine's `_FACTORIES` tuple gains `bind`,
+  `bind-nested`, and `bind-two` entries, and a check asserts that at least one
+  generated sequence actually installed a binding (a generator that never
+  samples the new entry would otherwise pass vacuously). What that guard
+  establishes is exactly one binding factory ran, not that all three did, and
+  not that same-key override and distinct-key merge both occurred; those are
+  sampled. The machine's own invariant is object identity of the restored
+  context — `active_context_matches_stack_top` compares with `is` — and it does
+  not independently model binding *contents*: its expected context comes from
+  `current_context()` after production registration, so a registration that
+  installed a wrong mapping would still satisfy it. Binding-content evidence
+  comes from the named tests in `test_context_isolation.py`, notably
+  `test_a_child_scope_binding_leaves_sibling_bindings_intact`, which checks
+  both programs before, during, and after an override. The concurrency examples
+  deliberately assert the *other* context's binding is absent, so a test that
+  leaked a binding would fail rather than pass.
 
 O3 — Resolution ordering: enforcement precedes resolution.
 
@@ -1905,7 +2217,19 @@ O3 — Resolution ordering: enforcement precedes resolution.
   `len(calls) == 1` for the allowlisted run, proving the counter works;
   `test_a_bound_but_unlisted_program_is_refused_without_resolving` then asserts
   `len(calls) == 0`, proving the ordering. Without the positive case the empty
-  list would be indistinguishable from a broken counter.
+  list would be indistinguishable from a broken counter. The pipeline path
+  carries its own pair, because ordering inside one stage's observation is not
+  the same property as ordering *across* stages:
+  `test_a_pipeline_refused_at_a_later_stage_resolves_no_stage` binds an allowed
+  first stage and a forbidden later one with a counting resolver on each and
+  asserts `ForbiddenProgramError` with **both** counters at zero. A mutation
+  probe that interleaved enforcement with resolution made it fail with
+  `the permitted stage's resolver must not run for a refused pipeline, ran 1
+  times`,
+  which is precisely the interleaving it exists to catch — the direct refusal
+  test cannot detect that pipeline-specific regression.
+  `test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage` supplies the
+  positive control for the pipeline's resolvers.
 
 O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 
@@ -1915,19 +2239,51 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
   `resolved_path`; the logging adapter emits `cuprum_resolved_path`, the
   tracing adapter emits `cuprum.resolved_path`, and the metrics label mapping
   stays exactly `{"program", "project"}`.
-- Method: named pytest examples, one per adapter, driving a real subprocess.
+- Method: two distinct methods, split by what each can actually observe.
+  Named pytest examples *driving a real subprocess* for the execution surface
+  (`test_executable_binding_execution.py`, `test_bound_fail_fast_event.py`),
+  and named pytest examples over *constructed* `ExecEvent` values for the
+  adapter projections (`test_adapter_projection.py`). The adapter tests do not
+  attach an adapter to a live child; an earlier revision of this line claimed
+  they did, which the proof assessment correctly rejected. What the adapter
+  module pins is the projection of a record shape, and a constructed record is
+  the faithful input for that.
 - Rationale: this is a finite set of surface-by-surface assertions over a
-  record shape, which examples express more readably than a generator.
+  record shape, which examples express more readably than a generator. The
+  split follows the boundary being tested rather than convenience: an adapter
+  reads a record and writes a projection, so a constructed record exercises the
+  projection completely; a spawn chooses the executable, so only a real child
+  can witness that.
 - Artefact: `cuprum/unittests/test_executable_binding_execution.py` (the
-  per-phase event assertions driven by a real spawn), with the adapter surface
-  locked in `cuprum/unittests/test_adapter_projection.py`.
+  per-phase event assertions driven by a real spawn),
+  `cuprum/unittests/test_bound_fail_fast_event.py` (the *bound* fail-fast case,
+  also driven by a real spawn), and
+  `cuprum/unittests/test_adapter_projection.py` (the adapter surface, over
+  constructed records).
 - Evidence: `make test-python` passes; the metrics test asserts the label set
   equals `{"program", "project"}` and would fail if a path were added.
 - Non-vacuity: two tests carry the unbound case.
   `test_an_unbound_program_runs_under_its_catalogued_name` asserts
   `resolved_path is None`, and `test_the_unbound_case_emits_no_path_key_at_all`
   asserts no `cuprum_resolved_path` key is present, so an adapter that
-  unconditionally emitted the key would fail.
+  unconditionally emitted the key would fail. The bound fail-fast case was
+  missing at the assessed head, and no existing test covered it: every
+  fail-fast run in the suite binds nothing, so a regression copying the failing
+  stage's path onto the sanitized decision event passed them all. The new
+  module binds the failing stage, which requires giving it a program of its own
+  — binding the shared interpreter program binds all three stages, and a probe
+  confirmed those three then settle in one batch and emit no decision event at
+  all. Three mutation probes were run against it, and their verdicts differ in
+  a way worth recording rather than flattening. Leaking `resolved_path` onto
+  `emit_fail_fast` failed `test_the_decision_event_withholds_the_bound_path` on
+  its own assertion, and dropping it from `emit` failed
+  `test_a_bound_failing_stage_reports_its_path_on_its_own_events` likewise —
+  both are true assertion failures, which is the evidence that these tests
+  discriminate on what they claim to. Making `argv0` ignore the binding is
+  detected differently: the fixture errors with
+  `FileNotFoundError: 'bound-failing-stage'`, because the child cannot start at
+  all. That is a genuine detection, but it is not an assertion doing the work,
+  and it is recorded as the weaker of the two kinds.
 
 O5 — Resolver invocation count and relative-path resolution.
 
@@ -1948,17 +2304,22 @@ O5 — Resolver invocation count and relative-path resolution.
   `cuprum/unittests/test_executable_binding_execution.py`.
 - Evidence: `make test-python` passes; the end-to-end case asserts the child's
   own `sys.executable` and the recorded `resolved_path` are equal.
-- Non-vacuity: the property's strategy is constructed so that both shapes are
-  reachable rather than relying on the generator to find them — measured over
-  2000 draws of `_RELATIVE_PATH`, 1123 contain a separator and 877 are bare
-  names, and `_CWD` draws `None` and an absolute path. This obligation is
-  weaker than O2's: the property module carries no assertion that both shapes
-  were generated, so its non-vacuity rests on the strategy's construction and
-  on that measurement rather than on a guard that fails when the shapes go
-  ungenerated. The invocation counter shares O3's positive/negative control,
-  which is a `len(calls) == 1` assertion in one test paired with a
-  `len(calls) == 0` assertion in the refusal test rather than a single body
-  carrying both.
+- Non-vacuity: the relative-path property asserts **exact equality** with
+  `str(Path(cwd) / str(binding.path))` rather than a prefix or containment
+  test, because a resolution returning some other executable under the same
+  directory would satisfy "lives under `cwd`" while running a file the binding
+  never named. Both sides are composed through `Path`, so the comparison speaks
+  the platform's separator instead of assuming `/`. `_CWD` draws `None`, an
+  absolute path, **and** a relative path: the relative spelling is the one the
+  double-anchoring defect lived in, and a strategy confined to `None` and
+  absolute paths could not have reached it. The property's strategy is
+  constructed so both binding shapes are reachable, but the module carries no
+  assertion that both were generated, so this obligation is weaker than O2's:
+  its non-vacuity rests on the strategy's construction rather than on a guard
+  that fails when a shape goes ungenerated. The invocation counter shares O3's
+  positive/negative control, a `len(calls) == 1` assertion in one test paired
+  with a `len(calls) == 0` assertion in the refusal test rather than a single
+  body carrying both.
 
 Axioms relied on, and why they are not verified here:
 

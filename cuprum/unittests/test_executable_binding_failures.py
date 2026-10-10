@@ -22,7 +22,8 @@ import typing as typ
 
 import pytest
 
-from cuprum.catalogue import ECHO
+from cuprum import ScopeConfig, bind_executable, scoped, sh
+from cuprum.catalogue import ECHO, ProgramCatalogue
 from cuprum.context import CuprumContext
 from cuprum.executable_binding import (
     ExecutableResolutionError,
@@ -141,6 +142,38 @@ def test_the_error_message_names_the_program_not_the_absent_path() -> None:
     assert str(excinfo.value) == (
         "Program 'echo' cannot resolve its executable: FileNotFoundError"
     ), f"unexpected message: {str(excinfo.value)!r}"
+
+
+def test_a_contract_violation_reaches_the_execution_boundary_wrapped() -> None:
+    """A run reports a wrong-typed resolver the same way it reports a raising one.
+
+    The documented contract is split by boundary, and only the outer half is
+    reachable from a command a caller actually runs. ``resolve_binding`` raises
+    ``TypeError`` for a non-``str``, but the execution boundary must not let
+    that distinction through: a caller catching resolver failures around a run
+    would otherwise need two handlers for one contract, and ``TypeError`` is
+    exactly what unrelated programming errors in the surrounding code raise.
+    """
+    tool = ECHO
+    catalogue = ProgramCatalogue.from_programs(
+        tool,
+        name="execution-boundary-failures",
+        documentation_locations=("docs/users-guide.md",),
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([tool]))),
+        bind_executable(tool, _returns(None)),
+        pytest.raises(ExecutableResolutionError) as excinfo,
+    ):
+        sh.make(tool, catalogue=catalogue)().run_sync()
+
+    assert not isinstance(excinfo.value, TypeError), (
+        "the execution boundary must not surface the raw contract violation"
+    )
+    assert isinstance(excinfo.value.__cause__, TypeError), (
+        f"the violation must be chained, found {excinfo.value.__cause__!r}"
+    )
 
 
 def test_the_original_exception_is_chained() -> None:

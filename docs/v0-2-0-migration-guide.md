@@ -128,14 +128,18 @@ it. Nested scopes override one program at a time and leave sibling bindings
 intact, so introducing a binding cannot silently change what a neighbouring
 scope runs.
 
-A resolver must return a `str`; anything else raises `TypeError`, which keeps
-`None` meaning only "no binding" rather than doubling as a resolver's answer. A
-resolver that raises — a virtual environment that was never created, a
-toolchain that is not installed — surfaces as `ExecutableResolutionError`
-naming the logical program, with the original exception chained as `__cause__`.
-That is a change for callers migrating a hand-rolled resolver: a
-`FileNotFoundError` raised inside one no longer escapes as itself, so catch
-`ExecutableResolutionError` (a `RuntimeError`) or inspect `__cause__`.
+A resolver must return a `str`; anything else is rejected, which keeps `None`
+meaning only "no binding" rather than doubling as a resolver's answer. Where
+that rejection surfaces depends on the boundary: `resolve_binding()` called
+directly raises `TypeError` naming the type the resolver returned, whereas an
+execution reports it as `ExecutableResolutionError`. Any resolver failure at an
+execution boundary — a wrong return type, a virtual environment that was never
+created, a toolchain that is not installed — surfaces the same way, naming the
+logical program with the original exception chained as `__cause__`. That is a
+change for callers migrating a hand-rolled resolver: a `FileNotFoundError`
+raised inside one no longer escapes as itself, so catch
+`ExecutableResolutionError` (a `RuntimeError`) or inspect `__cause__`, and do
+not expect `TypeError` to catch a resolver that returned the wrong type.
 
 Two limits apply. Path validation is advisory — construction rejects malformed
 paths, but the file at the bound path may be replaced between the check and the

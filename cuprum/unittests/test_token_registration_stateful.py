@@ -240,15 +240,24 @@ def test_binding_factories_are_sampled() -> None:
     """The generated sequences must actually reach a binding factory.
 
     This is the non-vacuity guard for the binding entries in ``_FACTORIES``.
-    The alphabet is sampled at random, so a run that never reaches
+    The alphabet is sampled at random, so a run that never reached
     ``bind``/``bind-nested``/``bind-two`` would satisfy every invariant in the
     machine while proving nothing about bindings. The machine is therefore run
-    separately with a small pinned budget, and the run is asserted to have
-    recorded at least one installed binding; ``_bound_programs`` is cleared
-    first so the result describes this run and not a previous one. The
-    budget deliberately exceeds the alphabet size: a binding factory can only
-    be missed when *every* generated step selects a non-binding entry, which
-    needs 7 consecutive misses per step.
+    separately and the run is asserted to have recorded at least one installed
+    binding; ``_bound_programs`` is cleared first so the result describes this
+    run and not a previous one.
+
+    What this guard establishes is deliberately narrow, and the budget is not
+    part of the argument: a pinned ``max_examples``/``stateful_step_count``
+    bounds how much is generated, it does not make any particular sequence
+    likely. The guard proves that *at least one* binding factory ran. It does
+    not prove that all three ran, that an absolute and a relative binding
+    overlapped, or that same-key override and distinct-key merge both occurred;
+    those are sampled rather than guaranteed. Binding-*content* correctness is
+    not this machine's subject at all — its invariant is object identity of the
+    restored context — and is carried by the named tests in
+    ``test_context_isolation.py``, which check the programs before, during, and
+    after an override.
 
     The recorded programs are checked to be a subset of the bound ones, which
     fails if ``_record_binding`` ever records a program no entry binds.

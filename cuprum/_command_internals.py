@@ -17,7 +17,6 @@ import dataclasses as dc
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
 from cuprum._context_policy import _collect_hooks
 from cuprum._execution_tracking import _ExecutionTracking
@@ -43,6 +42,7 @@ from cuprum._sink_lifecycle import (
     _outcome_for_result,
     _SinkBracket,
 )
+from cuprum._subprocess_context import _execution_cwd
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
@@ -100,7 +100,8 @@ def _prepare_execution_observation(
     output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
-    cwd = Path(context.cwd) if context.cwd is not None else None
+    # Anchored once, here, for the reason documented on ``_execution_cwd``.
+    cwd = _execution_cwd(context.cwd)
     env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
     # Resolved here, after the caller's allowlist check, so the resolver runs
     # once for a command that is actually going to run. The anchored form of
