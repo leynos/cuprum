@@ -896,8 +896,10 @@ Internally, command execution can be described in terms of events:
 - `pipeline_fail_fast` – a pipeline coordinator decision, emitted before it
   terminates remaining running stages after the first qualifying failure;
 - `exit` – process finished, with exit code and duration.
+- `settled` – execution reached its definitive terminal outcome, whether or
+  not a child process was spawned.
 
-These are the eleven declared `ExecPhase` values. Hooks must still handle
+These are the twelve declared `ExecPhase` values. Hooks must still handle
 unrecognized runtime values defensively: manually constructed or future events
 may carry a value such as `unheard-of`.
 
@@ -913,6 +915,7 @@ class ExecEvent:
         "stdout",
         "stderr",
         "exit",
+        "settled",
         "stdin",
         "stdin_error",
         "timeout",
@@ -1167,7 +1170,7 @@ fields that log processors can inspect, filter, and route.
 The same events can feed into metrics and tracing systems:
 
 - A metrics hook can increment counters and record durations based on
-  `start`/`exit` events (e.g. Prometheus or OpenTelemetry metrics).
+  `start`/`settled` events, while resource metrics use `exit` details.
 - A tracing hook can start and finish spans per command, attaching program
   name, argv, and exit code as span attributes.
 
@@ -1459,7 +1462,7 @@ The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
-  `stdin_error`, `exit`, `timeout`, `teardown_error`,
+  `stdin_error`, `exit`, `settled`, `timeout`, `teardown_error`,
   `capture_eof_grace_expired`, and `pipeline_fail_fast` phases for both single
   commands and pipeline stages — the declared `ExecPhase` values. `timeout`,
   `teardown_error`, and `capture_eof_grace_expired` are ancillary diagnostics
@@ -1485,8 +1488,8 @@ implemented with the following decisions:
   manually constructed events may omit `exec_id` (`None`); such events cannot
   be correlated. Consumers should ignore an uncorrelatable `start` and create
   no span for it, and likewise ignore ambiguous `stdout`, `stderr`, `timeout`,
-  `teardown_error`, `capture_eof_grace_expired`, `pipeline_fail_fast`, and
-  `exit` events rather than guess.
+  `teardown_error`, `capture_eof_grace_expired`, `pipeline_fail_fast`, `exit`,
+  and `settled` events rather than guess.
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
@@ -1507,9 +1510,10 @@ implemented with the following decisions:
   code. The logging adapter emits it as the `cuprum_env_mode` extra, the
   tracing adapter as the `cuprum.env_mode` span attribute, and the metrics
   adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
-  phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
-  so it records no failure sample at all; the typed field is the only signal
-  available for it. The typed policy and its composition rules are specified in
+  phase) and `cuprum_failures_total`. A spawn failure has no `exit` event or
+  child details, but its `settled(error)` event still records the terminal and
+  failure counters with the effective mode. The typed policy and its
+  composition rules are specified in
   [ADR-018](adr-018-typed-environment-policies.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)

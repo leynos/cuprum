@@ -2260,13 +2260,40 @@ once, in `_base_stage_tags`, or it will silently diverge between the
 single-command and pipeline telemetry.
 
 `_StageObservation.emit_terminal()` is the take-once finalizer for a planned
-stage: attempts before `plan` are ignored, and the first terminal category
-wins. Pipeline success settlements are emitted after after-hooks complete; when
-an after-hook raises, each planned stage settles as `error` while retaining any
-known child PID and exit code. `_safe_emit_terminal()` in
-`_timeout_reporting.py` is the best-effort boundary for timeout and cleanup
-paths, preserving the primary execution exception when a synchronous observer
-fails.
+stage: attempts before `plan` are ignored, terminal ownership is marked before
+observer dispatch, and the first terminal category wins. Pipeline success
+settlements are emitted after after-hooks complete; when an after-hook raises,
+each planned stage settles as `error` while retaining any known child PID and
+exit code.
+
+Command finalization is split at the hand-off to `_execute_with_hooks`.
+`_finalize_prepared_command_failure` owns a prepared command that fails before
+that hand-off: it closes the sink, best-effort settles an emitted plan, and
+drains tasks scheduled by plan or before-hooks. After hand-off, after
+`_execute_with_hooks` completes after-hooks, `_finalize_command_run_success`
+closes the sink, emits the result's terminal outcome, and drains successful
+observers; `_finalize_command_run_failure` closes the sink, best-effort emits
+the outcome derived from the primary error, and drains observers without losing
+that error.
+
+The pipeline helpers split the corresponding paths in `_pipeline_internals.py`.
+`_finalize_pipeline_execution` settles successful results after after-hooks; if
+an after-hook fails, it closes the sink and attempts `error` settlement for
+every planned stage. On execution failure, `_finalize_pipeline_run_failure`
+cancels stream tasks, settles stages after process cleanup, then drains
+observer tasks. `_finalize_pipeline_timeout` reports timeout and exit details
+before settlement, while `_finalize_pipeline_stage_result_failure` settles
+after result assembly has failed. These paths close the sink before
+observer-task draining and retain the known child details only.
+
+Finalizer drains use `_shielded_cleanup`, which keeps waiting for the owned
+cleanup task through repeated caller cancellation before re-raising
+cancellation. `_drain_tasks_during_cleanup` groups an observer-task failure
+with the active execution error in a `BaseExceptionGroup`.
+`_safe_emit_terminal()` in `_timeout_reporting.py` suppresses ordinary
+`Exception` and `asyncio.CancelledError` during best-effort dispatch so they
+cannot replace an existing timeout or cleanup error; it does not suppress every
+`BaseException`.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
