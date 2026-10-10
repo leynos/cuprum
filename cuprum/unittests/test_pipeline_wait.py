@@ -12,6 +12,7 @@ from cuprum._process_exit import (
     _PROCESS_EXIT_INITIAL_POLL_INTERVAL,
     _PROCESS_EXIT_MAX_POLL_INTERVAL,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum._testing import (
     _PipelineWaitResult,
     _StageWaitContext,
@@ -169,7 +170,7 @@ async def _exercise_wait_for_pipeline(
     result = await _wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
-        cancel_grace=0.01,
+        policy=_TeardownPolicy(0.01),
         stages=_StageWaitContext(started_at=(0.0, 0.0, 0.0)),
     )
 
@@ -185,7 +186,7 @@ def test_wait_for_pipeline_accepts_published_returncode() -> None:
             _wait_for_pipeline(
                 typ.cast("list[asyncio.subprocess.Process]", [process]),
                 pipe_tasks=[],
-                cancel_grace=0.01,
+                policy=_TeardownPolicy(0.01),
                 stages=_StageWaitContext(started_at=(0.0,)),
             ),
             timeout=0.5,
@@ -205,7 +206,7 @@ async def _run_stranded_pipeline_wait(
     result = await _wait_for_pipeline(
         typ.cast("list[asyncio.subprocess.Process]", processes),
         pipe_tasks=[],
-        cancel_grace=0.01,
+        policy=_TeardownPolicy(0.01),
         stages=_StageWaitContext(started_at=(0.0,) * len(processes)),
     )
     return _StrandedPipelineWaitCase(

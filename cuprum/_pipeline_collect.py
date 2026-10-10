@@ -37,6 +37,7 @@ from cuprum._process_lifecycle import (
     _shielded_cleanup,
     _terminate_timed_out_stages,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import types
@@ -97,8 +98,11 @@ async def _await_pipeline_wait_result(
     pipeline_wait = _wait_for_pipeline(
         spawn.processes,
         pipe_tasks=pipe_tasks,
-        cancel_grace=config.ctx.cancel_grace,
         stages=spawn.stages,
+        policy=_TeardownPolicy(
+            config.ctx.cancel_grace,
+            owns_group=spawn.owns_group,
+        ),
     )
     try:
         if wait_timeout is None:
@@ -191,7 +195,13 @@ async def _collect_pipeline_inputs(
             pipe_tasks=pipe_tasks,
         )
     except TimeoutError as exc:
-        await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
+        await _terminate_timed_out_stages(
+            spawn.processes,
+            _TeardownPolicy(
+                config.ctx.cancel_grace,
+                owns_group=spawn.owns_group,
+            ),
+        )
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)

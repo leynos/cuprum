@@ -17,6 +17,7 @@ import typing as typ
 from cuprum import ECHO, _pipeline_wait, sh
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._pipeline_wait import _PipelineWaitState
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -167,13 +168,12 @@ def record_terminations(
         processes: object,
         wait_tasks: object,
         failure_index: int,
-        *,
-        cancel_grace: float,
+        policy: _TeardownPolicy,
     ) -> tuple[bool, ...]:
         """Record the termination request instead of signalling processes."""
         del processes, wait_tasks
         await asyncio.sleep(0)
-        terminations.append((failure_index, cancel_grace))
+        terminations.append((failure_index, policy.grace_period))
         return (True,) * terminated_count
 
     monkeypatch.setattr(
@@ -263,7 +263,12 @@ def apply_completions(
                 await task
                 state.wait_tasks[idx] = task
                 state.task_to_index[task] = idx
-                await _pipeline_wait._process_completed_task(task, state, [], 0.25)
+                await _pipeline_wait._process_completed_task(
+                    task,
+                    state,
+                    [],
+                    _TeardownPolicy(0.25),
+                )
         finally:
             # Runs on the raising path too, so a hook failure leaves no
             # stand-in behind for the loop to complain about on shutdown.

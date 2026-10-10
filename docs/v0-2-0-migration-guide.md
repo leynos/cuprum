@@ -464,3 +464,70 @@ titles, and deliberate local activation, see the
 in the users' guide, which covers the
 [group and annotate flags](users-guide.md#group-and-annotate-flags) and
 [direct sink configuration](users-guide.md#configure-the-sink-directly).
+
+## Opt-in process-group ownership
+
+Cuprum terminates the process it spawns, but only that process. When the child
+spawns descendants of its own, they are not signalled, and they can hold
+inherited pipe descriptors open after the child is reaped — the case a timeout
+most often creates, because the work a wedged command is waiting on is usually
+a grandchild.
+
+Cuprum 0.2.0 adds an opt-in policy for that:
+`ExecutionContext(process_group=…)`. It defaults to
+`ProcessGroupPolicy.INHERIT`, which tears down only the direct child, so
+existing applications need no change and a run that does not opt in behaves as
+before.
+
+To adopt the policy, name it on the run's execution context:
+
+<!-- tested-example: migration-process-group -->
+
+```python
+import sys
+
+from cuprum import ExecutionContext, ProcessGroupPolicy, Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="process-group")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import os, sys; print(os.getpgrp() == os.getpid())"
+)
+owned = ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)
+assert owned.process_group is ProcessGroupPolicy.OWN_GROUP
+assert command.run_sync(context=owned).stdout == "True\n"
+# The default is unchanged: a run that says nothing keeps the caller's group.
+assert ExecutionContext().process_group is ProcessGroupPolicy.INHERIT
+```
+
+Under `OWN_GROUP` the child becomes the leader of a new session and process
+group, so its process-group identifier is its own PID. Teardown signals that
+group, which reaches the child's descendants as well as the child itself. Under
+`INHERIT` the child remains in the caller's group and teardown signals the
+child alone, as it always has.
+
+Session leadership also detaches the child from the controlling terminal. An
+application that opts in should expect a terminal interrupt (`SIGINT`) or
+`SIGHUP` to stop at the run rather than reach the child, and a child that opens
+`/dev/tty` to fail for want of one. Under `INHERIT` the terminal still reaches
+the child, so this is part of what the opt-in trades away rather than a
+behaviour change to migrate around.
+
+The guarantee is bounded, and the bound is worth stating plainly rather than
+burying: a descendant that calls `setsid()` or `setpgid()` leaves the group
+deliberately, and nothing here can reach it. Containment of that kind needs a
+supervisor, a cgroup, or a container, which belongs to the caller rather than
+to a command runner. Ancestors and siblings are outside the group for the same
+reason.
+
+`OWN_GROUP` is rejected with `ValueError` on Windows, which has no POSIX
+process groups. The nearest equivalent, a Job Object, cannot be assigned
+atomically with process creation, so containment there could begin only after
+the child had a chance to spawn a descendant. Refusing is honest; accepting the
+option and providing no containment would not be. `INHERIT` works on every
+platform, and is the default there as everywhere else.
+
+`ProcessGroupPolicy` is exported from the package root next to
+`ExecutionContext`, so an existing import line such as
+`from cuprum import ExecutionContext, sh` only needs `ProcessGroupPolicy` added
+to it. The decision and its alternatives are recorded in
+[ADR-019](adr-019-process-group-ownership.md).

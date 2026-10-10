@@ -1076,6 +1076,77 @@ stage gets a `timeout` event, a `cuprum.timeout` record with its `pid`, and one
 `cuprum_timeouts_total` increment. The fields and `timeout_mode` values match
 the single-command case.
 
+#### Reclaim a descendant with process-group ownership
+
+When the command that a deadline expires has spawned descendants of its own,
+terminating the direct child does not terminate them. Cuprum then gives the run
+a brief window to observe end of file, cancels whatever is still waiting when
+it closes, and raises `TimeoutExpired` — correct, but the work the timeout was
+meant to stop continues in the background, holding the pipe open.
+
+`ExecutionContext.process_group` addresses that. It defaults to
+`ProcessGroupPolicy.INHERIT`, which tears down the direct child only; set it to
+`ProcessGroupPolicy.OWN_GROUP` to have the child lead a new session and process
+group, so teardown can signal the whole group and every descendant still in it:
+
+<!-- tested-example: process-group-ownership -->
+
+```python
+import sys
+
+from cuprum import ExecutionContext, ProcessGroupPolicy, Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="process-group")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import os, sys; print(os.getpgrp() == os.getpid())"
+)
+owned = ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)
+assert owned.process_group is ProcessGroupPolicy.OWN_GROUP
+assert command.run_sync(context=owned).stdout == "True\n"
+assert ExecutionContext().process_group is ProcessGroupPolicy.INHERIT
+```
+
+That last assertion is the compatibility promise: a context that says nothing
+about the policy keeps the child in the caller's group, so no existing run is
+affected. Only a caller that names `OWN_GROUP` gets a new group.
+
+Under `OWN_GROUP` the child's process-group identifier equals its PID, because
+the spawn made it a session and process-group leader. Teardown signals exactly
+that group — never the caller's — so an unrelated process or an outer group is
+untouched. The two-phase grace is unchanged: `SIGTERM`, wait for
+`cancel_grace`, then `SIGKILL` on the same group. A descendant that ignores
+`SIGTERM` and keeps a pipe open is therefore reached by the escalation, and the
+run settles instead of waiting out the EOF window.
+
+Session leadership also detaches the child from the controlling terminal, and
+that trade-off is worth stating because it is not obvious from the name.
+`INHERIT` leaves the child in the caller's session, so a terminal interrupt
+(`SIGINT`) or `SIGHUP` reaches the child and its descendants; under `OWN_GROUP`
+they do not arrive from the terminal at all, and the run is reachable only
+through Cuprum's own teardown. An abrupt parent death can therefore leave the
+group running where `INHERIT` would have let the terminal end it. A child that
+needs a terminal — one that opens `/dev/tty`, or that prompts — cannot get one.
+
+The guarantee is bounded, and the bound is a property of the kernel rather than
+of this option: a descendant that calls `setsid()` or `setpgid()` leaves the
+group deliberately, and no non-privileged mechanism can contain it. Ancestors
+and siblings are outside the group for the same reason. Containment of
+processes that actively escape needs a supervisor, a cgroup, or a container; a
+command runner cannot promise it.
+
+`OWN_GROUP` raises `ValueError` on Windows, where POSIX process groups do not
+exist. The nearest equivalent, a Job Object, cannot be assigned atomically with
+process creation, so containment there could begin only after the child had a
+chance to spawn a descendant. Cuprum refuses rather than accepting the option
+and delivering no containment. `INHERIT` works everywhere and remains the
+default on every platform.
+
+**Do not signal a process group the run does not lead.** Under `INHERIT` the
+child stays in the caller's group, and the documented limitation applies in the
+other direction too: signalling that group reaches the caller's own process and
+its siblings. Ownership is what makes the group signal safe, which is why it is
+not the default.
+
 #### Timeout diagnostics
 
 Every expiry writes a structured `WARNING` record to the `cuprum.timeout`

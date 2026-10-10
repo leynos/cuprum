@@ -85,6 +85,9 @@ open each document.
 - [ADR-018: Typed environment policies][adr-018] - accepted decision to make
   environment inheritance, replacement, and deletion explicit at execution
   boundaries.
+- [ADR-019: Opt-in process-group ownership][adr-019] - accepted decision to
+  give callers opt-in ownership of a child's process group, with POSIX group
+  teardown and an explicit Windows refusal.
 
 ## Requests for comments
 
@@ -138,6 +141,7 @@ open each document.
 [adr-016]: adr-016-stable-abi-native-wheels.md
 [adr-017]: adr-017-release-pipeline.md
 [adr-018]: adr-018-typed-environment-policies.md
+[adr-019]: adr-019-process-group-ownership.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

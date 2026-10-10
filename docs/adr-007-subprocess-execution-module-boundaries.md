@@ -435,3 +435,31 @@ surface are unchanged for importers. `cuprum._line_stream` follows the same
 package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
+
+## Addendum (2026-10-03): reinstate `_subprocess_drain` on a real seam
+
+The 2026-08-30 addendum read as though `_subprocess_drain.py` had been removed
+for good. In fact it records the removal of the _earlier_ module of that name —
+the withdrawn compatibility boundary, which duplicated the drain helpers behind
+a second import path. The name returns here for a different reason and a
+different seam.
+
+Carrying opt-in process-group ownership through teardown pushed
+`_subprocess_wait.py` past the 400-line module ceiling. The split is by
+responsibility rather than by line count: `_subprocess_wait` keeps the wait
+half of ending a run — applying the deadline and terminating the process — while
+`_subprocess_drain.py` owns what happens to the tasks a run leaves behind:
+`_drain_stream_consumers`, `_cancel_pending_consumers`, `_reconcile_run_tasks`,
+`_await_capture_eof_grace`, `_settle_consumers`, and their supporting types
+`_RunTaskOwnership`, `_DrainContext`, and `_EofGraceWaiter`. No compatibility
+re-export is left on the old path, matching the `_pipeline_spawn` and
+`_subprocess_streams` splits: importers name the module that defines what they
+use.
+
+The capture-aware teardown contract is unchanged by the move. A capturing drain
+still gives terminated-process readers the bounded `_CAPTURE_EOF_GRACE_S`
+window before settling them, non-capturing cleanup still settles promptly and
+discards output, and cancellation during capture grace still settles the
+consumers before propagating. Reconciliation remains one shielded unit.
+
+No public API changes, and the module-size suppression is still unnecessary.

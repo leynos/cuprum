@@ -62,7 +62,12 @@ from cuprum.sh.execution import _DEFAULT_ERROR_HANDLING as _DEFAULT_ERROR_HANDLI
 from cuprum.sh.execution import (
     _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE as _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 )
-from cuprum.sh.execution import ExecutionContext, StdinInput, TimeoutExpired
+from cuprum.sh.execution import (
+    ExecutionContext,
+    ProcessGroupPolicy,
+    StdinInput,
+    TimeoutExpired,
+)
 from cuprum.sh.execution import _CwdType as _CwdType
 from cuprum.sh.execution import _EnvMapping as _EnvMapping
 from cuprum.sh.execution import cabc as cabc
@@ -87,6 +92,7 @@ __all__ = [
     "LineStream",
     "Pipeline",
     "PipelineResult",
+    "ProcessGroupPolicy",
     "RunOutputOptions",
     "SafeCmd",
     "SafeCmdBuilder",

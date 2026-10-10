@@ -2,8 +2,8 @@
 
 Termination sends SIGTERM, waits out a grace period, then escalates to
 SIGKILL and reaps the exit, whether for one process
-(``_terminate_process``, ``_terminate_process_with_wait``) or a whole
-pipeline (``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
+(``_terminate_process``) or a whole pipeline
+(``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
 ``_terminate_pipeline_remaining_stages``). ``_shielded_cleanup`` underlies all
 of that: it is the cancellation-safe primitive shared by the pipeline paths
 (``_pipeline_internals``, ``_pipeline_collect``) and the single-command
@@ -18,7 +18,10 @@ however many cancellations arrive before re-raising.
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
 error cleanup. Starting that pipeline — and cleaning up the resources left by
-a partial spawn — belongs to ``cuprum._pipeline_spawn``.
+a partial spawn — belongs to ``cuprum._pipeline_spawn``. What a teardown
+signal is delivered to, and what a completed teardown waits for, belongs to
+``cuprum._process_signal``: this module decides *when* to signal, that one
+decides *what* the signal reaches.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
+from cuprum._process_signal import _terminate_process_with_wait
 from cuprum.context import current_context
 from cuprum.context._policy import _resolve_env_policy
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
@@ -36,44 +40,20 @@ from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._teardown_policy import _TeardownPolicy
+
 
 async def _terminate_process(
     process: asyncio.subprocess.Process,
-    grace_period: float,
+    policy: _TeardownPolicy,
 ) -> None:
     """Terminate a running process, escalating to kill after the grace period."""
     await _terminate_process_with_wait(
         process,
-        grace_period=grace_period,
+        policy=policy,
         is_done=lambda: process.returncode is not None,
         wait_for_exit=lambda: _await_process_exit(process),
     )
-
-
-async def _terminate_process_with_wait(
-    process: asyncio.subprocess.Process,
-    *,
-    grace_period: float,
-    is_done: cabc.Callable[[], bool],
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
-) -> bool:
-    """Terminate a process and report whether its waiter completed."""
-    grace_period = max(0.0, grace_period)
-    if is_done():
-        return False
-    try:
-        process.terminate()
-    except (ProcessLookupError, OSError):
-        return False
-    try:
-        await asyncio.wait_for(wait_for_exit(), grace_period)
-    except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
-        try:
-            process.kill()
-        except (ProcessLookupError, OSError):
-            return False
-        await wait_for_exit()
-    return True
 
 
 async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
@@ -105,25 +85,31 @@ async def _await_teardown_shielded(
 
 async def _terminate_all_shielded(
     processes: cabc.Iterable[asyncio.subprocess.Process],
-    cancel_grace: float,
+    policy: _TeardownPolicy,
 ) -> None:
-    """Terminate every process before re-raising caller cancellation."""
+    """Terminate every process before re-raising caller cancellation.
+
+    *policy* carries the per-process ownership flags, so each process is
+    signalled the way it was spawned. A policy whose sequence is shorter than
+    ``processes`` leaves the rest on the direct-child route.
+    """
     await _await_teardown_shielded(
-        _terminate_process(process, cancel_grace) for process in processes
+        _terminate_process(process, policy.for_index(index))
+        for index, process in enumerate(processes)
     )
 
 
 async def _cleanup_pipeline_on_error(
     processes: list[asyncio.subprocess.Process],
     pipe_tasks: list[asyncio.Task[None]],
-    cancel_grace: float,
+    policy: _TeardownPolicy,
 ) -> list[object]:
     """Clean up pipeline resources after an error or cancellation."""
     # Terminate every process, then cancel and collect the pipe tasks owned by
     # the caller. This delivers cancellation to a native pump before waiting
     # for it to return descriptor ownership. Stream consumer tasks remain
     # owned by the caller (``_run_pipeline``), not by this helper.
-    await _terminate_all_shielded(processes, cancel_grace)
+    await _terminate_all_shielded(processes, policy)
     return await _reconcile_pipe_tasks(pipe_tasks)
 
 
@@ -149,12 +135,12 @@ def _merge_env(
 async def _terminate_process_via_wait_task(
     process: asyncio.subprocess.Process,
     wait_task: asyncio.Task[int],
-    grace_period: float,
+    policy: _TeardownPolicy,
 ) -> bool:
     """Terminate a process and report whether its provided waiter completed."""
     return await _terminate_process_with_wait(
         process,
-        grace_period=grace_period,
+        policy=policy,
         is_done=wait_task.done,
         wait_for_exit=lambda: asyncio.shield(wait_task),
     )
@@ -178,7 +164,7 @@ def _stages_to_terminate(
 
 async def _terminate_timed_out_stages(
     processes: cabc.Sequence[asyncio.subprocess.Process],
-    cancel_grace: float,
+    policy: _TeardownPolicy,
 ) -> None:
     """Terminate every still-running stage after a pipeline deadline expires.
 
@@ -196,7 +182,7 @@ async def _terminate_timed_out_stages(
     Failures are absorbed — this runs while a timeout is already propagating,
     and must not replace the ``TimeoutExpired`` the caller awaits.
     """
-    await _terminate_all_shielded(processes, cancel_grace)
+    await _terminate_all_shielded(processes, policy)
 
 
 def _has_stages_to_terminate(
@@ -226,8 +212,7 @@ async def _terminate_pipeline_remaining_stages(
     processes: list[asyncio.subprocess.Process],
     wait_tasks: list[asyncio.Task[int]],
     failure_index: int,
-    *,
-    cancel_grace: float,
+    policy: _TeardownPolicy,
 ) -> tuple[bool, ...]:
     """Terminate all still-running stages after a stage fails.
 
@@ -251,7 +236,11 @@ async def _terminate_pipeline_remaining_stages(
     )
     termination_tasks = [
         asyncio.create_task(
-            _terminate_process_via_wait_task(process, wait_task, cancel_grace),
+            _terminate_process_via_wait_task(
+                process,
+                wait_task,
+                policy.for_index(idx),
+            ),
         )
         for idx, (process, wait_task) in enumerate(
             zip(processes, wait_tasks, strict=True),

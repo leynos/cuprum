@@ -108,11 +108,18 @@ class _RaisingObservation:
 
 @dc.dataclass(slots=True)
 class _DeadlineExecution:
-    """Execution stand-in exposing only the fields the waiter reads."""
+    """Execution stand-in exposing only the fields the waiter reads.
+
+    ``owns_process_group`` mirrors the property the real bundle derives from
+    its ``process_group`` policy. It defaults to ``False`` because every
+    stand-in here stands for an inherited-group run, which is the default the
+    teardown must keep signalling directly.
+    """
 
     ctx: ExecutionContext
     timeout: float | None
     observation: _Observation = dc.field(default_factory=_RecordingObservation)
+    owns_process_group: bool = False
 
 
 __all__ = [

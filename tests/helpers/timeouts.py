@@ -91,6 +91,89 @@ def python_interpreter() -> str:
     return str(sys.executable)
 
 
+# The grandchild inherits its parent's stdout and stderr, so it holds the write
+# ends of the run's pipes. It ignores SIGTERM, so only a SIGKILL — to it, or to
+# a process group containing it — can end it. It writes its pid only after
+# installing its handler, so the pid file's arrival is itself the proof that the
+# grandchild is genuinely immune rather than mid-start-up. The pid is staged and
+# then renamed into place, so a reader polling for that file can never catch it
+# half-written: the expected name appears only once the whole pid is on disk.
+_GRANDCHILD_SOURCE = "; ".join((
+    "import os, pathlib, signal, sys, time",
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+    "target = pathlib.Path(sys.argv[1])",
+    "staged = target.parent / (target.name + '.part')",
+    "staged.write_text(str(os.getpid()))",
+    "os.replace(staged, target)",
+    f"time.sleep({_BLOCK_SECONDS})",
+))
+
+# The parent spawns the grandchild and then blocks. It passes its own stdout
+# and stderr straight through, which is what leaves the grandchild holding the
+# pipe after the parent is gone.
+_PARENT_SOURCE = "; ".join((
+    "import subprocess, sys, time",
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])",
+    f"time.sleep({_BLOCK_SECONDS})",
+))
+
+
+def pipe_holding_child_argv(
+    pid_file: Path,
+) -> tuple[str, ...]:
+    """Return ``-c`` argv for a child that holds a pipe through a grandchild.
+
+    The child spawns a grandchild that inherits the run's stdout and stderr and
+    ignores ``SIGTERM``, so the grandchild owns the write ends of those pipes
+    and no signal aimed at the direct child can dislodge it.
+
+    Parameters
+    ----------
+    pid_file:
+        Path the grandchild writes its own pid to, after installing its
+        handler. Its arrival therefore doubles as the readiness signal.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``-c`` argv, ready to spread into a spawn call.
+    """
+    return (
+        "-c",
+        _PARENT_SOURCE,
+        _GRANDCHILD_SOURCE,
+        str(pid_file),
+    )
+
+
+def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int:
+    """Return the pid recorded in ``path``, waiting until the file appears.
+
+    The timeout is raised rather than reported through ``pytest.fail`` so the
+    function returns an expression on every path; the caller, not this helper,
+    decides how a missing pid is reported.
+
+    Returns
+    -------
+    int
+        The pid the process recorded.
+
+    Raises
+    ------
+    AssertionError
+        If the file does not appear within ``seconds``.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            text = path.read_text().strip()
+            if text:
+                return int(text)
+        time.sleep(0.05)
+    msg = f"Process did not record its pid for {context}"
+    raise AssertionError(msg)
+
+
 def process_is_running(pid: int) -> bool:
     """Return whether ``pid`` still exists.
 

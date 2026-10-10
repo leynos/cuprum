@@ -15,6 +15,7 @@ import pytest
 
 from cuprum import _pipeline_wait, _process_lifecycle
 from cuprum._pipeline_wait_records import _completion_log_fields
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._pipeline_wait_support import (
     advancing_clock,
     apply_completions,
@@ -150,15 +151,14 @@ async def _run_late_settled_termination(
         processes: list[asyncio.subprocess.Process],
         wait_tasks: list[asyncio.Task[int]],
         failure_index: int,
-        *,
-        cancel_grace: float,
+        policy: _TeardownPolicy,
     ) -> tuple[bool, ...]:
         """Run the real teardown and retain each selected target outcome."""
         result = await terminate_stages(
             processes,
             wait_tasks,
             failure_index,
-            cancel_grace=cancel_grace,
+            policy,
         )
         outcomes.append(result)
         return result
@@ -176,7 +176,7 @@ async def _run_late_settled_termination(
     await _pipeline_wait._terminate_and_report(
         scenario.state,
         scenario.processes,
-        0.25,
+        _TeardownPolicy(0.25),
         fields,
     )
     return outcomes[0], scenario
