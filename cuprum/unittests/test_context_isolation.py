@@ -173,6 +173,7 @@ def test_scoped_catalogue_is_isolated_per_async_task() -> None:
         "task catalogues must not leak into the calling context"
     )
 
+
 def test_executable_bindings_are_isolated_per_thread() -> None:
     """Each thread resolves only its own binding for the same program.
 

@@ -1080,9 +1080,9 @@ escalation, not a workaround.
   is a failure signal, and that `git diff --check` across the rebased range --
   not a spot-check of the files that parsed -- is what proves no markers were
   committed. Repairing the single affected commit and replaying the remainder
-  produced `f30c9b1c`; the live branch was then advanced to that audited
-  result rather than resolving the same six conflicts a second time by hand,
-  and every post-condition was re-verified in place.
+  produced `f30c9b1c`; the live branch was then advanced to that audited result
+  rather than resolving the same six conflicts a second time by hand, and every
+  post-condition was re-verified in place.
 - [x] (2026-10-10 16:55Z) **The rebase audit passes on all counts, and the
   merge-tree oracle now reports the branch as content-identical to a merge with
   `main`.** All 49 commits replayed (no commits lost, none became empty, no
@@ -1090,11 +1090,41 @@ escalation, not a workaround.
   differ are exactly the conflict-resolved commits and their dependants. The 11
   files `main` changed but this branch never touched are byte-identical to
   `main`, every Python file parses, and the `catalogue.feature` scenarios and
-  their `pytest-bdd` bindings remain in 7-to-7 correspondence. `git diff --check`
-  against the target is clean. `git merge-tree --write-tree HEAD origin/main`
-  returns rc=0 with a result tree equal to `HEAD`'s own tree
-  (`b8cc7c417e4a761fc865110524b77dac7f35e57d`), which is the strongest available
-  evidence that nothing remains to reconcile against `main`.
+  their `pytest-bdd` bindings remain in 7-to-7 correspondence.
+  `git diff --check` against the target is clean.
+  `git merge-tree --write-tree HEAD origin/main` returns rc=0 with a result
+  tree equal to `HEAD`'s own tree (`b8cc7c417e4a761fc865110524b77dac7f35e57d`),
+  which is the strongest available evidence that nothing remains to reconcile
+  against `main`.
+- [x] (2026-10-10 17:35Z) **The union resolution left two real defects that the
+  rebase audit could not see, and both are repaired.** CI at `9e9b9315` failed
+  `lint-test` at its `Check formatting` step because the join point in
+  `cuprum/unittests/test_context_isolation.py` carried one blank line where
+  `ruff format` wants two; the same commit carried a second, independent defect
+  that CI never reached, and a third surfaced only under `make lint`.
+  `make check-fmt` aborts at the first failing stage, so the `mdtablefix`
+  re-wrap this plan needed was invisible from the served failure; running the
+  whole target locally reported both in one pass, and both were real. A fourth
+  defect was found by the scrutineer's sweep rather than by CI:
+  `tests/behaviour/test_catalogue_behaviour.py` reached 419 lines after the
+  merge added `main`'s scoped-catalogue scenario to this branch's two binding
+  scenarios, and the strict Pylint pass enforces 400 there. The
+  scoped-catalogue scenario and the four steps only it uses moved to a new
+  `tests/behaviour/test_catalogue_scope_behaviour.py`, leaving the original at
+  331 lines; the cut is self-contained because those four step texts each occur
+  exactly once in `tests/features/catalogue.feature` and reach for no fixture
+  outside the scenario. The move is proven non-vacuous by two mutation probes,
+  each of which failed the extracted step with its own message. All four
+  repairs are recorded above under Surprises and discoveries.
+- [x] (2026-10-10 17:40Z) **The scenario-to-step correspondence survives the
+  split, and the new module is collected.** `pytest --collect-only` over the
+  two catalogue behaviour modules reports exactly 7 tests, matching the feature
+  file's 7 scenarios one for one, and all 7 pass. The new filename matches the
+  `tests/behaviour/test_[a-h]*.py` glob in `PYTEST_TARGETS`, so `make test`
+  collects it without a Makefile change, and no test or configuration file
+  enumerates behaviour module filenames, so nothing else needed updating.
+  `pylint --jobs=1 tests/behaviour` now reports 10.00/10 with no `C0302`, and
+  `ruff check` and `ruff format --check` are clean on both modules.
 
 ## Surprises & discoveries
 
@@ -1481,6 +1511,42 @@ escalation, not a workaround.
   `anchors resolved against real headings: 7; stale: 2`. Impact: a reference
   audit needs a count of what it *resolved*, not only of what it rejected, or a
   parser that reads nothing reports perfect health.
+- Observation: **a three-stage gate target hides its later stages behind an
+  early abort.** `check-fmt` runs `ruff format --check`, then
+  `cargo fmt --all -- --check`, then `mdtablefix --check`. The round-3 rebase
+  union joined `main`'s scoped-catalogue tests to this branch's
+  executable-binding tests in `cuprum/unittests/test_context_isolation.py`
+  leaving a single blank line before the first binding test, where the file's
+  other seven definitions have two. `ruff format` wants two, so CI's
+  `lint-test` job failed at its `Check formatting` step and never reached the
+  third stage — where a second, independent defect was waiting: `mdtablefix`
+  wanted a nine-line re-wrap of this very plan. Both were real; only the first
+  was visible. Evidence: the failing job at `9e9b9315` reports
+  `ruff format --check` exit 2 at `test_context_isolation.py:176:1`, and the
+  pre-rebase head `6e4b8f7e` satisfies the same check because the union had not
+  yet happened. Running the whole target locally, both stages were reported in
+  one pass. Impact: verifying one stage is not verifying the target. Check
+  whether a gate is composite before treating its exit code as coverage of the
+  whole thing, and prefer running the target itself over the command one
+  believes it wraps.
+- Observation: **the 400-line module ceiling reaches behaviour tests through a
+  path the exemption does not cover.** `pylint-classic` runs twice: a strict
+  pass over `PYLINT_STRICT_TARGETS` and a second pass that disables
+  `too-many-lines` for `PYLINT_TEST_TARGETS`. The strict pass names `tests`,
+  and Pylint's `recursive = true` descends from it into `tests/behaviour`, so
+  the relaxation at line 437 never reaches a file whose own root
+  (`tests/behaviour`) is on the relaxed list. `cuprum/unittests/...` is
+  unaffected because the strict pass names `cuprum/unittests` too, and an
+  exact-path `filter-out` removes it. Evidence: `make lint` failed with
+  `tests/behaviour/test_catalogue_behaviour.py:1:0: C0302: Too many lines in
+  module (419/400)`,
+  printed by the strict invocation
+  `python -m pylint --jobs=1 benchmarks conftest.py cuprum scripts tests`.
+  Impact: the merge that added `main`'s fifth scenario to this branch's two
+  pushed the module 46 lines over the cap, and the de facto ceiling in
+  `tests/behaviour/` is real rather than nominal: every other module there
+  respects it, `test_context_hooks.py` sitting at exactly 400. The repair is a
+  cohesive split, not a suppression.
 
 ## Decision log
 
@@ -1985,12 +2051,15 @@ construction site. Add `resolved_path: str | None = None` after `env_mode` on
 untouched.
 
 EP-M4, proof and documentation. Unit tests, property tests, isolation tests,
-the stateful-machine extension, one behavioural scenario and its steps in
-`tests/features/catalogue.feature` and
-`tests/behaviour/test_catalogue_behaviour.py`, a `### 5.1.2` section in
-`docs/cuprum-design.md`, a section in `docs/users-guide.md`, a `### Added`
-entry in `CHANGELOG.md`, a section in `docs/v0-2-0-migration-guide.md`, and a
-note in `docs/roadmap.md` under item 3.3.1 that this is a separate concern.
+the stateful-machine extension, two behavioural scenarios and their steps in
+`tests/features/catalogue.feature`, declared by
+`tests/behaviour/test_catalogue_behaviour.py` and (after the module split that
+brought the former within Pylint's 400-line ceiling) the scoped-catalogue
+scenario by `tests/behaviour/test_catalogue_scope_behaviour.py`, a `### 5.1.2`
+section in `docs/cuprum-design.md`, a section in `docs/users-guide.md`, a
+`### Added` entry in `CHANGELOG.md`, a section in
+`docs/v0-2-0-migration-guide.md`, and a note in `docs/roadmap.md` under item
+3.3.1 that this is a separate concern.
 
 ### Stage D — refactor and validate
 
