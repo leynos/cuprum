@@ -16,6 +16,7 @@ from cuprum import (
     pump_span_events,
     pump_span_observation,
 )
+from cuprum.context import executable_overlay, registration
 from cuprum.events import ExecHook, new_exec_id
 
 
@@ -156,6 +157,42 @@ def test_exec_id_keeps_its_positional_slot() -> None:
     assert event.timeout_s is None, (
         f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
     )
+
+
+def test_executable_binding_surface_is_exported() -> None:
+    """The binding factory and its handle are reachable from the package root.
+
+    ``bind_executable`` is the registration factory a caller reaches for the
+    way it reaches for ``allow``, ``before``, ``env``, and ``observe``, so it
+    belongs on the same surface as those. Checked by identity against the
+    defining module rather than by presence alone: a re-export re-pointed at a
+    different definition is a different contract.
+    """
+    assert c.bind_executable is registration.bind_executable, (
+        "bind_executable must be exported from cuprum.context.registration"
+    )
+    assert (
+        c.ExecutableBindingRegistration is registration.ExecutableBindingRegistration
+    ), "the handle must be exported from cuprum.context.registration"
+    for name in ("bind_executable", "ExecutableBindingRegistration"):
+        assert name in c.__all__, f"{name} is public surface; __all__ must name it"
+
+
+def test_executable_overlay_merge_is_exported_where_its_sibling_is() -> None:
+    """``merge_executable_bindings`` mirrors ``merge_env_overlays``' surface.
+
+    Both are the overlay-only composition rule for their respective layers, and
+    both are documented as the helper that records the effective layer without
+    resolving it. Exporting one and not the other would make the pair
+    asymmetric for no reason a caller could predict.
+    """
+    assert (
+        c.merge_executable_bindings is executable_overlay.merge_executable_bindings
+    ), "the merge must be exported from cuprum.context.executable_overlay"
+    for module in (c, context):
+        assert "merge_executable_bindings" in module.__all__, (
+            f"{module.__name__}.__all__ must name the merge beside merge_env_overlays"
+        )
 
 
 def test_relay_fallback_is_exported_from_its_definition_site() -> None:
