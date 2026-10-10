@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -226,21 +227,33 @@ def test_snapshot_recalculates_totals_from_accepted_groups() -> None:
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class Measurement:
+    """One completed-operation measurement, grouped to bound call arity.
+
+    ``_event`` would otherwise need five parameters, which trips the
+    "Excess Number of Function Arguments" code-health rule. Grouping the three
+    counters into one named concept keeps the helper at two arguments and reads
+    as the measurement the profiling event actually carries.
+    """
+
+    bytes_consumed: int
+    read_operations: int
+    duration_s: float
+
+
 def _event(
-    operation: StreamOperation,
-    outcome: StreamOperationOutcome,
-    *,
-    bytes_consumed: int,
-    read_operations: int,
-    duration_s: float,
+    key: tuple[StreamOperation, StreamOperationOutcome],
+    measurement: Measurement,
 ) -> StreamOperationEvent:
     """Return one completed-operation event for accumulator coverage."""
+    operation, outcome = key
     return StreamOperationEvent(
         operation=operation,
         outcome=outcome,
-        bytes_consumed=bytes_consumed,
-        read_operations=read_operations,
-        duration_s=duration_s,
+        bytes_consumed=measurement.bytes_consumed,
+        read_operations=measurement.read_operations,
+        duration_s=measurement.duration_s,
     )
 
 
@@ -250,24 +263,18 @@ def test_accumulator_merges_events_within_and_across_groups() -> None:
     drain_eof = (StreamOperation.DRAIN, StreamOperationOutcome.EOF)
 
     for event in (
-        _event(*drain_eof, bytes_consumed=4, read_operations=2, duration_s=0.25),
-        _event(*drain_eof, bytes_consumed=6, read_operations=3, duration_s=0.5),
+        _event(drain_eof, Measurement(4, 2, 0.25)),
+        _event(drain_eof, Measurement(6, 3, 0.5)),
         # A distinct outcome must stay separate from the same operation's EOF
         # group rather than being folded into it.
         _event(
-            StreamOperation.DRAIN,
-            StreamOperationOutcome.CANCELLED,
-            bytes_consumed=1,
-            read_operations=1,
-            duration_s=0.125,
+            (StreamOperation.DRAIN, StreamOperationOutcome.CANCELLED),
+            Measurement(1, 1, 0.125),
         ),
         # A distinct operation must stay separate from the drain group.
         _event(
-            StreamOperation.PIPELINE_TRANSFER,
-            StreamOperationOutcome.EOF,
-            bytes_consumed=8,
-            read_operations=4,
-            duration_s=1.0,
+            (StreamOperation.PIPELINE_TRANSFER, StreamOperationOutcome.EOF),
+            Measurement(8, 4, 1.0),
         ),
     ):
         accumulator(event)
@@ -313,11 +320,8 @@ def test_accumulator_merges_snapshots_into_existing_groups() -> None:
     accumulator = StreamTelemetryAccumulator()
     accumulator(
         _event(
-            StreamOperation.DRAIN,
-            StreamOperationOutcome.EOF,
-            bytes_consumed=4,
-            read_operations=2,
-            duration_s=0.25,
+            (StreamOperation.DRAIN, StreamOperationOutcome.EOF),
+            Measurement(4, 2, 0.25),
         )
     )
 
@@ -368,11 +372,8 @@ def test_accumulator_reset_discards_prior_measurements() -> None:
     accumulator = StreamTelemetryAccumulator()
     accumulator(
         _event(
-            StreamOperation.DRAIN,
-            StreamOperationOutcome.EOF,
-            bytes_consumed=4,
-            read_operations=2,
-            duration_s=0.25,
+            (StreamOperation.DRAIN, StreamOperationOutcome.EOF),
+            Measurement(4, 2, 0.25),
         )
     )
 
