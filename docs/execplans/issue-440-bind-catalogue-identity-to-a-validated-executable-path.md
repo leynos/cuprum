@@ -1061,6 +1061,40 @@ escalation, not a workaround.
   effective fill width is narrower than 80 columns wherever a paragraph
   contains inline code spans, so the repository's own wrapping convention is
   not the gate's.
+- [x] (2026-10-10 16:55Z) **The branch was rebased onto the moved `main`
+  (`24c39650`, "Resolve the scoped catalogue in `sh.make` (#514)") and the six
+  textual collisions were resolved by hand, then the audit found a defect in
+  the rehearsal and it was repaired.** GitHub reported the PR `CONFLICTING` /
+  `DIRTY` because `main` advanced while CI ran, and the green rollup from the
+  previous head tested a merge ref built on the older base, so it could not be
+  transferred. The nine overlapping files were resolved by keeping both sides'
+  intent: `main`'s `catalogue` field and `_resolve_narrowed_catalogue` coexist
+  with this branch's `executable_bindings` field and its inlined
+  `merge_executable_bindings` call, and both contribute tests and scenarios.
+  The rebase was rehearsed in a scratch worktree first, and the rehearsal is
+  what caught the defect: `git diff --check` reported four leftover conflict
+  markers committed inside `cuprum/unittests/test_context_isolation.py`, whose
+  blob consequently did not parse. A union resolution script had correctly
+  refused to write that file, but its assertion was misread as a pass and the
+  file was staged unresolved. The lesson is that a resolution script's refusal
+  is a failure signal, and that `git diff --check` across the rebased range --
+  not a spot-check of the files that parsed -- is what proves no markers were
+  committed. Repairing the single affected commit and replaying the remainder
+  produced `f30c9b1c`; the live branch was then advanced to that audited
+  result rather than resolving the same six conflicts a second time by hand,
+  and every post-condition was re-verified in place.
+- [x] (2026-10-10 16:55Z) **The rebase audit passes on all counts, and the
+  merge-tree oracle now reports the branch as content-identical to a merge with
+  `main`.** All 49 commits replayed (no commits lost, none became empty, no
+  merges), 43 of the 49 are byte-identical to their originals, and the 6 that
+  differ are exactly the conflict-resolved commits and their dependants. The 11
+  files `main` changed but this branch never touched are byte-identical to
+  `main`, every Python file parses, and the `catalogue.feature` scenarios and
+  their `pytest-bdd` bindings remain in 7-to-7 correspondence. `git diff --check`
+  against the target is clean. `git merge-tree --write-tree HEAD origin/main`
+  returns rc=0 with a result tree equal to `HEAD`'s own tree
+  (`b8cc7c417e4a761fc865110524b77dac7f35e57d`), which is the strongest available
+  evidence that nothing remains to reconcile against `main`.
 
 ## Surprises & discoveries
 
