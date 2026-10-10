@@ -160,6 +160,7 @@
       'cuprum_phase': 'settled',
       'cuprum_pid': '<pid>',
       'cuprum_program': 'echo',
+      'cuprum_terminal_outcome': 'exit_zero',
     }),
     'metrics_labels': dict({
       'program': 'echo',
@@ -177,6 +178,7 @@
       'cuprum.pipeline_stages': 2,
       'cuprum.program': 'echo',
       'cuprum.project': 'proj',
+      'cuprum.terminal_outcome': 'exit_zero',
     }),
     'tracing_span_event': None,
   })

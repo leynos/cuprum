@@ -204,7 +204,7 @@ def _outcome_for_error(error: BaseException) -> sinks.SessionOutcome:
                 exit_code=None,
                 detail="timeout",
             )
-        case asyncio.CancelledError():
+        case asyncio.CancelledError() | GeneratorExit():
             return sinks.SessionOutcome(outcome=TerminalOutcome.CANCELLED)
         case _:
             return sinks.SessionOutcome(outcome=TerminalOutcome.ERROR)

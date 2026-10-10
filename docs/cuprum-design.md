@@ -2236,10 +2236,10 @@ design decisions guide these adapters:
   event fields, not labels. The resource-measurement counter belongs to the
   resource series and therefore carries `resource_usage_mode` alongside
   `program` and `project`.
-- Histogram metrics (`cuprum_duration_seconds`, `cuprum_child_max_rss_bytes`,
-  `cuprum_child_user_cpu_seconds`, `cuprum_child_system_cpu_seconds`) are
-  observed on `exit` events. The three `cuprum_child_*` histograms are observed
-  only where the figure was actually measured, while
+- The `cuprum_duration_seconds` histogram and terminal-category/failure
+  counters are emitted on `settled` events. Resource metrics remain on `exit`
+  events: the three `cuprum_child_*` histograms are observed only where the
+  figure was actually measured, while
   `cuprum_resource_usage_measurements_total` is emitted for every recorded
   mode, including `unavailable`.
 - All metrics carry `program` and `project` labels for multi‑dimensional
@@ -2251,7 +2251,8 @@ design decisions guide these adapters:
 
 **Tracing adapter specifics:**
 
-- Spans are started on `start` events and ended on `exit` events.
+- Spans are started on `start` events. `exit` records known child details, and
+  `settled` records the terminal category and ends the span.
 - Active spans are tracked in a dictionary keyed by the per-execution
   `ExecEvent.exec_id` correlation token, not by PID, so a recycled PID and
   delayed output/exit events cannot cross between executions. `pid` is kept
@@ -2270,14 +2271,13 @@ design decisions guide these adapters:
   `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
   its `eof_grace_s` and `pending_readers` fields. The grace-expiry event itself
   carries no captured stream payload.
-- Span status is set based on exit code (OK for 0, ERROR otherwise).
+- Span status is successful only for `exit_zero`; all other bounded terminal
+  outcomes set an error status.
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
-- The active-span registry is bounded (1024 entries) and evicts by recency of
-  activity rather than arrival order, because not every execution reaches
-  `exit` (cancellation and stdin-writer failures can leave a span open
-  indefinitely otherwise). Each eviction is logged at `WARNING` with counts
-  only, since an evicted span is ended as failed while its execution may still
-  be running.
+- The active-span registry has no eviction policy. Each planned execution
+  emits one `settled` event, and terminal dispatch attempts every observer even
+  after a synchronous hook failure, so the tracing hook can always retire its
+  state without ending a still-live span due to registry pressure.
 
 **Structured logging adapter specifics:**
 
@@ -2353,32 +2353,32 @@ over the operations, applying each: a `_CounterOp` calls
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp` calls
 `observe_histogram(name, value, labels)`.
 
-The loop is the contract, and it is deliberately **not** atomic. An `exit`
-event yields a sequence of operations, applied as independent collector calls
-in that order. For an `exit` event the sequence is: the failure counter (only
-for a known non-zero exit code), then the duration observation (only when a
-duration was measured), then the resource counter, and finally the resource
-histograms. Atomicity is not attempted: the collector wraps an arbitrary backend
+The loop is the contract, and it is deliberately **not** atomic. Each event
+yields a sequence of operations, applied as independent collector calls in that
+order. An `exit` event yields the resource counter and resource histograms. A
+`settled` event yields the terminal-category counter, a failure counter for
+every category except `exit_zero`, and the duration observation when measured.
+Atomicity is not attempted: the collector wraps an arbitrary backend
 (`prometheus_client`, statsd, OpenTelemetry) that this adapter cannot make
 transactional, and buffering the sequence to apply together would only move the
 problem while delaying when metrics appear.
 
 Three consequences follow, and collector implementations depend on them:
 
-- **Partial application is possible.** If the collector raises on the second
-  call, the first stays applied — a failure can be recorded without its
-  duration.
-- **The order is fixed.** For an `exit` event the failure counter is applied
-  before the duration observation, which is applied before the resource counter
-  and then the resource histograms, so a partial application is always the
-  prefix of that sequence, never the suffix.
+- **Partial application is possible.** If the collector raises part-way
+  through an event, earlier calls stay applied — a terminal category can be
+  recorded without its duration.
+- **The order is fixed.** For `settled`, the terminal-category counter is
+  applied before the failure counter and duration observation. For `exit`, the
+  resource counter precedes the resource histograms. A partial application is
+  always the prefix of that event's sequence.
 - **The exception propagates, and the command fails with it.**
-  `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
-  wraps the error in `_ExecEventEmissionError` so that observe-hook tasks
-  already scheduled survive cleanup; `_StageObservation.emit` unwraps that
-  wrapper and re-raises the collector's original exception. A broken metrics
-  backend therefore takes the user's command down rather than being absorbed,
-  so a collector that must not do that has to swallow its own errors.
+  `cuprum._observability._emit_exec_event` wraps the error so already-scheduled
+  observe tasks survive cleanup; for `settled`, it first attempts later hooks
+  so stateful adapters can release execution state. `_StageObservation.emit`
+  then re-raises the collector's original exception. A broken metrics backend
+  therefore takes the user's command down rather than being absorbed, so a
+  collector that must not do that has to swallow its own errors.
 
 So a collector must treat each call as independent and ordered, and must never
 assume that seeing a `cuprum_failures_total` increment guarantees a matching

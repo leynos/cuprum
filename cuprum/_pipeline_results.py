@@ -65,6 +65,37 @@ def _emit_terminal_events(
         )
 
 
+def _emit_result_terminal_events(
+    observations: tuple[_StageObservation, ...],
+    stage_results: list[CommandResult],
+    *,
+    outcome: TerminalOutcome | None = None,
+    best_effort: bool = False,
+) -> None:
+    """Settle every assembled stage, surfacing the first hook failure by default."""
+    first_error: BaseException | None = None
+    for observation, result in zip(observations, stage_results, strict=True):
+        stage_outcome = (
+            _outcome_for_result(result).outcome if outcome is None else outcome
+        )
+        try:
+            observation.emit_terminal(
+                stage_outcome,
+                _EventDetails(
+                    pid=observation.started_pid,
+                    exit_code=result.exit_code,
+                    duration_s=result.duration,
+                ),
+            )
+        # Try all stage observers even for fatal hook failures, then preserve
+        # the first one so cleanup of the other stages cannot mask it.
+        except BaseException as exc:  # ruff: ignore[blind-except]
+            if first_error is None:
+                first_error = exc
+    if first_error is not None and not best_effort:
+        raise first_error
+
+
 def _emit_timeout_exit_events(
     observations: tuple[_StageObservation, ...],
     spawn: _PipelineSpawnResult,
@@ -153,21 +184,13 @@ def _build_pipeline_stage_results(
             system_cpu_seconds=None,
             relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
         )
-        outcome = _outcome_for_result(stage_result)
-        obs.emit_terminal(
-            outcome.outcome,
-            _EventDetails(
-                pid=process.pid,
-                exit_code=inputs.wait_result.exit_codes[idx],
-                duration_s=duration_s,
-            ),
-        )
         stage_results.append(stage_result)
     return stage_results
 
 
 __all__ = [
     "_build_pipeline_stage_results",
+    "_emit_result_terminal_events",
     "_emit_terminal_events",
     "_emit_timeout_exit_events",
 ]

@@ -327,9 +327,9 @@ def test_normalized_lifecycle_payload_is_stable(
 ) -> None:
     """A normalized *lifecycle* payload matches its snapshot.
 
-    The snapshot covers the plan/start/exit triple — the lifecycle contract the
-    per-line hoist must not disturb — rather than the line events, whose
-    ordering is asserted explicitly by the sequence step and whose exact
+    The snapshot covers the plan/start/exit/settled sequence — the lifecycle
+    contract the per-line hoist must not disturb — rather than line events,
+    whose ordering is asserted explicitly by the sequence step and whose exact
     interleaving across streams is not guaranteed. Only genuinely volatile
     values are masked; phases, defaults, tags, and stage ownership stay in the
     snapshot, because those are what a careless hoist would change.
@@ -337,8 +337,11 @@ def test_normalized_lifecycle_payload_is_stable(
     events = run_lifecycle_probe()
     lifecycle = [ev for ev in events if ev.phase in LIFECYCLE_PHASES]
 
-    assert [ev.phase for ev in lifecycle] == ["plan", "start", "exit"], (
-        "the probe must produce exactly one plan/start/exit triple"
+    assert [ev.phase for ev in lifecycle] == ["plan", "start", "exit", "settled"], (
+        "the probe must produce one ordered plan/start/exit/settled sequence"
+    )
+    assert lifecycle[-1].terminal_outcome is TerminalOutcome.EXIT_ZERO, (
+        "the lifecycle snapshot must include its successful terminal category"
     )
     assert [normalize_event(ev) for ev in lifecycle] == snapshot, (
         "the normalized lifecycle payload changed; confirm the change is "

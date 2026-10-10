@@ -148,9 +148,16 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     return tuple(operations)
 
 
-# Keep the old internal import path for consumers that used this private helper
-# before the metric operations moved into this module.
-_exit_operations = _resource_operations
+def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Preserve the former private exit projection for direct importers."""
+    operations: list[_MetricOp] = []
+    if event.exit_code is not None and event.exit_code != 0:
+        operations.append(
+            _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))
+        )
+    if event.duration_s is not None:
+        operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
+    return (*operations, *_resource_operations(event))
 
 
 def _settled_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:

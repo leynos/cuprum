@@ -67,8 +67,12 @@ print('err1', file=sys.stderr)""",
             for record in caplog.records
             if getattr(record, "cuprum_phase", None) == "settled"
         )
-        assert "terminal_outcome=exit_zero" in settled.message
-        assert getattr(settled, "cuprum_terminal_outcome", None) == "exit_zero"
+        assert "terminal_outcome=exit_zero" in settled.message, (
+            "settled records must include the terminal category in the message"
+        )
+        assert getattr(settled, "cuprum_terminal_outcome", None) == "exit_zero", (
+            "settled records must expose the terminal category as a field"
+        )
 
     def test_includes_extra_fields(self, caplog: pytest.LogCaptureFixture) -> None:
         """Hook attaches cuprum_* extra fields to log records."""

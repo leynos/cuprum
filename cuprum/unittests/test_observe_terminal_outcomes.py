@@ -61,10 +61,14 @@ def test_spawn_failure_settles_without_inventing_a_child_status(
         f"{[event.phase for event in events]}"
     )
     terminal = settled[0]
-    assert terminal.terminal_outcome is TerminalOutcome.ERROR
-    assert terminal.exec_id == plans[0].exec_id
-    assert terminal.pid is None
-    assert terminal.exit_code is None
+    assert terminal.terminal_outcome is TerminalOutcome.ERROR, (
+        "spawn failures must settle as errors"
+    )
+    assert terminal.exec_id == plans[0].exec_id, (
+        "settlement must preserve the planned execution identity"
+    )
+    assert terminal.pid is None, "spawn failure cannot invent a child PID"
+    assert terminal.exit_code is None, "spawn failure cannot invent an exit code"
 
 
 def test_nonzero_child_status_is_preserved_at_settlement() -> None:
@@ -78,11 +82,15 @@ def test_nonzero_child_status_is_preserved_at_settlement() -> None:
 
     exit_event = next(event for event in events if event.phase == "exit")
     terminal = next(event for event in events if event.phase == "settled")
-    assert result.exit_code == 23
-    assert terminal.terminal_outcome is TerminalOutcome.EXIT_NONZERO
-    assert terminal.exec_id == exit_event.exec_id
-    assert terminal.pid == exit_event.pid
-    assert terminal.exit_code == 23
+    assert result.exit_code == 23, "the result must retain the child's status"
+    assert terminal.terminal_outcome is TerminalOutcome.EXIT_NONZERO, (
+        "a non-zero child exit must settle as exit_nonzero"
+    )
+    assert terminal.exec_id == exit_event.exec_id, (
+        "settlement must correlate with the child exit"
+    )
+    assert terminal.pid == exit_event.pid, "settlement must retain the real PID"
+    assert terminal.exit_code == 23, "settlement must retain the real exit code"
 
 
 def test_success_settles_after_exit_with_child_details() -> None:
@@ -96,11 +104,19 @@ def test_success_settles_after_exit_with_child_details() -> None:
 
     exit_event = next(event for event in events if event.phase == "exit")
     terminal = next(event for event in events if event.phase == "settled")
-    assert [event.phase for event in events[-2:]] == ["exit", "settled"]
-    assert terminal.terminal_outcome is TerminalOutcome.EXIT_ZERO
-    assert terminal.exec_id == exit_event.exec_id
-    assert terminal.pid == exit_event.pid
-    assert terminal.exit_code == exit_event.exit_code == 0
+    assert [event.phase for event in events[-2:]] == ["exit", "settled"], (
+        "successful settlement must follow the child's exit"
+    )
+    assert terminal.terminal_outcome is TerminalOutcome.EXIT_ZERO, (
+        "a zero exit must settle as exit_zero"
+    )
+    assert terminal.exec_id == exit_event.exec_id, (
+        "settlement must correlate with the child exit"
+    )
+    assert terminal.pid == exit_event.pid, "settlement must retain the real PID"
+    assert terminal.exit_code == exit_event.exit_code == 0, (
+        "settlement must retain the child's zero exit code"
+    )
 
 
 def test_immediate_timeout_settles_after_preserved_exit() -> None:
@@ -120,8 +136,16 @@ def test_immediate_timeout_settles_after_preserved_exit() -> None:
 
     exit_event = next(event for event in events if event.phase == "exit")
     terminal = next(event for event in events if event.phase == "settled")
-    assert [event.phase for event in events[-2:]] == ["exit", "settled"]
-    assert terminal.terminal_outcome is TerminalOutcome.TIMEOUT
-    assert terminal.exec_id == exit_event.exec_id
-    assert terminal.pid == exit_event.pid
-    assert terminal.exit_code is None
+    assert [event.phase for event in events[-2:]] == ["exit", "settled"], (
+        "timeout settlement must follow the preserved child exit"
+    )
+    assert terminal.terminal_outcome is TerminalOutcome.TIMEOUT, (
+        "a timed-out child must settle as timeout"
+    )
+    assert terminal.exec_id == exit_event.exec_id, (
+        "timeout settlement must correlate with the child exit"
+    )
+    assert terminal.pid == exit_event.pid, "timeout settlement must retain the PID"
+    assert terminal.exit_code is None, (
+        "timeout settlement must not invent a child exit code"
+    )

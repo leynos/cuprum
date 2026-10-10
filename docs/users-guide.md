@@ -1266,15 +1266,19 @@ another unbounded value.
 
 #### When an observe hook raises
 
-A failing observe hook fails the run. Cuprum logs the failure and then
-re-raises the hook's _own_ exception type out of `run()` / `run_sync()`; it is
-never swallowed. The two hook kinds differ only in when that happens:
+A failing observe hook normally fails the run. Cuprum logs the failure and
+re-raises the hook's _own_ exception type out of `run()` / `run_sync()`. When a
+run already has a primary timeout, cancellation, or other error, failures from
+terminal telemetry are suppressed so they cannot replace it. The two hook kinds
+differ in when a failure surfaces:
 
 - A **synchronous** hook raises inline, at the moment the event is emitted.
-  Emission of that event stops there, so hooks registered after it do not
-  receive that event, and the exception surfaces immediately — before the
-  subprocess is spawned, if the hook failed on `plan`. The raised exception is
-  the hook's own; Cuprum's internal wrapper appears only as its `__cause__`.
+  Emission of an ordinary event stops there, so hooks registered after it do
+  not receive that event, and the exception surfaces immediately — before the
+  subprocess is spawned, if the hook failed on `plan`. For `settled`, Cuprum
+  attempts every hook before surfacing the first synchronous failure, allowing
+  stateful adapters to release execution state. The raised exception is the
+  hook's own; Cuprum's internal wrapper appears only as its `__cause__`.
 - An **awaitable** hook raises inside its scheduled task. Every hook still
   receives the event, and the exception surfaces when Cuprum awaits the pending
   tasks before the run returns. When several awaitable hooks fail, only the
@@ -1341,11 +1345,12 @@ cannot give the series unbounded cardinality, and it is applied only to those
 two metrics: the per-line stream counters omit it, because a line's environment
 says nothing that its execution's mode does not already carry.
 
-A spawn failure is not counted. When a replacement policy's missing `PATH`
-leaves a bare program name unresolvable, the failure is raised before `start`,
-so no `exit` event follows and no `cuprum_failures_total` sample — and
-therefore no `env_mode`-labelled series — is recorded. Use the typed `env_mode`
-field on the corresponding `ExecEvent` to distinguish that case.
+A spawn failure has no `start` or `exit` event, because no child ran, but it
+does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
+therefore increments `cuprum_terminal_outcomes_total` and
+`cuprum_failures_total`; the failure counter carries the execution's `env_mode`
+label when that policy is known. The `pid` and `exit_code` fields remain absent
+because there is no child status to report.
 
 The four resource metrics also carry a low-cardinality `resource_usage_mode`
 label naming how the measurement was obtained: `wait4_child`,

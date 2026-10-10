@@ -526,7 +526,7 @@ def test_observe_hook_failure_on_timeout_does_not_mask_timeout_expired() -> None
     cmd, catalogue = _sleep_command()
 
     def hook(ev: ExecEvent) -> None:
-        """Fail only on the timeout event, mimicking a broken telemetry hook."""
+        """Fail only on settlement, mimicking a broken telemetry hook."""
         if ev.phase == "settled":
             raise _ObserveHookError
 

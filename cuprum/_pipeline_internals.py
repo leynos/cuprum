@@ -46,6 +46,7 @@ from cuprum._pipeline_observation import (
 )
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
+    _emit_result_terminal_events,
     _emit_terminal_events,
     _emit_timeout_exit_events,
 )
@@ -91,20 +92,10 @@ async def _finalize_pipeline_execution(
     stage_results: list[CommandResult],
     sink_bracket: _SinkBracket,
 ) -> None:
-    """Run after hooks, commit the sink outcome, then drain observe tasks.
+    """Run after-hooks before settling stages, then drain observer tasks.
 
-    This is the pipeline's counterpart to the command path's
-    :func:`cuprum._command_internals._execute_with_hooks`, and the three steps
-    are in that order for the same reason: an after-hook that raises is a
-    terminal *run* error, so the outcome the adapter records has to be decided
-    after the hooks have had their say. Closing with the stage-result outcome
-    first would leave the adapter reporting ``exit_zero`` for a run that ended
-    in an exception, and :meth:`_SinkBracket.close` clears its session on the
-    first call, so the error close that followed would be a no-op.
-
-    Both drains are shielded. The pipeline owns these observe-hook tasks, so a
-    cancellation landing while finalization waits on them must not return
-    before they have settled — that would leak a task per pending hook.
+    After-hook failures determine the run outcome. The sink bracket is
+    take-once; shielded drains keep pending hooks alive through cancellation.
     """
     observations = observers.observations
     pending_tasks = observers.pending_tasks
@@ -112,7 +103,14 @@ async def _finalize_pipeline_execution(
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        sink_bracket.close(outcome=_outcome_for_error(after_hook_error))
+        outcome = _outcome_for_error(after_hook_error)
+        sink_bracket.close(outcome=outcome)
+        _emit_result_terminal_events(
+            observations,
+            stage_results,
+            outcome=outcome.outcome,
+            best_effort=True,
+        )
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(
                 pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
@@ -120,6 +118,17 @@ async def _finalize_pipeline_execution(
         )
         raise
     sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
+    try:
+        _emit_result_terminal_events(observations, stage_results)
+    except BaseException as terminal_error:
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks,
+                terminal_error,
+                message=_PIPELINE_FINALIZATION_ERROR,
+            )
+        )
+        raise
     await _shielded_cleanup(_wait_for_exec_hook_tasks(pending_tasks))
 
 

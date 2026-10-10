@@ -4,8 +4,8 @@ A span is opened by ``start``. These tests cover what happens in between and
 what happens when ``settled`` never comes: the ancillary ``stdin_error`` /
 ``timeout`` / ``teardown_error`` phases record a span event and deliberately
 leave the span open, while ``settled`` closes a remaining span with its bounded
-terminal category. A ``teardown_error`` arriving after ``exit`` finds no entry
-and is dropped.
+terminal category. A ``teardown_error`` arriving after ``settled`` finds no
+entry and is dropped.
 
 The documented span-attribute contract is checked here too, so the prose and
 the attributes the hook can actually emit cannot drift apart.
@@ -167,7 +167,7 @@ class TestTracingSpanLifecycle:
         span = tracer.spans[0]
         assert span.ended is True, "the settled event must close the span"
         assert not any(name == "cuprum.teardown_error" for name, _ in span.events), (
-            "a teardown_error arriving after exit must not be recorded on the "
+            "a teardown_error arriving after settled must not be recorded on the "
             f"closed span, got {[name for name, _ in span.events]}"
         )
 
@@ -202,13 +202,19 @@ class TestTracingSpanLifecycle:
         )
 
         span = tracer.spans[0]
-        assert span.ended is True
-        assert span.status_ok is status_ok
-        assert span.attributes["cuprum.terminal_outcome"] == str(outcome)
+        assert span.ended is True, "settlement must end the span"
+        assert span.status_ok is status_ok, (
+            "span status must follow the terminal category"
+        )
+        assert span.attributes["cuprum.terminal_outcome"] == str(outcome), (
+            "the span must record the bounded terminal category"
+        )
         assert "cuprum.exit_code" not in span.attributes, (
             "settlement must not synthesize an exit code"
         )
-        assert exec_id not in hook._active_spans
+        assert exec_id not in hook._active_spans, (
+            "settled spans must be removed from the active registry"
+        )
 
     def test_exit_records_child_status_until_settled_closes_span(
         self,
@@ -227,9 +233,11 @@ class TestTracingSpanLifecycle:
         )
 
         span = tracer.spans[0]
-        assert span.ended is False
-        assert span.status_ok is None
-        assert span.attributes["cuprum.exit_code"] == 7
+        assert span.ended is False, "exit must leave the span open until settlement"
+        assert span.status_ok is None, "exit alone must not determine span status"
+        assert span.attributes["cuprum.exit_code"] == 7, (
+            "the exit event must retain the child's real status"
+        )
 
         hook(
             _make_exec_event(
@@ -241,6 +249,8 @@ class TestTracingSpanLifecycle:
             )
         )
 
-        assert span.ended is True
-        assert span.status_ok is False
-        assert span.attributes["cuprum.terminal_outcome"] == "exit_nonzero"
+        assert span.ended is True, "settlement must close the span"
+        assert span.status_ok is False, "non-zero settlement must mark an error"
+        assert span.attributes["cuprum.terminal_outcome"] == "exit_nonzero", (
+            "the settled span must retain the final category"
+        )
