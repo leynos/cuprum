@@ -842,3 +842,44 @@ The split changed no public surface. `cuprum/_subprocess_stdin_stream.py`
 reaches the write side as `_write`, and the maturin wheel snapshot gained
 exactly one line for the new module, which is the same one-line-per-module
 shape every other split here records.
+
+## Addendum (2026-10-11): split command finalization out of `_command_internals`
+
+`cuprum/_command_internals.py` carried 392 lines on the main branch before this
+work and 424 after it, so the module crossed the 400-line ceiling and
+`make lint` failed at its `pylint-classic` leaf with `C0302` on the branch head.
+The trigger is narrow — resolving the stdio plan at spawn, and the contested
+stdin check that has to sit beside it — but the headroom is not: a module that
+begins eight lines under a hard ceiling will breach it on almost any change, and
+suppressing the check was the option this ADR already rejected.
+
+The seam is the one the code already drew. `cuprum/_command_internals.py`
+decides *what* a run is: it prepares the observation, resolves the stdio plan,
+and builds the execution bundle. `cuprum/_command_finalization.py` owns
+everything that happens once the child exists and on every exit path afterwards
+— driving the subprocess, invoking the after-hooks, and settling the sink
+bracket, the terminal event, and the observer tasks. The finalization half was
+already a closed cluster: `_execute_with_hooks` had exactly one caller, and
+none of the helpers it moved with was reachable from the preparation half.
+
+The ordering inside those helpers is the reason they stay together rather than
+being scattered. Closing the sink before draining means a drain failure cannot
+replace a timeout annotation, and draining through `_shielded_cleanup` means a
+caller who cancels repeatedly is still waited on rather than leaving observer
+tasks stranded. Moving that cluster as a unit keeps the two invariants legible
+in one file.
+
+The overrun this time is measurable from the commits, unlike the working-tree
+figure the 2026-10-02 addendum had to reconstruct. Across every commit on the
+branch that holds the file its peak is 424 lines; the commit that first crossed
+the ceiling is `10d33429`, at 407. The split removes 158 lines from
+`_command_internals.py` and adds 18, which is the net −140 that brings it to 284
+— 116 lines clear of the ceiling, rather than the eight it started with.
+
+The split changed no public surface. The two names that leave are re-exported
+from `cuprum/_command_internals.py`, so `cuprum.sh`, `cuprum.sh.safe_cmd`, and
+the tests that import them are unchanged, and object identity holds: the
+re-exported `_execute_with_hooks` and `_finalize_prepared_command_failure` are
+the finalization module's own objects, not copies. The maturin wheel snapshot
+gained exactly one line for the new module, which is the same
+one-line-per-module shape every other split here records.
