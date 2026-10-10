@@ -692,6 +692,16 @@ def test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage(
     assert paths == [str(producer), str(consumer)], (
         f"each stage must report its singly-anchored path, got {paths!r}"
     )
+    # Both reports above come from a child that exited zero. Asserting the
+    # codes makes "the stage ran the file it was bound to" a claim about a
+    # successful execution rather than one about output a failing child could
+    # equally have produced. The comprehension is repeated rather than bound to
+    # a name because this function already sits at the module's local-variable
+    # limit; the message is only built when the assertion fails.
+    assert [stage.exit_code for stage in result.stages] == [0, 0], (
+        f"both stages must run to completion, got exit codes "
+        f"{[stage.exit_code for stage in result.stages]!r}"
+    )
 
 
 def test_line_iteration_anchors_a_relative_cwd_once(
