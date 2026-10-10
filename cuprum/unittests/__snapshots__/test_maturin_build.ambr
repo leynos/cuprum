@@ -12,6 +12,7 @@
       'cuprum/_bytes_run.py',
       'cuprum/_catalogue_defaults.py',
       'cuprum/_catalogue_helpers.py',
+      'cuprum/_command_finalization.py',
       'cuprum/_command_internals.py',
       'cuprum/_command_prepare.py',
       'cuprum/_concurrent_config.py',

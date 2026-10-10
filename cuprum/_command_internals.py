@@ -1,14 +1,17 @@
 """Private execution orchestration for ``SafeCmd.run`` and ``run_sync``.
 
 Like :mod:`cuprum._pipeline_internals`, this module prepares a validated
-command's observation, drives its subprocess execution, and finalizes the
-presentation-sink session. Public command types and pipeline orchestration
-remain in :mod:`cuprum.sh`.
+command's observation, resolves its stdio plan, and hands the run on. Public
+command types and pipeline orchestration remain in :mod:`cuprum.sh`.
 
-On failure, finalization closes the sink before draining observer tasks so a
-drain error cannot replace a timeout annotation. Drains use
-:func:`cuprum._process_lifecycle._shielded_cleanup`, which waits through
-repeated caller cancellation.
+Driving the spawned child and settling its observation — the after-hooks, the
+sink bracket, the terminal event, and the observer tasks — lives in
+:mod:`cuprum._command_finalization`, which split out when the stdio-resolution
+fix pushed this module past the 400-line ceiling. The seam is the one the code
+already drew: this module decides *what* a run is, that one owns everything
+that happens once the child exists and on every exit path afterwards. The two
+names callers reach through here are re-exported so the existing import sites
+are unchanged.
 """
 
 from __future__ import annotations
@@ -18,37 +21,44 @@ import sys
 import time
 import typing as typ
 
+# The finalization helpers moved to ``cuprum._command_finalization`` when this
+# module outgrew the line ceiling. They stay in this module's namespace because
+# the callers that reach for them — the owned-handle start, the prepared-command
+# path, and the settlement coordinator — all import them from here, and the
+# tests that replace them patch them here.
+from cuprum._command_finalization import (
+    _execute_with_hooks as _execute_with_hooks,
+)
+from cuprum._command_finalization import (
+    _finalize_command_run_failure as _finalize_command_run_failure,
+)
+from cuprum._command_finalization import (
+    _finalize_command_run_success as _finalize_command_run_success,
+)
+from cuprum._command_finalization import (
+    _finalize_prepared_command_failure as _finalize_prepared_command_failure,
+)
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
-    _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
     _resolve_executable_for,
-    _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
 from cuprum._pipeline_types import (
-    _EventDetails,
     _StageObservation,
-)
-from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._sink_lifecycle import (
-    _outcome_for_error,
-    _outcome_for_result,
 )
 from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_context import _event_cwd, _execution_cwd
 from cuprum._subprocess_execution import (
-    _execute_subprocess,
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
-from cuprum._timeout_reporting import _safe_emit_terminal
 from cuprum.context import EnvMode
-from cuprum.events import CaptureMode, TerminalOutcome
+from cuprum.events import CaptureMode
 from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
@@ -235,145 +245,6 @@ def _build_subprocess_execution(
         # Read from the context here so the bundle's spawn and teardown stages
         # share one decision instead of each consulting the context separately.
         process_group=state.context.resolved_process_group,
-    )
-
-
-async def _execute_with_hooks(
-    cmd: SafeCmd,
-    execution: _SubprocessExecution,
-    tracking: _ExecutionTracking,
-) -> _AnyCommandResult:
-    """Run the subprocess and hooks, then settle after all observers finish.
-
-    Cleanup aggregates observer failures with the active error; success-path
-    hook failures remain direct. Shielding waits through repeated cancellation.
-
-    Returns
-    -------
-    CommandResult | BytesCommandResult
-        The completed command's result after every observe-hook task drains.
-    """
-    result: _AnyCommandResult | None = None
-    try:
-        result = await _execute_subprocess(execution)
-        for hook in tracking.execution_hooks.after_hooks:
-            hook(cmd, result)
-    except BaseException as run_error:
-        await _finalize_command_run_failure(
-            execution,
-            tracking,
-            result,
-            run_error,
-        )
-        raise
-
-    await _finalize_command_run_success(execution, tracking, result)
-    return result
-
-
-async def _finalize_command_run_failure(
-    execution: _SubprocessExecution,
-    tracking: _ExecutionTracking,
-    result: _AnyCommandResult | None,
-    run_error: BaseException,
-) -> None:
-    """Settle and drain an observed command after execution or hook failure."""
-    # Close before the drain: its failure is grouped with the primary error.
-    outcome = _outcome_for_error(run_error)
-    tracking.sink_bracket.close(outcome=outcome)
-    _safe_emit_terminal(
-        execution.observation,
-        outcome.outcome,
-        _failed_command_details(
-            execution.observation.started_pid,
-            outcome.outcome,
-            result,
-        ),
-    )
-    await _shielded_cleanup(
-        _drain_tasks_during_cleanup(
-            tracking.pending_tasks,
-            run_error,
-            message=_COMMAND_FINALIZATION_ERROR,
-        )
-    )
-
-
-def _failed_command_details(
-    started_pid: int | None,
-    outcome: TerminalOutcome,
-    result: _AnyCommandResult | None,
-) -> _EventDetails:
-    """Retain only child details that remain valid after command failure."""
-    duration_s = None if result is None else result.duration
-    if outcome is TerminalOutcome.CANCELLED:
-        return _EventDetails(pid=None, duration_s=duration_s)
-    return _EventDetails(
-        pid=started_pid if result is None else result.pid,
-        exit_code=None if result is None else result.exit_code,
-        duration_s=duration_s,
-    )
-
-
-async def _finalize_command_run_success(
-    execution: _SubprocessExecution,
-    tracking: _ExecutionTracking,
-    result: _AnyCommandResult,
-) -> None:
-    """Settle a completed command, then drain every observe-hook task."""
-    outcome = _outcome_for_result(result)
-    tracking.sink_bracket.close(outcome=outcome)
-    try:
-        execution.observation.emit_terminal(
-            outcome.outcome,
-            _EventDetails(
-                pid=result.pid,
-                exit_code=result.exit_code,
-                duration_s=result.duration,
-            ),
-        )
-    except BaseException as terminal_error:
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                terminal_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
-        )
-        raise
-    await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
-
-
-async def _finalize_prepared_command_failure(
-    tracking: _ExecutionTracking,
-    observation: _StageObservation | None,
-    run_error: BaseException,
-) -> None:
-    """Close, settle, and drain a command that failed before ownership passed on."""
-    # Close before the drain: a hook failure is grouped with the run error, and
-    # closing afterwards would record that aggregate instead of a timeout.
-    outcome = _outcome_for_error(run_error)
-    tracking.sink_bracket.close(outcome=outcome)
-    if observation is not None:
-        _safe_emit_terminal(
-            observation,
-            outcome.outcome,
-            _EventDetails(
-                pid=(
-                    None
-                    if outcome.outcome is TerminalOutcome.CANCELLED
-                    else observation.started_pid
-                ),
-            ),
-        )
-    # A plan observer or before-hook can schedule tasks before execution starts.
-    # This layer still owns them, so it must drain them before re-raising.
-    await _shielded_cleanup(
-        _drain_tasks_during_cleanup(
-            tracking.pending_tasks,
-            run_error,
-            message=_COMMAND_FINALIZATION_ERROR,
-        )
     )
 
 
