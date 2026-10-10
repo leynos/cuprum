@@ -3422,6 +3422,71 @@ totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 *Table: Selector observability metrics reported in each
 `TeeProfileWorkerResult`, with field name, type, and what each value records.*
 
+### Stream telemetry (`benchmarks/_tee_profile_stream_telemetry.py`)
+
+`TeeProfileWorkerResult` also includes a `stream_telemetry` field: bounded
+aggregate measurements of completed pure-Python stream operations, grouped by
+closed operation and outcome. It reuses the existing opt-in observer channel,
+`cuprum.stream_observation.observe_stream_operation`; no per-read or per-chunk
+production telemetry is added, and stream read behaviour, including read-size
+and line-ending handling, is unchanged. The worker registers one observer
+around the complete `repeat_count` loop, so the reported groups accumulate
+across every repeat of the run.
+
+Each group carries four aggregate fields:
+
+| Field              | Type    | Description                                                     |
+| ------------------ | ------- | --------------------------------------------------------------- |
+| `bytes_consumed`   | `int`   | Total bytes consumed by completed operations in the group.      |
+| `read_operations`  | `int`   | Total completed reader calls, including EOF reads.              |
+| `operation_count`  | `int`   | Number of completed operations in the group.                    |
+| `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, in the group. |
+
+*Table: Aggregate fields of one `stream_telemetry` group.*
+
+`benchmarks/_tee_profile_stream_telemetry.py` owns the aggregation contract.
+Its public pieces divide the work as follows:
+
+| Piece                         | Responsibility                                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `StreamTelemetryGroup`        | One closed `(operation, outcome)` group, with `as_dict` for serialization and `merged_with` for summation.                      |
+| `StreamTelemetryAccumulator`  | The callable observer hook; adds one completion event to its group, offers `reset`, `add_snapshot`, and `snapshot`.             |
+| `StreamTelemetrySnapshot`     | Immutable frozen view keyed by the closed enums, with `as_dict` for the payload and `from_dict` for parsing one worker payload. |
+| `StreamTelemetryPayload`      | The `TypedDict` JSON shape written into the profiling artefacts.                                                                |
+| `StreamTelemetryGroupPayload` | The `TypedDict` for one group's four aggregate fields.                                                                          |
+
+*Table: Public pieces of the stream telemetry module.*
+
+The vocabulary is closed. An operation is a member of
+`cuprum.stream_events.StreamOperation` (`stream_drain` or `pipeline_transfer`)
+and an outcome is a member of `StreamOperationOutcome` (`eof`, `cancelled`,
+`failed`, `downstream_closed`, or `post_close_drain_timeout`). Accumulated
+events whose operation or outcome is not a member of those enums are ignored,
+so a caller cannot widen the label domain.
+
+`StreamTelemetrySnapshot.from_dict` treats a worker payload as untrusted.
+Unknown operation or outcome labels are ignored, and non-mapping payloads,
+non-mapping group mappings, and invalid group values are discarded. Counters
+must be non-negative integers excluding booleans; durations must be finite and
+non-negative, and a duration whose integer magnitude exceeds the binary64 range
+discards that group rather than letting the `OverflowError` escape into
+sweep-report assembly. Integer counters are not narrowed to a float range and
+are preserved exactly. Totals are always recalculated from the accepted groups,
+so a `totals` value in an input payload is ignored and cannot manufacture an
+aggregate.
+
+The observer sees only the pure-Python drain and pipeline-transfer paths, so a
+`pipeline_transfer` group may be absent when the Rust backend handles a
+pipeline hop. An absent group means the pure-Python path did not run, and must
+not be read as a failure.
+
+Sweep aggregation lives in
+`benchmarks/tee_profile_execution.py::_stream_telemetry_summary`, which merges
+the per-sample snapshots after all samples complete. `read-size-sweep.json`
+gains the resulting payload as an additive `stream_telemetry_summary` key,
+leaving the existing `randomize_order`, `read_sizes`, `rounds`, and `samples`
+keys unchanged.
+
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
@@ -3470,6 +3535,12 @@ The profiling sweep controls are `--read-sizes`, a comma-separated list of
 positive byte counts, and `--rounds`, the number of complete matrix passes.
 `--randomize-order` shuffles the configured read-size order within each round;
 the emitted plan and sweep artefact retain every requested size and round.
+
+A read-size sweep also writes `read-size-sweep.json` under the scenario
+directory, with an additive `stream_telemetry_summary` key that combines the
+`stream_telemetry` of every completed sample. The existing `randomize_order`,
+`read_sizes`, `rounds`, and `samples` keys are preserved; the aggregation
+itself is documented under the worker section above.
 
 Profiler modes are selected through `TeeProfileDriverConfig.profiler`. `none`
 runs the worker directly and writes a note that profiler artefacts were not
