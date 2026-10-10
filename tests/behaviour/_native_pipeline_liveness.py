@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import dataclasses as dc
 import time
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 #: How long the observation stream may stay quiet before an attempt is a stall.
 #: A healthy attempt emits at least a ``start`` per stage and an ``exit`` per
@@ -40,15 +44,30 @@ class LivenessProgress:
     deadline_remaining_s: float
 
 
-def quiet_for_s(last_progress_at: float) -> float:
+def quiet_for_s(
+    last_progress_at: float,
+    *,
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic,
+) -> float:
     """Return how long the observation stream has been quiet.
+
+    The clock is a dependency rather than a module global so a caller can drive
+    the arithmetic with no wall-clock wait; the default is the real clock, so
+    callers that do not care read exactly as they did before.
+
+    Parameters
+    ----------
+    last_progress_at : float
+        The monotonic instant at which progress was last observed.
+    monotonic_clock : Callable[[], float], default=time.monotonic
+        The clock supplying the current instant.
 
     Returns
     -------
     float
         Seconds elapsed since the last observable lifecycle event.
     """
-    return time.monotonic() - last_progress_at
+    return monotonic_clock() - last_progress_at
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -63,12 +82,17 @@ class LivenessBound:
 
     no_progress_interval_s: float = NO_PROGRESS_INTERVAL_S
     aggregate_deadline: float | None = None
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic
+
+    def _quiet_for_s(self, last_progress_at: float) -> float:
+        """Return the quiet period, read through this bound's clock."""
+        return quiet_for_s(last_progress_at, monotonic_clock=self.monotonic_clock)
 
     def _remaining_s(self) -> float:
         """Return how much of the suite-safety backstop is left."""
         if self.aggregate_deadline is None:
             return float("inf")
-        return max(0.0, self.aggregate_deadline - time.monotonic())
+        return max(0.0, self.aggregate_deadline - self.monotonic_clock())
 
     def progress(self, last_progress_at: float) -> LivenessProgress:
         """Describe where the progress clock stood when a stall was captured.
@@ -79,7 +103,7 @@ class LivenessBound:
             The quiet period and the remaining backstop, sampled together.
         """
         return LivenessProgress(
-            quiet_for_s(last_progress_at),
+            self._quiet_for_s(last_progress_at),
             self._remaining_s(),
         )
 
@@ -91,7 +115,7 @@ class LivenessBound:
         bool
             ``True`` when no lifecycle event has arrived for the interval.
         """
-        return quiet_for_s(last_progress_at) >= self.no_progress_interval_s
+        return self._quiet_for_s(last_progress_at) >= self.no_progress_interval_s
 
     def expired(self, last_progress_at: float) -> bool:
         """Report whether the suite-safety backstop has been reached.
@@ -106,7 +130,7 @@ class LivenessBound:
             ``True`` when the backstop expired while the run was still
             emitting progress.
         """
-        return self._expired_after(quiet_for_s(last_progress_at))
+        return self._expired_after(self._quiet_for_s(last_progress_at))
 
     def pre_attempt_backstop_reached(self) -> bool:
         """Report whether the backstop expired before an attempt could start.
@@ -126,13 +150,13 @@ class LivenessBound:
         """
         if self.aggregate_deadline is None:
             return False
-        return time.monotonic() >= self.aggregate_deadline
+        return self.monotonic_clock() >= self.aggregate_deadline
 
     def _expired_after(self, quiet_s: float) -> bool:
         """Report whether the backstop has been reached, given a quiet period."""
         if quiet_s >= self.no_progress_interval_s:
             return False
-        return time.monotonic() >= (self.aggregate_deadline or float("inf"))
+        return self.monotonic_clock() >= (self.aggregate_deadline or float("inf"))
 
     def pause_s(self, last_progress_at: float) -> float:
         """Return how long to wait before sampling progress again.
@@ -147,7 +171,7 @@ class LivenessBound:
             0.0,
             min(
                 PROGRESS_PROBE_INTERVAL_S,
-                self.no_progress_interval_s - quiet_for_s(last_progress_at),
+                self.no_progress_interval_s - self._quiet_for_s(last_progress_at),
                 self._remaining_s(),
             ),
         )

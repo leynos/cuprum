@@ -82,6 +82,15 @@ class ControllableMonotonicClock:
         """Advance simulated time by a non-negative test-controlled duration."""
         self.value += seconds
 
+    def advance_to(self, instant: float) -> None:
+        """Set the simulated time to an absolute ``instant``.
+
+        Absolute placement, unlike :meth:`advance`, does not accumulate: a test
+        that drives a double more than once lands on the same instant every
+        time, so the bound it is testing cannot drift with the attempt count.
+        """
+        self.value = instant
+
 
 @dc.dataclass(slots=True)
 class HeldNativePump:

@@ -91,7 +91,12 @@ class _ProgressTracker:
     pids: set[int] = dc.field(default_factory=set)
     stage_by_pid: dict[int, int] = dc.field(default_factory=dict)
     stdout_target_by_pid: dict[int, str] = dc.field(default_factory=dict)
-    last_progress_at: float = dc.field(default_factory=time.monotonic)
+    clock: cabc.Callable[[], float] = time.monotonic
+    last_progress_at: float = dc.field(init=False)
+
+    def __post_init__(self) -> None:
+        """Prime the progress clock from the injected clock."""
+        self.last_progress_at = self.clock()
 
     def observe(self, event: ExecEvent) -> None:
         """Record lifecycle events that prove the pipeline is still progressing."""
@@ -103,7 +108,7 @@ class _ProgressTracker:
             if stage is not None:
                 self.stage_by_pid[event.pid] = stage
             self._remember_stdout_target(event.pid)
-        self.last_progress_at = time.monotonic()
+        self.last_progress_at = self.clock()
 
     def _remember_stdout_target(self, pid: int) -> None:
         """Record a child's stdout pipe name while the child can still be read.

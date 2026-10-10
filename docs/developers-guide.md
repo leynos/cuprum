@@ -6626,9 +6626,36 @@ in the situation it exists for. The access mode is masked out of `F_GETFL`
 rather than read from `os.O_ACCMODE`, absent on some runtimes, where naming it
 would escape the helper's `OSError` guard as a traceback.
 
+The liveness policy is clock arithmetic, so it is exercised by moving a clock
+rather than by waiting on wall time: `quiet_for_s` and `LivenessBound` in
+`tests/behaviour/_native_pipeline_liveness.py`, and `_ProgressTracker` in
+`tests/behaviour/_native_pipeline_hand_off.py`, each accept an injectable clock
+defaulting to `time.monotonic`, so a test advances that clock instead of
+sleeping or measuring real elapsed time.
+`tests/helpers/native_pipeline_doubles.py` holds the doubles both liveness
+modules drive, and reuses `ControllableMonotonicClock` from
+`cuprum/unittests/_rust_pump_test_helpers.py` rather than carrying a second
+copy of it; each double is handed the clock to move, so a shared module-level
+clock does not couple the two modules. The clock is placed at an instant
+(`advance_to`) rather than nudged by a delta, so a fixture that resets one
+between tests and an attempt that moves one repeatedly both land on the value
+they named instead of accumulating.
+`tests/test_native_pipeline_liveness_runner.py` drives `_run_liveness_bounded`
+and `_NativePipelineHandOff.run_attempt` through a controllable pipeline double
+to both bounds: the quiet observation stream and the spent suite-safety
+backstop. `tests/test_native_pipeline_stall_diagnostic.py` pins the rendered
+`_format_stall` report with Syrupy snapshots, asserting it names the attempt,
+the process and pipe evidence, and the pending tasks.
+`tests/test_native_pipeline_stall_properties.py` generates snapshots for
+`_classify_stall` with Hypothesis, asserting that a positive verdict survives
+unrelated children and does not depend on the order evidence was captured in.
+
 The Makefile's `PYTEST_TARGETS` names
 `tests/test_native_pipeline_hand_off_support.py`,
 `tests/test_native_pipeline_liveness.py`,
+`tests/test_native_pipeline_liveness_runner.py`,
+`tests/test_native_pipeline_stall_diagnostic.py`,
+`tests/test_native_pipeline_stall_properties.py`,
 `tests/test_native_pipeline_stdout_capture.py`, and
 `tests/test_process_state_helper.py`, so `make test-python` runs them; the
 coverage job invokes pytest with no path targets and collects the repository
