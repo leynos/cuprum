@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 import typing as typ
 
@@ -10,19 +9,20 @@ from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, rule
 
-from cuprum import sh
-from cuprum._pipeline_internals import _finalize_pipeline_execution
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
-    _PipelineObservers,
     _StageObservation,
 )
-from cuprum._sink_lifecycle import _SinkBracket
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.unittests._cqrs_fixtures import _echo_cmd
+from cuprum.unittests._stage_observation_stateful_support import (
+    _complete_successful_execution,
+)
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum.sh import SafeCmd
 
 _MAX_STAGE_COUNT = 5
@@ -218,70 +218,7 @@ class _SettlementStateMachine(RuleBasedStateMachine):
     )
     def complete_successful_execution(self, exit_codes: list[int]) -> None:
         """Drive generated results through pipeline orchestration finalization."""
-        if self.completed or any(self.expected_settlements):
-            return
-        if any(
-            self.planned[index]
-            and self.exited[index]
-            and self.exit_codes[index] is None
-            for index in range(self.stage_count)
-        ):
-            return
-
-        completion_exit_codes = list(exit_codes)
-        for stage_index in range(self.stage_count):
-            if not self.planned[stage_index]:
-                continue
-            observation = self.observations[stage_index]
-            if not self.started[stage_index]:
-                pid = 10_001 + stage_index
-                self.started[stage_index] = True
-                self.started_pids[stage_index] = pid
-                observation.emit("start", _EventDetails(pid=pid))
-            exit_code = self.exit_codes[stage_index]
-            if not self.exited[stage_index]:
-                exit_code = exit_codes[stage_index]
-                self.exited[stage_index] = True
-                self.exit_codes[stage_index] = exit_code
-                observation.emit(
-                    "exit",
-                    _EventDetails(
-                        pid=self.started_pids[stage_index],
-                        exit_code=exit_code,
-                    ),
-                )
-            assert exit_code is not None, (
-                "completed stage results must carry a child exit code"
-            )
-            completion_exit_codes[stage_index] = exit_code
-            outcome = (
-                TerminalOutcome.EXIT_ZERO
-                if exit_code == 0
-                else TerminalOutcome.EXIT_NONZERO
-            )
-            self.expected_settlements[stage_index] = (
-                outcome,
-                self.started_pids[stage_index],
-                exit_code,
-            )
-
-        stage_results = [
-            _make_result(
-                command,
-                pid=10_001 + index,
-                exit_code=completion_exit_codes[index],
-            )
-            for index, command in enumerate(self.commands)
-        ]
-        asyncio.run(
-            _finalize_pipeline_execution(
-                tuple(self.commands),
-                _PipelineObservers(tuple(self.observations), self.pending_tasks),
-                stage_results,
-                _SinkBracket(None),
-            )
-        )
-        self.completed = True
+        _complete_successful_execution(self, exit_codes)
 
     def _settle_stage(self, stage: int, outcome: TerminalOutcome) -> None:
         """Record the first modelled outcome and attempt one stage settlement."""
@@ -368,20 +305,6 @@ class _SettlementStateMachine(RuleBasedStateMachine):
             and event.tags["pipeline_stages"] == self.stage_count
             for event in events
         ), "every event must retain its generated pipeline coordinates"
-
-
-def _make_result(command: SafeCmd, *, pid: int, exit_code: int) -> sh.CommandResult:
-    """Build a controlled result for the pipeline's real finalizer."""
-    return sh.CommandResult(
-        program=command.program,
-        argv=command.argv,
-        exit_code=exit_code,
-        pid=pid,
-        stdout=None,
-        stderr=None,
-        started_at=0.0,
-        duration=0.0,
-    )
 
 
 TestSettlementStateMachine = _SettlementStateMachine.TestCase
