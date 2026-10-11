@@ -18,10 +18,10 @@ done: the branch is implemented, gated, and pushed. See the paired entries in
 Status of the candidate at the round-5 rebase: head `ae9e8962`, base
 `fb268229`. The PR is `mergeable: true` again after a `CHANGELOG.md`-only
 conflict was resolved by rebasing onto current `main`; that conflict was the
-sole reason no hosted check could run at the previous head. CodeScene
-approved the rebased head (`cs delta origin/main` reports only an
-improvement). This status note records the candidate, not a disposition
-change: the deviation above is still open and still the owner's to accept.
+sole reason no hosted check could run at the previous head. CodeScene approved
+the rebased head (`cs delta origin/main` reports only an improvement). This
+status note records the candidate, not a disposition change: the deviation
+above is still open and still the owner's to accept.
 
 ## Purpose / big picture
 
@@ -1334,8 +1334,45 @@ likelihood, and mitigation.
       `OLD_BASE`, `TARGET`, and `REMOTE_HEAD`. This rebase is also what makes
       hosted CI possible again: the conflict, not the code, was suppressing
       every check.
+- [x] (2026-10-11 05:26Z) Hosted `lint-test` failed at step 32
+      (`make check-fmt`) on head `96c16aed`, which aborted steps 33-37
+      (Markdown lint, full lint including Skylos, MSRV, the Windows target
+      stdlib, and the Windows `cfg` lint) as `skipped`. Reproduced locally by
+      running the recipe's three leaves in sequence: `ruff format --check`
+      (766 files, clean) and `cargo +nightly-2026-05-28 fmt --all -- --check`
+      (clean) both passed, and `mdtablefix --check` was the one that failed,
+      naming this plan as its only file with a `+13 -13` reflow.
+      The cause was the prose this plan's own recent commits appended: the
+      round-5 Progress and Decision-log paragraphs were left past the wrapping
+      width, and the plan is a tracked Markdown file subject to the same gate
+      as any other. The fix was the formatter's own output, previewed on a copy
+      first and confirmed to be a pure reflow — the backtick count is
+      unchanged at 4048 before and after, so no code span was rewritten. All
+      three leaves now pass, along with `markdownlint` (0 issues in 85 files),
+      the spelling gate, and `nixie`.
+- [x] (2026-10-11 05:30Z) Re-ran the leaf gates as a set rather than one at a
+      time because the failure above was a formatting gate reached *after* two
+      other gates in the same recipe: a leaf that reports success says nothing
+      about the leaves behind it in the sequence, and `make`'s first-failure
+      abort means a green local partial run is compatible with a red hosted
+      one.
 
 ## Surprises & discoveries
+
+- Observation: the ExecPlan file is itself gated Markdown, so appending prose
+  to record progress can break `make check-fmt` in the same commit that records
+  it. Evidence: `lint-test` failed at `96c16aed` with `mdtablefix --check`
+  naming this plan as the only file needing reformatting, and the diff was
+  nothing but rewrapped lines from the two preceding plan commits. The failure
+  appeared only once the plan was pushed and hosted CI reached
+  `make check-fmt`; the local tree had been committed without a full run of the
+  recipe. A plan that is updated frequently is a frequently-edited Markdown
+  file, so every plan update is a potential formatting-gate trip. The systemic
+  response is to run the Markdown-scoped gates — `mdtablefix --check`,
+  `markdownlint`, the spelling gate, `nixie` — after every plan edit and before
+  pushing, not only when the edit is large enough to look risky. The trap is
+  that the edit which breaks the gate is the edit that looks least likely to: a
+  paragraph of prose appended by a documentation step, not a code change.
 
 - Observation: a percentage-threshold gate can be green on the target and red
   on the branch while the branch changes *nothing* about the defect, purely
@@ -1755,9 +1792,9 @@ likelihood, and mitigation.
 - Observation: a one-bullet conflict in `CHANGELOG.md` was enough to put the PR
   back into `CONFLICTING`, which builds no merge ref and therefore runs no
   hosted CI at all. Evidence: GitHub reported `mergeable: false`,
-  `mergeable_state: "dirty"` while the branch head had not changed; `git
-  merge-tree --write-tree HEAD origin/main` named `CHANGELOG.md` as the single
-  conflicted path and auto-merged `docs/developers-guide.md`,
+  `mergeable_state: "dirty"` while the branch head had not changed;
+  `git merge-tree --write-tree HEAD origin/main` named `CHANGELOG.md` as the
+  single conflicted path and auto-merged `docs/developers-guide.md`,
   `docs/users-guide.md`, and `docs/v0-2-0-migration-guide.md` without comment.
   Main had advanced by exactly one commit (`fb268229`, the #367 profiling
   telemetry work) and both sides had appended an independent bullet at the same
@@ -1809,12 +1846,12 @@ likelihood, and mitigation.
   pre-rebase candidate. Waiting for a green result on a head that cannot build
   a merge ref would have waited forever while reading as pending. Options
   considered: (a) leave the conflict and observe anyway — rejected, it cannot
-  produce evidence; (b) resolve the conflict in a merge commit without
-  rebasing — rejected, the repository's workflow is linear and a merge commit
-  would make the 74-commit series non-replayable. Replay boundary: `OLD_BASE`
-  `390fcf83` (the branch's original base, confirmed an ancestor of `OLD_HEAD`
-  `45e57bec` with no merge commits in the range) onto `TARGET` `fb268229`.
-  Date/Author: 2026-10-11, babysitting agent.
+  produce evidence; (b) resolve the conflict in a merge commit without rebasing
+  — rejected, the repository's workflow is linear and a merge commit would make
+  the 74-commit series non-replayable. Replay boundary: `OLD_BASE` `390fcf83`
+  (the branch's original base, confirmed an ancestor of `OLD_HEAD` `45e57bec`
+  with no merge commits in the range) onto `TARGET` `fb268229`. Date/Author:
+  2026-10-11, babysitting agent.
 - Decision: resolve the rebase's single conflict as a strict union — main's
   #367 bullet followed by the branch's two #445 bullets — and verify the
   resolution by diffing it against `origin/main:CHANGELOG.md` and confirming
