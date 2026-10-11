@@ -15,13 +15,14 @@ human decision, not something this document can supply. Everything else is
 done: the branch is implemented, gated, and pushed. See the paired entries in
 `Decision log` and `Outcomes & retrospective`.)
 
-Status of the candidate at the round-5 rebase: head `ae9e8962`, base
-`fb268229`. The PR is `mergeable: true` again after a `CHANGELOG.md`-only
-conflict was resolved by rebasing onto current `main`; that conflict was the
-sole reason no hosted check could run at the previous head. CodeScene approved
-the rebased head (`cs delta origin/main` reports only an improvement). This
-status note records the candidate, not a disposition change: the deviation
-above is still open and still the owner's to accept.
+Status of the candidate at the round-6 rebase: base `e4e4c4ad`. The PR had
+returned to `CONFLICTING` after `main` advanced one commit to `e4e4c4ad` (#502,
+which relocated `SafeCmdBuilder` into `cuprum/sh/builder.py`); that collision,
+not any defect in this branch, was again the sole reason no hosted check could
+run. The series was replayed onto the new base, and one rebase-introduced
+formatting defect found by `make lint` was then corrected. This status note
+records the candidate, not a disposition change: the deviation above is still
+open and still the owner's to accept.
 
 ## Purpose / big picture
 
@@ -1369,9 +1370,87 @@ likelihood, and mitigation.
       results for this series. The other previously-open jobs —
       `Native contracts` on Ubuntu, macOS, and Windows, and all five
       `build-native-wheels` legs — also completed successfully.
+- [x] (2026-10-11 04:21Z) Round 6 rebase. `main` advanced one commit to
+      `e4e4c4ad` (#502, "Replace SafeCmdBuilder ellipsis with a typed callable
+      contract"), which relocated `SafeCmdBuilder` out of
+      `cuprum/sh/safe_cmd.py` into `cuprum/sh/builder.py`. The PR returned to
+      `CONFLICTING` purely from that collision, so hosted CI stopped building a
+      merge ref again. Replayed `OLD_BASE` `fb268229`..`OLD_HEAD` `65a471c9`
+      onto `TARGET` `e4e4c4ad`: 78 commits in, 78 out, three conflicts across
+      three commits. Weave was bypassed with `-c core.attributesFile=/dev/null`
+      because it was selected only by ambient global configuration, not by
+      repository attributes, and its captured stderr was 0 bytes throughout.
+      `NEW_HEAD` is `3ae8db5e`. Recovery refs under
+      `refs/recovery/issue445-r6-20261011T042145Z/` retain `OLD_HEAD`,
+      `OLD_BASE`, `TARGET`, and `REMOTE_HEAD`.
+- [x] (2026-10-11 04:21Z) The three round-6 conflict resolutions, each decided
+      from evidence rather than branch labels. (1) In `cuprum/sh/safe_cmd.py`
+      at `580eec6a`: main's #502 moved `SafeCmdBuilder` to `builder.py`, so the
+      stale relocated alias was dropped while that commit's own genuine
+      addition (`_reject_redirected_lines_stdout`) was kept. This is decisive
+      rather than stylistic — main's `safe_cmd.py` has zero `cabc` usage and no
+      longer imports it, so reinstating `type SafeCmdBuilder = cabc.Callable[...]`
+      would have raised `NameError` at import. (2) In
+      `cuprum/sh/safe_cmd.py` and `cuprum/sh/__init__.py` at `fef4900b`: this
+      branch's `Pipeline` relocation collided with main's `SafeCmdBuilder`
+      relocation, and since both destinations were already imported, the
+      re-export narrowed to `from cuprum.sh.safe_cmd import SafeCmd` alone and
+      the module docstring was rewritten to name both moves. (3) In
+      `docs/adr-007-subprocess-execution-module-boundaries.md` at `ea96082c`:
+      both sides appended a dated addendum, so both were kept with main's first
+      and byte-for-byte unchanged. Because ADR text is append-only, the
+      observable that matters is that the diff against main is a pure append,
+      verified with `git diff TARGET -- <adr> | grep '^-' | grep -v '^---'`
+      returning empty.
+- [x] (2026-10-11 04:27Z) Post-replay audit of the round-6 result. Commit
+      count 78 to 78 with zero merges; `range-diff` reports exactly five
+      differing commits (2, 4, 8, 19, 44), all traced to the three resolutions
+      above — the two later ones differ only because they re-edit a line an
+      earlier resolution changed, so the delta propagates forward and no commit
+      was dropped, skipped, or emptied. Nine target-only paths are
+      byte-identical with zero violations, no files were deleted, no top-level
+      symbols were lost, the package went from 17 to 21 public exports with
+      none dropped, and a duplicate-definition and duplicate-import scan across
+      all 66 changed Python files found zero. The per-replay guard was a Python
+      `ast.parse` over every tracked file plus a hard stop on residual conflict
+      markers, chosen because this branch changes zero Rust files; its
+      non-vacuity was proven before use by seeding both a conflict marker and a
+      syntax error into a *tracked* file and confirming it rejected each. (The
+      first control attempt was vacuous — the probes were untracked and the
+      guard enumerates `git ls-files` — which is recorded here because the
+      guard would otherwise have been trusted on a test that could not fail.)
+- [x] (2026-10-11 04:37Z) `make lint` failed at head `3ae8db5e` with ruff
+      `I001` in `cuprum/sh/__init__.py` — a blank line between two imports
+      from the same module, left behind by resolution (2) above. This is a
+      rebase-introduced defect, not an inherited one: the original pre-rebase
+      commit `8f6eebb8` changed that line with no blank line following, while
+      its replayed twin `138724b7` added one, and `138724b7` exists only in the
+      replay. Notably `make check-fmt` does **not** catch this, because `ruff
+      format` tolerates the blank line and only `ruff check` rejects it — so a
+      green formatting gate is compatible with a red lint gate here. Removing
+      the blank line is the sole change; it is the one fix `ruff check --fix`
+      offers. The failure also aborted four lint leaves that consequently have
+      **no** result at `3ae8db5e` and must not be read as passing:
+      `python-lint`'s `ambrleaks`/Skylos tail, all of `rust-lint`
+      (`lint-clippy`, `lint-whitaker`, `spelling`), and all of
+      `github-actions-lint` (`yamllint`, `actionlint`).
 
 ## Surprises & discoveries
 
+- Observation: a conflict resolution that edits an import block can be
+  simultaneously *correct* and *ungrammatical*, and the two formatting gates in
+  this repository do not overlap in what they check. Evidence: the round-6
+  resolution of `cuprum/sh/__init__.py` removed the relocated `SafeCmdBuilder`
+  from a re-export line and left the blank line that had preceded it. The file
+  parses, every export resolves, the post-replay audit found nothing, and
+  `make check-fmt` passed — because `ruff format` tolerates the blank line. Only
+  `ruff check` rejected it, as `I001`, and only because `pyproject.toml`
+  selects the `"I"` rule family. The same gap exists in the hosted pipeline: the
+  `lint-test` job runs `Check formatting` and the lint step separately, so a
+  green formatting step says nothing about the lint step behind it. Consequence
+  for process: `make check-fmt` is not a sufficient pre-commit check for a
+  rebase whose resolutions touch imports, and a resolution should be checked
+  with `ruff check` on the resolved file before the rebase continues.
 - Observation: the ExecPlan file is itself gated Markdown, so appending prose
   to record progress can break `make check-fmt` in the same commit that records
   it. Evidence: `lint-test` failed at `96c16aed` with `mdtablefix --check`
@@ -2318,6 +2397,25 @@ likelihood, and mitigation.
   `CARGO_TARGET_DIR`, rejected as changing a test this branch did not author
   and whose cold-compile behaviour is the point of the check. Date/Author:
   2026-10-11, lifecycle agent.
+- Decision: treat the ruff `I001` blank line as a rebase-introduced defect and
+  fix it in place, rather than accepting any of the three alternatives. A
+  post-replay audit that only checks for deletions, lost symbols, duplicate
+  definitions, and parseability cannot see this class of damage, because it
+  damages nothing — it leaves a well-formed file that merely fails a lint rule
+  the audit does not run. Options considered: (a) fix the blank line and re-run
+  all gates at the new head, chosen; (b) leave it and note it as a known
+  cosmetic issue, rejected because `make lint` blocks the commit quality gate
+  and the same job is a required hosted check; (c) extend the per-replay guard
+  to run `ruff check`, rejected as the wrong instrument — the guard runs once
+  per replayed commit and `ruff check` over the whole package per commit would
+  multiply an already long replay by 78, for a defect that a single
+  end-of-rebase gate catches. The systemic lesson is narrower and worth
+  recording: a clean replay plus a green `check-fmt` does not imply a green
+  `lint`, because `ruff format` and `ruff check` enforce different rules over
+  the same file, so an import-block edit can satisfy one and violate the other.
+  Any future conflict resolution that edits an import block should be checked
+  with `ruff check` on the resolved file before the rebase continues, since
+  that is cheap and local. Date/Author: 2026-10-11, lifecycle agent.
 
 ## Outcomes & retrospective
 
