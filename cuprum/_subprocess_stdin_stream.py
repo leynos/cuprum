@@ -55,7 +55,6 @@ import logging
 import typing as typ
 
 from cuprum import _subprocess_stdin_write as _write
-from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
 from cuprum._subprocess_stdin_errors import _stdin_source_error
 from cuprum._subprocess_stdin_finalize import _finalize_stdin_source
@@ -205,27 +204,24 @@ async def _drain_source_into_pipe(
     except _ProducerFailureError as exc:
         # The producer failed, so there is no child-side close to weigh: the
         # marker is the only reason this is distinguishable once the exception
-        # has left _pump_chunks.
-        _emit_stdio_error(
-            observation,
-            _StdioFailure(
-                category=StdioFailureCategory.PRODUCER,
-                operation="produce",
-                error_type=type(exc.cause).__name__,
-                pid=process.pid,
-            ),
+        # has left _pump_chunks. The producer's own cause is both what is
+        # reported and what is chained from, so the diagnostic names the
+        # exception the producer actually raised.
+        sink.report_boundary(
+            exc.cause,
+            category=StdioFailureCategory.PRODUCER,
+            operation="produce",
         )
         raise _stdin_source_error(exc.cause) from exc.cause
     except Exception as exc:
+        # Blind on purpose, and reported as itself rather than as a failure to
+        # write: the writer's own guard has already established that this is
+        # not the child closing its end, so anything left is cuprum's to name.
         if not _write._is_early_close(exc):
-            _emit_stdio_error(
-                observation,
-                _StdioFailure(
-                    category=_write_boundary_category(sink),
-                    operation="write",
-                    error_type=type(exc).__name__,
-                    pid=process.pid,
-                ),
+            sink.report_boundary(
+                exc,
+                category=_write_boundary_category(sink),
+                operation="write",
             )
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")

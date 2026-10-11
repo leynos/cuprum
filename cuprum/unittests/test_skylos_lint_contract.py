@@ -135,6 +135,8 @@ _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.sh.stdio._normalize_payload",
     "cuprum.sh.stdio._reject_unknown_kind",
     "cuprum.sh.stdio._reject_unexpected_payload",
+    "cuprum.sh.stdio._reject_unusable_fd",
+    "cuprum.sh.stdio._reject_sentinel_descriptor",
 })
 _RUNTIME_CLASS_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum._wait4_process._Wait4InvariantError",

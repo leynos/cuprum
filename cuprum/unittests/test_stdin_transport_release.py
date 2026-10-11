@@ -112,6 +112,7 @@ def test_a_stalled_close_releases_the_descriptor() -> None:
     observation = _make_observation(observe_hooks=(events.append,))
 
     async def scenario() -> tuple[int, bool, int]:
+        """Close a stalled pipe and report its buffer and descriptor state."""
         process, writer = await _stalled_writer()
         # The descriptor is reached through ``get_extra_info`` rather than the
         # transport's own ``_fileno``, which is private and untyped. The

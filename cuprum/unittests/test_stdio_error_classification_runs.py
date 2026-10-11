@@ -57,6 +57,7 @@ boundaries itself.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import errno
 import pathlib
 import typing as typ
@@ -87,6 +88,49 @@ if typ.TYPE_CHECKING:
 # The observe phase a pre-spawn boundary never reaches: a run that fails before
 # the fork records a plan, its diagnostic, and a settle, but starts no child.
 _STARTING_PHASE = "start"
+
+
+def _idna_flush_error_name() -> str:
+    """Name the class ``idna`` raises when its final flush rejects a label.
+
+    The class is read from the interpreter rather than written into the case,
+    because it differs between versions: CPython 3.12 raises ``UnicodeError``
+    where 3.14 raises ``UnicodeEncodeError``. This mirrors the two calls
+    cuprum's writer makes — the per-chunk encode, which buffers, then the final
+    flush, which applies the length rule — so the name it returns is the one
+    the writer is handed on this interpreter.
+
+    Returns
+    -------
+    str
+        The exception class's ``__name__`` as this interpreter raises it.
+
+    Raises
+    ------
+    AssertionError
+        If the over-long label buffered *without* failing the final flush. That
+        would mean the codec no longer applies a length rule at the flush, and
+        the case asserting it would be vacuous rather than passing.
+    """
+    encoder = codecs.getincrementalencoder("idna")("strict")
+    # Keyword form throughout, matching what the writer under test emits at its
+    # own call sites: the second positional argument of ``encode`` is ``final``,
+    # which is exactly the boolean a bare ``True`` would leave a reader to look
+    # up. Passing it by name is what makes the final-flush call self-describing.
+    buffered = encoder.encode(OVERLONG_IDNA_LABEL, final=False)
+    assert buffered == b"", (
+        "the over-long label must buffer until the final flush, or the call "
+        f"site this case exists for is never reached; got {buffered!r}"
+    )
+    try:
+        encoder.encode("", final=True)
+    except UnicodeError as exc:
+        return type(exc).__name__
+    msg = (
+        "the over-long label no longer fails the final flush, so this case "
+        "would assert an error that cannot occur"
+    )
+    raise AssertionError(msg)
 
 
 class TestTheEncoderIsNamedForEncoding:
@@ -125,6 +169,16 @@ class TestTheEncoderIsNamedForEncoding:
         buffers, which the module docstring explains. Marking the per-chunk
         encode alone leaves this one unmarked; the measured mutation that drops
         this mark is caught by this case and by no other.
+
+        The expected ``error_type`` is read back from the codec rather than
+        written down, because the ``idna`` codec's final flush is *not*
+        version-stable: CPython 3.12 raises a bare ``UnicodeError`` from its
+        label-length rule, while 3.14 raises ``UnicodeEncodeError``. Naming
+        either concrete class makes the case pass on one interpreter and fail
+        on another — which is how it came to be green locally and red in
+        Continuous Integration. ``_idna_flush_error_name`` runs the same two
+        calls cuprum does and reports what this interpreter actually raised, so
+        the assertion holds only if cuprum reports the class it was handed.
         """
         outcome = run_capturing(
             stdin=StdinStream(chunks(OVERLONG_IDNA_LABEL)),
@@ -136,7 +190,7 @@ class TestTheEncoderIsNamedForEncoding:
             ExpectedClassification(
                 category=StdioFailureCategory.ENCODER,
                 operation="write",
-                error_type="UnicodeEncodeError",
+                error_type=_idna_flush_error_name(),
                 pid_present=True,
                 raised=StdinSourceError,
             ),
