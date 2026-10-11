@@ -54,11 +54,12 @@ def _write_chunk(
     For stdio echo this blocking write is acceptable; future slow-sink handling
     can layer on a background writer if needed.
 
-    A text-only sink is given a decoded *view*, so an undecodable byte is
-    replaced rather than left to raise: a mirror is not where a run's capture
-    is reported, and under ``errors="strict"`` the caller's policy still
-    governs the capture, which decodes its own buffer. See
-    :data:`cuprum._constants.OBSERVER_ERROR_POLICY`.
+    A text-only sink is given a decoded *view*. In a byte-exact run an
+    undecodable byte is replaced rather than left to raise, because a mirror is
+    not where the capture is reported and the bytes the caller asked for must
+    not be stranded by a display decode. A text run keeps the caller's policy,
+    so echo under ``errors="strict"`` raises exactly as it did before byte mode
+    existed. See :data:`cuprum._constants.OBSERVER_ERROR_POLICY`.
     """
     buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
@@ -66,7 +67,7 @@ def _write_chunk(
         buffer.flush()
         return
     text = (
-        chunk.decode(config.encoding, errors=OBSERVER_ERROR_POLICY)
+        chunk.decode(config.encoding, errors=config.view_errors)
         if decoder is None
         else decoder.decode(chunk, final=final)
     )
@@ -78,17 +79,20 @@ def _write_chunk(
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
     """Create a view decoder for the echo channel.
 
-    Echo renders a *view* of the child's bytes, so it replaces undecodable
-    bytes whatever policy the caller chose for the capture, as
+    Echo renders a *view* of the child's bytes. In a byte-exact run it replaces
+    undecodable bytes whatever policy the caller chose, so a display decode
+    cannot strand the bytes the caller asked for; a text run keeps the caller's
+    configured policy, in step with its capture, as
     :data:`cuprum._constants.OBSERVER_ERROR_POLICY` records.
 
     Returns
     -------
     codecs.IncrementalDecoder
-        A decoder that replaces undecodable bytes rather than raising.
+        A decoder that replaces undecodable bytes in byte mode, and one that
+        keeps the caller's policy otherwise.
     """
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=OBSERVER_ERROR_POLICY)
+    return decoder_factory(errors=config.view_errors)
 
 
 def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
@@ -150,9 +154,12 @@ def _write_finished_echo_line(
     :func:`cuprum._echo_truncation._validate_bounded_echo_encoding` to an
     ASCII-compatible stateless codec, and every encode on this path — the
     truncation marker and its ASCII fallback — carries ASCII-only text. A
-    strict policy therefore has nothing to refuse. The decode that can meet
-    the child's own bytes is the one in :func:`_write_chunk`, and that one
-    already renders a view.
+    strict policy therefore has nothing to refuse, in either mode. The decode
+    that can meet the child's own bytes is the one in :func:`_write_chunk`,
+    and that one renders a view, so it consults the mode-scoped
+    :attr:`cuprum._streams._StreamConfig.view_errors` rather than this
+    policy — replacing undecodable input in byte mode while a strict text run
+    still raises, exactly as it always did.
     """
     finished = limiter.finish_line(
         ending=ending,

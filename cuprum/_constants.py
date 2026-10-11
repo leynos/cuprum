@@ -9,13 +9,15 @@ PACKAGE_NAME = "cuprum"
 # complete.
 DEFAULT_ECHO_MAX_LINE_BYTES = 64 * 1024
 
-# Error policy for every decode that renders a *view* of a child's bytes rather
-# than the run's capture: line observation, echo, and the bounded mirror. Such
-# a renderer must never be able to end the run, so it always replaces
-# undecodable bytes whatever ``ExecutionContext.errors`` the caller chose. That
-# policy governs the capture alone, where ``errors="strict"`` still raises,
-# because the capture decodes its own untouched buffer. Reading the caller's
-# policy here instead would let an ambient observer — a registered
-# ``sh.observe()`` hook, or the line feeder the idle partition attaches —
-# decide the fate of a run it merely watches.
+# Error policy a byte-exact run's *views* decode under. A view is any decode
+# that renders the child's bytes for display or inspection — line observation,
+# echo, the bounded mirror — rather than the run's capture. In byte mode the
+# capture is the child's own bytes and must reach the caller untouched, so a
+# view may not end the run and strand them: byte-mode views replace undecodable
+# input whatever ``ExecutionContext.errors`` the caller chose, which stops an
+# ambient observer — a registered ``sh.observe()`` hook, or the line feeder the
+# idle partition attaches — from deciding the fate of a run it merely watches.
+# Text mode is untouched: there the view and the capture decode under the
+# caller's configured policy, so ``errors="strict"`` raises from either exactly
+# as it did before byte mode existed.
 OBSERVER_ERROR_POLICY = "replace"
