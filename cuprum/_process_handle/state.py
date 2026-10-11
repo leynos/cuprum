@@ -49,6 +49,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._process_handle.tasks import _HandleRun
     from cuprum._subprocess_spawn import _SubprocessExecution
+    from cuprum.events import ExecId
     from cuprum.sh import CommandResult
 
 __all__ = ["RunningCommand"]
@@ -98,12 +99,12 @@ class RunningCommand:
         return self._run.process.pid
 
     @property
-    def exec_id(self) -> str:
+    def exec_id(self) -> ExecId:
         """The execution identifier every event from this run carries.
 
         Returns
         -------
-        str
+        ExecId
             The identifier shared by the run's ``plan``, ``start``, ``exit``,
             and ``settled`` events, so a consumer can correlate the handle
             with the observation stream that describes it.

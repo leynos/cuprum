@@ -139,7 +139,8 @@ extend-ignore = [
 # The handle scenarios poll for a readiness marker and for a process's
 # disappearance, neither of which an asyncio primitive can observe, so a
 # default timeout parameter and blocking pathlib calls are acceptable here.
-"tests/behaviour/_running_command_support.py" = ["async-function-with-timeout", "blocking-path-method-in-async-function"]
+# The marker poll lives with the children it waits on.
+"tests/behaviour/_running_command_children.py" = ["async-function-with-timeout", "blocking-path-method-in-async-function"]
 # Same rationale as above: the teardown test polls a cross-process marker
 # file that no asyncio primitive can observe.
 "cuprum/unittests/test_pipeline_teardown_cancellation.py" = ["blocking-path-method-in-async-function"]

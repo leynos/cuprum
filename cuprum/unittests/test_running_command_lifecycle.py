@@ -363,7 +363,7 @@ def test_signal_is_refused_when_platform_cannot_deliver(
     asyncio.run(run_case())
 
 
-def test_platform_refusal_is_reported_ahead_of_the_childs_state(
+def test_platform_refusal_is_reported_ahead_of_the_child_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A gone child on a restricted platform reports the platform, not the race.

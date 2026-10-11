@@ -1,10 +1,11 @@
 """Stop, signal, and teardown orchestration for the handle scenarios.
 
-The companion module :mod:`tests.behaviour._running_command_support` builds the
-children and drives the start and wait scenarios. Both are imported by
-:mod:`tests.behaviour.test_running_command`, which owns the assertions, and
-both carry a leading underscore so pytest does not collect them as test
-modules.
+The companion module :mod:`tests.behaviour._running_command_support` drives the
+start and wait scenarios, and
+:mod:`tests.behaviour._running_command_children` builds the children both
+drive. Both are imported by :mod:`tests.behaviour.test_running_command`, which
+owns the assertions, and both carry a leading underscore so pytest does not
+collect them as test modules.
 
 The split is by subject rather than by size. A scenario that stops a child has
 to arrange a child that blocks, wait for it to be genuinely running, act, and
@@ -13,7 +14,7 @@ reading its outcome. Keeping the two apart means neither module's helpers
 branch on which kind of scenario is asking.
 
 Every ``_observe_*`` function returns the shared
-:class:`~tests.behaviour._running_command_support.HandleObservation`, so the
+:class:`~tests.behaviour._running_command_children.HandleObservation`, so the
 ``Then`` steps in the test module need not know which module produced a record.
 """
 
@@ -23,15 +24,17 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from tests.behaviour._running_command_support import (
+from tests.behaviour._running_command_children import (
     HandleObservation,
     ReadyChild,
     _reaped,
-    _start_owned,
     _wait_for_ready,
 )
+from tests.behaviour._running_command_support import _start_owned
 
 if typ.TYPE_CHECKING:
+    import pytest
+
     from cuprum.sh import ExecutionContext, RunningCommand
 
 __all__ = [
@@ -242,15 +245,26 @@ def _task_failure(task: asyncio.Task[None]) -> BaseException | None:
 def _observe_unsupported_signal(
     child: ReadyChild,
     signal_number: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> HandleObservation:
     """Signal a live child on a platform that cannot deliver the signal.
 
     The platform predicate is replaced for the duration of the call, so the
     refusal is exercised on the platform the suite runs on rather than only on
-    the one it is missing from. The patch target is the delivery module, which
-    is the module whose globals resolve that name — patching the error leaf
-    instead would leave the real check in place, and the scenario would then
-    pass while testing nothing.
+    the one it is missing from. The patch names the delivery module rather than
+    the error leaf, because that is the module whose globals resolve the
+    predicate: patching the leaf would leave the real check in place and the
+    scenario would pass while testing nothing.
+
+    Parameters
+    ----------
+    child : ReadyChild
+        The child to signal, already running.
+    signal_number : int
+        The signal to ask for.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that installs the replacement predicate, and undoes it once the
+        scenario's teardown has finished with it.
 
     Returns
     -------
@@ -259,19 +273,17 @@ def _observe_unsupported_signal(
     """
 
     async def orchestrate() -> HandleObservation:
-        from cuprum._process_handle import control
-
         handle = await _start_ready(child)
-        original = control._arbitrary_signals_supported
-        control._arbitrary_signals_supported = _platform_cannot_deliver
+        monkeypatch.setattr(
+            "cuprum._process_handle.control._arbitrary_signals_supported",
+            _platform_cannot_deliver,
+        )
         try:
             await handle.signal(signal_number)
         except RuntimeError as refusal:
             observation = HandleObservation(error=refusal, handle_pid=handle.pid)
         else:
             observation = HandleObservation(handle_pid=handle.pid)
-        finally:
-            control._arbitrary_signals_supported = original
         return dc.replace(observation, child_reaped=await _stop_and_reap(handle))
 
     return asyncio.run(orchestrate())
