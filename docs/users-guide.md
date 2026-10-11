@@ -337,6 +337,12 @@ guarantee teardown. Pipelines have no `lines()` method; `on_line` on a pipeline
 run observes final-stage stdout and every stage's stderr. Interior stdout feeds
 the next stage instead.
 
+Line observation decodes for display, so an undecodable byte in text mode
+raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
+[byte-exact mode](#binary-output)
+is the one place observation replaces such bytes instead, so that the bytes
+returned to the caller are not decided by a decode the caller never asked for.
+
 Echo normally limits each mirrored line to 64 KiB, including its truncation
 marker and terminator; captured output remains complete. Set
 `max_echo_line_bytes=None` only when unbounded mirroring is appropriate.
