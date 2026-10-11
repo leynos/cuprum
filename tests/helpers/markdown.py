@@ -100,6 +100,56 @@ def _opens_fence(container: int, line: str) -> re.Match[str] | None:
     return None if _leading_indent(line) > container + _MAX_OPENER_OFFSET else match
 
 
+def _fence_from_outside(
+    containers: list[int],
+    line: str,
+) -> tuple[tuple[str, int] | None, bool]:
+    """Advance the fence state for a line that is not inside a fenced block.
+
+    Only here are the open list items tracked: inside a fence the indentation is
+    content, so it closes nothing and opens nothing.
+
+    Returns
+    -------
+    tuple of (optional tuple of (str, int), bool)
+        The state after *line*, and whether the line lies inside a fence.
+    """
+    container = _track_containers(containers, line)
+    match = _opens_fence(container, line)
+    if match is None:
+        content = _content_indent(line)
+        if content is not None:
+            containers.append(content)
+        return None, False
+    run, rest = match.group(2), match.group(3)
+    # A backtick opener whose info string contains a backtick is content, per
+    # the CommonMark rule above, so it neither opens nor closes.
+    if run[0] == "`" and "`" in rest:
+        return None, False
+    return (run[0], len(run)), True
+
+
+def _fence_from_inside(
+    opener: tuple[str, int],
+    container: int,
+    line: str,
+) -> tuple[tuple[str, int] | None, bool]:
+    """Advance the fence state for a line already inside a fenced block.
+
+    The closing line is itself part of the block, so every outcome here reports
+    the line as fenced; only the state carried forward differs.
+
+    Returns
+    -------
+    tuple of (optional tuple of (str, int), bool)
+        The state after *line*, and whether the line lies inside a fence.
+    """
+    match = _opens_fence(container, line)
+    if match is None or not _closes_fence(match.group(2), match.group(3), opener):
+        return opener, True
+    return None, True
+
+
 def _step_fence(
     opener: tuple[str, int] | None,
     line: str,
@@ -113,34 +163,19 @@ def _step_fence(
     tracked alongside it for the same reason — an opener's indentation can only
     be judged against the container the line is currently inside.
 
+    Being inside a fence and being outside one are separate modes with separate
+    rules, so each is decided by its own function rather than by interleaving
+    both sets of conditions here.
+
     Returns
     -------
     tuple of (optional tuple of (str, int), bool)
         The state after *line*, and whether the line lies inside a fence.
     """
+    if opener is None:
+        return _fence_from_outside(containers, line)
     container = containers[-1] if containers else 0
-    if opener is None:
-        container = _track_containers(containers, line)
-
-    match = _opens_fence(container, line)
-    if match is None:
-        if opener is None:
-            content = _content_indent(line)
-            if content is not None:
-                containers.append(content)
-            return None, False
-        return opener, True
-
-    run, rest = match.group(2), match.group(3)
-    if opener is None:
-        # A backtick opener whose info string contains a backtick is content,
-        # per the CommonMark rule above, so it neither opens nor closes.
-        if run[0] == "`" and "`" in rest:
-            return None, False
-        return (run[0], len(run)), True
-    if _closes_fence(run, rest, opener):
-        return None, True
-    return opener, True
+    return _fence_from_inside(opener, container, line)
 
 
 def _fenced_line_indexes(markdown: str) -> set[int]:
