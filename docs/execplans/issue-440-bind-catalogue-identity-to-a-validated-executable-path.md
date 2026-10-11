@@ -92,7 +92,11 @@ escalation, not a workaround.
   dataclass with positional fields, and
   `cuprum/unittests/test_public_api.py::test_exec_id_keeps_its_positional_slot`
   pins `exec_id` directly after `error_type`. `resolved_path` is therefore
-  declared after `env_mode`, at the end of the field list.
+  declared after `env_mode`. The rebase onto main (#575) reordered this: main
+  appends its own `terminal_outcome` after `env_mode` and
+  `test_terminal_outcome_public_api` pins that field as the declaration tail,
+  so `resolved_path` sits *before* `terminal_outcome` rather than at the end.
+  Both follow every pre-existing slot, which is the invariant callers rely on.
 - **`CommandResult`'s positional prefix is frozen.** `relay_fallbacks` stays
   the seventh and last positional field
   (`test_command_result_keeps_relay_fallbacks_as_its_trailing_slot`).
@@ -3157,7 +3161,8 @@ def bind_executable(
 ) -> ExecutableBindingRegistration: ...
 ```
 
-`cuprum/events.py` addition, declared after `env_mode`:
+`cuprum/events.py` addition, declared after `env_mode` and ahead of main's
+tail-pinned `terminal_outcome`:
 
 ```python
 resolved_path: str | None = None

@@ -300,12 +300,18 @@ class ExecEvent:
         resolved file identity, so a replaced binary is not detected; see the
         TOCTOU note in ``cuprum.executable_binding``.
 
-    New optional fields are appended to the end of the declaration to preserve
-    existing positional argument slots. In particular, inserting one ahead of
-    ``exec_id`` would silently rebind a positional argument in existing caller
-    code, handing the correlation token to the new field and leaving
-    ``exec_id=None`` — which consumers such as ``TracingHook`` treat as
-    uncorrelatable and drop.
+    New optional fields are appended after every field that already had a
+    positional slot, which is what preserves those slots. In particular,
+    inserting one ahead of ``exec_id`` would silently rebind a positional
+    argument in existing caller code, handing the correlation token to the new
+    field and leaving ``exec_id=None`` — which consumers such as ``TracingHook``
+    treat as uncorrelatable and drop.
+
+    Appended *after the pre-existing slots* is the whole rule, not "last in the
+    class". ``terminal_outcome`` is pinned as the declaration tail by
+    ``test_terminal_outcome_public_api``, so a field added after it belongs
+    ahead of it instead: both are past every pre-existing slot, which is the
+    invariant callers depend on.
 
     """
 
@@ -339,8 +345,13 @@ class ExecEvent:
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
-    terminal_outcome: TerminalOutcome | None = None
+    # Declared before ``terminal_outcome`` rather than after it so that field
+    # stays the declaration tail. ``test_terminal_outcome_public_api`` pins
+    # ``dc.fields()[-1]`` to it, and a caller reading the generated signature
+    # sees the same ordering. Both are appended after every pre-existing
+    # positional slot, which is the invariant the class docstring states.
     resolved_path: str | None = None
+    terminal_outcome: TerminalOutcome | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
