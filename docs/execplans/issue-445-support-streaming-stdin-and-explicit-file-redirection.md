@@ -2013,6 +2013,53 @@ likelihood, and mitigation.
   mutation cannot distinguish the placements at all. The valid negative control
   is *removing* the callback, which fails correctly.
 
+- [x] 2026-10-11: closed CodeRabbit's four "Finish gap 3" asks at `3b4de5d8`,
+      and the guard can now be measured against the one it replaces.
+  - *The owned-path success cell names the stronger case.* The row was
+    `test_path_target_receives_the_children_bytes` with `_NO_ROUTE_AXIS`; it now
+    names `test_path_target_does_not_leak_the_descriptor`, which asserts the
+    child's bytes and a clean exit *and* descriptor accounting, and requests the
+    backend axis. The old row claimed the cell with less evidence than the
+    module already held, and declared it route-independent on top.
+  - *The redirect-only module filter is gone.* The guard derives its module set
+    from `_MATRIX` and collects each separately: 15 rows over three modules (10
+    redirect, 3 spawn-failure backends, 2 borrowed-file outcomes), where the old
+    guard saw only the backed rows of the first. The matcher was tightened from
+    `name.endswith(case)` — which a suffix-named case could borrow — to an exact
+    node-name match.
+  - *Measured, and this is the number that says what the item was worth.*
+    Collapsing `execution_strategy` to a single strategy makes the new guard
+    name **15 distinct cells** and the old guard name **7**. All seven of the
+    old guard's cells are defined in `test_safe_cmd_redirect.py`, confirming by
+    grep that its population was that one module's backed rows and nothing else.
+  - *The population pin is independent of the table it pins.* `assert compared`
+    prevented an empty check but could not detect one omitted row, and neither
+    could a pin derived from `_MATRIX`: deleting a row shrinks the table and any
+    set derived from it together, so such a pin shrinks with the defect and
+    reports nothing. The pin is built from `_TARGETS` and `_OUTCOMES`, written
+    out at module level, and is asserted *before* the deficiency list so a guard
+    that compared too little fails on that rather than reporting a clean run
+    over a subset. Measured across the two guard revisions: deleting one row
+    left the previous guard's combination check passing, and fails this one's
+    pin naming the missing cell.
+  - *A probe that could not be made to fail is recorded rather than dropped.*
+    Reverting the owned-path success row to the bytes case with
+    `_NO_ROUTE_AXIS` fails only `test_the_backend_axis_supplies_both_routes`;
+    the combination check passes because the weak case's `[run()]` /
+    `[run_sync()]` ids coincide with the expectation for a route-free row.
+    Closing that would require handwritten parameter orders for every
+    route-free cell across three modules, so a one-parameter fixture change
+    would become a three-file edit — the coupling the guard exists to avoid.
+
+- [x] 2026-10-11: resolved a deletion question raised against this branch by
+      its own audit. A two-dot diff against main's *tip* reported 15 paths as
+      "deleted in branch"; scoped to the merge base `e4e4c4ad` the branch
+      deletes **zero** paths, main added exactly those 15, and the merged tree
+      `a2b9048503a8628c3aeb2941544bafac1af49ca8` keeps every one of them. The
+      finding was an artefact of diffing trees rather than using the merge
+      base, not a deletion. Recorded because the same artefact will recur in
+      any audit written this way.
+
 ## Surprises & discoveries
 
 - Observation: **a gate log that records its head at the start is not enough
@@ -3413,6 +3460,41 @@ likelihood, and mitigation.
   Against the stated bound of 24 files and 1400 net lines, every framing
   remains a breach: production files alone are 41 files and net 3875.
   Date/Author: 2026-10-11, lifecycle agent.
+
+- Decision: derive the matrix guard's expected combinations from `row.axis`,
+  and pin the compared population against module-level `_TARGETS` and
+  `_OUTCOMES` rather than against `_MATRIX`. Rationale: the population pin
+  exists to detect an omitted row, and a pin built from the same table the loop
+  iterates cannot do that — removing a row shrinks both sides identically, so
+  the assertion holds vacuously over a smaller set. This is the same class of
+  error as the substring matcher it replaces: a check whose expected and actual
+  values are derived from one source agrees with itself however that source
+  changes. `_TARGETS` and `_OUTCOMES` are written out independently at module
+  level precisely so they can disagree with the table. The first draft of this
+  pin *was* derived from `_MATRIX`, and was replaced after recognizing it could
+  not fail for the defect it was written for. Options considered: (a) pin from
+  `_MATRIX`, rejected as above; (b) enumerate every expected combination by
+  hand per module, rejected because parameter *order* follows fixture request
+  order and differs between modules, so a handwritten order would break on a
+  fixture reorder unrelated to the cell's evidence; (c) derive from `row.axis`
+  for the expectation and pin the population independently, chosen.
+  Date/Author: 2026-10-11, lifecycle agent.
+
+- Decision: accept a residual gap in the matrix guard rather than close it by
+  hand-writing parameter orders, and record it in the reply to review.
+  Rationale: reverting the owned-path success row to the weaker bytes case
+  fails the route-axis check but not the combination check, because a
+  route-free row's two-id collection coincides with the expectation. Closing it
+  would require the guard to name handwritten parameter orders for every
+  route-free cell across all three participating modules, which turns a
+  one-parameter change to a shared fixture into a three-file edit — a
+  maintenance cost paid on every fixture change to catch one mutation that a
+  different check already catches. Options considered: (a) hand-write the
+  orders, rejected on the coupling argument; (b) drop the route-free rows from
+  the combination check entirely, rejected because it would silently reduce
+  coverage for the eight cells that are route-free; (c) keep the derived
+  expectation, keep the route-axis check as the detector for that mutation, and
+  state the limit, chosen. Date/Author: 2026-10-11, lifecycle agent.
 
 ## Outcomes & retrospective
 
