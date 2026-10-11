@@ -263,6 +263,38 @@
 - **`RunOutputOptions.on_line`:** Register a synchronous line callback that
   receives the same `LineEvent` values while `run()` executes. Independent of
   `capture` and `echo`; registering it keeps the stream on the Python pathway.
+- **`SafeCmd.start()`:** Start a command and hold it. The child is spawned and
+  its PID announced before the call returns, so the caller decides what happens
+  next, and an owned `RunningCommand` is returned rather than a
+  `CommandResult`. Await its `wait()` for the outcome — with an optional
+  deadline, whose expiry stops the child exactly as a timed-out `run()` does
+  and raises `TimeoutExpired` carrying the output captured before it — or read
+  the settled outcome from `result`. Deliver a POSIX signal with `signal()`
+  without settling the run; stop the child gracefully with `terminate()`
+  (`SIGTERM`, the cancel grace, then `SIGKILL` if it is still there); or compel
+  it with `kill()`, which sends `SIGKILL` without asking so the recorded
+  outcome reports the forced signal rather than whichever one happened to end
+  the child. Signals are never the caller's race to lose: a child that has
+  already exited raises `SignalAfterExitError`, and a platform with no route to
+  a caller-named signal raises `UnsupportedSignalError`. Using the handle as an
+  `async with` block settles the run on every exit — a child still running is
+  torn down the same way a cancelled `run()` does, `SIGTERM`, the cancel grace
+  wait, then `SIGKILL` — and never suppresses the block's own error. Every
+  control operation is idempotent, a repeated or concurrent wait reports the
+  one settlement rather than building a second result, and no child is left
+  unreaped. Capture is forced on, so a stopped child still reports the output
+  it produced ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`RunningCommand`:** The owned handle `SafeCmd.start()` returns, exposing
+  `pid`, `exec_id`, the settled `result`, and the `wait()`, `signal()`,
+  `terminate()`, and `kill()` control operations
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`SignalAfterExitError`:** Raised when a signal is requested for a child
+  that has already exited. A `ProcessLookupError` subclass carrying the exit
+  code the handle recorded and the PID it belonged to
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`UnsupportedSignalError`:** Raised when the platform cannot deliver a
+  caller-named signal, carrying the signal that was asked for and the platform
+  that declined it ([#437](https://github.com/leynos/cuprum/issues/437)).
 
 - **Per-command echo-fallback diagnostics:** Every `CommandResult` — including
   each pipeline stage's result — now carries `relay_fallbacks`, a defaulted

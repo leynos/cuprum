@@ -3931,3 +3931,257 @@ generation without invoking `hyperfine`, used by behavioural smoke tests.
 
 See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
 and alternatives considered.
+
+### 13.10 Owned running-command handle
+
+`SafeCmd.run` and `SafeCmd.lines` both own a child from start to finish: `run`
+awaits it, `lines` iterates it. Neither lets a caller hold a running child and
+decide later what to do with it. The workaround was to derive a PID from a
+public `start` event and signal it with `os.kill`, which hands the caller four
+races the library can see and they cannot: a child that exits before the first
+signal, a PID the operating system has already reused, a set of stream
+consumers nobody is draining, and a child left with no one holding it when the
+cancellation that should have stopped it goes astray. `SafeCmd.start()` and the
+`RunningCommand` handle it returns exist so those outcomes belong to the
+library rather than to a caller's signal handler.
+
+#### 13.10.1 Ownership
+
+`SafeCmd.start()` spawns the child and returns before it exits, so the caller
+decides what happens next. The handle owns everything that ownership implies:
+
+- the spawned process, reaped exactly once;
+- the execution bundle its streams and deadline came from, so a wait's deadline
+  is applied without mutating the bundle the child was spawned with;
+- the tracking that owns the run's sink bracket and observe-hook tasks;
+- the task ownership that reconciles the stdin writer and both stream
+  consumers.
+
+Output capture is forced on, because a handle exists so its caller can inspect
+the child after the fact and a child whose streams were routed to `DEVNULL`
+cannot be asked what it said. Echo and every other presentation decision remain
+the caller's. A completion before the caller asks for the command — the
+`before` and `after` hooks, the presentation-sink session, the
+`plan`/`start`/`settled` events — is the sequence `run()` already performs;
+`_prepare_owned_command` is the shared prefix for both, so the handle is a
+second way to own a `run()` rather than a second implementation of one.
+
+There is deliberately one assembly path. `terminate()` and `kill()` do not
+build a result of their own: they stop the child, and the ordinary wait that
+follows observes the death and reports the signal that caused it. A second
+assembly path would be a second place for the exit code, the exit event, and
+the relay diagnostics to be read at different moments.
+
+The exit event deliberately reports no resource usage. On this path the wait
+can begin after the child has already been reaped, so a figure measured then
+would describe a different window than the one it claims; the event says
+`unavailable` rather than reporting zeros that would read as a child that
+consumed nothing.
+
+#### 13.10.2 Settlement
+
+Settlement happens once. The handle holds the single task that drives a run to
+its end, and every operation that needs an outcome awaits that same task rather
+than starting a second one. That is what makes concurrent `wait` calls one
+settlement with several readers, and it is also what keeps `terminate` from
+racing a wait: stopping the child first unblocks the shared task, which then
+completes normally and hands every waiter the result.
+
+Because the task is a task rather than a lock held across the wait, a caller
+who is cancelled leaves the settlement running, and the next caller awaits the
+same task and gets the same outcome — whether that is a result or the error the
+first caller never saw. Nothing can deadlock a stop behind a wait with no
+deadline. `result` publishes what `wait` returned and never waits itself;
+`wait(timeout=...)` bounds one call, so a handle may reach a deadline on one
+wait and the next wait on the same handle sees the already-settled outcome
+rather than starting a second deadline.
+
+Unlike the streamed `run()` path, no deadline is enforced while the handle is
+merely held: the clock a timeout is measured against starts at the `wait` that
+asks for one. `start(timeout=...)` is therefore the default deadline for every
+`wait()` on the handle rather than a limit on how long the child may live. The
+timeout translation still happens on the one wait path, so the output captured
+before the deadline is drained exactly once and carried onto the raised
+`TimeoutExpired`, exactly as the streamed path does.
+
+#### 13.10.3 Control operations
+
+The three control operations are ordered by how much they ask of the child.
+
+- `signal(signal_number)` asks for exactly what was named and takes no view on
+  how the child should respond. It does not settle the run: a child sent
+  `SIGSTOP`, or sent a signal it ignores, is still the caller's to wait on or
+  stop. Delivery is synchronous because `send_signal` is, so there is nothing
+  to await.
+- `terminate(grace=None)` asks for the cooperative stop: `SIGTERM`, the grace
+  period, then `SIGKILL` if the child is still there. The grace defaults to the
+  execution context's `cancel_grace`, which is the same window a cancelled
+  `run()` allows.
+- `kill()` skips the request entirely and compels the child to go with
+  `SIGKILL`.
+
+Kill is a separate path rather than the escalation with a zero grace, because
+the two answer different questions. A zero-grace escalation still sends
+`SIGTERM` first, so a child that dies from it reports `-15` — the signal that
+happened to end the child, not the one the caller asked for. A caller who
+chooses `kill()` has already decided the child is not to be asked, so `-9` is
+what the outcome reports. Both paths reap the child before returning, and both
+are idempotent: a second call reports the recorded outcome and delivers
+nothing, so a stop coordinated from two places cannot reap the child twice or
+build a second result that disagrees with the first.
+
+Every path stops the process before the caller reconciles its stream tasks,
+never after. Cancelling a stream consumer while the child is still writing
+would turn a clean shutdown into a broken pipe, and a cancellation landing
+mid-drain would leave consumers nobody holds.
+
+#### 13.10.4 Cancellation and teardown guarantees
+
+Every control path runs shielded. The shield is what makes teardown a guarantee
+rather than a best effort: a cancellation arriving mid-grace — a task group
+tearing down the block that owns the handle, say — must not leave a child
+running with nobody holding it. The helper waits through the cancellation, and
+the caller's cancellation is re-raised afterwards.
+
+Leaving an `async with` block settles the handle on every exit, and never
+suppresses the block's own exception. Stopping and settling are separate
+guarded steps rather than one, because a cancellation arriving during the stop
+would otherwise skip the settle entirely: the child would be reaped while
+`result` stayed `None` forever, leaving a handle that reports nothing about a
+child it has already dealt with. Reaping without settling is half-ownership,
+which is the state this ordering exists to prevent. A teardown failure is
+raised only when the block itself succeeded, since otherwise it would replace
+the error that caused the exit; it is recorded on the run's event stream either
+way.
+
+Because capture is forced on and the drain is the same one `run()` uses, a
+terminated or killed child still reports what it wrote before it ended.
+
+#### 13.10.5 Signalling on an unsupported platform and after exit
+
+`signal()` distinguishes two refusals, because the caller's remedy differs.
+
+A platform that cannot deliver a caller-named signal is a limitation no retry
+can fix. The Windows proactor transport asyncio uses for subprocesses accepts
+only its own terminate and kill pairs, so a caller-named signal number has no
+route to the child; everywhere else `send_signal` is `os.kill`. That condition
+raises `UnsupportedSignalError`, carrying the signal that was asked for and the
+platform that declined it. A caller on such a platform has to reach for
+`terminate` or `kill`, which use the platform's own signals.
+
+A child that has already exited is an ordinary racing outcome rather than a
+misuse, because a caller coordinating several signals cannot avoid racing the
+child's own exit. That condition raises `SignalAfterExitError`, a
+`ProcessLookupError` subclass carrying the exit code the handle recorded and
+the PID it belonged to — and nothing is delivered. Subclassing
+`ProcessLookupError` is what keeps a caller who already tolerates a lost
+process working once the handle names the condition.
+
+The platform is checked before the child's state, so a caller on a platform
+that cannot deliver the signal at all learns that, rather than being told the
+child happened to be gone. Only one of the two refusals is actionable: a caller
+told the child had exited gives up, while a caller told the platform cannot
+take the request knows to reach for `terminate` or `kill` instead.
+
+`terminate()` and `kill()` take the opposite view of an already-exited child:
+that is a no-op which reports the recorded outcome, because a caller stopping a
+child has no use for a refusal.
+
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.start()` handle. There is no separate creation state to observe: the
+handle exists because `start()` spawned the child, so the first state is the
+child already running. From there a signal leaves the handle running — it is
+delivered, or it is refused and nothing changes — while a wait starts the
+settlement that will end in a published `CommandResult`. `terminate()` and
+`kill()` stop the child directly, and the exit from an `async with` block and a
+cancellation converge on the same state; a timeout converges on it too, through
+the existing timeout termination path. Termination is the shared SIGTERM,
+cancel-grace, and SIGKILL sequence a cancelled `run()` uses — a child that
+obeys the SIGTERM ends the settlement there, while one that ignores it is
+killed once the grace expires — and both routes then publish the settled
+record. Once the run is reconciled and its result published, the handle is
+closed: no work it owns is outstanding, and every later wait or stop reports
+the recorded outcome rather than starting again.
+
+Figure 17: Lifecycle of a `SafeCmd.start()` handle from creation through
+waiting to completion, timeout, or control-driven termination
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running: SafeCmd.start() spawns the child
+    Running --> Running: signal(signal_number) delivered
+    Running --> Running: SignalAfterExitError or UnsupportedSignalError
+    Running --> Running: await wait() starts the settlement
+    Running --> Completed: the child exits on its own
+    Running --> Cancelling: terminate(), kill(), async with exit, or cancellation
+    Running --> TimedOut: a wait's deadline expires
+    Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
+    TimedOut --> Terminated: existing timeout termination path
+    Terminated --> Completed: the settlement records how the child ended
+    Completed --> Closed: the run reconciled, CommandResult published
+    Closed --> [*]
+```
+
+For screen readers: The following sequence diagram shows one handle stopping
+and then settling a cooperative child. The caller starts the child, receives a
+handle, and leaves the child running for as long as it chooses. When the caller
+calls `terminate()`, the handle sends SIGTERM and arms a grace window: a child
+that obeys the signal ends the stop there, while one that ignores it is sent
+SIGKILL once the window expires, so termination is the escalation rather than
+the pairing of two separately requested signals. The wait that follows observes
+the death, and its result is handed back from `terminate()` itself as the
+handle's one `CommandResult`. Every later `wait()` on the same handle reports
+that same result rather than building another.
+
+Figure 18: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+through `terminate()` to the single published `CommandResult`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant Handle as RunningCommand
+    participant Settlement
+    participant Process as Child process
+
+    Caller->>SafeCmd: start(output, timeout, context, stdin)
+    SafeCmd->>Process: spawn subprocess
+    SafeCmd->>Handle: own the run
+    SafeCmd-->>Caller: RunningCommand
+    Note over Caller,Process: the caller keeps the child for as long as it needs
+    Caller->>Handle: terminate(grace=None)
+    Handle->>Process: SIGTERM
+    Note over Handle,Process: within the grace, then SIGKILL if it expired
+    Handle->>Settlement: await the wait that observes the death
+    Settlement->>Settlement: reconcile consumers, build one CommandResult
+    Settlement-->>Handle: publish result
+    Handle-->>Caller: CommandResult
+    Caller->>Handle: wait()
+    Handle-->>Caller: the same CommandResult, nothing redelivered
+```
+
+#### 13.10.6 Module boundaries
+
+The handle is a package rather than a single module, split by responsibility
+the way the subprocess execution path is split by lifecycle concern:
+
+- `cuprum/_process_handle/state.py` owns `RunningCommand` itself: the owned
+  record, the single settlement, and the public control operations.
+- `cuprum/_process_handle/tasks.py` owns the spawn seam: `_HandleRun`, the
+  deadline-stripping `_build_handle_execution`, and `_start_handle_run`, which
+  spawns the child, emits its `start` event, and reclaims the child if that
+  emission raises — a `start` event whose synchronous observe hook raises is
+  the one failure that can strand a spawned child.
+- `cuprum/_process_handle/control.py` owns signal delivery and termination, and
+  is where the ordering of the platform and child-state checks lives.
+- `cuprum/_process_handle/coordinator.py` owns waiting, settling, and result
+  assembly: the one convergence point every route to the end passes through.
+- `cuprum/_process_handle_errors.py` owns the two refusals and the platform
+  predicate, beside the error that reports when it declines.
+
+The idle monitor is armed when the handle starts waiting rather than at spawn,
+so the time a caller spends holding a handle without waiting is not counted as
+the child's silence. It is not detached from the execution bundle, and that is
+load-bearing in the other direction: the monitor's presence is what decides
+whether the child's streams are piped at all, so detaching it would change how
+the child is wired.

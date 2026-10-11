@@ -13,6 +13,9 @@ Python example is executed from this document by the behavioural suite. The
   [0.2.0 migration guide](v0-2-0-migration-guide.md).
 - **Working application:** [Handle failure](#handle-failure),
   [control output](#control-output), and [apply a policy](#apply-a-policy).
+- **Long-running child:**
+  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) and
+  stop it when the caller decides.
 - **Several commands:** [Connect a pipeline](#connect-a-pipeline) or
   [run commands concurrently](#run-commands-concurrently).
 - **Growing an application:** [Going further](#going-further) has task
@@ -344,6 +347,9 @@ assert result.stdout == "ready hello\n"
 A timeout raises `TimeoutExpired`; cancellation of an async run also starts
 child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
+When the caller needs to decide later when a child stops, `start()` hands back
+an owned handle to stop by hand instead; see
+[hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
 
 ## Connect a pipeline
 
@@ -547,16 +553,18 @@ sinks.
 
 ## Troubleshoot a run
 
-| Symptom                 | Check                                                                                     |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `UnknownProgramError`   | Register the exact program in the builder's catalogue.                                    |
-| `ForbiddenProgramError` | Inspect the active scope and parent allowlist.                                            |
-| `FileNotFoundError`     | Confirm the executable path or inherited `PATH`.                                          |
-| `TimeoutExpired`        | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
-| Non-zero `exit_code`    | Use captured stderr and the tool's documented exit codes.                                 |
-| No visible output       | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
-| No heartbeat            | Supply a positive `idle_after`; output activity resets its clock.                         |
-| No native speed-up      | The optional extension may be unavailable or this operation may use Python.               |
+| Symptom                  | Check                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| `UnknownProgramError`    | Register the exact program in the builder's catalogue.                                    |
+| `ForbiddenProgramError`  | Inspect the active scope and parent allowlist.                                            |
+| `FileNotFoundError`      | Confirm the executable path or inherited `PATH`.                                          |
+| `TimeoutExpired`         | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
+| `SignalAfterExitError`   | The child has already exited; treat the recorded outcome as the command's ending.         |
+| `UnsupportedSignalError` | Use `terminate()` or `kill()`, which use the platform's own signals.                      |
+| Non-zero `exit_code`     | Use captured stderr and the tool's documented exit codes.                                 |
+| No visible output        | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
+| No heartbeat             | Supply a positive `idle_after`; output activity resets its clock.                         |
+| No native speed-up       | The optional extension may be unavailable or this operation may use Python.               |
 
 _Table 1: First checks for common execution outcomes._
 
@@ -730,6 +738,56 @@ else:
 
 [Timeouts](#timeouts) in the reference covers scope-level defaults, pipeline
 deadlines, and the log records each expiry writes.
+
+### Hold a running child and decide when to stop it
+
+`start()` spawns the child and hands back an owned `RunningCommand` instead of
+awaiting it. Await the handle's `wait()` to get the outcome, read `result` once
+the handle has settled, or stop the child with `terminate()` — `SIGTERM`, the
+cancel grace, then `SIGKILL` if it is still there — or `kill()`, which sends
+`SIGKILL` without asking. The `async with` block below is what guarantees
+teardown; leaving it stops a child still running.
+
+<!-- tested-example: hold-a-handle -->
+
+```python
+import asyncio
+import sys
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="handle")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import time; time.sleep(30)")
+
+
+async def stop_a_child() -> int | None:
+    async with await command.start(
+        context=ExecutionContext(cancel_grace=0.2),
+    ) as handle:
+        assert handle.pid is not None and handle.result is None
+        result = await handle.terminate()
+        assert result.exit_code == -15
+        return handle.result.exit_code if handle.result is not None else None
+
+
+assert asyncio.run(stop_a_child()) == -15
+```
+
+`wait(timeout=...)` bounds one call: its expiry stops the child the way a
+timed-out `run()` does and raises `TimeoutExpired` with whatever the child had
+written before it. A `timeout` passed to `start()` is instead the default
+deadline for every `wait()` on that handle, because the clock a timeout is
+measured against starts at the wait that asks for one. Capture is always on for
+a handle, so a stopped child still reports its output on the result.
+
+`signal()` delivers one POSIX signal without settling the run. The two refusals
+are separate errors because the remedy differs: `SignalAfterExitError` (a
+`ProcessLookupError`) means the child has gone, and `UnsupportedSignalError`
+means the platform has no route to a caller-named signal, so `terminate()` or
+`kill()` is the only option there. Stopping an already-exited child is not an
+error: `terminate()` and `kill()` are no-ops that report the recorded outcome,
+so both are safe to call twice or from two places at once.
 
 ### Restrict a block of code to specific programs
 
