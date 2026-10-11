@@ -81,6 +81,29 @@ def _blocked_on_parent_stdin(
     )
 
 
+def _runnable_child(
+    *,
+    pid: int = 4244,
+    stage_index: int = 2,
+) -> _ChildStallSnapshot:
+    """Build a live child the kernel could run, with nothing holding it.
+
+    Returns
+    -------
+    _ChildStallSnapshot
+        A child in state ``R`` whose stdin has no parent writer and which has
+        written no output — the shape a starved host leaves behind, where the
+        pipeline was ready and nothing was blocking it.
+    """
+    return _ChildStallSnapshot(
+        ProcessState(pid, "R", exited=False, wchan=None, available=True),
+        (ChildPipe(0, "pipe:[44]", None),),
+        (),
+        stage_index,
+        None,
+    )
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _Telemetry:
     """The external measurements that characterize a stall without deciding it.
@@ -97,16 +120,25 @@ class _Telemetry:
 #: The deltas the fixtures below declare; a report may override them.
 _TELEMETRY = _Telemetry(fd_delta=1, thread_delta=2)
 
+#: The reason both snapshot fixtures record. The distinctive report below
+#: deliberately records another one, so a formatter that hardcoded this text
+#: could not satisfy the semantic assertions.
+_REASON = "no observable progress"
+
 
 def _report(
     *,
     verdict: HandOffVerdict,
-    children: tuple[_ChildStallSnapshot, ...],
-    task_names: tuple[str, ...] = (),
+    evidence: _StallSnapshot,
     attempt: int = 3,
     telemetry: _Telemetry = _TELEMETRY,
 ) -> _StallReport:
     """Build one classified stall report from fixed evidence.
+
+    The evidence arrives as the snapshot it already is. ``children`` and
+    ``task_names`` are that dataclass's first two fields, and a real attempt
+    captures one and then pairs it with a verdict — so naming them separately
+    here would describe one value twice, in a weaker form.
 
     ``pipeline`` is left ``None``, which the diagnostic renders as the
     ``task=None`` case the field exists to make explicit; a real pipeline's
@@ -124,7 +156,7 @@ def _report(
         fd_delta=telemetry.fd_delta,
         thread_delta=telemetry.thread_delta,
         verdict=verdict,
-        snapshot=_StallSnapshot(children, task_names, "no observable progress"),
+        snapshot=evidence,
         progress=LivenessProgress(quiet_for_s=0.75, deadline_remaining_s=12.5),
     )
 
@@ -135,8 +167,11 @@ def test_the_diagnostic_renders_a_hung_hand_off_report(
     """The message names the attempt, the pipe evidence, and the pending tasks."""
     report = _report(
         verdict=HandOffVerdict.HUNG_HANDOFF,
-        children=(_exited_child_with_parent_output(), _blocked_on_parent_stdin()),
-        task_names=("native-pipeline-hand-off:pipeline_wait",),
+        evidence=_StallSnapshot(
+            (_exited_child_with_parent_output(), _blocked_on_parent_stdin()),
+            ("native-pipeline-hand-off:pipeline_wait",),
+            _REASON,
+        ),
     )
 
     message = _format_stall(report)
@@ -153,15 +188,7 @@ def test_the_diagnostic_renders_a_host_starvation_report(
     """A starvation report carries the same evidence under its own verdict."""
     report = _report(
         verdict=HandOffVerdict.HOST_STARVATION,
-        children=(
-            _ChildStallSnapshot(
-                ProcessState(4244, "R", exited=False, wchan=None, available=True),
-                (ChildPipe(0, "pipe:[44]", None),),
-                (),
-                2,
-                None,
-            ),
-        ),
+        evidence=_StallSnapshot((_runnable_child(),), (), _REASON),
     )
 
     assert _format_stall(report) == snapshot, (
@@ -173,20 +200,23 @@ def test_the_diagnostic_renders_a_host_starvation_report(
 def _distinctive_report() -> _StallReport:
     """Build a report whose every rendered field carries a chosen value.
 
-    The attempt and both deltas deliberately differ from the fixtures'
-    defaults, so a rendering that hardcoded a default — or dropped a field and
-    read a constant — could not satisfy the assertions below.
+    The attempt, both deltas, and the reason deliberately differ from the
+    fixtures' defaults, so a rendering that hardcoded a default — or dropped a
+    field and read a constant — could not satisfy the assertions below.
 
     Returns
     -------
     _StallReport
-        A report whose attempt, deltas, verdict, and evidence are all the
-        values this module chose rather than any fixture default.
+        A report whose attempt, deltas, verdict, reason, and evidence are all
+        the values this module chose rather than any fixture default.
     """
     return _report(
         verdict=HandOffVerdict.HUNG_HANDOFF,
-        children=(_exited_child_with_parent_output(), _blocked_on_parent_stdin()),
-        task_names=("native-pipeline-hand-off:pipeline_wait",),
+        evidence=_StallSnapshot(
+            (_exited_child_with_parent_output(), _blocked_on_parent_stdin()),
+            ("native-pipeline-hand-off:pipeline_wait",),
+            "generator yielded no progress event",
+        ),
         attempt=11,
         telemetry=_Telemetry(fd_delta=7, thread_delta=8),
     )
@@ -199,6 +229,7 @@ def _distinctive_report() -> _StallReport:
         pytest.param("fd_delta=7", id="fd_delta"),
         pytest.param("thread_delta=8", id="thread_delta"),
         pytest.param("verdict=HUNG_HANDOFF", id="verdict"),
+        pytest.param("reason='generator yielded no progress event'", id="reason"),
         pytest.param(
             "pending_tasks=('native-pipeline-hand-off:pipeline_wait',)",
             id="pending_tasks",
@@ -219,6 +250,10 @@ def test_the_diagnostic_names_each_field_it_was_given(fragment: str) -> None:
 
     One fragment per invocation keeps each field an independently reported
     case, so a failure names the contract that broke.
+
+    ``reason`` is the case that proves the point: the two snapshots do record
+    it, but they record the same text the fixtures declare, so a formatter
+    printing a constant would satisfy both. This report carries other text.
     """
     message = _format_stall(_distinctive_report())
 
