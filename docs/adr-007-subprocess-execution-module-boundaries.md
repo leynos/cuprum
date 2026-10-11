@@ -505,10 +505,13 @@ names it no longer defines, so importers keep working. It does not re-export
 `_spawn_subprocess`: `_start_owned_process` resolves that name from
 `_subprocess_spawn`'s globals, so a re-exported copy would be a name no call
 path reads. Patching it there would rebind the copy and leave the real spawn
-running — a test that still passes while exercising nothing. The two tests that
-refuse a spawn therefore patch `cuprum._subprocess_spawn`, and the line-stream
-coordinator imports the seam from that module too rather than through the old
-one, so a single patch covers both driving paths.
+running — a test that still passes while exercising nothing. A test that
+refuses a spawn therefore patches the module whose globals its entry point
+resolves the name from: `cuprum._subprocess_spawn` for `SafeCmd.run()`,
+`cuprum._line_stream.coordinator` for `SafeCmd.lines()`, and
+`cuprum._process_handle.tasks` for `SafeCmd.start()`. Each binds the seam into
+its own globals, so patching the defining module reaches none of the importers,
+and one patch per entry point is the rule rather than one patch for all of them.
 
 The module boundary is by responsibility, not by call depth:
 `_subprocess_spawn` creates a child and announces it; `_subprocess_execution`
