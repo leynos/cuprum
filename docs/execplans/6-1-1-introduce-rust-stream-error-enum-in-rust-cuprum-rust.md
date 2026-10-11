@@ -2342,17 +2342,18 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   was the reason — not a missing workflow or a rate limit.** `main` had moved
   70 commits to `6dae5a13`, so the PR read `CONFLICTING`/`DIRTY` and
   `git merge-tree --write-tree 5ddfada4 6dae5a13` exited 1. GitHub cannot build
-  `refs/pull/432/merge` from a conflicted pair, and without that synthetic merge
-  commit no `pull_request` workflow starts. So the branch's last two commits had
-  no runs at all, including the tip, which carried only third-party review apps.
-  This is worth recording because "no CI" had been read as an infrastructure
-  oddity; it was a hard blocker that only a rebase could clear.
+  `refs/pull/432/merge` from a conflicted pair, and without that synthetic
+  merge commit no `pull_request` workflow starts. So the branch's last two
+  commits had no runs at all, including the tip, which carried only third-party
+  review apps. This is worth recording because "no CI" had been read as an
+  infrastructure oddity; it was a hard blocker that only a rebase could clear.
 
-  The branch was rebased `81efc928..5ddfada4` onto `6dae5a13`: 70 commits in, 70
-  out, none lost or emptied. `range-diff` reports 67 identical and exactly the
-  three conflict sites changed (commits 4, 59, 60). `git merge-tree --write-tree
-  6dae5a13 49ddf8b9` now exits 0, which is the fix — the merge ref can be built
-  again. Both generated spelling files are byte-identical to `main`'s.
+  The branch was rebased `81efc928..5ddfada4` onto `6dae5a13`: 70 commits in,
+  70 out, none lost or emptied. `range-diff` reports 67 identical and exactly
+  the three conflict sites changed (commits 4, 59, 60).
+  `git merge-tree --write-tree 6dae5a13 49ddf8b9` now exits 0, which is the fix
+  — the merge ref can be built again. Both generated spelling files are
+  byte-identical to `main`'s.
 
   Three conflicts, each decided on evidence rather than side preference:
 
@@ -2383,8 +2384,8 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   the assignment's first line carries no indent, which is why the figure was
   re-derived by parsing rather than re-counting with a looser pattern.
 
-  The second finding was a genuine test gap: `_pump_via_pipes` returned only the
-  transferred byte count and never read `sink_read`, so
+  The second finding was a genuine test gap: `_pump_via_pipes` returned only
+  the transferred byte count and never read `sink_read`, so
   `test_pump_default_buffer_matches_explicit` passed for a pump that wrote the
   right number of wrong bytes. It now drains the sink and compares the payload,
   reusing the existing `_read_all` helper from `tests/helpers/stream_pipes.py`
