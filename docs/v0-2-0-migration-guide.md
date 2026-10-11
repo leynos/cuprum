@@ -395,6 +395,41 @@ GitHub Actions, which is when `GITHUB_ACTIONS` holds the runner's value `true`.
 For local reproduction of CI framing, or on a non-standard runner that does not
 export the variable, pass `force=True` to activate the sink deliberately.
 
+## Aggregate stream telemetry in profiling reports
+
+This section concerns the profiling harness in `benchmarks/` rather than the
+`cuprum` library. Applications that only use `cuprum` need no change, and no
+stream read behaviour changes.
+
+The tee hot-path profiling harness gained two keys, and both are additive: the
+keys that were already present are unchanged, and the artefacts remain plain
+JSON.
+
+- `stream_telemetry` in each scenario's `worker-result.json`, covering that
+  worker run, including every repeat in its repeat loop.
+- `stream_telemetry_summary` in a sweep's `read-size-sweep.json`, combining the
+  telemetry of every completed sample in the sweep.
+
+Both keys are written unconditionally, so every worker run and every sweep now
+carries them. A report consumer that ignores unknown keys needs no change, and
+a consumer that validates these artefacts strictly must accept the new keys.
+
+Both keys use the same shape: a `groups` mapping keyed first by the closed
+operation (`stream_drain` or `pipeline_transfer`) and then by the closed outcome
+(`eof`, `cancelled`, `failed`, `downstream_closed`, or
+`post_close_drain_timeout`), plus a `totals` group summed over every group
+present. Each group carries four aggregate fields, and nothing else. The three
+counters `bytes_consumed`, `read_operations`, and `operation_count` are
+integers, and `duration_seconds` is a float summing monotonic operation
+durations.
+
+The telemetry observes only the pure-Python drain and pipeline-transfer paths,
+so a `pipeline_transfer` group may be absent when the Rust backend handles a
+hop; an absent group is not a failure. No per-read or per-chunk telemetry is
+emitted. The aggregate shape mirrors
+[aggregate Python stream-operation observation](#aggregate-python-stream-operation-observation),
+the opt-in production channel described above.
+
 ## Benchmark ratchet measurement protocol
 
 This section concerns the benchmark harness in `benchmarks/` rather than the
