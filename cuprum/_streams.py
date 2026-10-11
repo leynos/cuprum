@@ -25,6 +25,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._echo_truncation import (
     _EchoLineLimiter,
     _validate_bounded_echo_encoding,
@@ -113,6 +114,20 @@ class _StreamConfig:
     # whether it would land mid-line.
     activity: cabc.Callable[[], None] | None = None
     mirror: _MirrorCursor | None = None
+
+    @property
+    def view_errors(self) -> str:
+        """The error policy for a *view* of the child's bytes.
+
+        Line observation and echo render a view rather than the run's capture,
+        so in byte mode they replace undecodable input under
+        :data:`cuprum._constants.OBSERVER_ERROR_POLICY` and cannot end a run
+        whose bytes must reach the caller untouched. A text run keeps
+        :attr:`errors`, so its views raise under a strict policy exactly as
+        they did before byte mode existed. Deriving the choice here keeps the
+        two view decoders from deciding it twice.
+        """
+        return OBSERVER_ERROR_POLICY if self.capture_bytes else self.errors
 
 
 @dc.dataclass(frozen=True, slots=True)

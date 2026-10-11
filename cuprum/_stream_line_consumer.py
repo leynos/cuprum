@@ -127,31 +127,36 @@ def _empty_capture(config: _StreamConfig) -> str | bytes | None:
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create a line-splitting decoder that never fails on invalid bytes.
+    """Create a line-splitting decoder whose policy matches the run's mode.
 
     Line observation renders a *view* of the child's bytes; it is not where a
-    run reports its output, so it must not be able to end the run. The decode
-    therefore always replaces undecodable bytes, whatever policy the caller
-    chose for the capture. Under ``errors="strict"`` a caller has asked the
-    capture to reject invalid bytes, and the capture still does: a byte-exact
-    run hands back ``bytes`` untouched, and a text run raises when it decodes
-    its buffer in :func:`cuprum._stream_drain_finish._captured_payload`.
-
-    Reading the caller's policy here instead would let an ambient observer
-    change the outcome of a run it merely watches. A registered
-    ``sh.observe()`` hook, or the line feeder the idle partition attaches,
-    supplies a line sink the caller never asked for, and under
+    run reports its output, and in a byte-exact run it must not be able to end
+    the run and strand the bytes the caller asked for. The decode therefore
+    replaces undecodable bytes in that mode, whatever policy the caller chose
+    for the capture. Reading the caller's policy in byte mode instead would let
+    an ambient observer change the outcome of a run it merely watches: a
+    registered ``sh.observe()`` hook, or the line feeder the idle partition
+    attaches, supplies a line sink the caller never asked for, and under
     ``errors="strict"`` the resulting :class:`UnicodeDecodeError` would escape
     from the drain's read loop and kill a ``run_bytes()`` that would otherwise
     have returned the child's bytes intact.
 
-    See :data:`cuprum._constants.OBSERVER_ERROR_POLICY` for the shared
-    rationale.
+    A text run is deliberately not covered: there the view decodes under the
+    caller's configured policy, in step with the capture, so ``run()`` and
+    ``SafeCmd.lines()`` under ``errors="strict"`` still raise on undecodable
+    input exactly as they did before byte mode existed. The byte-mode capture
+    still reports undecodable input where it is read back: a byte-exact run
+    hands back ``bytes`` untouched, and a text run raises when it decodes its
+    buffer in :func:`cuprum._stream_drain_finish._captured_payload`.
+
+    See :data:`cuprum._constants.OBSERVER_ERROR_POLICY` and
+    :attr:`cuprum._streams._StreamConfig.view_errors` for the shared rationale.
 
     Returns
     -------
     codecs.IncrementalDecoder
-        A decoder that replaces undecodable bytes rather than raising.
+        A decoder that replaces undecodable bytes in byte mode, and one that
+        keeps the caller's policy otherwise.
     """
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=OBSERVER_ERROR_POLICY)
+    return decoder_factory(errors=config.view_errors)
