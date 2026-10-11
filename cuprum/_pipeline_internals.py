@@ -61,6 +61,8 @@ from cuprum._pipeline_stream_results import (
 )
 from cuprum._pipeline_types import (
     _EventDetails as _EventDetails,
+)
+from cuprum._pipeline_types import (
     _ExecutionHooks as _ExecutionHooks,
 )
 from cuprum._pipeline_types import (

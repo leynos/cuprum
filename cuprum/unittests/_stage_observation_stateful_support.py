@@ -16,6 +16,7 @@ from cuprum._sink_lifecycle import _SinkBracket
 from cuprum.events import TerminalOutcome
 
 if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import SafeCmd
 
 
@@ -81,9 +82,9 @@ def _has_planned_exit_without_status(
 def _build_successful_stage_results(
     machine: _SettlementMachine,
     generated_exit_codes: list[int],
-) -> list[sh.CommandResult]:
+) -> list[_AnyCommandResult]:
     """Prepare planned stage events and assemble finalizer result values."""
-    stage_results: list[sh.CommandResult] = []
+    stage_results: list[_AnyCommandResult] = []
     for stage_index, command in enumerate(machine.commands):
         exit_code = machine.exit_codes[stage_index]
         if exit_code is None:
