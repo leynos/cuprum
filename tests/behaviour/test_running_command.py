@@ -31,6 +31,8 @@ from pytest_bdd import scenario, then
 
 from cuprum.sh import SignalAfterExitError, TimeoutExpired
 from tests.behaviour._running_command_children import (
+    _EARLY_EXIT_CODE,
+    _OUTPUT_EXIT_CODE,
     DELAYED_WRITER_MARKER,
     HandleObservation,
 )
@@ -47,14 +49,6 @@ pytestmark = pytest.mark.skipif(
 # plugin makes pytest collect its fixtures, which is what registers its
 # Given/When steps here without restating the step text.
 pytest_plugins = ("tests.behaviour._running_command_steps",)
-
-#: Status the output-producing child exits with, non-zero so a signal-reported
-#: code cannot pass for it.
-_OUTPUT_EXIT_CODE = 7
-
-#: Status the early-exit child chooses for itself, so a refusal that reports
-#: the wrong code cannot pass by coincidence.
-_EARLY_EXIT_CODE = 3
 
 #: How many waiters the concurrent-wait scenario issues.
 _WAITERS = 5

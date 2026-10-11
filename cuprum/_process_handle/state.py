@@ -22,6 +22,7 @@ and what each answer guarantees.
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 from cuprum._process_handle.control import (
@@ -250,8 +251,19 @@ class RunningCommand:
 
         Never suppresses: the block's own exception reaches the caller
         unchanged. A teardown failure is reported only when the block itself
-        succeeded — otherwise it would replace the error that caused the exit —
-        and it is recorded on the run's event stream either way.
+        succeeded — otherwise it would replace the error that caused the exit.
+
+        Cancellation is the exception to that rule, and the reason is not
+        stylistic. ``_shielded_cleanup`` finishes the teardown and then
+        re-raises the ``CancelledError`` it absorbed, so holding it as an
+        ordinary teardown failure and swallowing it because the block already
+        failed would lose the cancel request: the caller handles its own error
+        and keeps going, while the task that was told to stop never sees the
+        cancellation. From 3.11 on it stays marked cancelled with no matching
+        ``CancelledError``, and an enclosing ``asyncio.timeout`` or task-group
+        shutdown then waits on, or misreports, a task that was never actually
+        cancelled. So cancellation always propagates; only ordinary teardown
+        failures defer to the block's error.
 
         Settlement is attempted even when the stop did not complete cleanly,
         and that ordering is deliberate. The two steps are separate *try*
@@ -262,20 +274,29 @@ class RunningCommand:
         which is the state this method exists to prevent.
         """
         stop_error: BaseException | None = None
+        cancellation: asyncio.CancelledError | None = None
         try:
             await _shielded_cleanup(self._stop(None))
+        except asyncio.CancelledError as cancelled:
+            cancellation = cancelled
         except BaseException as stop_failure:  # ruff: ignore[blind-except] - held, not handled: settling must still run
             stop_error = stop_failure
         try:
             await _shielded_cleanup(self._settlement.outcome())
+        except asyncio.CancelledError as cancelled:
+            # The first cancellation is the one the caller is owed: it is the
+            # request that arrived, and a second is a repeat of it.
+            cancellation = cancellation or cancelled
         except BaseException as settle_failure:  # ruff: ignore[blind-except] - held, not handled: the stop's failure takes precedence
             if stop_error is None:
                 stop_error = settle_failure
+        if cancellation is not None:
+            raise cancellation
         if stop_error is not None and exc is None:
             raise stop_error
         # Otherwise the block is already failing. That error is the one the
-        # caller has to see, so teardown's own failure is left on the
-        # observation stream rather than allowed to take its place.
+        # caller has to see, so an ordinary teardown failure is dropped rather
+        # than allowed to take its place.
 
     async def _stop(self, grace: float | None) -> None:
         """Escalate the child to a stop; idempotent, and never waits to settle."""

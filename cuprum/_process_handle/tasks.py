@@ -154,9 +154,9 @@ async def _start_handle_run(
     Raises
     ------
     BaseException
-        Whatever the ``start`` emission raised, once the child has been
-        terminated and reaped.
-    """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission raised
+        Whatever the ``start`` emission or the task attachment raised, once the
+        child has been terminated and reaped.
+    """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission or the attachment raised
     started_at = perf_counter()
     wall_clock_started_at = execution.observation.wall_clock()
     # Set on the bundle before the spawn, because the record this returns is

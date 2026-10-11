@@ -85,7 +85,10 @@ class _HookRefusalError(RuntimeError):
 #: A child that writes its error marker first, then its output marker, then
 #: blocks far longer than any case here will wait. The order is load-bearing:
 #: a case waits for the *stdout* line to arrive, which therefore guarantees
-#: both streams had already been written and flushed by the time it acts.
+#: both streams had already been written and flushed by the time it acts. That
+#: guarantee rests on the wait, not on the child's ordering: the callback must
+#: ignore stderr, because the child writes that first and a callback that fired
+#: on it would report readiness while the stdout marker did not yet exist.
 _CHILD_SOURCE = (
     "import sys, time\n"
     f"sys.stderr.write({CHILD_STDERR!r} + chr(10))\n"
@@ -94,6 +97,18 @@ _CHILD_SOURCE = (
     "sys.stdout.flush()\n"
     "time.sleep(300)\n"
 )
+
+
+def _hear_stdout(event: LineEvent, heard: asyncio.Event) -> None:
+    """Set *heard* once the child's stdout line arrives, ignoring stderr.
+
+    The child writes stderr first, so a callback that fired on any line would
+    report readiness while the stdout marker was still unwritten — and the
+    deadline could then stop the child before the output the case is about
+    ever existed, leaving the assertion to fail intermittently under load.
+    """
+    if event.stream == "stdout":
+        heard.set()
 
 
 def _observe() -> tuple[list[ExecEvent], cabc.Callable[[ExecEvent], None]]:
@@ -235,7 +250,9 @@ def test_an_expiry_carries_the_output_the_child_had_written() -> None:
 
         with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
             handle = await command.start(
-                output=RunOutputOptions(on_line=lambda _event: heard.set()),
+                output=RunOutputOptions(
+                    on_line=lambda event: _hear_stdout(event, heard),
+                ),
             )
             # The child writes stderr first, so hearing its stdout means both
             # streams have been written and the deadline cannot cut either off
@@ -284,7 +301,9 @@ def test_an_expired_run_settles_as_a_timeout() -> None:
             sh.observe(observe),
         ):
             handle = await command.start(
-                output=RunOutputOptions(on_line=lambda _event: heard.set()),
+                output=RunOutputOptions(
+                    on_line=lambda event: _hear_stdout(event, heard),
+                ),
             )
             await asyncio.wait_for(heard.wait(), timeout=_READY)
             with pytest.raises(TimeoutExpired):

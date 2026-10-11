@@ -44,6 +44,8 @@ if typ.TYPE_CHECKING:
 
 __all__ = [
     "DELAYED_WRITER_MARKER",
+    "_EARLY_EXIT_CODE",
+    "_OUTPUT_EXIT_CODE",
     "HandleObservation",
     "ReadyChild",
     "_absent_start_command",
@@ -74,11 +76,16 @@ _READY_TIMEOUT = 5.0
 
 _EXIT_SOURCE = "import sys\nsys.exit({code})\n"
 _SLEEP_SOURCE = "import time\ntime.sleep(300)\n"
+# Both templates take the status as a parameter for the same reason: a caller
+# that names one status and receives another has no way to notice, and the
+# statuses here are deliberately distinct from zero and from each other so a
+# wrong one cannot pass by coincidence. Hard-coding one of them into the
+# output-writing template is exactly how that guarantee is lost.
 _OUTPUT_EXIT_SOURCE = (
     "import sys\n"
     f"sys.stdout.write({CHILD_STDOUT!r} + chr(10))\n"
     "sys.stdout.flush()\n"
-    f"sys.exit({_OUTPUT_EXIT_CODE})\n"
+    "sys.exit({code})\n"
 )
 _DELAYED_WRITER_SOURCE = (
     f"import time\ntime.sleep(0.2)\nprint({DELAYED_WRITER_MARKER!r}, flush=True)\n"
@@ -195,8 +202,8 @@ def _exit_code_command(tmp_path: Path, code: int, *, writes: bool = False) -> Sa
     SafeCmd
         The built command.
     """
-    source = _OUTPUT_EXIT_SOURCE if writes else _EXIT_SOURCE.format(code=code)
-    return _script_command(tmp_path, "exits.py", source)
+    template = _OUTPUT_EXIT_SOURCE if writes else _EXIT_SOURCE
+    return _script_command(tmp_path, "exits.py", template.format(code=code))
 
 
 def _sleep_command(tmp_path: Path) -> SafeCmd:

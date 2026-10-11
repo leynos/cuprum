@@ -264,7 +264,11 @@ def test_teardown_cancelled_mid_grace_still_settles() -> None:
     async def run_case() -> None:
         """Cancel the block leaving the handle, then inspect what survived."""
         process = _SigtermImmuneProcess()
-        handle = _handle(process, grace=5.0)
+        # Long enough that the cancellation lands inside the window, short
+        # enough that the case does not spend five seconds proving it: the
+        # cancellation is timed against ``process.signalled``, not the clock,
+        # so it fires as soon as the SIGTERM has been delivered.
+        handle = _handle(process, grace=0.5)
 
         async def leave_context() -> None:
             """Enter the handle's context and leave it at once."""
@@ -491,6 +495,66 @@ def test_teardown_after_an_expired_wait_keeps_the_recorded_outcome() -> None:
         )
         assert handle.result.exit_code == _TERMINATED, (
             f"the recorded outcome must be the stop's, got {handle.result.exit_code}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_cancellation_survives_a_failing_block() -> None:
+    """A cancelled teardown propagates even when the block already failed.
+
+    The two rules pull in opposite directions and only one of them can win.
+    A block that raises keeps its own error — teardown does not get to replace
+    it — but a cancellation is not a teardown *failure*, it is a request that
+    the task stop, and ``_shielded_cleanup`` re-raises it precisely so it is
+    not lost. Holding that cancellation as an ordinary failure and dropping it
+    because the block failed is what loses it: the caller handles ``ValueError``
+    and carries on, while the task stays marked cancelled with no matching
+    ``CancelledError`` — so an enclosing ``asyncio.timeout`` or task-group
+    shutdown waits on a task that was never actually cancelled.
+
+    What the caller sees is therefore both facts at once: the cancellation
+    wins, and the task *ends* as cancelled rather than merely being marked so —
+    which is the difference between a request that was delivered and one that
+    was only counted.
+    """
+
+    async def run_case() -> None:
+        """Fail the block, cancel inside the grace, and inspect the task."""
+        process = _SigtermImmuneProcess()
+        handle = _handle(process, grace=0.5)
+
+        async def fail_and_leave() -> None:
+            """Fail the block, then leave the context while teardown runs."""
+            async with handle:
+                _raise_block_error()
+
+        task = asyncio.ensure_future(fail_and_leave())
+        # Let the block fail and teardown reach the point where it is waiting
+        # out the grace period, so the cancellation lands inside it rather than
+        # before the block has even started.
+        await process.signalled.wait()
+        task.cancel()
+        raised: BaseException | None = None
+        try:
+            await task
+        except BaseException as failure:  # ruff: ignore[blind-except] - carried out: which error reaches the caller is what this case asserts
+            raised = failure
+
+        assert isinstance(raised, asyncio.CancelledError), (
+            "the cancellation must reach the caller rather than being "
+            f"swallowed by the block's error; got {raised!r}"
+        )
+        assert task.cancelled(), (
+            "the task must end as cancelled rather than merely counted as "
+            "such, which is what a swallowed request leaves behind"
+        )
+        assert process.kill_calls == 1, (
+            "the escalation must still complete before the cancellation "
+            f"propagates, got {process.kill_calls} kills"
+        )
+        assert handle.result is not None, (
+            "a cancelled teardown must still settle the handle"
         )
 
     asyncio.run(run_case())

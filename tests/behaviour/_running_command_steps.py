@@ -21,6 +21,8 @@ import typing as typ
 from pytest_bdd import given, when
 
 from tests.behaviour._running_command_children import (
+    _EARLY_EXIT_CODE,
+    _OUTPUT_EXIT_CODE,
     ReadyChild,
     _absent_start_command,
     _delayed_writer_command,
@@ -54,14 +56,6 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum.sh import SafeCmd
-
-#: Status the output-producing child exits with, non-zero so a signal-reported
-#: code cannot pass for it.
-_OUTPUT_EXIT_CODE = 7
-
-#: Status the early-exit child chooses for itself, so a refusal that reports
-#: the wrong code cannot pass by coincidence.
-_EARLY_EXIT_CODE = 3
 
 
 @given(

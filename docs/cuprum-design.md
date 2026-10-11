@@ -4206,12 +4206,17 @@ the way the subprocess execution path is split by lifecycle concern:
   state that must not be duplicated.
 - `cuprum/_process_handle/tasks.py` owns the spawn seam: `_HandleRun`, the
   deadline-stripping `_build_handle_execution`, and `_start_handle_run`, which
-  spawns the child, emits its `start` event, and reclaims the child if that
-  emission raises — a `start` event whose synchronous observe hook raises is
-  the one failure that can strand a spawned child. `_HandleRun.default_timeout`
-  carries the deadline `start()` resolved, because the bundle cannot hold it
-  without the spawn path acting on it; `RunningCommand.wait` consults it
-  whenever the caller supplies no deadline of their own.
+  spawns the child, emits its `start` event, attaches the run tasks, and
+  reclaims the child if either step raises. A `start` event whose synchronous
+  observe hook raises is the immediate hazard, since the child is already
+  running and the caller is about to be told the start failed; a failure while
+  the run tasks are attached is the quieter one, because it leaves a child
+  nobody is driving — no stdin writer, no consumers to drain its pipes — which
+  is why the attach sits inside the same guard rather than after it.
+  `_HandleRun.default_timeout` carries the deadline `start()` resolved, because
+  the bundle cannot hold it without the spawn path acting on it;
+  `RunningCommand.wait` consults it whenever the caller supplies no deadline of
+  their own.
 - `cuprum/_process_handle/control.py` owns signal delivery and termination, and
   is where the ordering of the platform and child-state checks lives.
 - `cuprum/_process_handle/coordinator.py` owns waiting, settling, and result
