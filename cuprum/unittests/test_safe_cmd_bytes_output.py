@@ -57,6 +57,15 @@ _WRITE_BOTH_STREAMS = (
     f"sys.stderr.buffer.write({_FAILING_PAYLOAD!r})"
 )
 _ECHO_STDIN = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
+# The child writes the payload to both streams and only then fails, so one run
+# pins both facts at once: the non-zero exit and the bytes it did not truncate.
+_FAILURE_CODE = 3
+_WRITE_BOTH_STREAMS_AND_FAIL = (
+    "import sys;"
+    f"sys.stdout.buffer.write({_FAILING_PAYLOAD!r});"
+    f"sys.stderr.buffer.write({_FAILING_PAYLOAD!r});"
+    f"raise SystemExit({_FAILURE_CODE})"
+)
 
 
 type BytesExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], BytesCommandResult]
@@ -102,6 +111,12 @@ def bytes_cmd(python_builder: cabc.Callable[..., SafeCmd]) -> SafeCmd:
 
 
 @pytest.fixture
+def failing_cmd(python_builder: cabc.Callable[..., SafeCmd]) -> SafeCmd:
+    """Build the command that writes the payload and then exits non-zero."""
+    return python_builder("-c", _WRITE_BOTH_STREAMS_AND_FAIL)
+
+
+@pytest.fixture
 def observe_scope() -> ObserveScope:
     """Provide an allowlist and a binary-payload command it admits.
 
@@ -139,6 +154,37 @@ def test_byte_exact_capture_round_trips_both_streams(
         f"stderr must survive byte-for-byte, got {result.stderr!r}"
     )
     assert result.exit_code == 0, "the child exits cleanly after writing"
+
+
+def test_byte_exact_capture_reports_a_failing_child(
+    byte_entry_point: BytesExecuteFn,
+    failing_cmd: SafeCmd,
+) -> None:
+    """A non-zero byte run reports the failure and keeps the bytes it captured.
+
+    Failure is the half of the result contract the passing runs cannot pin: an
+    implementation that reported ``ok`` unconditionally, or that read success
+    out of the captured stream rather than the exit status, satisfies every
+    test above and fails here. The child writes before it fails, so the run
+    must report both facts at once rather than trading one for the other.
+    """
+    result = byte_entry_point(failing_cmd, {})
+
+    assert isinstance(result, BytesCommandResult), (
+        f"run_bytes must report a BytesCommandResult, got {type(result).__name__}"
+    )
+    assert result.exit_code == _FAILURE_CODE, (
+        f"the child's exit status must reach the result, got {result.exit_code}"
+    )
+    assert result.ok is False, (
+        "a non-zero exit must report ok=False, not merely carry the exit code"
+    )
+    assert result.stdout == _FAILING_PAYLOAD, (
+        f"a failing run must still keep its stdout bytes, got {result.stdout!r}"
+    )
+    assert result.stderr == _FAILING_PAYLOAD, (
+        f"a failing run must still keep its stderr bytes, got {result.stderr!r}"
+    )
 
 
 def test_text_mode_is_unchanged_beside_the_byte_exact_entry_point(

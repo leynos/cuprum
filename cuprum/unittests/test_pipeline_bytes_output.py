@@ -90,6 +90,25 @@ def _binary_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     return producer | consumer, frozenset([python_program])
 
 
+# The second stage relays its stdin to the capture, then fails. It writes no
+# stream of its own, so the bytes the aggregate hands back are the first
+# stage's — proving the failing stage did not cost the pipeline its capture.
+_FAILURE_CODE = 4
+_CONSUMER_FAILS = (
+    "import sys;"
+    "sys.stdout.buffer.write(sys.stdin.buffer.read());"
+    f"raise SystemExit({_FAILURE_CODE})"
+)
+
+
+def _failing_pipeline() -> tuple[Pipeline, frozenset[Program]]:
+    """Build a two-stage pipeline whose final stage exits non-zero."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", _PRODUCER)
+    return producer | python("-c", _CONSUMER_FAILS), frozenset([python_program])
+
+
 def test_pipeline_run_bytes_relays_binary_stdout_to_the_capture() -> None:
     """The final capture is the producer's bytes, relayed undecoded."""
     pipeline, allowlist = _relay_pipeline()
@@ -108,6 +127,59 @@ def test_pipeline_run_bytes_relays_binary_stdout_to_the_capture() -> None:
     assert result.stages[0].stdout is None, (
         "an intermediate stage's stdout is consumed by the next stage rather "
         f"than captured, got {result.stages[0].stdout!r}"
+    )
+
+
+def test_pipeline_run_bytes_reports_a_failing_stage() -> None:
+    """A failing stage sets ``ok`` false and is named by the failure helpers.
+
+    The success-only assertions in the tests around this one cannot tell the
+    aggregate helpers from constants: ``ok``, ``failure``, and ``failure_index``
+    all satisfy them either way, so an implementation that always reported
+    success, or that named the wrong stage, would pass. This run fails and
+    pins each of them, together with the byte capture and the class of every
+    stage the aggregate was assembled from.
+
+    The failing stage is the *final* one, so it ends the pipeline by itself and
+    ``failure_index`` follows from the exit codes rather than from which stage
+    happened to be reaped first. A mid-pipeline failure would make this
+    assertion a race between the failure being latched and its siblings being
+    terminated by fail-fast.
+    """
+    pipeline, allowlist = _failing_pipeline()
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = pipeline.run_bytes_sync()
+
+    assert isinstance(result, BytesPipelineResult), (
+        f"run_bytes must report a BytesPipelineResult, got {type(result).__name__}"
+    )
+    assert result.ok is False, (
+        "a non-zero stage must report ok=False, not merely carry an exit code"
+    )
+    assert result.failure_index == 1, (
+        f"the failing stage is the second one, got {result.failure_index}"
+    )
+    assert result.failure is result.stages[1], (
+        "failure must be the stage that exited non-zero, not a copy of it"
+    )
+    assert result.final is result.stages[-1], "final must be the last stage"
+    assert result.final is result.failure, (
+        "the final stage is the one that failed, so the two must agree"
+    )
+    assert result.stages[0].exit_code == 0, (
+        "the upstream stage had already produced its output, so it must have "
+        f"completed cleanly; got {result.stages[0].exit_code}"
+    )
+    assert result.final.exit_code == _FAILURE_CODE, (
+        f"the stage's exit status must reach the result, got {result.final.exit_code}"
+    )
+    assert result.stdout == _PRODUCER_STDOUT, (
+        "the relayed bytes must survive the downstream stage's failure, got "
+        f"{result.stdout!r}"
+    )
+    assert all(isinstance(stage, BytesCommandResult) for stage in result.stages), (
+        f"every stage must be a BytesCommandResult, got {result.stages!r}"
     )
 
 
