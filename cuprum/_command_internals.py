@@ -71,10 +71,6 @@ __all__ = [
     "_run_prepared_command",
 ]
 
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-
 
 @dc.dataclass(frozen=True, slots=True)
 class _ExecutionState:

@@ -233,9 +233,14 @@ class TestAdapterProjection:
             assert logging_extra.get("cuprum_error_category") == "producer", (
                 "stdio-failure records must name the failing boundary"
             )
-            assert (
-                projections["tracing_span_event"].get("error_category") == "producer"
-            ), "span events must name the failing boundary"
+            span_event = projections["tracing_span_event"]
+            assert span_event is not None, (
+                "a stdio_error must reach the tracer as a span event, not as "
+                "a suppressed attribute on an unrelated surface"
+            )
+            assert span_event.get("error_category") == "producer", (
+                "span events must name the failing boundary"
+            )
             assert set(projections["metrics_labels"]) == {"program", "project"}, (
                 "the boundary category must not become a common metric label"
             )

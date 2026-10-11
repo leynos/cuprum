@@ -354,7 +354,10 @@ def _invalid_chunk_producer() -> cabc.AsyncIterator[str | bytes]:
     collections.abc.AsyncIterator[str | bytes]
         A producer whose single chunk is not a valid chunk type.
     """
-    return _chunks(typ.cast("str | bytes", True))
+    # Named rather than passed as a literal: a bare ``True`` in the argument
+    # list reads as a flag to ``_chunks``, which it is not — it is the chunk.
+    invalid: object = True
+    return _chunks(typ.cast("str | bytes", invalid))
 
 
 def test_a_runtime_invalid_chunk_is_a_source_failure(
