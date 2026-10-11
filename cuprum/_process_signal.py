@@ -32,6 +32,7 @@ from cuprum._process_group import (
     _POST_KILL_SETTLEMENT_S,
     _await_group_exit,
     _await_group_teardown,
+    _group_has_members,
 )
 
 if typ.TYPE_CHECKING:
@@ -40,6 +41,36 @@ if typ.TYPE_CHECKING:
     from cuprum._teardown_policy import _TeardownPolicy
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _teardown_is_settled(
+    process: asyncio.subprocess.Process,
+    *,
+    owns_group: bool,
+    is_done: cabc.Callable[[], bool],
+) -> bool:
+    """Return whether the run's teardown target has nothing left to signal.
+
+    An inherited-group run targets the direct child alone, so a completed child
+    *is* settlement and the caller's *is_done* answers it.
+
+    An owning run targets the child's whole group, and that group can outlive
+    the child that led it. The kernel holds a group addressable for as long as
+    it has a member, and the group's name — the leader's pid — therefore cannot
+    be recycled into an unrelated group while this one still answers. A live
+    probe is thus both safe and decisive, and it knows something *is_done*
+    cannot: whether a descendant is still in the group. Such a descendant is
+    exactly the process that keeps an inherited pipe open past a graceful child
+    exit, so treating the reaped leader as settlement would leak the very
+    descendant this policy exists to reclaim.
+
+    The probe is asked only where :func:`_signal_child` would signal the group.
+    A child with no pid has no group name to ask about, and that helper falls
+    back to the direct route there, so settlement is decided the same way.
+    """
+    if owns_group and process.pid is not None:
+        return not _group_has_members(process.pid)
+    return is_done()
 
 
 def _signal_child(
@@ -122,12 +153,13 @@ async def _terminate_process_with_wait(
     :func:`_signal_child` and :func:`_settlement` are the two places that
     decide it.
 
-    *is_done* still short-circuits on the direct child, which is deliberate.
-    While that child is un-reaped its identifier is unambiguously this run's,
-    so the group name ``pid == pgid`` is too. Once the child has been reaped
-    that name may already have been recycled, so signalling it could reach a
-    group this run never created; an owned teardown therefore stops there
-    rather than trading a leaked descendant for signalling a stranger.
+    Settled is decided by :func:`_teardown_is_settled` rather than by *is_done*
+    alone. For an inherited-group run the two are the same question, but an
+    owning run's target is the child's whole group, and that group survives the
+    child that led it: a descendant left holding an inherited pipe is still a
+    member after the child has been reaped. Short-circuiting on the child alone
+    would leave that descendant running and the run's pipes held open, which is
+    the failure this policy exists to prevent.
 
     Returns
     -------
@@ -138,7 +170,7 @@ async def _terminate_process_with_wait(
     """
     grace_period = max(0.0, policy.grace_period)
     owns_group = policy.owns_group_for(0)
-    if is_done():
+    if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
         return False
     try:
         _signal_child(

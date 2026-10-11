@@ -94,23 +94,28 @@ def test_owned_pipeline_stages_are_each_signalled_as_a_group(
     descendants running.
     """
     signalled: list[tuple[int, int]] = []
+    live: set[int] = {7001, 7002}
 
     def recording_killpg(pgid: int, sig: int) -> None:
-        """Record the signal, then report the group as empty.
+        """Record the signal and retire the group it needs to signal.
 
-        There are no real members behind these doubles, so the probe that
-        settles the grace period has to see the group empty; reporting
-        ``ProcessLookupError`` for the null probe is how a stub says so.
+        The probe that settles the grace period rides on the same call, so the
+        stub reports a group as live until it has been signalled — which is
+        what a real group does, and what keeps the probe from standing in for
+        settlement before anything has been asked to exit.
 
         Raises
         ------
         ProcessLookupError
-            For the null probe on signal ``0``, standing in for a group whose
-            last member has gone.
+            Once *pgid* has no members left. The call is recorded before that
+        decision so a poll that finds the group already gone is still
+        observable as a probe that happened.
         """
         signalled.append((pgid, sig))
-        if sig == 0:
+        if pgid not in live:
             raise ProcessLookupError
+        if sig != 0:
+            live.discard(pgid)
 
     monkeypatch.setattr(os, "killpg", recording_killpg)
 
@@ -131,9 +136,9 @@ def test_owned_pipeline_stages_are_each_signalled_as_a_group(
         "each owned stage's group must be signalled, in stage order; "
         f"found {signalled!r}"
     )
-    assert sorted(probes) == [(7001, 0), (7002, 0)], (
-        "the grace period must be settled by probing each owned group; "
-        f"found {probes!r}"
+    assert probes == [(7001, 0), (7002, 0), (7001, 0), (7002, 0)], (
+        "each owned group is probed by the settled check and again by the "
+        f"grace-period wait; found {probes!r}"
     )
 
 
@@ -303,33 +308,43 @@ def test_a_partial_spawn_leaves_no_owned_group_running(
     )
 
 
-def test_an_exited_owned_stage_is_not_signalled_at_all(
+def test_an_exited_owned_stage_still_reaches_its_live_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A stage recorded as owning a group whose leader has exited is a no-op.
+    """A stage that exited early is still torn down through its group.
 
     ``_cleanup_spawned_processes`` runs on the partial-spawn path, where a
     stage that has already exited is an ordinary outcome rather than a
-    failure. Teardown must absorb it as quietly as it absorbs a signal to a
-    reaped direct child.
+    failure. A completed direct child is nevertheless not settlement for an
+    owning run: the group it led can outlive it, and a descendant still in that
+    group holds the inherited pipes open.
 
-    "Quietly" here means *no signal at all*, group signals included, and this
-    test exists because the obvious alternative looks equally reasonable. The
-    group name an owned stage is signalled by is its leader's pid, and that
-    stage has been reaped: the kernel is free to have recycled the number, so
-    probing or signalling the group could reach a group this run never created.
-    The reaped child is what makes the name unsafe, so the short-circuit on a
-    completed child is what keeps the group signal honest.
+    The group name is the reaped leader's pid, so the probe that decides this
+    must itself be safe — and it is, because the kernel keeps a group
+    addressable while it has a member, so a name that still answers cannot have
+    been recycled. Signalling it therefore reaches this run's own descendant
+    rather than the stranger the old blanket short-circuit feared.
     """
     doubles = [_RecordingProcess(7005)]
     doubles[0].returncode = 0
     group_signals: list[tuple[int, int]] = []
+    # A group stays addressable while it holds a member, which is what makes
+    # the probe safe. Model a member that ignores SIGTERM, so the probe keeps
+    # answering until the escalation empties the group.
+    is_live = True
 
-    def forbidden_killpg(pgid: int, sig: int) -> None:
-        """Record rather than signal a group whose name may be recycled."""
+    def live_group_killpg(pgid: int, sig: int) -> None:
+        """Report the group as live until it is compelled to exit."""
+        nonlocal is_live
+        if is_live is False:
+            raise ProcessLookupError(pgid, "No such process")
+        if sig == 0:
+            return
         group_signals.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            is_live = False
 
-    monkeypatch.setattr(os, "killpg", forbidden_killpg)
+    monkeypatch.setattr(os, "killpg", live_group_killpg)
 
     async def run_case() -> None:
         """Tear down a partial spawn whose one stage has already exited."""
@@ -342,15 +357,16 @@ def test_an_exited_owned_stage_is_not_signalled_at_all(
 
     asyncio.run(run_case())
 
-    assert not group_signals, (
-        "an exited owned stage's group name may have been recycled, so it must "
-        f"not be signalled or probed; found {group_signals!r}"
+    assert group_signals == [(7005, signal.SIGTERM), (7005, signal.SIGKILL)], (
+        "an exited owned stage's group must be asked to exit and then "
+        f"compelled, reaching the descendant the leader left behind; got "
+        f"{group_signals!r}"
     )
-    assert not doubles[0].terminated, (
-        "an exited stage must not be signalled directly either"
+    assert doubles[0].terminated is False, (
+        "an owned stage is reached through its group, not the direct route"
     )
-    assert not doubles[0].killed, (
-        "an exited owned group must never be escalated to SIGKILL"
+    assert doubles[0].killed is False, (
+        "the direct child has already exited, so it is never escalated"
     )
     assert doubles[0].returncode == 0, (
         "the stage's recorded exit code must survive teardown unchanged"

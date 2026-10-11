@@ -149,6 +149,17 @@ async def _terminate_owned_run(run: _OwnedRun) -> None:
     await run.process.wait()
 
 
+def _kill_ignoring_missing(pid: int, *, group: bool) -> None:
+    """Force-kill *pid* — or its group — tolerating a target already gone."""
+    try:
+        if group:
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def test_owned_group_teardown_terminates_a_grandchild_that_ignores_sigterm(
     tmp_path: Path,
 ) -> None:
@@ -288,6 +299,73 @@ def test_owned_group_teardown_of_an_exited_child_is_not_an_error(
         assert process.returncode is not None, (
             "the exited child must keep its recorded exit code"
         )
+
+    asyncio.run(run_case())
+
+
+def test_owned_teardown_reaches_a_group_its_reaped_leader_left_behind(
+    tmp_path: Path,
+) -> None:
+    """A reaped leader is not settlement while its group still holds a member.
+
+    This is the failure the ownership policy exists to prevent, in its most
+    easily missed form. The direct child exits straight away, but a descendant
+    stays behind in the group the child led — and because the child is reaped
+    by the time teardown starts, a short-circuit on the direct child alone
+    would report the run as settled and never signal the group at all.
+
+    The kernel keeps the group addressable while that member lives, so the
+    group name is still this run's and the descendant is still reachable. Both
+    halves are asserted: the escaped-background member is gone afterwards, and
+    the already-reaped leader's recorded exit code survives.
+    """
+
+    async def run_case() -> None:
+        """Spawn a leader that leaves a member behind and exits, then tear down."""
+        pid_file = tmp_path / "member.pid"
+        leader_script = (
+            "import os, time\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            f"    open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+            "    while True:\n"
+            "        time.sleep(60)\n"
+            "os._exit(0)\n"
+        )
+        process = await asyncio.create_subprocess_exec(
+            python_interpreter(),
+            "-c",
+            leader_script,
+            start_new_session=True,
+        )
+        # The leader exits at once; wait for that exit *and* for the member it
+        # left behind to be observable, so teardown genuinely starts against a
+        # reaped leader rather than racing its spawn.
+        await process.wait()
+        member_pid = await asyncio.to_thread(
+            wait_for_pid_file,
+            pid_file,
+            context="member left behind by the reaped leader",
+        )
+        assert process_is_running(member_pid), (
+            "the member must outlive the leader this case is built around"
+        )
+        assert process.returncode is not None, (
+            "the leader must be reaped before teardown begins"
+        )
+
+        try:
+            await _terminate_all_shielded(
+                (process,),
+                _TeardownPolicy(0.5, owns_group=True),
+            )
+            assert not process_is_running(member_pid), (
+                "a reaped leader must not settle an owned group that still "
+                "holds a descendant"
+            )
+        finally:
+            _kill_ignoring_missing(process.pid, group=True)
+            _kill_ignoring_missing(member_pid, group=False)
 
     asyncio.run(run_case())
 
