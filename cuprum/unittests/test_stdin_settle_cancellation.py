@@ -265,6 +265,7 @@ def test_a_child_that_never_reads_does_not_wedge_the_run(
     command = python_builder("-c", _EXITS_AND_HOLDS_STDIN)
 
     async def run_case() -> int:
+        """Run with more than the pipe can hold and report the child's exit."""
         result = await command.run(
             stdin=StdinInput(data=b"x" * _BLOCKING_PAYLOAD_BYTES),
             output=RunOutputOptions(capture=False),

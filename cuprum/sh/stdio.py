@@ -117,10 +117,18 @@ def _normalize_payload(target: StdioTarget) -> None:
         the ``path`` variant carries something other than a path.
     """
     if target.kind == "fd":
-        if target.value is None:
+        resource = target.value
+        if resource is None:
             msg = "StdioTarget.fd requires a descriptor or file object"
             raise ValueError(msg)
-        _reject_sentinel_descriptor(target.value)
+        if isinstance(resource, Path):
+            # The two fields are independently typed, so ``kind == "fd"`` does
+            # not narrow ``value`` on its own. Refusing a path here states the
+            # correlation the type cannot, and keeps the check below total over
+            # the payloads an ``fd`` target can actually carry.
+            msg = f"StdioTarget.fd requires a descriptor or file object, got {resource!r}"
+            raise ValueError(msg)
+        _reject_sentinel_descriptor(resource)
         return
     if target.kind != "path":
         return
