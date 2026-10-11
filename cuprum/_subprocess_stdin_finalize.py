@@ -27,6 +27,7 @@ import contextlib
 import typing as typ
 
 from cuprum._subprocess_stdin_reclaim import (
+    _STDIN_FINALIZER_RECLAIM_S,
     _STDIN_SETTLE_GRACE_S,
     _cancel_stdin_writer,
 )
@@ -63,6 +64,14 @@ async def _finalize_stdin_source(
     rather than papered over: cuprum can bound its own wait, and cannot bound
     code it does not own. The loop reclaims what remains at shutdown.
 
+    Everything here fails towards the run's own outcome. Both invoking the
+    caller's hook and scheduling it are guarded, so a finalizer that raises on
+    entry cannot take the place of the failure the run is already ending on,
+    and a task that finishes after the window has its exception retrieved
+    rather than left for the loop to report. What the caller sees is the run's
+    ending; what the caller does not see is a cleanup fault attributed to a
+    producer cuprum has already stopped using.
+
     ``asyncio.wait`` rather than ``wait_for``, and this is a correctness point
     rather than a style one. ``wait_for`` waits for the cancellation it
     requests to *take effect*, so a finalizer that absorbs ``CancelledError``
@@ -81,16 +90,29 @@ async def _finalize_stdin_source(
     Raises
     ------
     asyncio.CancelledError
-        If the surrounding run is cancelled while the bounded wait is pending.
-        Cancellation is the caller's control flow, so it is never absorbed by
-        the window.
+        If the surrounding run is cancelled, whether before the finalizer is
+        scheduled or while the bounded wait is pending. Cancellation is the
+        caller's control flow, so it is never absorbed by the window — not by
+        the guard around scheduling, and not by the wait itself.
     """
     if source is None:
         return
     aclose = getattr(source, "aclose", None)
     if aclose is None:
         return
-    task = asyncio.ensure_future(aclose())
+    task = _schedule_finalizer(aclose)
+    if task is None:
+        # The hook failed on entry. Its failure has been reported and the run's
+        # own outcome stands; there is no cleanup left to bound.
+        return
+    # Attached before the first wait, so it covers every way this task can end:
+    # finishing inside the window, finishing while being reclaimed, and
+    # finishing after this helper has already returned. A retrieval placed on
+    # the paths instead would have to be repeated at each of them, and the
+    # paths that matter most are the ones it is hardest to reach — a task
+    # cancelled by the reclaim that then fails as it unwinds raises *after* the
+    # reclaim returns, where no later statement of this function runs at all.
+    task.add_done_callback(_retrieve_finalizer_outcome)
     try:
         await asyncio.wait((task,), timeout=_STDIN_SETTLE_GRACE_S)
     except asyncio.CancelledError:
@@ -100,12 +122,73 @@ async def _finalize_stdin_source(
         task.cancel()
         raise
     if not task.done():
-        await _cancel_stdin_writer(task)
-        return
-    if task.cancelled():
-        return
-    # Awaited so a failure the finalizer raised is retrieved here rather than
-    # reported later as an unretrieved task exception. It cannot change the
-    # run's outcome, which is already decided.
+        await _cancel_stdin_writer(task, budget=_STDIN_FINALIZER_RECLAIM_S)
+
+
+def _schedule_finalizer(
+    aclose: cabc.Callable[[], cabc.Awaitable[None]],
+) -> asyncio.Task[None] | None:
+    """Invoke a producer's ``aclose`` and schedule whatever it returns.
+
+    Both the call and the scheduling are guarded, and for the same reason: this
+    runs *after* the run has already decided its outcome. The finalizer is the
+    caller's code, so it can fail on the way in as well as on the way through —
+    an ``aclose`` that raises before it returns its awaitable, a coroutine
+    object that cannot be wrapped as a task. An unguarded call would let that
+    failure leave this helper and take the place of the run's real ending: a
+    ``StdinSourceError`` the caller needed to see would be reported as a
+    cleanup fault from a producer cuprum was already finished with.
+
+    ``CancelledError`` is deliberately not suppressed. Cancellation is the
+    caller's control flow rather than a cleanup failure, so it propagates to
+    end the run exactly as it would have without this helper.
+
+    Parameters
+    ----------
+    aclose : collections.abc.Callable[[], collections.abc.Awaitable[None]]
+        The producer's own cleanup hook, already fetched from the iterator.
+
+    Returns
+    -------
+    asyncio.Task[None] | None
+        The scheduled finalization, or ``None`` if the hook could not be
+        invoked or scheduled at all. ``None`` means the finalizer is done with
+        — it failed on entry and its failure has been reported — so every
+        caller treats it as "nothing left to wait for" rather than as an error.
+    """
     with contextlib.suppress(Exception):
-        await task
+        return asyncio.ensure_future(aclose())
+    return None
+
+
+def _retrieve_finalizer_outcome(task: asyncio.Task[None]) -> None:
+    """Retrieve a finished finalizer's outcome so the loop never reports it.
+
+    A finalizer that raised after the window, or that failed while the reclaim
+    was cancelling it, would otherwise leave its exception on the task with
+    nothing to retrieve it, and the loop reports that as an unretrieved task
+    exception — noise attributing a failure to a producer cuprum has already
+    stopped caring about. This is what makes the bounded window mean
+    *bounded*: past the window the outcome cannot reach the caller, so the
+    only question left is whether the loop is told about it.
+
+    Registered as a done callback rather than called from the waiting paths,
+    because the outcome this exists for is the one no waiting path reaches. It
+    cannot change the run's outcome, which the caller has already decided.
+
+    Parameters
+    ----------
+    task : asyncio.Task[None]
+        The finalization that has just finished.
+    """
+    if task.cancelled():
+        # ``exception()`` raises ``CancelledError`` for a cancelled task, so
+        # the cancellation is consumed by checking for it rather than by
+        # calling it and suppressing what comes back. A finalizer cuprum
+        # cancelled itself is the ordinary expiry case, not a fault.
+        return
+    # One deliberate blind retrieval: this is the only way to mark a task's
+    # exception as observed, and retrieving it is the entire purpose. Nothing
+    # here can report it — the run it belonged to has already ended.
+    with contextlib.suppress(BaseException):
+        task.exception()
