@@ -238,19 +238,29 @@ class RunningCommand:
         succeeded — otherwise it would replace the error that caused the exit —
         and it is recorded on the run's event stream either way.
 
-        Stopping comes before settling, and both run shielded, so a
-        cancellation landing mid-teardown leaves the child reaped and the
-        result recorded rather than half-owned.
+        Settlement is attempted even when the stop did not complete cleanly,
+        and that ordering is deliberate. The two steps are separate *try*
+        blocks rather than one, because a cancellation arriving during the
+        stop would otherwise skip the settle entirely: the child would be
+        reaped but no result recorded, leaving a handle whose :attr:`result`
+        stays ``None`` forever. Reaping without settling is half-ownership,
+        which is the state this method exists to prevent.
         """
+        stop_error: BaseException | None = None
         try:
             await _shielded_cleanup(self._stop(None))
+        except BaseException as stop_failure:  # ruff: ignore[blind-except] - held, not handled: settling must still run
+            stop_error = stop_failure
+        try:
             await _shielded_cleanup(self._settled(None))
-        except BaseException:
-            if exc is None:
-                raise
-            # The block is already failing. That error is the one the caller
-            # has to see, so teardown's own failure is left on the observation
-            # stream rather than allowed to take its place.
+        except BaseException as settle_failure:  # ruff: ignore[blind-except] - held, not handled: the stop's failure takes precedence
+            if stop_error is None:
+                stop_error = settle_failure
+        if stop_error is not None and exc is None:
+            raise stop_error
+        # Otherwise the block is already failing. That error is the one the
+        # caller has to see, so teardown's own failure is left on the
+        # observation stream rather than allowed to take its place.
 
     def _execution(self, deadline: float | None) -> _SubprocessExecution:
         """Return the bundle this run is waited with, carrying *deadline*.
