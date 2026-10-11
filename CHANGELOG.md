@@ -95,14 +95,18 @@
   whole group down through `os.killpg`, so a descendant the direct child left
   behind — including one that ignores `SIGTERM` and keeps an inherited pipe
   open — is reclaimed and the run settles within the documented bounds instead
-  of waiting out the drain's grace window. Only the group the spawn created is
-  signalled, so unrelated processes and the caller's own group are untouched.
-  The guarantee is bounded and stated as such: a descendant that leaves the
-  group with `setsid()` or `setpgid()` is out of reach, as are ancestors and
-  siblings. `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX
-  process groups and would need a Job Object whose assignment cannot be made
-  atomic with process creation, so containment could begin only after a child
-  might already have spawned a descendant. See
+  of waiting out the drain's grace window. For an owning run, settlement is the
+  group rather than the direct child, so a descendant is still reached after
+  the child has exited and even after it has been reaped; `INHERIT` keeps the
+  direct-child-only behaviour, where a reaped child settles the run and no
+  group is signalled. Only the group the spawn created is signalled, so
+  unrelated processes and the caller's own group are untouched. The guarantee
+  is bounded and stated as such: a descendant that leaves the group with
+  `setsid()` or `setpgid()` is out of reach, as are ancestors and siblings.
+  `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX process groups
+  and would need a Job Object whose assignment cannot be made atomic with
+  process creation, so containment could begin only after a child might already
+  have spawned a descendant. See
   [ADR-019](docs/adr-019-process-group-ownership.md)
   ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child

@@ -212,3 +212,39 @@ need a supervisor, a control group, or a container.
   the spawn recorded rather than re-deriving it from the policy.
 - Windows callers cannot request the guarantee at all until a Job Object
   implementation exists.
+
+## Addendum (2026-10-03): settlement for an owning run is the group, not the child
+
+The decision outcome above recorded that `_terminate_process_with_wait` kept its
+`is_done()` short-circuit unchanged. That was wrong for an owning run, and the
+implementation now amends it. This addendum records the correction; the accepted
+outcome text stands as written, and an earlier section that reads as current
+should be read together with this one.
+
+An inherited-group run targets the direct child alone, so `is_done()` is
+exactly the right question and the short-circuit stays for `INHERIT`: a
+completed child is settlement, byte for byte as before. An owning run's target
+is the group the child leads, and that group outlives its leader. When the
+direct child exits — and is even reaped — while a descendant stays in the group,
+`is_done()` is already true, so the old short-circuit returned without
+signalling anything and the descendant survived despite `OWN_GROUP`. It also
+kept the run's inherited pipes open, which is the failure the option exists to
+prevent, so the policy was delivering no containment in precisely the case its
+first line of documentation promised.
+
+Settlement for an owning run is therefore decided by a null signal to the
+group, not by the direct child's waiter. The kernel holds a group addressable
+for as long as it has a member, and the group's name is the leader's pid, so a
+name that still answers cannot have been recycled onto an unrelated group while
+this one lives. The probe is safe and decisive in the same breath: it never
+signals a group the run does not lead, and it knows what `is_done()` cannot —
+whether a descendant is still inside.
+
+The decision drivers and non-goals above are unchanged. In particular, "do not
+claim containment that cannot be delivered" still governs, and the correction
+moves the implementation towards it rather than away: what the option promises
+is now what teardown performs. The bounds already recorded still bound it — a
+descendant that leaves the group with `setsid()` or `setpgid()` remains out of
+reach, as do ancestors and siblings. Teardown of a child that never had a pid
+falls back to the direct route, matching where `_signal_child` would signal, so
+there is no group name to probe and nothing to probe it with.

@@ -1755,15 +1755,15 @@ preserving the `SafeCmd.run()` execution contract:
   window and retain `None` for absent text. Both were split out of
   `_subprocess_execution` so that module stays about orchestration — spawning,
   wiring streams, assembling the result.
-- When that window expires with readers still pending, `_subprocess_drain` uses
-  `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
-  `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
-  `operation="drain"`, `eof_grace_s`, and `pending_readers`. `MetricsHook`
-  projects it to `cuprum_capture_eof_grace_expired_total` with only `program`
-  and `project` labels, while `TracingHook` adds a
-  `cuprum.capture_eof_grace_expired` event to the matching span. No captured
-  stream payload is emitted in that event. Unexpected reader failures remain
-  separately reported as `teardown_error`.
+- When the `_CAPTURE_EOF_GRACE_S` window expires with readers still pending,
+  `_subprocess_drain` uses `_timeout_reporting` to emit one correlated
+  `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
+  `exec_id` and `pid`, `operation="drain"`, `eof_grace_s`, and
+  `pending_readers`. `MetricsHook` projects it to
+  `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
+  labels, while `TracingHook` adds a `cuprum.capture_eof_grace_expired` event
+  to the matching span. No captured stream payload is emitted in that event.
+  Unexpected reader failures remain separately reported as `teardown_error`.
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
@@ -1776,21 +1776,21 @@ Figure 9: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
-    participant Wait as _subprocess_drain
+    participant Drain as _subprocess_drain
     participant Consumers as Stream consumers
     participant Reader as StreamReader
     participant Telemetry as Exec telemetry
 
-    Wait->>Consumers: _drain_stream_consumers(consumers, context)
-    Wait->>Consumers: _await_capture_eof_grace(consumers, context)
+    Drain->>Consumers: _drain_stream_consumers(consumers, context)
+    Drain->>Consumers: _await_capture_eof_grace(consumers, context)
     Consumers->>Reader: read(_READ_SIZE)
     alt EOF observed within grace
         Reader-->>Consumers: empty chunk
-        Consumers-->>Wait: captured text
+        Consumers-->>Drain: captured text
     else grace expires with readers pending
-        Wait->>Telemetry: _report_capture_eof_grace_expiry(...)
-        Wait->>Consumers: _settle_consumers(consumers, discard_on_cancel)
-        Consumers-->>Wait: deterministic captured result
+        Drain->>Telemetry: _report_capture_eof_grace_expiry(...)
+        Drain->>Consumers: _settle_consumers(consumers, discard_on_cancel)
+        Consumers-->>Drain: deterministic captured result
     end
 ```
 
@@ -1821,10 +1821,13 @@ owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
 teardown decisions the waiter makes. It delegates the two per-process questions
 teardown asks — what a signal is delivered to, and what a completed teardown
 waits for — to `cuprum/_process_signal.py`, which is the only module that has
-to know whether a run owns its child's process group. Splitting startup from
-termination keeps each module within the Pylint module ceiling while leaving
-every helper that existing importers reach importable from its previous
-definition site.
+to know whether a run owns its child's process group. The second question is
+answered per policy: an inherited-group run settles when its direct child does,
+while an owning run settles only when the group its child led has emptied, so a
+descendant left running after the child exits — the child having been reaped
+included — is still reached. Splitting startup from termination keeps each
+module within the Pylint module ceiling while leaving every helper that
+existing importers reach importable from its previous definition site.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout

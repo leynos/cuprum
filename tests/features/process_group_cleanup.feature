@@ -1,6 +1,7 @@
 Feature: Opt-in process-group cleanup
   A run that owns its process group can reclaim the descendants its direct
-  child leaves behind when it exits, which direct-child teardown cannot reach.
+  child leaves behind when it exits — including a descendant still in the group
+  after the child has been reaped — which direct-child teardown cannot reach.
 
   The policy is opt-in: the default inherits the caller's group, and only a run
   that asked to own a group may signal one.

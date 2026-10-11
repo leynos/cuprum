@@ -1118,6 +1118,14 @@ untouched. The two-phase grace is unchanged: `SIGTERM`, wait for
 `SIGTERM` and keeps a pipe open is therefore reached by the escalation, and the
 run settles instead of waiting out the EOF window.
 
+For an owning run, settlement is decided by the group rather than by the direct
+child. A run whose child has already exited — even one already reaped — is
+still torn down, and the group is signalled again, for as long as the group
+holds a member. That is what reaches a descendant the child left behind before
+teardown began: the child's exit alone settles nothing while its group outlives
+it. `INHERIT` keeps the old rule, where a completed direct child settles the
+run and no group signal is involved at all.
+
 Session leadership also detaches the child from the controlling terminal, and
 that trade-off is worth stating because it is not obvious from the name.
 `INHERIT` leaves the child in the caller's session, so a terminal interrupt

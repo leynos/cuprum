@@ -265,6 +265,12 @@ them, while non-capturing cleanup settles promptly without that window and
 discards output. Cancellation during capture grace still settles the consumers
 before propagating, so process cleanup cannot leave stream readers pending.
 
+> **Superseded by the 2026-10-03 addendum.** The removal recorded here is of the
+> _earlier_ `_subprocess_drain.py`, the withdrawn compatibility boundary. The
+> name was reinstated later for a different seam, so `_subprocess_wait.py` is no
+> longer the single owner of the drain implementation. Read that addendum before
+> treating this section as the current module layout.
+
 ## Addendum (2026-09-15): streamed relay diagnostics ownership
 
 The per-command echo fallback diagnostics introduced a small refinement to the
@@ -439,9 +445,9 @@ coordination steps, so tests that replace one of their collaborators patch
 ## Addendum (2026-10-03): reinstate `_subprocess_drain` on a real seam
 
 The 2026-08-30 addendum read as though `_subprocess_drain.py` had been removed
-for good. In fact it records the removal of the _earlier_ module of that name —
-the withdrawn compatibility boundary, which duplicated the drain helpers behind
-a second import path. The name returns here for a different reason and a
+for good. In fact, it records the removal of the _earlier_ module of that name
+— the withdrawn compatibility boundary, which duplicated the drain helpers
+behind a second import path. The name returns here for a different reason and a
 different seam.
 
 Carrying opt-in process-group ownership through teardown pushed
