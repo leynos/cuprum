@@ -83,6 +83,15 @@ def _rendered_enum_fields(
     for field, mode in modes:
         if mode is not None:
             yield name(field), str(mode)
+    if event.error_category is not None:
+        # Rendered for the same reason as the modes above, but yielded apart
+        # rather than added to *modes*: this one describes a single boundary
+        # failure rather than the run, so it is set on ``stdio_error`` alone
+        # and is ``None`` on every phase the projection otherwise carries.
+        # It is the field that separates two standard-stream boundaries
+        # raising the same exception class, so a consumer must read the value
+        # rather than the member's ``repr``.
+        yield name("error_category"), str(event.error_category)
 
 
 def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:

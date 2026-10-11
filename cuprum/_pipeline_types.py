@@ -27,6 +27,7 @@ from cuprum.events import (
     ExecPhase,
     GroupTeardownOutcome,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
     TimeoutMode,
     new_exec_id,
@@ -104,6 +105,10 @@ class _EventDetails:
     owns_group: bool | None = None
     group_outcome: GroupTeardownOutcome | None = None
     settle_s: float | None = None
+    # Appended at the end for the reason ``ExecEvent`` documents: a positional
+    # construction would otherwise rebind the field ahead of it. Only the
+    # ``stdio_error`` diagnostics set this.
+    error_category: StdioFailureCategory | None = None
 
 
 @dc.dataclass(slots=True)
@@ -223,6 +228,7 @@ class _StageObservation:
             env_mode=self.env_mode,
             resolved_path=self.resolved_path,
             capture_mode=self.capture_mode,
+            error_category=details.error_category,
         )
         self._emit_event(event)
 
@@ -292,6 +298,9 @@ class _StageObservation:
             # the ``exit`` event that follows. Carrying one here would invite a
             # consumer to read the pipeline's decision as having run that path.
             resolved_path=None,
+            # A decision about a teardown has no failing stdio boundary of its
+            # own; the stage's ``exit`` event that follows carries the fault.
+            error_category=None,
         )
         self._emit_event(event)
 

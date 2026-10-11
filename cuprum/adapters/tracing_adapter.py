@@ -77,7 +77,11 @@ from cuprum.adapters._tracing_control_join import (
     _ControlJoinTracingMixin,
     record_control_events,
 )
-from cuprum.adapters._tracing_fields import _SPAN_FIELDS, write_exit_attributes
+from cuprum.adapters._tracing_fields import (
+    _ENUM_SPAN_FIELDS,
+    _SPAN_FIELDS,
+    write_exit_attributes,
+)
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
@@ -150,6 +154,7 @@ class TracingHook(
                 "stdout"
                 | "stderr"
                 | "stdin_error"
+                | "stdio_error"
                 | "timeout"
                 | "teardown_error"
                 | "capture_eof_grace_expired"
@@ -228,7 +233,7 @@ class TracingHook(
         for field in _SPAN_FIELDS:
             value = getattr(event, field)
             if value is not None:
-                event_attrs[field] = value
+                event_attrs[field] = str(value) if field in _ENUM_SPAN_FIELDS else value
         with active.lock:
             if not active.is_closed:
                 active.span.add_event(f"cuprum.{event.phase}", event_attrs)

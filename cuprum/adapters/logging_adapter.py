@@ -65,6 +65,10 @@ class LogLevels:
         unlike the other phases this reports an abnormal outcome, and it would
         otherwise fall through to the unhandled-phase default of DEBUG and be
         invisible in a normal configuration.
+    stdio_error_level:
+        Log level for ``stdio_error`` events (a standard-stream boundary
+        failed). Default WARNING, for the same reason as ``fail_fast_level``:
+        it reports a failure, and a record nobody retains is not a diagnostic.
 
     """
 
@@ -74,6 +78,7 @@ class LogLevels:
     exit_level: int = logging.INFO
     fail_fast_level: int = logging.WARNING
     group_teardown_level: int = logging.WARNING
+    stdio_error_level: int = logging.WARNING
 
 
 class _StructuredLoggingHook:
@@ -93,6 +98,7 @@ class _StructuredLoggingHook:
             "settled": levels.exit_level,
             "pipeline_fail_fast": levels.fail_fast_level,
             "group_teardown": levels.group_teardown_level,
+            "stdio_error": levels.stdio_error_level,
         }
 
     def __call__(self, event: ExecEvent) -> None:
@@ -244,12 +250,43 @@ def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
     )
 
 
+def _stdio_error_extra(event: ExecEvent) -> dict[str, object]:
+    """Build bounded, trusted fields for a standard-stream failure diagnostic."""
+    # A ``stdio_error`` can be emitted while a producer failure or a
+    # cancellation is already unwinding, and it is the one record an operator
+    # reads to tell a broken producer from a child that stopped reading. Only
+    # bounded identifiers travel with it: the boundary category is a closed
+    # set, the operation is a fixed name chosen at the call site, and
+    # ``error_type`` is an exception class rather than its message. The argv
+    # and the caller's tags stay out, as they do for the grace expiry.
+    #
+    # This set is deliberately narrower than ``_correlation_fields``: a
+    # pre-spawn boundary has no child to name and a ``stdio_error`` carries no
+    # project, so the shared prefix would write two fields this phase has no
+    # answer for.
+    return _bounded_extra(
+        event,
+        (
+            ("cuprum_pid", event.pid),
+            ("cuprum_operation", event.operation),
+            ("cuprum_error_type", event.error_type),
+            (
+                "cuprum_error_category",
+                None if event.error_category is None else str(event.error_category),
+            ),
+            ("cuprum_exec_id", event.exec_id),
+        ),
+    )
+
+
 def _build_extra(event: ExecEvent) -> dict[str, object]:
     """Build structured extra data for a log record."""
     if event.phase == "capture_eof_grace_expired":
         # The grace expiry can occur after a timeout, so retain only bounded,
         # trusted correlation fields—not caller tags or the raw argument vector.
         return _capture_eof_grace_extra(event)
+    if event.phase == "stdio_error":
+        return _stdio_error_extra(event)
 
     if event.phase == "group_teardown":
         # A teardown report is reached from the same cancellation and timeout
