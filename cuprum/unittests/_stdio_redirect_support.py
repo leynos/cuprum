@@ -41,12 +41,13 @@ class _BackendTraversal:
     """Which spawn routes were reached, and which route the case selected.
 
     ``reached`` is held live rather than copied. The spawn entry is called
-    after the fixture returns, so a snapshot taken at setup would always be
-    empty and every case would pass its own assertion for the wrong reason.
+    after the fixture yields, so a snapshot taken at setup would always be
+    empty and every case would pass its assertion for the wrong reason.
 
-    Shared by both backend fixtures: the ownership suites assert that the
-    route they ran is the route they selected, and the failure suites assert
-    additionally that only that route was reached at all.
+    The ownership suites never read this: :func:`spawn_backend` asserts on it
+    during teardown, so a case cannot pass without having spawned. The failure
+    suite reads it directly, because it makes the stronger claim that the
+    selected route was the *only* one reached.
     """
 
     requested: str
@@ -109,7 +110,7 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
 def spawn_backend(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
-) -> _BackendTraversal:
+) -> cabc.Iterator[_BackendTraversal]:
     """Select the backend a direct command is spawned through, and record it.
 
     A direct command has two spawn routes, chosen inside the backend by
@@ -125,16 +126,24 @@ def spawn_backend(
     ``wait4`` arm used to patch nothing, so on a platform without ``os.wait4``
     this arm ran the asyncio transport while being labelled ``wait4`` — an
     ownership case reported as evidence about a route it never took. That arm
-    now skips with a platform reason instead, and both arms record the route
-    whose entry point was actually reached, so a case can assert the route it
-    ran rather than the label it was given.
+    now skips with a platform reason instead.
 
-    The fixture returns that record rather than nothing. A case that ignores
-    the return value is unaffected; the ownership suites assert on it, because
-    a label is not traversal.
+    Both arms wrap *both* routes: the route the case selected records the
+    spawn, and the other traps it. That is what makes the axis an axis. A
+    label alone changes a case's name; a trap makes the alternative
+    unreachable, so a case that stopped selecting its route fails naming the
+    route that ran instead of quietly passing as evidence about the host's
+    preferred one.
 
-    Returns
-    -------
+    The traversal is asserted here rather than in each case, because the
+    property belongs to the axis and not to any one subject. A case that
+    spawned through the wrong route, or through none at all, fails at teardown
+    whatever it asserted in between — including the ownership cases that
+    request this fixture for its side effect through ``usefixtures`` and have
+    no parameter to assert on.
+
+    Yields
+    ------
     _BackendTraversal
         The route this case selected and the routes whose spawn entry was
         actually reached, handed out live so a post-run read sees them.
@@ -143,46 +152,63 @@ def spawn_backend(
     if request.param == "wait4":
         if not _wait4_process.wait4_resource_measurement_available():
             pytest.skip("os.wait4 and waitstatus_to_exitcode are unavailable here")
-        monkeypatch.setattr(
-            _wait4_process, "_spawn_popen", _recording_entry(reached, "wait4")
-        )
     else:
         # ``spawn_direct_process`` reads this at call time, so patching it
         # selects the fallback for this test alone. Patching the dispatch
-        # itself would replace the branch under test. The wait4 entry is
-        # trapped as well, so this arm cannot silently run the route it names
-        # as *not* selected.
+        # itself would replace the branch under test.
         monkeypatch.setattr(
             _wait4_process, "wait4_resource_measurement_available", lambda: False
         )
+    monkeypatch.setattr(
+        _wait4_process,
+        "_spawn_popen",
+        _recording_entry(reached, "wait4", request.param),
+    )
     monkeypatch.setattr(
         _wait4_process.asyncio,
         "create_subprocess_exec",
         _recording_transport(reached, "asyncio", request.param),
     )
-    return _BackendTraversal(request.param, reached)
+    traversal = _BackendTraversal(request.param, reached)
+    yield traversal
+    assert traversal.reached == [traversal.requested], (
+        "this case selected the "
+        f"{traversal.requested!r} route, but the routes actually reached were "
+        f"{traversal.reached!r}; the arm did not take effect, so the case is "
+        "evidence about whichever route the host preferred rather than about "
+        "the one it claims"
+    )
 
 
 def _recording_entry(
-    reached: list[str], label: str
+    reached: list[str], label: str, selected: str
 ) -> cabc.Callable[[DirectProcessConfig], subprocess.Popen[bytes]]:
-    """Wrap ``_spawn_popen`` so a wait4 spawn records the route it took.
+    """Wrap ``_spawn_popen`` to record the wait4 route and to trap the other.
 
-    The record is a *side effect*, not an interception: the wrapped entry is
-    still called and its child still starts. Replacing it with a recorder would
-    turn every ownership case into a case about a child that never ran, which
-    is a different test.
+    On the wait4 arm the record is a *side effect*: the wrapped entry is still
+    called and its child still starts. Replacing it with a recorder would turn
+    every ownership case into a case about a child that never ran, which is a
+    different test. On the asyncio arm the wrapped entry is a *trap*, because
+    reaching it means the availability patch did not take effect and the case
+    ran the route it names as not selected.
 
     Returns
     -------
     collections.abc.Callable[[DirectProcessConfig], subprocess.Popen[bytes]]
-        The entry point, recording on the way through.
+        The entry point, recording on the way through, or refusing when it
+        should not have been reached at all.
     """
     original = _wait4_process._spawn_popen
 
     def record(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
-        """Note that the wait4 route ran, then spawn as it normally would."""
+        """Note the wait4 route, then spawn or refuse."""
         reached.append(label)
+        if selected != label:
+            message = (
+                "the wait4 spawn entry was reached, but this case selected "
+                f"{selected!r}; the availability patch did not take effect"
+            )
+            raise AssertionError(message)
         return original(config)
 
     return record

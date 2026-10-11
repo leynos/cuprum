@@ -402,7 +402,7 @@ def _axis_combinations(case: str) -> frozenset[str]:
     Returns
     -------
     frozenset[str]
-        One normalised combination per collected id for this case, each built
+        One normalized combination per collected id for this case, each built
         by sorting the ``-``-separated parameter ids so the result does not
         depend on the module's fixture request order. Empty when the case is
         not collected at all.
