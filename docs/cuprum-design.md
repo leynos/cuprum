@@ -1756,8 +1756,11 @@ preserving the `SafeCmd.run()` execution contract:
   source is started from.
 - `cuprum/_subprocess_stdin_stream.py` owns the streaming source: pulling an
   async producer's chunks one at a time, writing each and draining it before
-  the next pull, the incremental encoder a `str` chunk is encoded with, and
-  building the `StdinSourceError` a producer failure raises.
+  the next pull, and deciding which failures are the producer's rather than the
+  child's.
+- `cuprum/_subprocess_stdin_errors.py` owns building the `StdinSourceError` a
+  classified producer or encoder failure raises. It reads neither the sink nor
+  the process, so it sits below the pull loop rather than inside it.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.

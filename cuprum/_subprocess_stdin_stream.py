@@ -30,6 +30,13 @@ whether a pipe error came from the child — lives in
 That split keeps each module inside the 400-line ceiling and draws the same
 line the code does: this module owns *which* failures are the producer's, and
 ``_subprocess_stdin_write`` owns *how* a chunk reaches the pipe.
+
+Turning a classified failure into the exception the caller catches lives in
+``cuprum._subprocess_stdin_errors``. That third split exists for the same
+ceiling reason: the pair that builds the public ``StdinSourceError`` reads
+neither the sink nor the process, so keeping it here put the module over the
+line without deepening the seam the code draws. This module owns which side
+failed; that one owns what the caller is told about it.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ import typing as typ
 from cuprum import _subprocess_stdin_write as _write
 from cuprum._stdio_diagnostics import _emit_stdio_error
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
+from cuprum._subprocess_stdin_errors import _stdin_source_error
 from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
@@ -348,67 +356,6 @@ async def _pump_chunks(
         except Exception as exc:
             raise _ProducerFailureError(exc) from exc
         await _write._write_chunk(sink, chunk)
-
-
-def _stdin_source_error(exc: BaseException) -> Exception:
-    """Build the public ``StdinSourceError`` for a producer or encoder failure.
-
-    Returned rather than raised so each handler can spell ``raise ... from``
-    itself: the repository's linter requires the raise to be visible in the
-    handler body, and a helper that raised on the caller's behalf would hide
-    it.
-
-    Parameters
-    ----------
-    exc : BaseException
-        The producer's or encoder's original failure.
-
-    Returns
-    -------
-    Exception
-        An instance of the public ``StdinSourceError``, ready to raise with
-        *exc* chained as ``__cause__``.
-    """
-    msg = f"stdin producer failed: {type(exc).__name__}: {exc!s}"
-    return _source_error(msg, exc)
-
-
-def _source_error(msg: str, exc: BaseException) -> Exception:
-    """Build a ``StdinSourceError`` from its defining module.
-
-    The type lives in ``cuprum.sh.execution``, which this module must not
-    import at runtime: ``cuprum.sh`` pulls in the whole ``cuprum`` surface,
-    and interior modules are loaded while that surface is still being built.
-    The defining module is reached through the same lazy shim the rest of the
-    execution layer uses, so the exception the caller catches is the class
-    that ``cuprum`` exports.
-
-    Parameters
-    ----------
-    msg : str
-        The message for the raised error.
-    exc : BaseException
-        The producer's original exception, used only for the fallback path.
-
-    Returns
-    -------
-    Exception
-        An instance of the public ``StdinSourceError``.
-
-    Raises
-    ------
-    RuntimeError
-        If the shim cannot resolve the public type at all, which means the
-        cuprum surface is broken rather than the caller's producer.
-    """
-    from cuprum._subprocess_context import _sh_module
-
-    sh_module = _sh_module()
-    error_type = getattr(sh_module, "StdinSourceError", None)
-    if error_type is None:
-        msg = "cuprum.sh.StdinSourceError is unavailable"
-        raise RuntimeError(msg) from exc
-    return error_type(msg)
 
 
 __all__ = [

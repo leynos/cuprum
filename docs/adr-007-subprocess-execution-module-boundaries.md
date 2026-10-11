@@ -883,3 +883,45 @@ re-exported `_execute_with_hooks` and `_finalize_prepared_command_failure` are
 the finalization module's own objects, not copies. The maturin wheel snapshot
 gained exactly one line for the new module, which is the same
 one-line-per-module shape every other split here records.
+
+## Addendum (2026-10-11): split the source-error builders out of `_subprocess_stdin_stream`
+
+The 2026-09-27 addendum above records streaming stdin splitting out of
+`cuprum/_subprocess_stdin`, and the 2026-10-02 addendum records the chunk write
+then splitting out of `cuprum/_subprocess_stdin_stream.py`. The module crossed
+the ceiling once more on the streaming-stdin branch, and this addendum records
+that third split. It supersedes the 2026-09-27 addendum's claim that the
+`_stdin_source_error` / `_source_error` pair lives in
+`cuprum/_subprocess_stdin_stream.py`; that text stays as the record of what was
+true when it was written.
+
+The overrun is measurable from the commits. Across every commit on the branch
+that holds the file its peak is 419 lines, reached at `5b8cba42`; its parent
+held 380. Classifying a producer that cannot start added 39 net lines and put
+the module 19 over the ceiling, and `make lint` failed at its `pylint-classic`
+leaf with `C0302` on the branch head. The headroom was already thin: a module
+that begins twenty lines under a hard ceiling breaches it on almost any change,
+which is the same reasoning the 2026-10-11 command-finalization addendum above
+records.
+
+The seam is the one the code already drew. `cuprum/_subprocess_stdin_stream.py`
+owns _which_ failures are the producer's — the pull loop, the early-close
+predicate, and the handler that tells the three outcomes apart.
+`cuprum/_subprocess_stdin_errors.py` owns what the caller is told about them:
+the `_stdin_source_error` / `_source_error` pair that builds the public
+`StdinSourceError`. Neither function in the moved pair reads the sink, the
+process, or the observation, and nothing there calls back into the pull loop,
+so the edge is a leaf rather than a cycle.
+
+The lazy import is the one constraint that travels with the code.
+`cuprum.sh.execution` defines `StdinSourceError`, but `cuprum.sh` pulls in the
+whole `cuprum` surface and interior modules are loaded while that surface is
+still being built. The pair reaches the type through the shared `_sh_module()`
+shim for the same reason it did before the move, so the exception a caller
+catches is the class `cuprum` exports rather than a copy.
+
+The split changed no public surface. `_subprocess_stdin_stream.py` imports
+`_stdin_source_error` from the new module, and the two names were not in its
+`__all__`, so no importer outside the module ever saw them. The maturin wheel
+snapshot gained exactly one line for the new module, which is the same
+one-line-per-module shape every other split here records.
