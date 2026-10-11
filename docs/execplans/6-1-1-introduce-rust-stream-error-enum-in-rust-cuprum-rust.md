@@ -2338,6 +2338,61 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   practice a gate log is cited by the `HEAD_BEFORE` recorded inside it, not by
   its filename, because a filename does not record which revision produced it.
 
+- [x] (2026-10-11) **The PR had no CI at all, and the absence of a merge ref
+  was the reason — not a missing workflow or a rate limit.** `main` had moved
+  70 commits to `6dae5a13`, so the PR read `CONFLICTING`/`DIRTY` and
+  `git merge-tree --write-tree 5ddfada4 6dae5a13` exited 1. GitHub cannot build
+  `refs/pull/432/merge` from a conflicted pair, and without that synthetic merge
+  commit no `pull_request` workflow starts. So the branch's last two commits had
+  no runs at all, including the tip, which carried only third-party review apps.
+  This is worth recording because "no CI" had been read as an infrastructure
+  oddity; it was a hard blocker that only a rebase could clear.
+
+  The branch was rebased `81efc928..5ddfada4` onto `6dae5a13`: 70 commits in, 70
+  out, none lost or emptied. `range-diff` reports 67 identical and exactly the
+  three conflict sites changed (commits 4, 59, 60). `git merge-tree --write-tree
+  6dae5a13 49ddf8b9` now exits 0, which is the fix — the merge ref can be built
+  again. Both generated spelling files are byte-identical to `main`'s.
+
+  Three conflicts, each decided on evidence rather than side preference:
+
+  - `docs/developers-guide.md` — both sides restructured the same CI job table.
+    Took `main`'s shape (the 3.13 typecheck leg is gone; `extension-tests` gains
+    "then `make typecheck`") while keeping the branch's count, which was 15 at
+    that commit.
+  - `docs/users-guide.md` — both sides appended at the same seam. Kept both: the
+    branch's `buffer_size`/`OSError` prose belongs to its own section, and
+    `main`'s telemetry section follows. Re-verified `main`'s new table
+    renumbering propagated, with no duplicate or dangling cross-reference.
+  - `typos.local.toml` — commit 60's message says to adopt `main`'s
+    `'[0-9][0-9a-f]{6,39}'`, but `main` has since replaced that single rule with
+    an enumerated seven-pattern set covering the mandatory digit at any
+    position. The enumerated set strictly supersedes it (anything matching the
+    old pattern matches the first alternative) and additionally catches SHAs
+    that lead with a letter, which the old rule missed. Took `main`'s set, so
+    the commit's intent holds even though its stated premise is now historical.
+
+- [x] (2026-10-11) **Two review findings were repaired at the rebased tip, and
+  one of them was a documentation figure that had gone stale rather than being
+  wrong.** `docs/developers-guide.md` claimed 15 gated modules against the
+  Makefile's 16. Parsing `EXTENSION_TEST_TARGETS` per commit showed 13 at the
+  merge-base, 15 from commit 3, and 16 from commit 21 (`0147f40c`) onward — so
+  the "15" was correct when written and went stale when commit 21 added
+  `test_rust_streams_roundtrip_property.py` without refreshing the table. The
+  count method mattered: an earlier `grep -c '  '` undercounted by one because
+  the assignment's first line carries no indent, which is why the figure was
+  re-derived by parsing rather than re-counting with a looser pattern.
+
+  The second finding was a genuine test gap: `_pump_via_pipes` returned only the
+  transferred byte count and never read `sink_read`, so
+  `test_pump_default_buffer_matches_explicit` passed for a pump that wrote the
+  right number of wrong bytes. It now drains the sink and compares the payload,
+  reusing the existing `_read_all` helper from `tests/helpers/stream_pipes.py`
+  rather than adding a second reader. Non-vacuity was demonstrated rather than
+  assumed: the drain returned all 1028 bytes of a probe payload, and a
+  deliberately wrong expectation failed the comparison. 23 related Rust-stream
+  tests pass.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
