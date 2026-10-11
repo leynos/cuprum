@@ -1225,6 +1225,19 @@ hooks receive `ExecEvent` values describing:
   the failing step (`write`, `close`, or `early_close`), and execution
   continues.
 
+- `stdio_error` — a standard-stream boundary _outside_ the stdin writer's own
+  pipe operations failed: the caller's producer, an invalid chunk, the encoder,
+  opening a cuprum-owned target file, or flushing a caller's borrowed file
+  object. `operation` names the failing step (`produce`, `write`, `open`, or
+  `flush`), `error_type` the exception class, and `error_category` the boundary
+  that failed. Unlike `stdin_error`, this is never a substitute for the
+  caller-visible exception: a producer failure still raises `StdinSourceError`,
+  and a failed owned-path open still raises `OSError`. Emission is best-effort,
+  so a failing observe hook or logging handler cannot replace the exception the
+  caller receives; no `exit` event follows these boundaries, but `settled`
+  still does, because these failures occur while another exception or a
+  cancellation is already unwinding.
+
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
 
@@ -1416,6 +1429,8 @@ The hook collects:
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 - `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
 - `cuprum_stdin_errors_total`: Counter of stdin writer failures
+- `cuprum_stdio_errors_total`: Counter of standard-stream boundary failures,
+  labelled by `error_category`
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
   during cleanup
@@ -1444,6 +1459,20 @@ closed three-value enum resolved by Cuprum, never by caller input), so it
 cannot give the series unbounded cardinality, and it is applied only to those
 two metrics: the per-line stream counters omit it, because a line's environment
 says nothing that its execution's mode does not already carry.
+
+`cuprum_stdio_errors_total` additionally carries an `error_category` label
+naming which standard-stream boundary failed — `producer`, `invalid_chunk`,
+`encoder`, `pipe`, `owned_path_open`, or `borrowed_flush`. It is the label and
+not the metric name that separates these boundaries, because several of them
+raise the same exception class: a failed producer advance and a failed pipe
+write both surface as `OSError`, and an invalid chunk and a mistyped encoder
+both surface as `TypeError`. Counting them together would leave an operator
+unable to tell a failure in the caller's own producer from a failure in
+cuprum's write path, which call for opposite responses. Like `env_mode` it is a
+bounded label by construction — `StdioFailureCategory` is a closed enum
+resolved by Cuprum, never by caller input — so it cannot give the series
+unbounded cardinality. The counter carries no path, payload, argv, or error
+message; those are caller data and stay with the caller.
 
 A spawn failure has no `start` or `exit` event, because no child ran, but it
 does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
@@ -1511,16 +1540,23 @@ Output lines (stdout/stderr) are recorded as span events when
 
 #### Ancillary span events
 
-The `stdin_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
-phases are recorded as `cuprum.<phase>` events on the execution's open span.
-They leave the span neither ended nor marked; `settled` closes it and sets its
-status from the terminal category. `timeout` is followed by `exit` and then
-`settled`, while spawn failure and cancellation can settle without `exit`.
+The `stdin_error`, `stdio_error`, `timeout`, `teardown_error`, and
+`capture_eof_grace_expired` phases are recorded as `cuprum.<phase>` events on
+the execution's open span. They leave the span neither ended nor marked;
+`settled` closes it and sets its status from the terminal category. `timeout`
+is followed by `exit` and then `settled`, while spawn failure and cancellation
+can settle without `exit`.
 
 Ancillary events carry whichever of the `line`, `operation`, `error_type`,
-`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers`
-fields are set. An event without a matching open span is dropped. The
-grace-expiry event carries no captured stdout or stderr payload.
+`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, `pending_readers`, and
+`error_category` fields are set. An event without a matching open span is
+dropped. The grace-expiry event carries no captured stdout or stderr payload.
+
+`error_category` is the one field whose value is an enum member rather than a
+plain string, so a backend receives its value — `producer`, say — and not the
+member's `repr`. It is carried by `stdio_error` for the same reason it labels
+the metrics counter: without it a producer failure and a pipe fault record
+identically on the span, because both raise `OSError`.
 
 #### Correlating events with spans
 
