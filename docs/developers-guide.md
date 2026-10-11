@@ -1448,6 +1448,72 @@ exceptions, and cancellation. Tests cover this contract at four levels:
   `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
   enforcement, before/after/observe hooks, and async observe-task scheduling
 
+## Opt-in process-group ownership internals
+
+`ProcessGroupPolicy` rides on `ExecutionContext.process_group` and is read as
+`resolved_process_group`. The field accepts a policy member or its spelling;
+`__post_init__` resolves the string through the `StrEnum`, and an unknown
+spelling raises `ValueError` rather than degrading to `INHERIT`. Consumers
+inside the package read the resolved view, never the raw field.
+
+`OWN_GROUP` spawns the child with `start_new_session=True`, which makes the
+child both session leader and process-group leader, so its group identifier is
+its own pid and teardown needs no `os.getpgid` lookup. Ownership is recorded
+per spawn — one flag for a single command, one flag per stage for a pipeline —
+and teardown reads that record rather than re-deriving it from the policy. A
+spawn path that forgets to record ownership therefore degrades to the
+direct-child route, which is why the record, not the policy, is the source of
+truth at teardown time.
+
+Table 1: process-group ownership modules and their responsibilities
+
+| Module                  | Owns                                                       |
+| ----------------------- | ---------------------------------------------------------- |
+| `_process_group.py`     | The liveness probe, the backoff poll, and the capped wait  |
+| `_process_signal.py`    | Signal delivery and the settlement decision                |
+| `_teardown_policy.py`   | The grace period and the per-process ownership record      |
+| `_process_lifecycle.py` | The two-phase escalation and the fail-fast stage selection |
+
+### The liveness probe
+
+`_group_has_members(pgid)` answers a null signal to the group. The kernel keeps
+a group addressable while it has a member, so the group's name — the leader's
+pid — cannot be recycled onto an unrelated group while the probe still answers.
+That is what makes the probe safe as well as decisive: it never signals a group
+the run does not lead, and it knows something the direct child's waiter cannot,
+namely whether a descendant is still inside.
+
+`ProcessLookupError` means the group has emptied. `PermissionError` means
+members exist that this process may not signal: neither the grace period nor
+the escalation could reach them, so waiting longer cannot settle the group and
+the probe reports it as having no reachable members. Those two answers are not
+the same, and only the permission case leaves a member running past teardown,
+so it is logged as `cuprum.process_group_unsignalable` before being reported as
+settled.
+
+### Settlement
+
+`_teardown_is_settled` decides whether a teardown target has anything left to
+signal, and it is the one place that decision is made. An owning run asks the
+group probe; a run that does not own its group, and a child that never had a
+pid, keep the `is_done()` short-circuit byte for byte. Both teardown entry
+points read this helper, including the pipeline cleanup path that does not pass
+through `_terminate_process_with_wait`.
+
+`_await_group_exit` polls because a process group has no completion event to
+await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`
+so a group that takes seconds to die is not re-probed at full frequency. The
+post-`SIGKILL` wait is capped by `_POST_KILL_SETTLEMENT_S` and deliberately not
+derived from `cancel_grace`: an adopted descendant whose parent died first
+cannot exit until an init process reaps it, and waiting unbounded there would
+strand the teardown. When the cap expires the group is reported with
+`cuprum.process_group_settlement_timeout`.
+
+`owns_group` is mandatory on the wait helper and explicit at every direct
+caller. With the settlement rule in one place, the flag selecting between its
+two routes is the thing a caller can get wrong, so an omitted keyword is a
+`TypeError` at the call site rather than a silently lost guarantee.
+
 ## Timeout and fail-fast reducer verification
 
 The temporal, branch-heavy subprocess-timeout and pipeline-cleanup paths are
@@ -6325,7 +6391,8 @@ non-positive timeout is special-cased to expire immediately and
 deterministically, because `asyncio.timeout()` alone would let a fast,
 already-exited process race past a zero or negative deadline; this preserves
 the behaviour of the previous `asyncio.wait_for()` implementation and is
-guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
+guarded by regression tests in
+`cuprum/unittests/test_subprocess_wait_teardown.py`.
 
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —

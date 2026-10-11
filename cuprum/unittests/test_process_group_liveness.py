@@ -10,6 +10,7 @@ top of them.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
 import sys
@@ -67,6 +68,7 @@ def test_a_group_whose_members_have_gone_has_none() -> None:
 
 def test_members_this_process_may_not_signal_are_not_awaited(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An unreachable group reports settled, because waiting cannot reach it.
 
@@ -74,6 +76,11 @@ def test_members_this_process_may_not_signal_are_not_awaited(
     grace period nor the ``SIGKILL`` escalation could signal. Treating that as
     "still running" would make teardown wait out a process it can never end, so
     the probe reports the group as having nothing left to wait for.
+
+    Settled and gone are not the same answer, though, and only this one leaves
+    a member running past the teardown. The probe therefore says which of the
+    two it found, so a clean-looking teardown can still be traced to a group
+    that outlived it.
     """
 
     def unreachable(pgid: int, sig: int) -> None:
@@ -82,8 +89,16 @@ def test_members_this_process_may_not_signal_are_not_awaited(
         raise PermissionError
 
     monkeypatch.setattr(os, "killpg", unreachable)
-    assert not _group_has_members(1234), (
-        "a group this process cannot signal must not be awaited"
+    with caplog.at_level(logging.WARNING, logger="cuprum._process_group"):
+        assert not _group_has_members(1234), (
+            "a group this process cannot signal must not be awaited"
+        )
+
+    assert any(
+        "process_group_unsignalable" in record.getMessage() for record in caplog.records
+    ), (
+        "an unsignalable group must be reported rather than passed over "
+        f"silently, got {caplog.messages}"
     )
 
 

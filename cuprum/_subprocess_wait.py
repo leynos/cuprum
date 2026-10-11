@@ -34,7 +34,7 @@ async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
     *,
-    owns_group: bool = False,
+    owns_group: bool,
 ) -> tuple[int, float]:
     """Wait for a subprocess exit code, terminating it on expiry or cancel.
 
@@ -42,6 +42,13 @@ async def _wait_for_exit_code(
     consumers belong to the caller, which drains them exactly once when the wait
     fails (see :func:`_run_subprocess_with_streams`); terminating the process
     here lets those consumers reach EOF during that drain.
+
+    *owns_group* is mandatory. Teardown routes the termination through this
+    flag, so a caller that omits it silently reduces an owning run to the
+    direct-child signal and lets the group survive. Requiring the keyword
+    makes an omitted ownership value a ``TypeError`` at the call site instead
+    of a lost guarantee, and every caller that targets the child alone must
+    say so.
 
     Callers also own the deadline: wrap the call in ``async with
     asyncio.timeout(...)`` to bound the wait. A deadline expiry cancels this

@@ -67,6 +67,12 @@ def _teardown_is_settled(
     The probe is asked only where :func:`_signal_child` would signal the group.
     A child with no pid has no group name to ask about, and that helper falls
     back to the direct route there, so settlement is decided the same way.
+
+    Returns
+    -------
+    bool
+        Whether the teardown target has nothing left to signal, so no signal
+        need be sent.
     """
     if owns_group and process.pid is not None:
         return not _group_has_members(process.pid)

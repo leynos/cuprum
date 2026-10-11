@@ -217,9 +217,9 @@ need a supervisor, a control group, or a container.
 
 The decision outcome above recorded that `_terminate_process_with_wait` kept its
 `is_done()` short-circuit unchanged. That was wrong for an owning run, and the
-implementation now amends it. This addendum records the correction; the accepted
-outcome text stands as written, and an earlier section that reads as current
-should be read together with this one.
+implementation now amends it. This addendum records the correction; the
+accepted outcome text stands as written, and an earlier section that reads as
+current should be read together with this one.
 
 An inherited-group run targets the direct child alone, so `is_done()` is
 exactly the right question and the short-circuit stays for `INHERIT`: a
@@ -248,3 +248,28 @@ descendant that leaves the group with `setsid()` or `setpgid()` remains out of
 reach, as do ancestors and siblings. Teardown of a child that never had a pid
 falls back to the direct route, matching where `_signal_child` would signal, so
 there is no group name to probe and nothing to probe it with.
+
+## Addendum (2026-10-11): settlement is decided in `_teardown_is_settled`
+
+The addendum above names `_terminate_process_with_wait` as the place the
+short-circuit was corrected, and that is where the entry point's decision loops
+back to. The decision itself is made in `_teardown_is_settled`, a helper the
+teardown entry points share, because there is more than one of them: the
+pipeline cleanup path reaches settlement without going through
+`_terminate_process_with_wait` at all. A later reader looking only for the
+short-circuit in the function named above would find the `is_done()` call
+unconditional and conclude that the owning route had never been fixed, so the
+helper is recorded here as the one place the rule lives.
+
+That single definition is the point rather than an implementation detail. The
+question "is this teardown target settled?" has one answer per run, and both
+teardown entry points have to give it, so it is asked in one place and read by
+both. The probe is asked only where `_signal_child` would signal the group: a
+child with no pid has no group name to ask about, and settlement for that child
+is the same question the inherited route asks. A child with a pid that the run
+does not own keeps the `is_done()` short-circuit byte for byte.
+
+The mandatory `owns_group` keyword on the wait helper, and the explicit
+`owns_group=False` at every direct caller, are part of the same boundary: with
+the rule in one place, the flag that selects between its two routes is the
+thing a caller can get wrong, so it may not be omitted silently.

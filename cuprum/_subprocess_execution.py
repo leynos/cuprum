@@ -2,10 +2,11 @@
 
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
-run loop that waits for exit and reconciles the consumer tasks lives in
-``cuprum._subprocess_stream_run``, and the consumer construction those two
+run — applying the deadline and terminating the process — live in
+``cuprum._subprocess_wait``, which shares the second half of that job with
+``cuprum._subprocess_drain``: draining the stream consumers exactly once. The
+streamed run loop that waits for exit and reconciles the consumer tasks lives
+in ``cuprum._subprocess_stream_run``, and the consumer construction those two
 drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
 importers of this module keep working unchanged. Timing and child resource
 usage are measured here, with ``cuprum._wait4_process`` owning the direct

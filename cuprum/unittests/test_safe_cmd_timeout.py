@@ -169,7 +169,7 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
 
 # -- Public-boundary timeout contract -----------------------------------------
 #
-# The private-helper tests in ``test_subprocess_timeout`` drive
+# The private-helper tests in ``test_subprocess_wait_teardown`` drive
 # ``_wait_for_exit_code_within_timeout`` with process doubles, which isolates
 # branches a public test cannot reach. These cover what a caller actually sees:
 # the public ``TimeoutExpired``, its payload, and the absence of any surviving

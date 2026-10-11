@@ -10,11 +10,14 @@ descendant table to keep and no way to count a process outside the group.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_LOGGER = logging.getLogger(__name__)
 
 # Short enough that a teardown which settles immediately pays at most one
 # probe, long enough that a group outliving the grace period is noticed
@@ -47,6 +50,11 @@ def _group_has_members(pgid: int) -> bool:
     them, so waiting longer cannot settle the group and it is reported as
     having no reachable members.
 
+    The two absences are not the same, so the permission case is logged before
+    it is reported as settled. Both answers stop the wait, but only one of them
+    means the group is actually gone, and a caller reading a clean teardown
+    should be able to tell that a member outlived it.
+
     Returns
     -------
     bool
@@ -54,7 +62,14 @@ def _group_has_members(pgid: int) -> bool:
     """
     try:
         os.killpg(pgid, 0)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        _LOGGER.warning(
+            "cuprum.process_group_unsignalable pgid=%s; group not signalled, "
+            "treated as unreachable rather than settled",
+            pgid,
+        )
         return False
     return True
 
