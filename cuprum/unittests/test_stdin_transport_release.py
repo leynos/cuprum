@@ -113,7 +113,12 @@ def test_a_stalled_close_releases_the_descriptor() -> None:
 
     async def scenario() -> tuple[int, bool, int]:
         process, writer = await _stalled_writer()
-        descriptor = writer.transport._fileno
+        # Both private attributes are read through ``getattr`` for the same
+        # reason: the transport's published surface does not include them, so
+        # naming them directly is a type error as well as a version risk. The
+        # descriptor is what the assertion below checks the transport released,
+        # and it is not exposed any other way.
+        descriptor: int = getattr(writer.transport, "_fileno")
         try:
             await _close_stdin(process, writer, observation)
             await asyncio.sleep(0.1)
