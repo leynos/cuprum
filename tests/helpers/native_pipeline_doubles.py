@@ -69,23 +69,14 @@ class CompletingPipeline:
         device for making an assertion fire. The real pipeline spawns
         subprocesses and drains their streams, so it always suspends; a double
         that computed its result in a single step would let the monitor task go
-        unscheduled where the real one reliably yields to it. Kept because that
-        scheduling difference is real, and a double should not be less
-        concurrent than the thing it stands in for.
+        unscheduled where the real one reliably yields to it.
 
-        Measured, so a later reader does not have to guess which line carries
-        the contract. Deleting this yield alone leaves all twelve of the runner
-        module's tests passing, so nothing here asserts on it. Deleting the
-        monitor cancellation in ``_run_liveness_bounded`` instead, with the
-        yield left in place, fails ``test_a_completing_pipeline_cancels_the_
-        monitor`` by name; deleting both fails that same test and no others. So
-        the completing path is pinned by that cancellation, not by this line.
-
-        This line is kept anyway, for the fidelity reason above, and it is worth
-        saying plainly that "no test needs it" is not the same as "it is safe to
-        delete". It is also what keeps this body off the single-statement shape
-        the df12 ``R9104`` rule matches; removing it once already produced a
-        lint finding on this exact line.
+        Nothing asserts on this line, and it is not what pins the completing
+        path: that pin is the monitor cancellation in ``_run_liveness_bounded``.
+        The line is kept anyway, and "no test needs it" is not the same as "it
+        is safe to delete" — it is also what keeps this body off the
+        single-statement shape the df12 ``R9104`` rule matches, and removing it
+        once already produced a lint finding on this exact line.
 
         Returns
         -------
