@@ -84,6 +84,38 @@ def _assert_descendant_reclaimed(descendant_pid: int, message: str) -> None:
     assert not process_is_running(descendant_pid), message
 
 
+async def _run_owned_failure(pipeline: sh.Pipeline) -> sh.PipelineResult:
+    """Run *pipeline* owned and undeadlined, bounded so a leak fails loudly.
+
+    A descendant left holding the run's inherited pipes holds the run open
+    rather than failing it, so without a bound this state would present as a
+    hang. The bound converts it into a named defect instead: a run that
+    outlasts it fails the test here, naming the cause rather than timing out
+    somewhere upstream.
+
+    Returns
+    -------
+    sh.PipelineResult
+        The completed run's result, including its latched failure index.
+    """
+    try:
+        return await asyncio.wait_for(
+            pipeline.run(
+                output=RunOutputOptions(capture=True, echo=False),
+                context=ExecutionContext(
+                    process_group=ProcessGroupPolicy.OWN_GROUP,
+                ),
+            ),
+            _FAIL_FAST_RUN_BUDGET_S,
+        )
+    except TimeoutError:
+        pytest.fail(
+            "the run did not finish within "
+            f"{_FAIL_FAST_RUN_BUDGET_S}s: an owned stage's descendant is still "
+            "holding the run's inherited pipes, so nothing reached its group"
+        )
+
+
 def test_a_public_owned_pipeline_run_reaches_its_grandchildren(tmp_path: Path) -> None:
     """A pipeline run asked for ownership reclaims the grandchild it started.
 
@@ -162,24 +194,7 @@ def test_an_owned_failing_stage_reaches_the_descendant_it_left(tmp_path: Path) -
         grandchild_pid: int | None = None
         try:
             with scoped(ScopeConfig(allowlist=frozenset({python_program}))):
-                try:
-                    result = await asyncio.wait_for(
-                        pipeline.run(
-                            output=RunOutputOptions(capture=True, echo=False),
-                            context=ExecutionContext(
-                                process_group=ProcessGroupPolicy.OWN_GROUP,
-                            ),
-                        ),
-                        _FAIL_FAST_RUN_BUDGET_S,
-                    )
-                except TimeoutError:
-                    grandchild_pid = _recorded_descendant(pid_file)
-                    pytest.fail(
-                        "the run did not finish within "
-                        f"{_FAIL_FAST_RUN_BUDGET_S}s: the failed stage's "
-                        "descendant is still holding the run's inherited "
-                        "pipes, so nothing reached its group"
-                    )
+                result = await _run_owned_failure(pipeline)
             assert result.failure_index == 0, (
                 f"the first stage must be the reported failure; got {result!r}"
             )
@@ -192,6 +207,64 @@ def test_an_owned_failing_stage_reaches_the_descendant_it_left(tmp_path: Path) -
                 "the stage that failed owns a group that outlives it, so its "
                 "descendant must be reclaimed even though the stage itself "
                 "had already exited when the failure latched",
+            )
+        finally:
+            _reap_descendant(pid_file, grandchild_pid)
+
+    asyncio.run(run_case())
+
+
+def test_an_owned_exited_sibling_still_reaches_the_descendant_it_left(
+    tmp_path: Path,
+) -> None:
+    """A successful owned stage's group is reached once a sibling fails.
+
+    The complement of the test above, and the case that separates ownership
+    from exit status completely. The first stage *succeeded*: its wait task
+    reports completion with a zero exit code well before the failure latches,
+    so every direct-child rule agrees it needs nothing — a finished stage has
+    no direct child left to signal. Its group nevertheless still holds the
+    descendant it spawned, and that descendant still holds the run's
+    inherited pipes.
+
+    Selecting fail-fast targets by exit status alone therefore skips it, and
+    the run's own collection then waits on pipes whose only writer is a
+    process nothing has signalled. Reaching it has to come from the per-stage
+    ownership record rather than from the failure or the waiter.
+
+    The failure sits in the middle of three stages on purpose: a failing
+    *final* stage has nothing left to stop, so it does not trigger fail-fast
+    at all, and the window this test needs would never open.
+    """
+    pid_file = tmp_path / "exited-sibling-grandchild.pid"
+
+    async def run_case() -> None:
+        """Run an owned pipeline whose first stage succeeds after forking."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        pipeline = (
+            python(*descendant_then_exit_argv(pid_file, exit_code=0))
+            | python("-c", "import sys, time; time.sleep(1.0); sys.exit(9)")
+            | python("-c", "import time; time.sleep(120)")
+        )
+
+        grandchild_pid: int | None = None
+        try:
+            with scoped(ScopeConfig(allowlist=frozenset({python_program}))):
+                result = await _run_owned_failure(pipeline)
+            assert result.failure_index == 1, (
+                "the middle stage is the one that fails; the first succeeds "
+                f"while leaving its descendant behind; got {result!r}"
+            )
+            grandchild_pid = wait_for_pid_file(
+                pid_file,
+                context="the exited sibling's descendant",
+            )
+            _assert_descendant_reclaimed(
+                grandchild_pid,
+                "a stage that exited successfully still owns the group it "
+                "led, so the descendant it left must be reclaimed even though "
+                "its waiter had already completed when the sibling failed",
             )
         finally:
             _reap_descendant(pid_file, grandchild_pid)
