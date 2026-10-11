@@ -37,7 +37,6 @@ import pytest
 from cuprum import _group_teardown, _process_group
 from cuprum.unittests._process_signal_identity_support import (
     _LEADER_PID,
-    _as_process,
     _teardown,
     _TeardownTarget,
 )
@@ -139,7 +138,7 @@ def test_the_recorded_settlement_duration_is_the_measured_wait(
         started = time.monotonic()
         with caplog.at_level(logging.WARNING, logger=_SETTLEMENT_LOGGER):
             delivered = await _teardown(
-                _as_process(target),
+                target,
                 owns_group=True,
             )
         assert delivered, (
