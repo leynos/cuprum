@@ -22,6 +22,7 @@ import typing as typ
 
 import pytest
 
+from cuprum import _wait4_process
 from cuprum.sh import RunOutputOptions, StdioTarget
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -82,6 +83,40 @@ def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
     if request.param == "async":
         return ("async", _execute_async)
     return ("sync", _execute_sync)
+
+
+@pytest.fixture(params=["wait4", "asyncio"], ids=["wait4", "asyncio"])
+def spawn_backend(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Select the backend a direct command is spawned through.
+
+    A direct command has two spawn routes, chosen inside the backend by
+    ``wait4_resource_measurement_available``: the ``wait4`` reaper, which is
+    the only one that can return the child's own resource usage, and
+    asyncio's ``create_subprocess_exec`` transport. The choice is made
+    *below* the stdio mapping this module tests, and the two routes receive
+    the identical three stdio values, so this axis establishes that the
+    ownership and flush rules hold on both rather than on the one a Linux
+    machine happens to prefer.
+
+    The value returned is the label, useful in assertion messages; the
+    selection is a side effect of requesting the fixture.
+
+    Returns
+    -------
+    str
+        ``"wait4"`` or ``"asyncio"``, naming the route under test.
+    """
+    if request.param == "asyncio":
+        # ``spawn_direct_process`` reads this at call time, so patching it
+        # selects the fallback for this test alone. Patching the dispatch
+        # itself would replace the branch under test.
+        monkeypatch.setattr(
+            _wait4_process, "wait4_resource_measurement_available", lambda: False
+        )
+    return str(request.param)
 
 
 @pytest.fixture
@@ -211,6 +246,7 @@ def _assert_no_descriptor_leak(descriptors: DescriptorLog) -> None:
 def test_path_target_does_not_leak_the_descriptor(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
     tmp_path: Path,
     target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
 ) -> None:
@@ -306,6 +342,7 @@ def test_partial_owned_open_closes_what_it_already_opened(
 def test_redirected_stream_is_not_captured(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """A redirected stream reaches no parent-side pipe, so capture sees nothing."""
@@ -332,6 +369,7 @@ def test_redirected_stream_is_not_captured(
 def test_inherit_target_leaves_the_parent_stream_alone(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     """An inherited stdout is the parent's own stream, not a pipe cuprum reads.
@@ -367,6 +405,7 @@ def test_inherit_target_leaves_the_parent_stream_alone(
 def test_borrowed_descriptor_survives_the_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """Cuprum never closes a descriptor it borrowed.
@@ -401,6 +440,7 @@ def test_borrowed_descriptor_survives_the_run(
 def test_borrowed_file_object_is_flushed_before_spawn(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """A borrowed file object's buffered bytes are visible to the child.
@@ -560,6 +600,7 @@ def test_both_streams_can_be_redirected_at_once(
 def test_pipe_target_still_captures(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    spawn_backend: str,
 ) -> None:
     """An explicit pipe target keeps capture working, proving the rule is a boundary.
 
@@ -631,4 +672,166 @@ def test_descriptorless_file_object_is_refused_with_the_stream_named(
     )
     assert isinstance(info.value.__cause__, io.UnsupportedOperation), (
         "the original fileno failure must stay reachable as __cause__"
+    )
+
+
+# The INV-5 matrix is {owned path, borrowed fd, borrowed file} crossed with
+# {exit 0, non-zero exit, timeout, spawn failure}. The owned row covers all
+# four outcomes above; the borrowed rows covered only exit 0, and the borrowed
+# half is the safety-critical half — "cuprum closed a descriptor it did not
+# open" is invisible in the child's exit code and shows up only when the caller
+# next touches their own resource. Each case below therefore *uses* the
+# borrowed resource after the failing run, which is the assertion.
+
+
+@_posix_only
+def test_borrowed_descriptor_survives_a_failing_run(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """A non-zero exit never closes a descriptor the caller lent cuprum.
+
+    The failure path is where an over-eager cleanup would live: a handler that
+    closes every stream it was handed is exactly what a "tidy up on error"
+    reflex produces, and it passes every success-path test. The caller's write
+    afterwards is what makes that defect visible, because a close cuprum did
+    not owe raises ``EBADF`` from it.
+    """
+    _, execute = execution_strategy
+    log = tmp_path / "borrowed.log"
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        command = python_builder("-c", _WRITE_THEN_FAIL)
+
+        result = execute(
+            command, {"output": _redirect_options(stdout=StdioTarget.fd(fd))}
+        )
+
+        assert result.exit_code == 3, "the child's own exit code must be reported"
+        os.write(fd, b"caller\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+    assert log.read_text(encoding="utf-8") == "out\ncaller\n", (
+        "the child's bytes and the caller's own write must both land in the file"
+    )
+
+
+@_posix_only
+def test_borrowed_descriptor_survives_a_timeout(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """A timeout kills the child without closing the caller's descriptor.
+
+    Teardown after a timeout is the most aggressive path in the run: the child
+    is killed, the writer is cancelled, and every library-owned resource is
+    released. A borrowed descriptor is not one of those, and this is the
+    outcome most likely to lose that distinction.
+    """
+    _, execute = execution_strategy
+    log = tmp_path / "borrowed.log"
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        command = python_builder("-c", "import time; time.sleep(30)")
+
+        with pytest.raises(TimeoutError):
+            execute(
+                command,
+                {
+                    "output": _redirect_options(stdout=StdioTarget.fd(fd)),
+                    "timeout": 0.05,
+                },
+            )
+
+        os.write(fd, b"caller\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+    assert log.read_text(encoding="utf-8") == "caller\n", (
+        "a timed-out child wrote nothing, and the caller's own write must "
+        "still succeed against the descriptor cuprum was lent"
+    )
+
+
+@_posix_only
+def test_borrowed_descriptor_survives_a_spawn_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A spawn that never happened leaves the caller's descriptor alone.
+
+    The borrowed flush runs between opening the owned targets and the spawn
+    call, so a spawn failure lands after cuprum has already touched the
+    borrowed object. The failure unwinds through the ``finally`` that closes
+    the *owned* descriptors, which is precisely where a borrowed one could be
+    swept up with them.
+    """
+    log = tmp_path / "borrowed.log"
+    fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    try:
+        command = python_builder("-c", _WRITE_STDOUT)
+
+        def refuse_to_spawn(*_: object, **__: object) -> typ.NoReturn:
+            """Fail the spawn the way a missing executable does."""
+            message = "missing"
+            raise FileNotFoundError(message)
+
+        # Patched at the backend's own spawn entry point, which is the last
+        # statement inside ``_spawn_subprocess``'s ``try``. Patching the
+        # executor's ``_spawn_subprocess`` instead would replace the whole
+        # body — including the ``finally`` under test — so the run would never
+        # reach the close this case exists to observe.
+        monkeypatch.setattr(_wait4_process, "spawn_direct_process", refuse_to_spawn)
+
+        with pytest.raises(FileNotFoundError):
+            command.run_sync(output=_redirect_options(stdout=StdioTarget.fd(fd)))
+
+        os.write(fd, b"caller\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+    assert log.read_text(encoding="utf-8") == "caller\n", (
+        "a child that never started wrote nothing, and the caller's own write "
+        "must still succeed against the descriptor cuprum was lent"
+    )
+
+
+@_posix_only
+def test_borrowed_file_object_survives_a_failing_run(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """The borrowed *file object* arm of the matrix, on a non-zero exit.
+
+    The descriptor arm above proves cuprum does not close what it borrowed.
+    This one proves the object itself stays usable: the flush cuprum performs
+    before spawning, and the ``fileno()`` it reads, must leave the object in a
+    state the caller can keep writing through.
+    """
+    _, execute = execution_strategy
+    log = tmp_path / "borrowed.log"
+    command = python_builder("-c", _WRITE_THEN_FAIL)
+
+    with log.open("w+b") as handle:
+        result = execute(
+            command,
+            {"output": _redirect_options(stdout=StdioTarget.fd(handle))},
+        )
+
+        assert result.exit_code == 3, "the child's own exit code must be reported"
+        handle.write(b"caller\n")
+        handle.flush()
+
+    written = log.read_bytes()
+    assert written == b"out\ncaller\n", (
+        "the child must have written before failing, and the caller's own "
+        f"write must land after it; got {written!r}"
     )

@@ -1637,6 +1637,51 @@ likelihood, and mitigation.
   that failed at `fcce831b` — both report `success`, and the PR reads
   `mergeStateStatus: CLEAN`.
 
+- [x] (2026-10-11 10:10Z) Assessment round `pr511-r6-execplan-8994f723` was
+  adjudicated against the source rather than against commit subjects. All five
+  correctness findings were already repaired by the eleven commits that landed
+  after the assessed head; the five *gaps* were not, and four are now closed.
+  The distinction mattered: a green multi-gate run is evidence for what it
+  exercises, not for cases no test reaches.
+
+- [x] (2026-10-11 10:10Z) **Gap A — the INV-5 ownership matrix is complete.**
+  Four borrowed-target cases were added to
+  `cuprum/unittests/test_safe_cmd_redirect.py`: the descriptor arm gained a
+  non-zero exit, a timeout and a spawn failure, and the file-object arm gained
+  a non-zero exit, each over `run()`/`run_sync()`. The suite went 32 → 44
+  tests. Every one is proven non-vacuous by mutation rather than by argument;
+  see the Surprises entry on the spawn-failure case, which was vacuous on its
+  first cut.
+
+- [x] (2026-10-11 10:10Z) **Gap B — both spawn backends are exercised.** A
+  `spawn_backend` fixture parameterizes the six tests covering the most
+  divergent stdio kinds (owned path, unread pipe, inherited, borrowed
+  descriptor, borrowed file object, explicit pipe) over the `wait4` reaper and
+  asyncio's `create_subprocess_exec` transport. The two routes were shown to
+  agree on the whole matrix *before* the fixture existed, and the fixture is
+  what makes that agreement a repository fact instead of a scratch result.
+
+- [x] (2026-10-11 10:10Z) **Gap D — the async timing statement is corrected.**
+  `cuprum/sh/execution.py::_resolve_stdin_source` said the encoding error
+  "surfaces synchronously from `run()`". That is false: `run()` only builds the
+  coroutine, so the error surfaces when the coroutine executes — still before
+  the spawn, and still in the caller's frame. The docstring now says so. The
+  plan had already recorded this correction at line 671 while the source still
+  carried the wrong text, which is why the sweep re-read the source rather than
+  trusting the plan.
+
+- [x] (2026-10-11 10:10Z) **Gap E — the formatter/checker asymmetry is closed.**
+  `make fmt` ran `ruff check --select I --fix`; `make check-fmt` never verified
+  it, so the formatter repaired what the checker did not check. `check-fmt` now
+  runs `$(RUFF) check --select I`, and
+  `scripts/tests/test_check_fmt_import_order_contract.py` holds it there with a
+  test that runs the pinned Ruff against a formatted-but-unsorted fixture and
+  requires `I001`. Both halves of that test are proven non-vacuous.
+
+- [ ] **Gap C — document `stdio_error`, `StdioFailureCategory`, and
+  `cuprum_stdio_errors_total`.** No maintained doc file names any of them; only
+  this plan does. In progress.
+
 ## Surprises & discoveries
 
 - Observation: a test harness can be wrong in a way that leaves most of its own
@@ -1741,6 +1786,54 @@ likelihood, and mitigation.
   for process: `make check-fmt` is not a sufficient pre-commit check for a
   rebase whose resolutions touch imports, and a resolution should be checked
   with `ruff check` on the resolved file before the rebase continues.
+- Observation: the fix for a process workaround is to remove the need for the
+  workaround, and the earlier entry above is the evidence for this one. The
+  round-6 entry recorded a *process* consequence for the `I001` gap — "check a
+  resolved file with `ruff check` before the rebase continues" — while leaving
+  the gate itself asymmetric: `make fmt` ran `check --select I --fix` and
+  `make check-fmt` did not run `check --select I`. A contributor who ran only
+  the formatting gate could therefore ship an import block the lint gate
+  rejects, and the workaround put the burden on every future contributor to
+  remember what the gate should have caught. `check-fmt` now verifies the rule,
+  and `scripts/tests/test_check_fmt_import_order_contract.py` holds it there by
+  running the pinned Ruff against a formatted-but-unsorted fixture rather than
+  by reading the recipe text — a recipe assertion passes against a command that
+  detects nothing, which is the failure mode being guarded. Consequence: when a
+  discovery yields a "remember to also run X" instruction, check whether the
+  gate could simply run X.
+
+- Observation: a test can name the right rule, assert the right property, and
+  still be structurally incapable of failing, because it patches a seam *above*
+  the code it claims to observe. Evidence: the new spawn-failure case for the
+  INV-5 matrix patched `_subprocess_execution._spawn_subprocess` — a function
+  whose body *contains* the `finally: _close_owned_stdio(opened)` the case
+  exists to exercise. Replacing the whole function meant the `finally` never
+  ran, so the test would have passed against an implementation that closed the
+  caller's descriptor. It was caught because a mutation probe that killed six
+  sibling cases left this one standing; the survivors list, not the failure
+  list, is what identified it. Re-pointed at
+  `_wait4_process.spawn_direct_process` — the last statement *inside* the
+  `try` — it now fails under the same probe. Consequence: "the mutation killed
+  it" is the only cheap evidence that a test observes the code it names, and a
+  test that survives a mutation aimed at its own claim is a finding about the
+  test, not a passing result.
+
+- Observation: a probe that reads a monkeypatched symbol through a binding taken
+  at import time reports the *original* and renders every measurement
+  identical. Evidence: verifying that the new `spawn_backend` axis really
+  selects each route, the first probe captured
+  `wait4_resource_measurement_available` at module import and then called that
+  captured function from inside the trace, so it reported `wait4` for the
+  `asyncio` parameter as well — an artefact that looks exactly like a working
+  gate. Re-reading the attribute at call time, through the module rather than
+  the captured binding, reported `asyncio` for the `asyncio` parameter and
+  `wait4` for `wait4`, which is the observation that means something. The
+  companion negative control — replacing the switch with a function that raises
+  — broke 30 of 32 tests, proving the switch is genuinely consulted on this
+  path. Consequence: a probe of patched behaviour must resolve the symbol
+  through the same lookup the production code uses, or it measures the patch
+  instead of the patch's effect.
+
 - Observation: the ExecPlan file is itself gated Markdown, so appending prose
   to record progress can break `make check-fmt` in the same commit that records
   it. Evidence: `lint-test` failed at `96c16aed` with `mdtablefix --check`
