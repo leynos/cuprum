@@ -89,7 +89,6 @@ from cuprum.sh.pipeline import _resolve_pipeline_output as _resolve_pipeline_out
 from cuprum.sh.results import CommandResult, PipelineResult
 from cuprum.sh.results import dc as dc
 from cuprum.sh.safe_cmd import SafeCmd
-
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
