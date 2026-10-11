@@ -49,6 +49,22 @@ class _TeardownPolicy:
             return self.owns_group
         return index < len(self.owns_group) and self.owns_group[index]
 
+    def ownership_of(self, count: int) -> tuple[bool, ...]:
+        """Return one ownership flag per process, in the caller's own order.
+
+        This is the sequence form of the same resolution :meth:`owns_group_for`
+        performs one index at a time, for a caller that has to reason about
+        every process at once — the fail-fast selection asks which stages own a
+        group before it decides which to terminate.
+
+        Returns
+        -------
+        tuple[bool, ...]
+            ``count`` flags, each resolved as :meth:`owns_group_for` resolves
+            it, so a short sequence is padded with the direct-child default.
+        """
+        return tuple(self.owns_group_for(index) for index in range(count))
+
     def for_index(self, index: int) -> _TeardownPolicy:
         """Return an equivalent policy resolved to the single process at ``index``."""
         return _TeardownPolicy(

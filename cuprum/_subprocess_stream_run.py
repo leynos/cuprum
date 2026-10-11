@@ -13,7 +13,7 @@ import asyncio
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_drain import (
     _drain_stream_consumers,
@@ -26,9 +26,43 @@ from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
+
+
+async def _settle_owned_group_before_draining(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate the run's owned group so the drain that follows can reach EOF.
+
+    Once the direct child has exited, this module still has stream consumers to
+    collect. For an owning run that exit is not settlement: a descendant the
+    child left behind is still in the group, still holds the write end of the
+    run's pipes, and no signal aimed at the leader can reach it. Draining first
+    would spend the bounded capture grace on readers that cannot reach EOF and
+    then discard output the descendant was still producing.
+
+    Signalling the group first is what lets those readers see EOF. The teardown
+    is shielded like every other one on a failure path, so a cancellation
+    arriving during its grace period cannot skip the escalation.
+
+    A run that does not own its group has nothing to do here — its only
+    teardown target is the direct child, which has already exited on every path
+    that reaches this helper — so the call is skipped rather than made and
+    proven a no-op.
+    """
+    if not execution.owns_process_group:
+        return
+    await _terminate_all_shielded(
+        (process,),
+        _TeardownPolicy(
+            execution.ctx.cancel_grace,
+            owns_group=True,
+        ),
+    )
 
 
 async def _wait_for_streamed_process_exit(
@@ -190,6 +224,11 @@ async def _run_subprocess_with_streams(
         for diagnostics in tasks.relay_diagnostics:
             diagnostics.settle()
     except BaseException:
+        # The leader has exited but its group may not have, so settle the group
+        # before reaching for the consumers: a descendant still holding the
+        # pipes is what makes this gather fail, and no drain can succeed until
+        # it is gone.
+        await _settle_owned_group_before_draining(process, execution)
         # `gather` re-raises the first failure and leaves its sibling running,
         # so a reader wedged on a pipe would outlive the run it belonged to.
         # Reconcile it the way every other exit path does, then re-raise: the

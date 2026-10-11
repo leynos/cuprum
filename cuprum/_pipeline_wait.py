@@ -137,13 +137,16 @@ async def _process_completed_task(
     latched_first_failure = not had_failure and state.failure_index == idx
 
     # The query says whether this completion *is* the trigger; the wait tasks
-    # say whether the decision still has a subject. A batch handled in stage
-    # order can reach an upstream failure after every sibling has exited, and
-    # announcing a teardown of nothing would report a termination that never
-    # happened and count a fail-fast the operator cannot act on.
+    # and the stage's ownership say whether the decision still has a subject. A
+    # batch handled in stage order can reach an upstream failure after every
+    # sibling has exited, and announcing a teardown of nothing would report a
+    # termination that never happened and count a fail-fast the operator cannot
+    # act on. An owned stage keeps the decision live once its leader has exited,
+    # because the group it leads outlives it.
     terminate_others = state.should_terminate_others(idx) and _has_stages_to_terminate(
         idx,
         state.wait_tasks,
+        policy,
     )
 
     if not (latched_first_failure or terminate_others):

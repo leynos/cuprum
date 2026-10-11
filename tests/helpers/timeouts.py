@@ -146,6 +146,63 @@ def pipe_holding_child_argv(
     )
 
 
+# A child that starts the pipe-holding grandchild above, waits for it to
+# announce itself, and then exits with a chosen code. The readiness wait is
+# load-bearing: a stage that exited before its descendant existed would give a
+# teardown nothing to reach, and the case would pass while proving nothing.
+# The child never waits on the grandchild, so its exit says nothing about it —
+# which is exactly the situation a group teardown exists for.
+#
+# Joined with newlines rather than the semicolons the one-statement sources
+# above use, because this child needs a loop and the compound-statement form
+# cannot be written on one line. The indentation is part of the source.
+_DESCENDANT_THEN_EXIT_SOURCE = "\n".join((
+    "import pathlib, subprocess, sys, time",
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])",
+    "target = pathlib.Path(sys.argv[2])",
+    "deadline = time.monotonic() + 10.0",
+    "while not target.exists() and time.monotonic() < deadline:",
+    "    time.sleep(0.01)",
+    "sys.exit(int(sys.argv[3]))",
+))
+
+
+def descendant_then_exit_argv(
+    pid_file: Path,
+    *,
+    exit_code: int,
+) -> tuple[str, ...]:
+    """Return ``-c`` argv for a child that leaves a pipe-holding descendant behind.
+
+    The child spawns the ``SIGTERM``-immune grandchild described by
+    :func:`pipe_holding_child_argv`, waits until the grandchild has recorded
+    its pid, and then exits with ``exit_code`` without waiting for it. The
+    descendant therefore outlives its parent and still holds the run's
+    inherited pipes — the state a direct-child-only teardown cannot clean up.
+
+    Parameters
+    ----------
+    pid_file:
+        Path the grandchild writes its pid to. Its arrival is also the
+        readiness signal this child waits on before exiting.
+    exit_code:
+        Status the child exits with, so a caller can choose between a failing
+        stage and a successful one that merely left work behind.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``-c`` argv, ready to spread into a spawn call.
+    """
+    return (
+        "-c",
+        _DESCENDANT_THEN_EXIT_SOURCE,
+        _GRANDCHILD_SOURCE,
+        str(pid_file),
+        str(exit_code),
+    )
+
+
 def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int:
     """Return the pid recorded in ``path``, waiting until the file appears.
 

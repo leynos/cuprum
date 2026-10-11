@@ -1477,11 +1477,22 @@ Table 1: process-group ownership modules and their responsibilities
 ### The liveness probe
 
 `_group_has_members(pgid)` answers a null signal to the group. The kernel keeps
-a group addressable while it has a member, so the group's name — the leader's
-pid — cannot be recycled onto an unrelated group while the probe still answers.
-That is what makes the probe safe as well as decisive: it never signals a group
-the run does not lead, and it knows something the direct child's waiter cannot,
-namely whether a descendant is still inside.
+a group addressable while it has a member, so while the probe answers, the
+group's name — the leader's pid — still names a group this run created. That is
+what makes the probe decisive: it never signals a group the run does not lead,
+and it knows something the direct child's waiter cannot, namely whether a
+descendant is still inside.
+
+The guarantee is one-directional, and the difference is worth stating. A probe
+that answers proves the name is still this run's. A probe that has stopped
+answering proves only that the group has emptied; after that the identifier is
+an ordinary free slot the kernel may recycle, and the probe and the signal it
+guards are two separate syscalls with a window between them. No pidfd
+equivalent exists for a process group — `os.pidfd_open` and
+`signal.pidfd_send_signal` are per-pid — so there is no handle to close that
+window with. The residual risk is the one `Popen` documents between its own
+liveness check and its `os.kill` (bpo-38630); kernel identifier recycling is
+what bounds it in practice.
 
 `ProcessLookupError` means the group has emptied. `PermissionError` means
 members exist that this process may not signal: neither the grace period nor

@@ -278,3 +278,48 @@ The mandatory `owns_group` keyword on the wait helper, and the explicit
 `owns_group=False` at every direct caller, are part of the same boundary: with
 the rule in one place, the flag that selects between its two routes is the
 thing a caller can get wrong, so it may not be omitted silently.
+
+## Addendum (2026-10-11): the identifier guarantee is one-directional
+
+Both addenda above justify the liveness probe with a kernel property, and state
+it as a two-way guarantee: "a name that still answers cannot have been recycled
+onto an unrelated group while this one lives". The property itself is sound —
+the kernel does hold a group addressable for as long as it has a member — but
+the guarantee drawn from it is stronger than the property supports, and the
+difference matters to anyone reasoning about worst-case safety here.
+
+What the property gives is one direction. A probe that still answers proves the
+name is still this run's group: a group that has emptied would not answer, so
+an answer is conclusive. A probe that has *stopped* answering proves only that
+the group has emptied, and says nothing about what the kernel did with the
+identifier afterwards — once the group is gone, its identifier is an ordinary
+free slot that may be recycled like any other. The two addenda's phrasing reads
+as though the name were reserved for this run's lifetime and could not be
+reused even after the group ended, and that is not what the kernel promises.
+
+There is also a window the probe cannot close, which the earlier text did not
+account for. The probe and the signal it guards are separate syscalls, so a
+group that empties between them leaves the signal to be sent under a name the
+kernel may already have recycled. Closing that window would need a
+lifetime-safe handle on the group — the analogue of `pidfd` for a process. No
+such primitive exists: `os.pidfd_open` and `signal.pidfd_send_signal` are
+per-pid only, and no process-group equivalent is available on Linux.
+"Lifetime-safe signalling where supported" therefore has nothing to select on
+this platform.
+
+The residual risk is real but small, and it is the one already familiar from
+`Popen`: the same check-then-signal gap between a liveness test and an
+`os.kill`, which CPython documents as bpo-38630. What bounds it here is the
+kernel's own recycling rate — an identifier must be freed and handed to a new
+process before the gap can be exploited, and identifier space on current
+kernels makes that improbable within a teardown window.
+
+Nothing about the decision changes. The probe stays, because a two-way
+guarantee is not needed for the deduction it supports: settlement of an owning
+run still cannot be decided by the direct child's waiter, a live probe still
+answers the question that matters, and the alternative that the first addendum
+rejected — reverting to `is_done()` alone — would leak descendants exactly as
+before. This addendum corrects the strength of a stated guarantee, not the
+design that rests on it. The corrected statement lives in
+`cuprum/_process_signal.py` and in the developers' guide, so the code and the
+guide no longer claim more than the kernel provides.

@@ -141,9 +141,11 @@ async def _run_late_settled_termination(
     def settle_after_selection(
         failure_index: int,
         done: list[bool],
+        *,
+        owns_group: cabc.Sequence[bool] = (),
     ) -> list[int]:
         """Settle the second target after its selection snapshot."""
-        targets = select_targets(failure_index, done)
+        targets = select_targets(failure_index, done, owns_group=owns_group)
         scenario.late_waiter.set_result(0)
         return targets
 

@@ -20,6 +20,7 @@ import typing as typ
 from asyncio.streams import FlowControlMixin
 
 from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
@@ -28,6 +29,7 @@ from cuprum._rusage import (
     resource_usage_from_wait4,
     wait4_resource_measurement_available,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -235,16 +237,63 @@ def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
 async def spawn_wait4_process(
     config: DirectProcessConfig,
 ) -> asyncio.subprocess.Process:
-    """Spawn a direct POSIX child that owns its ``wait4`` resource usage."""
+    """Spawn a direct POSIX child that owns its ``wait4`` resource usage.
+
+    The child exists before its pipes do, so an attachment failure has to clean
+    up whatever was already started. That cleanup goes through the run's shared
+    teardown rather than a bare ``kill``, for two reasons the previous direct
+    call could not cover: the child may lead a group that already holds
+    descendants — a shell that forked before the attachment failed — which a
+    signal aimed at the leader alone would leave running, and the escalation
+    must survive a cancellation arriving on it, or the child is left
+    un-reaped with the resource usage this path exists to measure.
+
+    ``start_new_session`` is not merely a spawn flag here: it is the same
+    ownership fact ``ProcessGroupPolicy.OWN_GROUP`` selects, so reading it is
+    what keeps the spawn and its cleanup from disagreeing about whose group is
+    being torn down.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The spawned child, with its pipes attached.
+    """
     loop = asyncio.get_running_loop()
     process = _Wait4Process(_spawn_popen(config), loop)
     try:
         await process.connect_pipes()
     except BaseException:
-        process.kill()
-        await process.wait()
+        await _settle_spawned_child(
+            process,
+            owns_group=config.start_new_session,
+        )
         raise
     return process
+
+
+# A spawn that never completed has no in-flight work left to finish: the child
+# was created milliseconds ago and its streams were never attached. The cleanup
+# therefore escalates at once, which is what the pre-ownership ``process.kill``
+# did. Only the reach of that signal and its shielding change.
+_SPAWN_FAILURE_GRACE_S = 0.0
+
+
+async def _settle_spawned_child(
+    process: asyncio.subprocess.Process,
+    *,
+    owns_group: bool,
+) -> None:
+    """Terminate and reap a child whose pipe attachment failed.
+
+    The shared teardown signals the child's target — the group when this run
+    owns one — escalates, and awaits the direct child's exit, so reaping stays
+    with this path's single ``wait4`` owner rather than being left to whatever
+    collects a zombie later.
+    """
+    await _terminate_all_shielded(
+        (process,),
+        _TeardownPolicy(_SPAWN_FAILURE_GRACE_S, owns_group=owns_group),
+    )
 
 
 async def spawn_direct_process(

@@ -146,19 +146,56 @@ async def _terminate_process_via_wait_task(
     )
 
 
+def _stage_may_own_live_group(
+    index: int,
+    owns_group: cabc.Sequence[bool],
+) -> bool:
+    """Return whether stage ``index`` owns a group this selection must reach."""
+    return index < len(owns_group) and owns_group[index]
+
+
 def _stages_to_terminate(
     failure_index: int,
     done: cabc.Sequence[bool],
+    *,
+    owns_group: cabc.Sequence[bool] = (),
 ) -> list[int]:
-    """Return the stage indices to terminate after a fail-fast, each once."""
-    # This is the pure selection behind _terminate_pipeline_remaining_stages.
-    # Every stage is scheduled at most once — indices come from a single
-    # enumeration — and two stages are never scheduled: the failed stage, which
-    # owns its own exit, and any already-finished stage, which needs no
-    # termination. Cleanup is therefore idempotent: a second pass over settled
-    # stages (all ``done``) selects nothing.
+    """Return the stage indices to terminate after a fail-fast, each once.
+
+    This is the pure selection behind ``_terminate_pipeline_remaining_stages``.
+    Every stage is scheduled at most once — indices come from a single
+    enumeration — and the two exclusion rules turn on ownership:
+
+    - A stage that does *not* own its group is selected exactly when it is
+      neither the failed stage nor already finished. The failed stage owns its
+      own exit, and a finished stage has no direct child left to signal.
+    - A stage that *does* own its group is always selected, whatever its wait
+      task says. Its group outlives the leader that named it, so a completed
+      waiter is not settlement: a descendant the stage left behind can still
+      hold an inherited pipe. Whether anything is actually signalled is decided
+      later, by the group probe in
+      :func:`cuprum._process_signal._teardown_is_settled`, which answers for
+      the group rather than for the leader.
+
+    ``owns_group`` is per stage, so a short or absent sequence leaves the
+    remaining stages on the direct-child rule: an ownership bookkeeping slip
+    degrades to the selection every run had before ownership existed, rather
+    than signalling a group this run never created.
+
+    Cleanup is idempotent for the inherited route — a second pass over settled
+    stages selects nothing — while an owned stage stays selectable by design,
+    because the group probe, not this selection, is what reports it settled.
+
+    Returns
+    -------
+    list[int]
+        The stage indices to terminate, in ascending stage order.
+    """
     return [
-        idx for idx, is_done in enumerate(done) if idx != failure_index and not is_done
+        idx
+        for idx, is_done in enumerate(done)
+        if _stage_may_own_live_group(idx, owns_group)
+        or (idx != failure_index and not is_done)
     ]
 
 
@@ -188,12 +225,17 @@ async def _terminate_timed_out_stages(
 def _has_stages_to_terminate(
     failure_index: int,
     wait_tasks: cabc.Sequence[asyncio.Task[int]],
+    policy: _TeardownPolicy,
 ) -> bool:
     """Report whether a fail-fast at ``failure_index`` has anything to stop.
 
     Asks the same reducer `_terminate_pipeline_remaining_stages` picks its
     targets with, so a caller that announces the decision before requesting the
     teardown cannot disagree with it about whether a stage was left running.
+
+    *policy* supplies the per-stage ownership the reducer selects on: an owned
+    stage is a termination target even when its wait task has completed, since
+    its group can outlive the leader that named it.
 
     Returns
     -------
@@ -204,6 +246,7 @@ def _has_stages_to_terminate(
         _stages_to_terminate(
             failure_index,
             [wait_task.done() for wait_task in wait_tasks],
+            owns_group=policy.ownership_of(len(wait_tasks)),
         ),
     )
 
@@ -232,6 +275,7 @@ async def _terminate_pipeline_remaining_stages(
         _stages_to_terminate(
             failure_index,
             [wait_task.done() for wait_task in wait_tasks],
+            owns_group=policy.ownership_of(len(wait_tasks)),
         )
     )
     termination_tasks = [
