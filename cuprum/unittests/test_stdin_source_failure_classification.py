@@ -105,6 +105,24 @@ async def _text_chunks(*values: str) -> cabc.AsyncIterator[str]:
         yield value
 
 
+class _UnstartableProducer:
+    """An async iterable whose ``__aiter__`` raises, before yielding anything.
+
+    ``StdinStream`` documents that ``chunks`` may be any async iterable,
+    because the writer advances it with ``aiter()``. That call is itself the
+    producer's code, so a producer that fails to *start* is failing exactly as
+    one that fails to advance does, and the two must classify alike.
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        """Raise *exc* from this producer's ``__aiter__``."""
+        self._exc = exc
+
+    def __aiter__(self) -> cabc.AsyncIterator[bytes]:
+        """Raise the recorded exception, as a failing producer would."""
+        raise self._exc
+
+
 # The three ways CPython spells a broken pipe. ``BrokenPipeError`` and
 # ``ConnectionResetError`` are the named subclasses; the bare ``OSError`` is
 # what a pipe error becomes when its errno is assigned after construction,
@@ -117,6 +135,32 @@ _PIPE_ERRORS = (
     ),
     pytest.param(OSError(errno.EPIPE, "Broken pipe"), id="OSError-EPIPE"),
 )
+
+
+@pytest.mark.parametrize("producer_error", _PIPE_ERRORS)
+def test_a_producer_that_cannot_start_is_a_source_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    producer_error: OSError,
+) -> None:
+    """A pipe error from ``__aiter__`` blames the producer, not the child.
+
+    The same classification as advancing the producer, and for the same
+    reason: the child never reads, so its stdin stays open and no write of
+    cuprum's can have failed. Classifying this as an early close instead
+    swallows it — the run continues to the child's exit code and reports
+    success for a producer that never produced anything.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _NEVER_READS)
+    stream = StdinStream(_UnstartableProducer(producer_error))
+
+    with pytest.raises(StdinSourceError) as info:
+        execute(command, {"stdin": stream, "timeout": 5})
+
+    assert info.value.__cause__ is producer_error, (
+        "the producer's own exception must be chained as the cause"
+    )
 
 
 @pytest.mark.parametrize("producer_error", _PIPE_ERRORS)
