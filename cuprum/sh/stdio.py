@@ -126,7 +126,9 @@ def _normalize_payload(target: StdioTarget) -> None:
             # not narrow ``value`` on its own. Refusing a path here states the
             # correlation the type cannot, and keeps the check below total over
             # the payloads an ``fd`` target can actually carry.
-            msg = f"StdioTarget.fd requires a descriptor or file object, got {resource!r}"
+            msg = (
+                f"StdioTarget.fd requires a descriptor or file object, got {resource!r}"
+            )
             raise ValueError(msg)
         _reject_sentinel_descriptor(resource)
         return
