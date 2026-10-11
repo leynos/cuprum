@@ -1212,7 +1212,7 @@ Python's last-resort handler still prints them to standard error.
 
 These are diagnostic rather than structured execution telemetry, so they have
 no observe event and no metric alongside them; see the developers' guide for
-why the attribution would not be meaningful.
+why a single attribution across all the routes would not be meaningful.
 
 #### Timeout diagnostics
 

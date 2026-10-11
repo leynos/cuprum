@@ -480,3 +480,39 @@ already settled and counts it into ``cuprum_terminated_stage_count``. A refusal
 was therefore trended as a clean outcome. The two signal sites now share one
 wrapper that separates the arms, so the tolerated race stays quiet and a
 refusal is recorded once, naming the signal it could not deliver.
+
+## Addendum (2026-10-11): correction to the propagation account above
+
+The addendum above is left in place, because accepted ADR text is append-only.
+Two of its claims are wrong and are corrected here rather than edited.
+
+**The count claim.** It says the fail-fast path "reads that ``False`` as a
+stage that had already settled and counts it into
+``cuprum_terminated_stage_count``", implying a refused signal inflated the
+count. It does not. The fail-fast chain is
+``_terminate_process_with_wait`` → ``_terminate_process_via_wait_task`` →
+``_await_teardown_shielded`` → ``_terminate_pipeline_remaining_stages`` →
+``_terminate_and_report``. It does not pass through ``_terminate_all_shielded``,
+which returns ``None`` and discards its outcomes; that helper is a sibling
+route, reached from the stream, single-command, and spawn paths.
+
+``_terminate_pipeline_remaining_stages`` reduces its outcomes with
+``outcome is True``, so a refused signal has always contributed **zero** to the
+count — the same as an absent target. The defect was therefore a **conflation**
+of absence with failure, not an **inflation** of the tally: a reader could not
+tell a swept-and-clean stage from one whose signal the kernel refused. The
+record fixes the diagnosis. It does not, and was never going to, change the
+number.
+
+**The attribution claim.** It gives attribution as the reason no metric exists,
+on the grounds that group teardown "is reached from ``_terminate_all_shielded``,
+which the pipeline fail-fast path calls for every still-running stage at once",
+so no single stage could own a group event. The premise is the same wrong
+helper, and the conclusion does not follow from it either. The fail-fast path
+reaches group teardown through ``_terminate_pipeline_remaining_stages``, which
+carries a stage index, and its caller holds the ``_StageObservation`` it emits
+``cuprum_terminated_stage_count`` through. A per-stage or run-level group metric
+is therefore constructible; it is unbuilt, not impossible. The decline stands on
+the narrower ground that the three records already carry the signal an operator
+needs, and that cardinality is a property of a metric's labels rather than of
+how many targets a run reaches.

@@ -1582,15 +1582,19 @@ analogous teardown bound *does* have a counter (`capture_eof_grace_expired`
 maps to `cuprum_capture_eof_grace_expired_total`), so an omission without a
 stated reason would read as an oversight.
 
-The reason is that these helpers have no `_StageObservation` to emit through.
-An observe event is emitted from a stage's observation, and the group teardown
-is reached from `_terminate_all_shielded` — including from the pipeline
-fail-fast path, which has no single stage to attribute a group event to, and
-from routes whose caller has already abandoned the run. Threading an
-observation down would mean inventing an attribution for a signal that belongs
-to the run rather than to any one stage. What an operator needs from this path
-is bounded and low-cardinality anyway: whether a group was left holding members
-this run could not reach, and why.
+The reason is attribution, but it is narrower than "no observation exists".
+The helpers themselves have no `_StageObservation` to emit through, and the
+routes that reach them divide in two. The pipeline fail-fast path *does* carry
+one — `_terminate_pipeline_remaining_stages` is given a stage index and its
+caller holds the observation it emits `cuprum_terminated_stage_count` through,
+so a per-stage group metric is constructible there. The other routes reach
+`_terminate_all_shielded` from callers that have already abandoned the run, and
+what they would have to hand down is a group signal that belongs to the run
+rather than to any one stage. Since the remaining routes can only report at run
+level while the fail-fast path could report per stage, one metric would mean
+two attributions for one signal, and the three records below already carry what
+an operator needs — whether a group was left holding members this run could not
+reach, and why.
 
 The records, all at WARNING because each one reports an abnormal outcome:
 
@@ -1606,14 +1610,24 @@ The records, all at WARNING because each one reports an abnormal outcome:
 The last of those is the subtle one, and the reason `_signal_child_or_report`
 exists as a wrapper rather than the two signal sites each growing their own
 handler. Both ways a signal can fail to arrive reach the caller as the same
-`False` — "nothing left to do here" — and the fail-fast path reads that as a
-stage that had already settled, counting it into
-`cuprum_terminated_stage_count`. `ProcessLookupError` is the tolerated race and
-stays silent; a wider `OSError` is a process this run believes is running and
-could not signal, so it is reported before it is passed over.
+`False` — "nothing left to do here" — so the value itself conflates a teardown
+that found nothing with one that failed. `ProcessLookupError` is the tolerated
+race and stays silent; a wider `OSError` is a process this run believes is
+running and could not signal, so it is reported before it is passed over.
+
+Reporting is diagnosis, not arithmetic. The fail-fast path reduces teardown
+outcomes with `outcome is True` (`cuprum/_process_lifecycle.py`), so a refused
+signal has always contributed zero to `cuprum_terminated_stage_count` — exactly
+as an absent target does. Nothing about the tally changes; what changes is that
+the two are no longer indistinguishable to a reader.
 `cuprum/unittests/test_process_signal_failure_reporting.py` pins both
-directions: that the benign race stays quiet, and that a refused signal is
-recorded once, naming the signal.
+directions and both routes: that the benign race stays quiet, that a refused
+signal is recorded once and names the signal — once through `os.killpg` under
+`owns_group=True`, and once through the direct route under `owns_group=False`,
+since the wrapper is shared and the default policy is the one that inherits.
+The direct case refuses with a plain `OSError` rather than a
+`ProcessLookupError`, because on that route `Popen.send_signal` suppresses the
+latter itself before the wrapper could see it.
 
 ### Settlement
 

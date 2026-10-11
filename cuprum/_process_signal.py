@@ -23,12 +23,10 @@ What the name does *not* carry is a guarantee that no unrelated group can ever
 hold it. The kernel keeps a group addressable for as long as it has a member,
 but once the group has emptied its identifier is an ordinary free slot the
 kernel may hand to anyone. The liveness probe reads the kernel's answer about
-the *number*, and the kernel has no way to answer about the *group*: every
-``killpg`` a process can make takes a number, so there is nothing to ask that
-would distinguish this run's group from a stranger's that inherited the number.
-That makes the probe a veto rather than a licence — an answer of "no such
-group" is conclusive, and an answer of "yes" is only that some group holds the
-number, never that the group is this run's.
+the *number*, and the kernel cannot answer about the *group*: every ``killpg``
+takes a number, so nothing can distinguish this run's group from a stranger's
+that inherited it. The probe is therefore a veto rather than a licence — "no
+such group" is conclusive, "yes" is only that some group holds the number.
 
 Two windows follow, and they are separate hazards rather than one.
 
@@ -146,17 +144,12 @@ def _signal_child(
     process identifier: no ``os.getpgid`` lookup is needed, and the identifier
     is one this run created rather than one it was handed.
 
-    The name identifies a group this run made; it does not by itself guarantee
-    that group still exists, nor that it is still the group holding the name.
-    The caller reaches this function only after the
-    settlement probe has declined to veto — but a probe that answers cannot
-    attribute the name to this run. The original group could have emptied and
-    the kernel recycled the number onto a stranger's group *before* the probe
-    ran, and the probe and this signal are separate syscalls besides, so a
-    group that empties between them leaves a name the kernel may already have
-    re-used. The module docstring records both windows, why no process-group
-    equivalent of ``pidfd`` closes them, and how far the kernel's own recycling
-    rate bounds them.
+    The name identifies a group this run made; it does not guarantee that group
+    still exists or still holds the name. The caller reaches this function only
+    after the settlement probe declined to veto, and a probe that answers
+    cannot attribute the name to this run. The module docstring records both
+    reuse windows, why no process-group equivalent of ``pidfd`` closes them,
+    and how far the kernel's own recycling rate bounds them.
 
     Signalling the group rather than the direct child is what lets a child's
     descendants reach end-of-file on inherited pipes; a descendant that left
@@ -164,11 +157,10 @@ def _signal_child(
     :class:`~cuprum.sh.ProcessGroupPolicy` documents.
 
     *direct* is the child-only route — ``process.terminate`` or
-    ``process.kill`` — passed in rather than selected here so a run that does
-    not own the group signals exactly the process it always did. Both
-    ``os.killpg`` and those two raise ``ProcessLookupError`` when the target
-    has already gone; :func:`_signal_child_or_report` is the wrapper that turns
-    either route's outcome into the boolean its callers branch on.
+    ``process.kill`` — passed in so a run that does not own the group signals
+    exactly the process it always did. The routes report an absent target
+    differently: ``os.killpg`` raises ``ProcessLookupError`` where
+    :meth:`subprocess.Popen.send_signal` suppresses it (bpo-40550).
     """
     if owns_group and process.pid is not None:
         os.killpg(process.pid, group_signal)
@@ -189,13 +181,21 @@ def _signal_child_or_report(
     ``ProcessLookupError`` is the race both routes already tolerate — the
     target went before the signal could be delivered — so it is passed over
     silently. A wider ``OSError`` is a target this run believes is there and
-    could not signal, which the caller would otherwise read as an orderly
-    teardown, so it is logged before it is reported.
+    could not signal, and silence there conflates two outcomes: a teardown that
+    found nothing to do, and one that failed. Both reach the caller as the same
+    ``False``, so only a record distinguishes them.
+
+    The wrapper reports; it does not change control flow. A logging handler the
+    application installed can still raise out of the ``warning`` call, which is
+    left to propagate: the branch is already abnormal, and swallowing it would
+    hide the failure a second time.
 
     Returns
     -------
     bool
-        Whether the signal was delivered to anything.
+        Whether the signal call returned without raising. That is weaker than
+        "the signal was delivered", for the ``send_signal`` suppression noted
+        on :func:`_signal_child`.
     """
     try:
         _signal_child(
@@ -280,8 +280,10 @@ async def _terminate_process_with_wait(
     -------
     bool
         Whether the target was signalled and its waiter ran to completion.
-        ``False`` means it had already settled, or had gone before it could be
-        signalled.
+        ``False`` has three causes the caller cannot tell apart: the target had
+        already settled or gone, the signal call raised, or the grace period
+        expired with it still running. Only the second is a kernel refusal, and
+        it is the one reported through :func:`_signal_child_or_report`.
     """
     grace_period = max(0.0, policy.grace_period)
     owns_group = policy.owns_group_for(0)
@@ -334,8 +336,9 @@ async def _escalate_after_grace(
     -------
     bool
         Whether the escalation was delivered. ``False`` means the target had
-        settled by the time it was considered, or had gone before the signal
-        could be sent.
+        settled or gone by the time it was considered, or the escalation itself
+        raised. Only the last is a kernel refusal, reported through
+        :func:`_signal_child_or_report`; the others are silent by design.
     """
     if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
         return False
