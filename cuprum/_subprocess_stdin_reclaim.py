@@ -40,7 +40,7 @@ from cuprum._process_lifecycle import _shielded_cleanup
 # inside the very task cuprum is reclaiming, so a reclaim window that does not
 # account for the nested steps expires while the cleanup it is waiting for is
 # still running — and then reports the reclaim as done. Deriving the outer
-# figure from the inner ones is what keeps the two in step; a hand-written
+# figure from the inner ones is what keeps the two in step; a handwritten
 # total would have to be re-derived by hand every time a step is added.
 _STDIN_SETTLE_GRACE_S = 0.25
 

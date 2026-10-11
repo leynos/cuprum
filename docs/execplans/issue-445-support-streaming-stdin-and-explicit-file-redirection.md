@@ -1723,6 +1723,53 @@ likelihood, and mitigation.
   see the Surprises entry on the spawn-failure case, which was vacuous on its
   first cut.
 
+- [x] (2026-10-11 11:05Z) **Assessment round `pr511-r6-execplan-8994f723`
+  accepted Gap A as closed but kept Open Item 3 open**, on two grounds that the
+  10:10Z entry did not address. First, two cells of the matrix it claims
+  (borrowed file × timeout, borrowed file × spawn failure) were absent, and the
+  non-zero-exit and timeout cells did not request the backend axis. Second, the
+  spawn-failure case it cited patched `spawn_direct_process` — the *dispatch* —
+  so it exercised neither backend's own failure path, and a backend label alone
+  would not have fixed that.
+
+  Both are now repaired. The missing borrowed-file cells live in
+  `cuprum/unittests/test_safe_cmd_borrowed_file_outcomes.py` and the
+  below-dispatch failures in
+  `cuprum/unittests/test_safe_cmd_spawn_failure_backends.py`, which patches
+  `_wait4_process._spawn_popen` for the wait4 route and
+  `asyncio.create_subprocess_exec` for the asyncio route, each after forcing
+  the dispatch the other way, and asserts a *record of which route ran* against
+  a table written out at module level. Five mutation probes on that module
+  (turn the wait4 patch off; stop recording; remove the trap; put a wrong pin
+  in the table; force one arm onto the other route) each fail the intended case.
+
+  The four modules were moved apart for a measured reason, not for tidiness:
+  `test_safe_cmd_redirect.py` reaches CodeScene 10.00 with the five new
+  `spawn_backend` markers, and adding the borrowed-file timeout cell to it
+  drops it to **8.03 `Low Cohesion`** — a file-level finding with an empty
+  `Functions:` field, so no in-file refactor can reach it. All four modules
+  score 10.00 at their real paths and collect 79 nodes
+  (`test_safe_cmd_redirect` 57, `..._spawn_failure_backends` 12,
+  `..._borrowed_file_outcomes` 6, `..._stdio_matrix_contract` 4).
+
+- [x] (2026-10-11 11:05Z) **The drift guard CodeRabbit asked for exists, and
+  its own non-vacuity is measured.** `test_safe_cmd_stdio_matrix_contract.py`
+  writes the 15 cells of the matrix out by hand and asserts, for each, that the
+  named case exists, that it is collected, and that it reaches the route axis
+  its row claims. The rows are not derived from the modules: a guard that read
+  the cases and then asserted what it had read would pass for any input. Five
+  probes — remove a `spawn_backend` marker, delete a row, rename a case,
+  collapse the axis to one route, cut the injected axis out of the
+  `backend_failure_case` fixture — each fail the guard for the intended reason,
+  and each names the specific cell in the failure message.
+
+  One design point was settled by measurement rather than by argument. The
+  guard's first cut read only `@pytest.mark.usefixtures`; the three
+  backend-failure cells request their axis as a *parameter* one link away, via
+  `backend_failure_case`, so the guard called three covered cells uncovered. It
+  now follows the fixture graph to a bounded depth, which is also what makes
+  probe E detectable at all.
+
 - [x] (2026-10-11 10:10Z) **Gap B — both spawn backends are exercised.** A
   `spawn_backend` fixture parameterizes the six tests covering the most
   divergent stdio kinds (owned path, unread pipe, inherited, borrowed
@@ -3372,13 +3419,20 @@ and why a passing result cannot be vacuous.
   helper) asserts the owned path's descriptor count. Rationale: the
   borrowed/owned distinction is the safety-critical part of the feature and is
   a finite table. Domain: {owned path, borrowed fd, borrowed file} × {exit 0,
-  exit non-zero, timeout, spawn failure}. Artefact:
-  `cuprum/unittests/test_safe_cmd_redirect.py`. Evidence: `make test`; a mutant
-  that closes a borrowed descriptor makes the caller's subsequent write fail
-  with `EBADF`. Non-vacuity: the borrowed cases are the control for the owned
-  case — an implementation that closes everything passes the owned assertions
-  and fails these; POSIX-only descriptor checks are skipped on Windows with an
-  explicit marker rather than silently omitted.
+  exit non-zero, timeout, spawn failure}. Artefact: four modules, because the
+  matrix does not fit in one file at an acceptable cohesion score —
+  `cuprum/unittests/test_safe_cmd_redirect.py` (the success, non-zero-exit and
+  timeout cells), `cuprum/unittests/test_safe_cmd_borrowed_file_outcomes.py`
+  (the borrowed-file timeout and shared spawn failure),
+  `cuprum/unittests/test_safe_cmd_spawn_failure_backends.py` (spawn failure
+  below backend dispatch, on both spawn routes), and
+  `cuprum/unittests/test_safe_cmd_stdio_matrix_contract.py` (the drift guard
+  that fails if a cell, a case name, or a route axis disappears). Evidence:
+  `make test`; a mutant that closes a borrowed descriptor makes the caller's
+  subsequent write fail with `EBADF`. Non-vacuity: the borrowed cases are the
+  control for the owned case — an implementation that closes everything passes
+  the owned assertions and fails these; POSIX-only descriptor checks are
+  skipped on Windows with an explicit marker rather than silently omitted.
 
 - Obligation: `INV-6 — piped-only consumers and writers`. A stream bound to a
   file, inherited, or `/dev/null` has no parent-side `StreamReader` and no

@@ -65,7 +65,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
     from cuprum.unittests._stdin_run_cancellation_support import _CancellationProbe
 
-# How long the producer's release takes, hand-written rather than derived from
+# How long the producer's release takes, handwritten rather than derived from
 # the production constants: deriving it would restate the budget instead of
 # measuring it. It has to satisfy two conditions, and both are the point.
 #
