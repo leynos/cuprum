@@ -26,6 +26,13 @@ one settlement finalizes as the timeout it was: the terminal outcome a consumer
 observes for a deadline-ended run is ``TIMEOUT``, matching what the streamed
 ``run()`` path reports for the same condition.
 
+A deadline that fires after the child has exited is not that case, so it is not
+recorded. The settlement can outlive the child — the drain waits out an EOF
+grace, which a grandchild holding an inherited pipe can extend — and a deadline
+landing there would report a timeout, and skip the run's ``after`` hooks, for a
+child that ended on its own. The caller is given the child's own ending
+instead, exactly as the streamed path's exit-wait deadline does.
+
 A settlement that raises rather than recording is a different matter. Nothing
 is kept, because there is nothing worth keeping, and the failed task stays where
 it is: a later caller awaits the same task and meets the same failure, which is
@@ -225,11 +232,24 @@ class _Settlement:
         nothing: the stop path short-circuits on a child that has exited, so a
         second expiry neither signals twice nor builds a second outcome.
 
+        A positive deadline that fires after the child has already exited is
+        not recorded and stops nothing. The settlement is still finishing, and
+        what it is finishing is the drain — up to the capture EOF grace, or
+        longer while a grandchild holds an inherited pipe open. Recording the
+        deadline there would publish ``TIMEOUT`` for a child that ended on its
+        own and skip its ``after`` hooks, so the child's own ending is what the
+        caller is given instead. The streamed ``run()`` path applies its
+        deadline the same way, to the exit wait alone. A non-positive deadline
+        is exempt from the exemption and still expires deterministically, as
+        the documented contract for an already-elapsed deadline requires.
+
         Returns
         -------
         CommandResult
-            The recorded outcome when the run had already settled, which is
-            history rather than something a fresh deadline can interrupt.
+            The recorded outcome when the run had already settled, or the
+            outcome the child produced on its own when the deadline fired
+            after it had exited. History, either way, rather than something a
+            fresh deadline can interrupt.
 
         Raises
         ------
@@ -242,11 +262,18 @@ class _Settlement:
             settled = self._result
             if settled is not None:
                 return settled
-            self._record_deadline(deadline)
+            exited_first = deadline > 0 and run.process.returncode is not None
+            if not exited_first:
+                self._record_deadline(deadline)
             settling = self._task
             if settling is None:
                 settling = asyncio.ensure_future(self.settle_and_record())
                 self._task = settling
+        if exited_first:
+            # Unbounded and shielded, for the reason the stop path below is:
+            # the task is the only thing that reaps the child and drains its
+            # streams, so walking away here would strand both.
+            return await self._await_settlement()
         await _terminate_shielded(run.process, run.execution.ctx.cancel_grace)
         # Unbounded: the child is already stopping, and the task is the only
         # thing that reaps it, so waiting here is what guarantees the child

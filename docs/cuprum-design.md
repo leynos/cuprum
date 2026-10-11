@@ -3960,11 +3960,12 @@ decides what happens next. The handle owns everything that ownership implies:
 Output capture is forced on, because a handle exists so its caller can inspect
 the child after the fact and a child whose streams were routed to `DEVNULL`
 cannot be asked what it said. Echo and every other presentation decision remain
-the caller's. A completion before the caller asks for the command — the
-`before` and `after` hooks, the presentation-sink session, the
-`plan`/`start`/`settled` events — is the sequence `run()` already performs;
-`_prepare_owned_command` is the shared prefix for both, so the handle is a
-second way to own a `run()` rather than a second implementation of one.
+the caller's. The handle runs the same sequence `run()` does — the `before`
+hooks, the presentation-sink session, and the `plan`/`start`/`settled` events —
+and runs the `after` hooks at settlement, because they take the result and
+there is no result until the run has one. `_prepare_owned_command` is the
+shared prefix for both, so the handle is a second way to own a `run()` rather
+than a second implementation of one.
 
 There is deliberately one assembly path. `terminate()` and `kill()` do not
 build a result of their own: they stop the child, and the ordinary wait that
@@ -4022,6 +4023,16 @@ Because the deadline is applied by the wait rather than carried into the
 settlement, it is translated on the one path that drains the run: the output
 captured before the deadline is drained exactly once and carried onto the raised
 `TimeoutExpired`, exactly as the streamed path does.
+
+A positive deadline that fires *after* the child has exited is not recorded and
+does not raise. The settlement can outlive the child, because the drain that
+follows the exit waits out an EOF grace that a grandchild holding an inherited
+pipe can extend, and a clock landing in that window would otherwise publish
+`TIMEOUT` — and skip the run's `after` hooks — for a child that ended on its
+own. The caller reads the child's own outcome instead, which is the same thing
+the streamed path's exit-wait deadline gives it. A non-positive deadline is
+exempt, because that value means "already elapsed" and is required to expire
+deterministically.
 
 #### 13.10.3 Control operations
 

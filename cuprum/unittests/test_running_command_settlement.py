@@ -3,7 +3,9 @@
 :mod:`cuprum.unittests.test_running_command_lifecycle` covers the handle's
 bookkeeping — repeated stops, refusals, and a cancellation landing mid-grace.
 This module covers the property those cases lean on: the settlement is shared,
-so a deadline one caller names must bound *that caller* and nobody else.
+so a deadline one caller names must bound *that caller* and nobody else. Both
+modules drive the same process doubles, which live in
+:mod:`cuprum.unittests._running_command_support`.
 
 Three consequences are asserted here and nowhere else.
 
@@ -40,7 +42,7 @@ import pytest
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import RunOutputOptions, TimeoutExpired
-from cuprum.unittests.test_running_command_lifecycle import (
+from cuprum.unittests._running_command_support import (
     _TERMINATED,
     _handle,
     _StubProcess,
@@ -68,6 +70,12 @@ _READY = 10.0
 #: How long a waiter that should never raise is allowed to take. It settles as
 #: soon as the child it is waiting on is stopped, so this too is only a guard.
 _SETTLED = 5.0
+
+#: How long the double's drain is held open, so a deadline can fire inside the
+#: window that follows the exit wait. Comfortably longer than :data:`_DEADLINE`
+#: plus the capture EOF grace the drain grants its consumers, and far shorter
+#: than the per-test timeout.
+_DRAIN_DELAY = 1.0
 
 
 class _HookRefusalError(RuntimeError):
@@ -377,6 +385,56 @@ def test_a_refusing_after_hook_settles_the_run_as_its_error() -> None:
     assert settled.terminal_outcome is TerminalOutcome.ERROR, (
         "a run refused by its own after hook must settle as an error, got "
         f"{settled.terminal_outcome}"
+    )
+
+
+def test_a_deadline_after_the_child_exited_is_not_recorded() -> None:
+    """A clock that fires once the child is gone reports the child's own exit.
+
+    The settlement outlives the child by the drain: after the exit wait
+    returns, the captured consumers are given an EOF grace to observe EOF, and
+    a grandchild holding an inherited pipe can extend that further. A deadline
+    landing in that window has nothing left to interrupt — the child is
+    already gone — so recording it would publish ``TIMEOUT`` for a run that
+    ended on its own, and skip its ``after`` hooks while doing so.
+
+    The double exits before its ``wait()`` returns, which is that window: the
+    exit has happened and the settlement is still running. Both halves of the
+    rule are asserted here, because they fail together: the caller reads the
+    child's status rather than an expiry, and the hook the run registered — the
+    one a deadline branch does not run — was run.
+    """
+    hook_calls: list[int] = []
+
+    class _ExitedProcess(_StubProcess):
+        """A double that has already exited before anything waits on it."""
+
+        def __init__(self, *, pid: int = 4399) -> None:
+            super().__init__(pid=pid)
+            self.exit_with(0)
+
+    async def run_case() -> CommandResult:
+        """Wait with a deadline that fires while the exit is being drained."""
+        process = _ExitedProcess()
+        handle = _handle(
+            process,
+            after_hooks=(lambda _cmd, result: hook_calls.append(result.exit_code),),
+            # The settlement's drain stays open past the deadline, which is the
+            # window the rule under test is about.
+            drain_delay=_DRAIN_DELAY,
+        )
+        return await handle.wait(timeout=_DEADLINE)
+
+    result = asyncio.run(run_case())
+
+    assert result.exit_code == 0, (
+        "a child that exited on its own must report its own status, got "
+        f"{result.exit_code}"
+    )
+    assert hook_calls == [0], (
+        "the run ended on its own, so its after hook must have run with the "
+        f"child's own outcome; got calls {hook_calls!r}, which is empty when "
+        "the deadline was wrongly recorded and took the timeout branch"
     )
 
 
