@@ -40,10 +40,14 @@ premise this plan had asserted without testing. The branch then stood at **19**
 files excluding the lockfile and this plan — one over the tolerance, on a single
 `typos.toml` line `main` already carries, with the merge ref back at eighteen.
 `e2846439` later adopted `main`'s `typos.local.toml` verbatim, which took the
-branch frame to **20** without moving the merge ref, and the surface is now
-**18 of 18** — exactly at the tolerance rather than over it. The 2026-10-01
-entries below measure every count. At `1714ac0d` the required `coverage` job
-failed twice on a test this branch does not touch,
+branch frame to **20** without moving the merge ref, and the surface then sat
+at **18 of 18** for a time. That is no longer current: the stall-flake repair
+described below edited `main`'s own `test_native_pipeline_stall_properties.py`,
+taking both frames to **19**. The surface is therefore **one over the
+tolerance**, recorded as a breach rather than absorbed — see the 2026-10-11
+Progress entry, which carries the commands. The 2026-10-01 entries below
+measure every earlier count. At `1714ac0d` the required `coverage` job failed
+twice on a test this branch does not touch,
 `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`.
 The failure is **environmental and measured, not a branch defect**: the
 coverage job is the only lane that runs that test without provisioning
@@ -2436,7 +2440,106 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   non-vacuous: a direct probe finds it matching all-exited-with-pending-bytes,
   declining a zero-byte count, and declining a live child.
 
-## Surprises & discoveries
+- [x] (2026-10-11) **The 18-of-18 file-count claim is falsified: the surface is
+  now 19, and the nineteenth file is `main`'s own stall-property module.** The
+  count was re-derived rather than carried, per the standing instruction in the
+  entry above. `git diff --name-only origin/main HEAD`, excluding
+  `rust/Cargo.lock` and this plan, lists **19** paths; the merge-ref derivation
+  agrees rather than contradicting, which is the frame that decides:
+
+  ```text
+  git merge-tree --write-tree origin/main HEAD   -> clean, tree 16b15718
+  git diff --name-only origin/main 16b15718      -> 21 paths
+  ```
+
+  Excluding the lockfile and this plan, that is **19** at the merge ref and
+  **19** on the branch — the two frames now list the same paths, since the
+  rebase made both `typos` files byte-identical to `main` and they left both
+  frames at once, exactly as the prediction-failure entry above records.
+
+  The nineteenth file is `tests/test_native_pipeline_stall_properties.py`. It
+  is not branch work: it is `main`'s own module, added by `main`'s commit
+  `017c06e2` (PR #456) and byte-identical to `origin/main` before this branch
+  touched it. The stall-flake adjudication recorded above edited it, so the
+  module genuinely enters the change surface for the first time — the fix was
+  unavoidable, because the alternative was a suite that fails roughly one run
+  in ten on correct code, and no frame of this branch could have been published
+  green around it.
+
+  **This is a tolerance breach, and it is recorded as one rather than
+  absorbed.** The tolerance clause above stops a branch at 18 files excluding
+  the lockfile and this plan. The count reached 19 at `f2d18849` and stands
+  there now. The precedent for how to treat it is set by the earlier
+  nineteenth-file argument, and it does not apply here: that argument leaned on
+  a file byte-identical to `main` making no substantive change, and this file's
+  *content* is now branch-owned even though its provenance is not. What can be
+  said in its favour is only that the change is a two-part test correction
+  inside one existing module, with no production, API, or dispatch effect, and
+  that it repairs a defect the branch did not introduce.
+
+  The count is stated per frame with the commands beside it, as the plan's own
+  convention requires, and no earlier figure is rewritten: the `18 of 18`
+  entries above keep their measurements true at the heads they were taken at.
+  This entry supersedes their conclusion, not their measurements.
+
+- [x] (2026-10-11) **The hosted CodeScene check failed on this branch's own new
+  Rust test file, and the fix was an extraction rather than a suppression.**
+  The check run `CodeScene Code Health Review (main)` reported `failure` on
+  `c5428f8e`: "New code is healthy (1 new file with code health below 10.00)"
+  and "Enforce advisory code health rules (1 file with Code Duplication)", with
+  a Code Health Impact of **9.39** and 4 quality gates passed. Unlike the CI
+  failures earlier in this plan, the file is branch-owned —
+  `git cat-file -e origin/main:rust/cuprum-rust/src/stream_error_tests.rs`
+  exits non-zero — so it could not be attributed elsewhere and was not treated
+  as style advice.
+
+  Local measurement reproduced the hosted figure and named the pair. The
+  installed CLI is `cs version 1.0.52 (efcaeed1)`:
+
+  ```text
+  cs review rust/cuprum-rust/src/stream_error_tests.rs
+  -> score 9.38, Code Duplication, indication 2
+     invalid_descriptors_are_classified_with_their_message   (97-107, cfg(unix))
+     invalid_handles_are_classified_with_their_message       (122-129, cfg(windows))
+  ```
+
+  The two are one rule — "a refused value surfaces as `InvalidDescriptor`
+  carrying the platform's stable message", the text the Python boundary
+  branches on — separated only by the values `rstest` feeds them and the noun
+  in their failure message. Since only one arm is ever compiled, they could
+  never be caught drifting apart, which is exactly the risk the duplication
+  rule exists to price.
+
+  Both now call a module-scope
+
+  ```rust
+  fn assert_descriptor_refused(value: i64, expected: &str)
+  ```
+
+  which owns the rule once. It sits outside the `#[cfg(unix)]` arm because both
+  arms call it and only one compiles; the per-case message is kept so a failure
+  still names the value. The crate already set this precedent —
+  `check_accepted` in `fd_tests.rs` is shared by its own unix and windows arms
+  the same way. No rule was disabled, no threshold raised, and no `@codescene`
+  directive added; `.codescene/code-health-rules.json` is untouched by the
+  commit.
+
+  Verified with the non-vacuity asserted rather than assumed, since an empty
+  result has twice in this branch looked like a clean one:
+
+  ```text
+  cs review <file>            before 9.38 + 1 finding    after 10.0 + 0 findings
+  cs delta origin/main HEAD   after  0 bytes, exit 0
+  cs delta origin/main HEAD~1 after  609 bytes, the finding
+  ```
+
+  The identical command run against `HEAD~1` emits the finding, so the command
+  demonstrably reports findings when present; the clean result on `HEAD` is a
+  measurement, not an artefact of a silent failure. One trap is worth recording:
+  `cs delta <ref> <ref>` reads **committed** refs, so the working tree is
+  invisible to it — the first post-edit delta still showed the finding, and it
+  had to be re-run after the commit.
+
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
 coverage percentage.** `stream_error_behaviour.rs` carried two `#[scenario]`
@@ -2760,6 +2863,15 @@ changing anything between the runs that disagreed.
   download rather than accommodating it — because the same latent cost is paid
   by any lane that runs the test without the prerequisite action. Recorded in
   Progress with the measurements, and left for `main`.
+
+  *Superseded in part, 2026-10-11: the tolerance premise above no longer
+  holds.* The surface is now 19 files, one over, because the stall-flake repair
+  edited `main`'s own `test_native_pipeline_stall_properties.py` (Progress,
+  2026-10-11). The decision itself is unchanged and is now *stronger*, not
+  weaker: this branch has no headroom left, and `.github/workflows/ci.yml`
+  remains untouched and out of scope for the same reason. What changes is only
+  the closing clause — a fix for this timeout can no longer be justified as
+  "within tolerance" by anyone reading this entry as current.
 
 - (2026-09-26) **The `rstest-bdd` dev-dependency must be locked at
   `textwrap 0.16.2`, not re-resolved freely.** Adding `rstest-bdd` pulls in
