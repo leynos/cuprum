@@ -55,25 +55,30 @@ def _stringify_arg(value: ArgValue) -> str:
         ``bool``, or :class:`pathlib.Path`. ``None`` keeps its own dedicated
         message; every other rejected type is named in the error.
     """
-    if value is None:
-        # None is disallowed because it is almost always a mistake in CLI argv
-        # construction; callers must represent missing values themselves (for
-        # example, by omitting the flag) before invoking sh.make.
-        msg = "None is not a valid argv element for sh.make"
-        raise TypeError(msg)
-    if isinstance(value, bytes):
-        # bytes is a sequence of integers rather than text, so it is rejected
-        # ahead of the domain check to quote the offending value: the caller
-        # almost always passed an encoded payload where a str was intended.
-        msg = f"bytes is not a valid argv element for sh.make: {value!r}"
-        raise TypeError(msg)
-    if not isinstance(value, _ARG_TYPES):
-        # str() would happily render any object, silently putting a repr such
-        # as "<object object at 0x...>" on a real command line. Rejecting the
-        # type keeps the runtime domain identical to the annotated one.
-        msg = f"{type(value).__name__} is not a valid argv element for sh.make"
-        raise TypeError(msg)
-    return str(value)
+    match value:
+        case None:
+            # None is disallowed because it is almost always a mistake in CLI
+            # argv construction; callers must represent missing values
+            # themselves (for example, by omitting the flag) before invoking
+            # sh.make.
+            msg = "None is not a valid argv element for sh.make"
+            raise TypeError(msg)
+        case bytes():
+            # bytes is a sequence of integers rather than text, so it is
+            # rejected ahead of the domain check to quote the offending value:
+            # the caller almost always passed an encoded payload where a str
+            # was intended.
+            msg = f"bytes is not a valid argv element for sh.make: {value!r}"
+            raise TypeError(msg)
+        case _ if not isinstance(value, _ARG_TYPES):
+            # str() would happily render any object, silently putting a repr
+            # such as "<object object at 0x...>" on a real command line.
+            # Rejecting the type keeps the runtime domain identical to the
+            # annotated one.
+            msg = f"{type(value).__name__} is not a valid argv element for sh.make"
+            raise TypeError(msg)
+        case _:
+            return str(value)
 
 
 def _serialize_kwargs(kwargs: dict[str, ArgValue]) -> tuple[str, ...]:
