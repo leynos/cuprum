@@ -332,10 +332,23 @@ def test_redirected_stream_is_not_captured(
 def test_inherit_target_leaves_the_parent_stream_alone(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
-    """An inherited stdout is the parent's own stream, not a pipe cuprum reads."""
-    _, execute = execution_strategy
-    command = python_builder("-c", _WRITE_STDOUT)
+    """An inherited stdout is the parent's own stream, not a pipe cuprum reads.
+
+    The child writes a sentinel that could not appear anywhere else, and
+    ``capfd`` reads it back off the *descriptor* the parent held while the run
+    executed. That is the boundary the claim is about: an exit code and a
+    ``None`` stdout are both satisfied by a child whose output went nowhere at
+    all, so only the sentinel arriving on the caller's own descriptor shows the
+    child inherited the parent's real stream rather than a substitute.
+    """
+    label, execute = execution_strategy
+    sentinel = f"inherit-sentinel-{label}"
+    command = python_builder(
+        "-c",
+        f"import sys; sys.stdout.write({sentinel!r}); sys.stdout.flush()",
+    )
 
     result = execute(
         command, {"output": _redirect_options(stdout=StdioTarget.inherit())}
@@ -343,6 +356,11 @@ def test_inherit_target_leaves_the_parent_stream_alone(
 
     assert result.exit_code == 0, "an inherited stdout should exit cleanly"
     assert result.stdout is None, "an inherited stream is not a parent-side pipe"
+    assert capfd.readouterr().out == sentinel, (
+        "the child's bytes must arrive on the parent's own stdout descriptor; "
+        "anything else means the run bound the stream somewhere other than "
+        "the parent's real stream"
+    )
 
 
 @_posix_only

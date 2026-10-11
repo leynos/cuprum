@@ -381,6 +381,15 @@ def test_stdin_input_cancellation_cleans_up_task(
 
 _ECHO_STDIN = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
 
+# The child reports its stdin byte-for-byte into the file named by its first
+# argument. Reporting to a file rather than to stdout keeps the evidence
+# readable on a run whose capture is disabled, and hex keeps the comparison
+# exact without a codec in the middle.
+_RECORD_STDIN_HEX = (
+    "import pathlib, sys; "
+    "pathlib.Path(sys.argv[1]).write_text(sys.stdin.buffer.read().hex())"
+)
+
 
 def test_an_inherited_stdin_beside_a_source_is_refused(
     python_builder: cabc.Callable[..., SafeCmd],
@@ -420,6 +429,7 @@ def test_an_inherited_stdin_beside_a_source_is_refused(
 def test_an_explicit_stdin_pipe_beside_a_source_is_accepted(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
 ) -> None:
     """The near-miss: naming the pipe a payload travels through is coherent.
 
@@ -427,16 +437,30 @@ def test_an_explicit_stdin_pipe_beside_a_source_is_accepted(
     through the pipe the target names — so refusing this would break the
     ordinary spelling for no reason. Without this case the refusal above would
     be satisfied by rejecting every combination of target and source.
+
+    The child reports the bytes it read into a file rather than returning them
+    on stdout, because this run deliberately disables capture: the payload has
+    to be observable from the child's own record, not from a stream the run
+    never keeps.
     """
     _, execute = execution_strategy
-    command = python_builder("-c", _ECHO_STDIN)
+    record = tmp_path / "received.hex"
+    command = python_builder("-c", _RECORD_STDIN_HEX, str(record))
+    payload = b"payload"
 
     result = execute(
         command,
         {
-            "stdin": StdinInput("payload"),
+            "stdin": StdinInput(data=payload),
             "output": RunOutputOptions(capture=False, stdin=StdioTarget.pipe()),
         },
     )
 
     assert result.exit_code == 0, "a payload through an explicit pipe must run"
+    # A clean exit alone would be satisfied by a pipe the writer never reached;
+    # the child's own record of its stdin is what proves delivery.
+    assert record.read_text(encoding="utf-8") == payload.hex(), (
+        "the child must have received exactly the bytes the explicit stdin "
+        f"pipe supplied; expected {payload.hex()!r}, got "
+        f"{record.read_text(encoding='utf-8')!r}"
+    )
