@@ -361,6 +361,7 @@ async def _collect_stdout_lines(stream: LineStream) -> list[str]:
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_path_target_closed_after_a_failing_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -385,6 +386,7 @@ def test_path_target_closed_after_a_failing_run(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_path_target_closed_after_a_timeout(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -565,6 +567,7 @@ def test_descriptorless_file_object_is_refused_with_the_stream_named(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_borrowed_descriptor_survives_a_failing_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -600,6 +603,7 @@ def test_borrowed_descriptor_survives_a_failing_run(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_borrowed_descriptor_survives_a_timeout(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -642,6 +646,7 @@ def test_borrowed_descriptor_survives_a_timeout(
 @pytest.mark.usefixtures("refusing_spawn")
 def test_borrowed_descriptor_survives_a_spawn_failure(
     python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
 ) -> None:
     """A spawn that never happened leaves the caller's descriptor alone.
@@ -651,14 +656,20 @@ def test_borrowed_descriptor_survives_a_spawn_failure(
     borrowed object. The failure unwinds through the ``finally`` that closes
     the *owned* descriptors, which is precisely where a borrowed one could be
     swept up with them.
+
+    This is the *shared* spawn-entry failure — the dispatch itself refusing,
+    before any backend was chosen — so both execution strategies are exercised
+    against the one route. A failure below that dispatch is a different row and
+    lives in ``test_safe_cmd_spawn_failure_backends``.
     """
+    _, execute = execution_strategy
     log = tmp_path / "borrowed.log"
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     try:
         command = python_builder("-c", _WRITE_STDOUT)
 
         with pytest.raises(FileNotFoundError):
-            command.run_sync(output=_redirect_options(stdout=StdioTarget.fd(fd)))
+            execute(command, {"output": _redirect_options(stdout=StdioTarget.fd(fd))})
 
         os.write(fd, b"caller\n")
         os.fsync(fd)
@@ -672,6 +683,7 @@ def test_borrowed_descriptor_survives_a_spawn_failure(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_borrowed_file_object_survives_a_failing_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
