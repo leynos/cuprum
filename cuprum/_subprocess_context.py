@@ -30,7 +30,7 @@ class _ShModule(typ.Protocol):
     Only the three names below are accessed through :func:`_sh_module`
     (``CommandResult`` in ``cuprum._subprocess_execution``,
     ``TimeoutExpired`` in ``cuprum._subprocess_timeout``, and
-    ``StdinSourceError`` in ``cuprum._subprocess_stdin_stream``), so naming
+    ``StdinSourceError`` in ``cuprum._subprocess_stdin_errors``), so naming
     them keeps the lazy-import shim typed without reintroducing the import
     cycle.
     """
