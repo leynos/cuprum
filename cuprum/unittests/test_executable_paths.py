@@ -97,7 +97,7 @@ def test_classify_reports_each_syntactic_category() -> None:
         "C:/tools/../evil.exe",
         r"C:\tools\bin\..\..\evil.exe",
     ],
-    ids=["nested", "root", "mixed-separators", "double"],
+    ids=["nested", "root", "forward-slashes", "double"],
 )
 def test_classify_rejects_a_traversal_behind_windows_separators(raw: str) -> None:
     """A drive-letter path is split as Windows would split it, on any host.
@@ -118,7 +118,7 @@ def test_classify_rejects_a_traversal_behind_windows_separators(raw: str) -> Non
 @pytest.mark.parametrize(
     "raw",
     [r"C:\tools\..\evil.exe", "C:/tools/../evil.exe"],
-    ids=["backslash", "mixed-separators"],
+    ids=["backslash", "forward-slashes"],
 )
 def test_executable_path_rejects_a_traversal_behind_windows_separators(
     raw: str,

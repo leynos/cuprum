@@ -145,9 +145,11 @@ escalation, not a workaround.
   Severity: high. Likelihood: low. Mitigation: `_extract_labels` is not
   touched; a test asserts the label mapping is exactly `{"program", "project"}`.
 - Risk: a positional `ExecEvent` construction elsewhere rebinds. Severity:
-  high. Likelihood: low. Mitigation: the field is appended last;
-  `test_public_api` already pins the `exec_id` slot and is extended to pin
-  `resolved_path`'s position.
+  high. Likelihood: low. Mitigation: `resolved_path` is declared keyword-only,
+  so it claims no positional slot and every pre-existing slot keeps the index
+  the base gave it; `test_public_api` already pins the `exec_id` slot, and
+  `test_terminal_outcome_keeps_its_positional_slot` protects the tail of the
+  positional contract — the slot the earlier reorder had displaced.
 - Risk: resolution races with a concurrent scope in another thread or task.
   Severity: medium. Likelihood: low. Mitigation: bindings live in the same
   `ContextVar`-backed `CuprumContext` as every other policy, so isolation is
@@ -1778,8 +1780,11 @@ escalation, not a workaround.
   `NameError: name 'cabc' is not defined`), and 128 passing tests across the
   four affected modules. Two neighbouring defects on the base revision —
   `classify_path_string` in `cuprum/builders/args.py` and `ExecEvent.program` in
-  `cuprum/events.py` — are deliberately left alone, because neither file is in
-  this branch's diff; they are recorded rather than repaired.
+  `cuprum/events.py` — are deliberately left alone, and the evidence differs
+  between them: `args.py` is absent from this branch's diff entirely, whereas
+  `events.py` is present for the unrelated `resolved_path` work while the
+  `TYPE_CHECKING` block that causes this defect is byte-identical to base. Both
+  are recorded rather than repaired.
 
 ## Surprises & discoveries
 
@@ -2326,6 +2331,28 @@ escalation, not a workaround.
   that platform's rules — a regex that identifies a shape, and a `parts`
   sequence that reflects a *different* separator convention, agree about
   nothing.
+
+  The non-vacuity count is **four of the six added rows**, and the figure is
+  recorded this precisely because an earlier draft of the assessment request
+  stated it two different ways. Under the pre-fix classifier body
+  (`path = PurePath(raw_value)` with the regex folded into `is_absolute`), the
+  three backslash classifier rows (`nested`, `root`, `double`) and the
+  backslash constructor row all fail — the mutant answers `None` where
+  `PARENT_SEGMENT` is required, and the constructor row's
+  `assert rejection is not None` fires — whereas the two forward-slash rows
+  (`"C:/tools/../evil.exe"`) keep passing, because `PurePosixPath` already
+  splits that spelling on `/` and the `..` was always visible. Those two rows
+  are genuine coverage of a different sub-case, not witnesses for this defect.
+  Their identifier was `mixed-separators`, which described the substring
+  `C:/` and not the input: both rows contain no backslash, so the two
+  `"mixed-separators"` ids were renamed to `"forward-slashes"`. The count was
+  derived twice, independently: once by running the six rows against a scratch
+  copy of the module whose parse line was reverted to `PurePath`, and once by
+  importing the genuine pre-fix module from `605ba3d7^` and running the same
+  rows through it. Both give four, and both agree row for row, not merely in
+  total. Evidence: each run reports the three backslash classifier rows and
+  the backslash constructor row detecting, and the two forward-slash rows
+  passing through.
 - Observation: **the plan already required the property its own stage check
   then recorded as satisfied by its absence.** The runtime-resolution
   observation above states that `ExecutableBinding`'s annotations must remain
@@ -2799,10 +2826,28 @@ O1 — Classification totality and first-match order.
   `cuprum/unittests/test_executable_binding.py`.
 - Evidence: `make test-python` passes; the construction round trip is asserted
   with `pytest.raises(InvalidExecutableBindingError)` and the raised `reason`
-  compared to the classifier's answer.
+  compared to the classifier's answer. The F1 regression rows distinguish
+  themselves by kind rather than by count: of the six added rows, four detect
+  the reverted fix and two (`"C:/tools/../evil.exe"`) pass under it, because a
+  POSIX parse already exposes their `..` — the two are labelled
+  `forward-slashes` accordingly, and the `Surprises & discoveries` entry
+  records the enumeration.
 - Non-vacuity: the generator's alphabet includes NUL, both path separators, and
   the parent-segment dot, and dedicated properties pin `EMPTY`, `NUL`,
   `PARENT_SEGMENT`, and `NOT_ABSOLUTE` individually. The two
+  drive-letter rows added by the F1 repair are the one exception, and the limit
+  is stated rather than glossed: `_FUZZ_TEXT`'s alphabet contains no colon, so
+  on POSIX the generated domain cannot reach the `PureWindowsPath` branch at
+  all. The existing generated totality checks therefore supply no sampled
+  evidence for that branch; the named Windows-path examples carry it alone. Nor
+  do those examples independently pin the check order *inside* the branch: they
+  assert that a drive-letter traversal is rejected as `PARENT_SEGMENT`, not that
+  the empty, NUL, and parent-segment checks still precede one another for a
+  drive-letter input. That ordering is source-inspected and mirrors the
+  pre-existing POSIX path, which keeps its own generated and table evidence;
+  the distinction between ordering that is inspected and ordering that is
+  tested is recorded rather than flattened. The
+  two
   filesystem-dependent members are pinned by a witness table in
   `test_executable_binding.py` that asserts coverage of the *entire* enum, so a
   newly added member fails that guard until it is given a witness. A mutation
@@ -3093,8 +3138,11 @@ The exact commands are in `Concrete steps`.
 ### Stage C — implementation
 
 EP-M1, `cuprum/executable_binding.py`. A pure module importing only
-`collections.abc`, `dataclasses`, `enum`, `os`, `typing`, and `pathlib`. It
-must not import `cuprum.context` at runtime. Define:
+`collections.abc`, `dataclasses`, `enum`, `os`, `typing`, `pathlib`, its
+companion path module `cuprum.executable_paths`, and `cuprum.program` (the
+last a deliberate runtime dependency, because the public `Program`
+annotations must resolve through `typing.get_type_hints`). It must not
+import `cuprum.context` at runtime. Define:
 
 - `ExecutablePath = typ.NewType("ExecutablePath", str)`.
 - `type ExecutableResolver = cabc.Callable[[], str]`.

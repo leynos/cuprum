@@ -507,12 +507,13 @@ def test_safe_cmd_and_make_type_hints_resolve_at_runtime() -> None:
 def test_executable_binding_type_hints_resolve_at_runtime() -> None:
     """The binding vocabulary resolves its public annotations at runtime.
 
-    ``ExecutableResolver`` is a ``type`` statement, so it is evaluated when the
-    module is imported rather than only by a checker: an import it names being
-    confined to ``TYPE_CHECKING`` makes the alias itself unreadable, and the
-    ``program`` annotations on the factory and the errors unresolvable. Both
-    surfaces are public, so a caller reaching either one through
-    ``typing.get_type_hints`` must not meet a ``NameError``.
+    The ``type`` statement creates ``ExecutableResolver`` during module
+    import, but its value is evaluated lazily when ``__value__`` is accessed.
+    An import the alias names being confined to ``TYPE_CHECKING`` therefore
+    leaves the alias value unreadable, and leaves the ``program`` annotations
+    on the factory and the errors unresolvable. Both surfaces are public, so a
+    caller reaching either one through ``typing.get_type_hints`` must not meet
+    a ``NameError``.
     """
     import collections.abc as cabc
     import typing as typ
