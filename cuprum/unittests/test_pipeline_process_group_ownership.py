@@ -104,12 +104,13 @@ def test_owned_pipeline_stages_are_each_signalled_as_a_group(
         what a real group does, and what keeps the probe from standing in for
         settlement before anything has been asked to exit.
 
+        The call is recorded before the liveness decision, so a poll that finds
+        the group already gone is still observable as a probe that happened.
+
         Raises
         ------
         ProcessLookupError
-            Once *pgid* has no members left. The call is recorded before that
-        decision so a poll that finds the group already gone is still
-        observable as a probe that happened.
+            If *pgid* has no members left.
         """
         signalled.append((pgid, sig))
         if pgid not in live:
