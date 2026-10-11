@@ -372,4 +372,5 @@ async def _run_to_command_result(
         stdout=stdout_text,
         stderr=stderr_text,
         relay_fallbacks=_relay_fallbacks_for_result(run.tasks.relay_diagnostics),
+        resolved_path=execution.observation.resolved_path,
     )

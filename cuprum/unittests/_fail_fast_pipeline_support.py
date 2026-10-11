@@ -15,7 +15,9 @@ import tempfile
 import typing as typ
 from pathlib import Path
 
-from cuprum import ScopeConfig, scoped, sh
+from cuprum import ScopeConfig, bind_executable, scoped, sh
+from cuprum.catalogue import ProgramCatalogue
+from cuprum.program import Program
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
@@ -98,6 +100,82 @@ def run_failing_pipeline(
                     output=RunOutputOptions(capture=True, echo=False),
                     context=context,
                 )
+        finally:
+            for gate_fd in gate_fds:
+                os.close(gate_fd)
+
+    return tuple(events)
+
+
+def run_bound_failing_pipeline(
+    failing_executable: Path,
+) -> tuple[ExecEvent, ...]:
+    """Run a pipeline whose *bound*, distinct first stage fails, capturing events.
+
+    This exists because a binding is keyed by logical program, and the ordinary
+    failing pipeline runs all three stages under one interpreter program. A
+    binding for that program would therefore bind every stage: the downstream
+    stages would run the failing script too, all three would settle in one
+    batch, and the run would never emit a fail-fast decision at all. Probing
+    that arrangement is what showed the mistake — the events contained no
+    ``pipeline_fail_fast`` phase, only three ``exit 3`` events.
+
+    The failing stage is consequently given a program of its own, which is the
+    only stage bound. The two downstream stages stay on the catalogued
+    interpreter and keep the FIFO gate that makes the decision reachable.
+
+    Parameters
+    ----------
+    failing_executable : Path
+        Executable the first stage is bound to. It must exit non-zero so the
+        pipeline latches this stage as the failure.
+
+    Returns
+    -------
+    tuple[ExecEvent, ...]
+        Events published by the pipeline, in publication order.
+    """
+    catalogue, python_program = python_catalogue()
+    failing_program = Program("bound-failing-stage")
+    catalogue = ProgramCatalogue.from_programs(
+        python_program,
+        failing_program,
+        name="fail-fast-binding-tests",
+    )
+    python = sh.make(python_program, catalogue=catalogue)
+    failing = sh.make(failing_program, catalogue=catalogue)
+    events: list[ExecEvent] = []
+
+    with tempfile.TemporaryDirectory() as directory:
+        gates = [Path(directory) / f"stage-{index}.gate" for index in range(2)]
+        for gate in gates:
+            os.mkfifo(gate)
+        gate_fds = [os.open(gate, os.O_RDWR | os.O_NONBLOCK) for gate in gates]
+
+        def observe(event: ExecEvent) -> None:
+            """Capture an event and release the downstream fail-fast gates."""
+            events.append(event)
+            if event.phase == "pipeline_fail_fast":
+                for gate_fd in gate_fds:
+                    os.write(gate_fd, b"1")
+
+        pipeline = (
+            failing()
+            | python("-c", _READ_STDIN, str(gates[0]))
+            | python("-c", _READ_STDIN, str(gates[1]))
+        )
+
+        try:
+            with (
+                scoped(
+                    ScopeConfig(
+                        allowlist=frozenset([python_program, failing_program]),
+                    )
+                ),
+                bind_executable(failing_program, str(failing_executable)),
+                sh.observe(observe),
+            ):
+                pipeline.run_sync(output=RunOutputOptions(capture=True, echo=False))
         finally:
             for gate_fd in gate_fds:
                 os.close(gate_fd)

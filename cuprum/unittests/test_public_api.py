@@ -16,7 +16,8 @@ from cuprum import (
     pump_span_events,
     pump_span_observation,
 )
-from cuprum.events import ExecHook, new_exec_id
+from cuprum.context import executable_overlay, registration
+from cuprum.events import ExecHook, TerminalOutcome, new_exec_id
 
 
 def test_public_exports_are_available() -> None:
@@ -156,6 +157,111 @@ def test_exec_id_keeps_its_positional_slot() -> None:
     assert event.timeout_s is None, (
         f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
     )
+
+
+def test_terminal_outcome_keeps_its_positional_slot() -> None:
+    """``terminal_outcome`` must not be displaced by a later optional field.
+
+    ``terminal_outcome`` arrived on ``main`` already holding a positional slot,
+    so it is not an appended tail for positional purposes even though
+    ``test_terminal_outcome_public_api`` pins it as the *declaration* tail. A
+    field declared ahead of it moves its slot, and a caller passing the
+    outcome positionally then binds that argument to the new field instead and
+    silently gets ``terminal_outcome=None``. A later field is therefore
+    ``kw_only``; this pins both halves of that arrangement.
+    """
+    fields = [f.name for f in dc.fields(c.ExecEvent)]
+    assert fields[-1] == "terminal_outcome", (
+        f"terminal_outcome must stay the declaration tail, got {fields[-1]!r}"
+    )
+
+    positional = [f.name for f in dc.fields(c.ExecEvent) if not f.kw_only]
+    assert positional[-1] == "terminal_outcome", (
+        "terminal_outcome must keep the last positional slot; a field declared "
+        f"ahead of it would rebind positional callers, got {positional}"
+    )
+
+    params = inspect.signature(c.ExecEvent).parameters
+    assert params["resolved_path"].kind is inspect.Parameter.KEYWORD_ONLY, (
+        "resolved_path must be keyword-only so it cannot displace "
+        "terminal_outcome's positional slot"
+    )
+
+    outcome = next(iter(TerminalOutcome))
+    event = c.ExecEvent(
+        "start",  # phase
+        c.ECHO,  # program
+        ("echo",),  # argv
+        None,  # cwd
+        None,  # env
+        4321,  # pid
+        0.0,  # timestamp
+        None,  # line
+        None,  # exit_code
+        None,  # duration_s
+        {},  # tags
+        None,  # note
+        None,  # byte_count
+        None,  # operation
+        None,  # error_type
+        None,  # exec_id
+        None,  # project
+        None,  # timeout_s
+        None,  # timeout_mode
+        None,  # stage_index
+        None,  # stage_count
+        None,  # eof_grace_s
+        None,  # pending_readers
+        None,  # max_rss_bytes
+        None,  # user_cpu_seconds
+        None,  # system_cpu_seconds
+        None,  # resource_usage_mode
+        None,  # env_mode
+        outcome,  # terminal_outcome
+    )
+    assert event.terminal_outcome is outcome, (
+        "positional construction must still bind terminal_outcome, got "
+        f"{event.terminal_outcome!r} with resolved_path={event.resolved_path!r}"
+    )
+    assert event.resolved_path is None, (
+        f"the outcome must not land on resolved_path, got {event.resolved_path!r}"
+    )
+
+
+def test_executable_binding_surface_is_exported() -> None:
+    """The binding factory and its handle are reachable from the package root.
+
+    ``bind_executable`` is the registration factory a caller reaches for the
+    way it reaches for ``allow``, ``before``, ``env``, and ``observe``, so it
+    belongs on the same surface as those. Checked by identity against the
+    defining module rather than by presence alone: a re-export re-pointed at a
+    different definition is a different contract.
+    """
+    assert c.bind_executable is registration.bind_executable, (
+        "bind_executable must be exported from cuprum.context.registration"
+    )
+    assert (
+        c.ExecutableBindingRegistration is registration.ExecutableBindingRegistration
+    ), "the handle must be exported from cuprum.context.registration"
+    for name in ("bind_executable", "ExecutableBindingRegistration"):
+        assert name in c.__all__, f"{name} is public surface; __all__ must name it"
+
+
+def test_executable_overlay_merge_is_exported_where_its_sibling_is() -> None:
+    """``merge_executable_bindings`` mirrors ``merge_env_overlays``' surface.
+
+    Both are the overlay-only composition rule for their respective layers, and
+    both are documented as the helper that records the effective layer without
+    resolving it. Exporting one and not the other would make the pair
+    asymmetric for no reason a caller could predict.
+    """
+    assert (
+        c.merge_executable_bindings is executable_overlay.merge_executable_bindings
+    ), "the merge must be exported from cuprum.context.executable_overlay"
+    for module in (c, context):
+        assert "merge_executable_bindings" in module.__all__, (
+            f"{module.__name__}.__all__ must name the merge beside merge_env_overlays"
+        )
 
 
 def test_relay_fallback_is_exported_from_its_definition_site() -> None:

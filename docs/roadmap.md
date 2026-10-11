@@ -132,7 +132,11 @@ compromising explicitness.
 
 - [ ] 3.3.1. Add policy toggles for allowlist narrowing, unsafe namespace
   warnings, and default echo behaviour; ensure defaults remain safe and test
-  policy interactions.
+  policy interactions. Scoped *executable bindings* ([#440]) are deliberately
+  not part of this item: a toggle narrows or widens the existing allowlist
+  policy, whereas a binding answers a different question — which executable a
+  program that is already permitted runs — and lives on the execution context
+  rather than in the policy switch set.
 - [ ] 3.3.2. Document policy switches and recommended defaults in
   `docs/users-guide.md` and add release notes describing the migration path for
   existing users.
@@ -967,4 +971,5 @@ questions" and §"Recommendation".
   - Success: the users' guide and the changelog state the settled behaviour
     with its rationale, or the question is closed as a documented non-goal.
 
+[#440]: https://github.com/leynos/cuprum/issues/440
 [issue-379]: https://github.com/leynos/cuprum/issues/379

@@ -754,6 +754,71 @@ with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
         raise AssertionError("the scope should forbid the interpreter")
 ```
 
+### Bind a catalogued program to a specific executable
+
+A `Program` is the catalogue's name for a program, and by default it is also
+the string that the operating system executes. It is often convenient for those
+to differ: a build may need a pinned absolute path, a virtual-environment
+executable, or a controlled replacement during a test. `bind_executable()`
+supplies the second without changing the first.
+
+Inside the scope, the logical program runs the bound executable while the
+allowlist, project metadata, and telemetry go on carrying the logical name. The
+binding is a scope, so nested scopes override only the program they name, and
+nothing leaks to a sibling scope, thread, or task.
+`CommandResult.resolved_path` reports what actually ran and is `None` when
+nothing was bound.
+
+A binding never widens the allowlist. Binding an unlisted program and running
+it still raises `ForbiddenProgramError`, and the resolver is not called.
+
+A resolver must return a `str`. Returning anything else is rejected, because
+`None` is reserved to mean "no binding"; a resolver returning it silently runs
+the catalogued name instead of the executable the caller selected.
+
+Which exception reports that rejection depends on the boundary, and the two are
+worth telling apart. Calling `resolve_binding()` directly raises `TypeError`
+naming the type the resolver returned. Reaching the same resolver through an
+execution — `CommandResult.resolved_path`, or any command that runs — raises
+`ExecutableResolutionError` instead, with that `TypeError` chained as
+`__cause__`, because the execution boundary reports every resolver failure the
+same way. The rule is therefore uniform rather than split: whatever a resolver
+raises or returns wrongly, an execution reports as `ExecutableResolutionError`,
+which names the logical program and chains the resolver's own exception as its
+`__cause__`. It subclasses `RuntimeError`, so `except FileNotFoundError` around
+the call no longer catches a resolver that failed to find its virtual
+environment, and `except TypeError` does not catch a resolver that returned the
+wrong type.
+
+<!-- tested-example: executable-bindings -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, bind_executable, scoped, sh
+
+PYTHON = Program("python")
+OTHER = Program("some-other-tool")
+catalogue = ProgramCatalogue.from_programs(PYTHON, OTHER, name="bindings")
+python = sh.make(PYTHON, catalogue=catalogue)
+
+with (
+    scoped(ScopeConfig(allowlist=frozenset([PYTHON]))),
+    bind_executable(PYTHON, sys.executable),
+):
+    result = python("-c", "import sys; sys.stdout.write(sys.executable)").run_sync()
+    assert result.program == PYTHON, "the logical identity is preserved"
+    assert result.resolved_path == sys.executable, "the bound path was executed"
+    assert (result.stdout or "").strip() == sys.executable, "the child agrees"
+```
+
+Path validation is advisory, not a guarantee. Construction rejects an empty
+path, a relative path unless `allow_relative=True`, and a path containing NUL or
+`..` segments, but the file may still be replaced between that check and the
+`exec`. Keeping the bound path unwritable to the executing user, and read-only
+where binaries must not change, is the operator's responsibility; see
+[§5.1.2 of the design document](cuprum-design.md#512-executable-bindings).
+
 ### Choose how a child environment is composed
 
 `EnvMode.OVERLAY` is the default environment policy. It resolves values against

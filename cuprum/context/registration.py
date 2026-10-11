@@ -1,27 +1,27 @@
 """Scoped-context managers and registration handles.
 
 Provides ``scoped`` plus the user-facing registration factories (``allow``,
-``before``, ``after``, ``observe``, ``env``). All registration handles derive
-from the canonical :class:`_TokenRegistration` base, which owns the
-``ContextVar`` token-restoration discipline.
+``before``, ``after``, ``observe``, ``env``, ``bind_executable``). All
+registration handles derive from the canonical :class:`_TokenRegistration`
+base, which owns the ``ContextVar`` token-restoration discipline.
 """
 
 from __future__ import annotations
 
 import typing as typ
 
-from cuprum.context.env_overlay import (
-    EnvMode,
-    EnvOverlay,
-    EnvOverlayValue,
-    _coerce_env_overlay,
-)
+from cuprum.context._env_registration import EnvRegistration, env
+from cuprum.context._registration_base import _TokenRegistration
 from cuprum.context.scoped import scoped
-from cuprum.context.state import _reset_context, _set_context, current_context
+from cuprum.context.state import current_context
+from cuprum.executable_binding import (
+    ExecutableBinding,
+    ExecutableResolver,
+    executable_binding,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from contextvars import Token
+    from pathlib import Path
 
     from cuprum.context.core import (
         AfterHook,
@@ -30,68 +30,6 @@ if typ.TYPE_CHECKING:
     )
     from cuprum.events import ExecHook
     from cuprum.program import Program
-
-
-class _TokenRegistration:
-    """Canonical base for ContextVar-backed scope-registration handles.
-
-    All scope-registration handles (allowlist extensions, hook
-    registrations, env overlays) derive from this base. Subclasses perform
-    only the context-derivation step in ``__init__`` and hand the derived
-    context to :meth:`_install`; the token capture, idempotent
-    :meth:`detach`, and context-manager protocol live here so the subtle
-    restoration discipline cannot drift between handle types.
-
-    Token-based Restoration
-    -----------------------
-    The registration captures a :class:`~contextvars.Token` when the derived
-    context is installed. When :meth:`detach` is called, the original context
-    is restored via the token, ensuring no context pollution even when used
-    outside ``scoped(ScopeConfig())`` blocks. This means :meth:`detach`
-    restores the exact context that existed when the registration was
-    created, regardless of subsequent context modifications. If multiple
-    registrations are created and detached in non-LIFO (last in, first out)
-    order, earlier tokens restore states that discard changes layered by
-    later registrations; prefer ``with`` blocks, which detach in LIFO order.
-
-    Detach in the same logical :class:`~contextvars.Context` (thread or
-    task) in which the registration was created. Resetting a
-    :class:`~contextvars.ContextVar` with a token from a different context
-    raises :class:`ValueError`.
-    """
-
-    __slots__ = ("_detached", "_token")
-
-    def __init__(self) -> None:
-        """Initialize the handle in the attached, token-less state."""
-        self._detached = False
-        self._token: Token[CuprumContext] | None = None
-
-    def _install(self, new_ctx: CuprumContext) -> None:
-        """Set ``new_ctx`` as current and capture the restoration token."""
-        self._token = _set_context(new_ctx)
-
-    def detach(self) -> None:
-        """Restore the original context via the captured token."""
-        if self._detached:
-            return
-        if self._token is not None:
-            _reset_context(self._token)
-            self._token = None
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter context manager; the registration is already installed."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Exit context manager; detach the registration."""
-        self.detach()
 
 
 class AllowRegistration(_TokenRegistration):
@@ -230,113 +168,6 @@ def after(hook: AfterHook) -> HookRegistration:
     return HookRegistration(hook, "after")
 
 
-class EnvRegistration(_TokenRegistration):
-    """Registration handle for a scoped environment overlay.
-
-    The overlay is layered on top of any overlay already present in the
-    current context; nested registrations therefore behave as a stack. The
-    token-restoration discipline is documented on
-    :class:`_TokenRegistration`.
-
-    The overlay itself is overlay-only. For effective modes other than
-    :class:`~cuprum.context.EnvMode.REPLACE`, the live :func:`os.environ` is
-    read at subprocess spawn time, when
-    :func:`~cuprum.context.env_overlay.render_env` renders the composed policy,
-    so any updates to the process environment after the registration is created
-    — for example via ``pytest``'s ``monkeypatch.setenv`` — remain visible to
-    subprocesses spawned inside the scope. This is the behaviour the issue
-    requires. A ``REPLACE`` mode is the exception: it renders from an empty
-    environment, so the live process environment stays out of the child
-    entirely.
-    """
-
-    __slots__ = ("_overlay",)
-
-    def __init__(self, overlay: EnvOverlay, mode: EnvMode = EnvMode.OVERLAY) -> None:
-        """Register an environment overlay in the current context.
-
-        Parameters
-        ----------
-        overlay:
-            Environment values to apply in the enclosing scope.
-        mode:
-            Policy for combining ``overlay`` with the current context.
-            ``EnvMode.OVERLAY`` (the default) layers it onto the overlay
-            already in scope; ``EnvMode.REPLACE`` discards that outer overlay
-            and renders from ``overlay`` alone.
-        """
-        super().__init__()
-        self._overlay = _coerce_env_overlay(overlay)
-        self._install(current_context().with_env_overlay(self._overlay, mode))
-
-    @property
-    def overlay(self) -> EnvOverlay | None:
-        """The immutable overlay this registration applied."""
-        return self._overlay
-
-
-def env(
-    *overlays: cabc.Mapping[str, EnvOverlayValue],
-    **kwvars: EnvOverlayValue | EnvMode,
-) -> EnvRegistration:
-    """Overlay environment variables on top of the live :func:`os.environ`.
-
-    Mirrors :func:`dict` in how arguments are combined: positional mappings
-    are merged left-to-right and any keyword arguments win over them. For
-    effective modes other than :class:`~cuprum.context.EnvMode.REPLACE`, values
-    are not snapshot against ``os.environ`` — the live process environment is
-    read at subprocess spawn time so that variables set after Cuprum is
-    imported (for example by ``monkeypatch.setenv``) remain visible. A
-    ``REPLACE`` mode renders from an empty environment instead, so the live
-    process environment stays out of the child.
-
-    Parameters
-    ----------
-    overlays:
-        Zero or more ``Mapping[str, str | UnsetType]`` instances supplying
-        overlay entries. Useful when the variable name is not a valid Python
-        identifier.
-    mode:
-        When an :class:`EnvMode`, the policy contributed by this scope.
-        ``OVERLAY`` remains the default; another value creates the environment
-        variable named ``mode`` for compatibility.
-    kwvars:
-        Keyword pairs naming environment variables or ``UNSET`` markers.
-        Identifier-safe variable names are typically expressed this way.
-
-    Returns
-    -------
-    EnvRegistration
-        A handle that can be detached or used as a context manager.
-
-    Example
-    -------
-    >>> import os
-    >>> os.environ["GIT_AUTHOR_NAME"] = "Cuprum"
-    >>> with env(PATH="/usr/bin"):
-    ...     # Subprocesses spawned here see PATH=/usr/bin overlaid on the
-    ...     # *live* os.environ, including GIT_AUTHOR_NAME.
-    ...     pass
-
-    Notes
-    -----
-    ``env`` is bound to the :class:`~contextvars.Context` in which it is
-    created. Detach it in that same logical context (thread or task) to avoid
-    ``ValueError`` from :meth:`~contextvars.ContextVar.reset`.
-    """
-    raw_mode = kwvars.get("mode")
-    mode = EnvMode.OVERLAY
-    if isinstance(raw_mode, EnvMode):
-        mode = raw_mode
-        del kwvars["mode"]
-
-    merged: dict[str, EnvOverlayValue] = {}
-    for overlay in overlays:
-        merged.update(overlay)
-    merged.update(typ.cast("cabc.Mapping[str, EnvOverlayValue]", kwvars))
-    return EnvRegistration(merged, mode)
-
-
 def observe(hook: ExecHook) -> HookRegistration:
     """Register a structured execution event hook in the current context.
 
@@ -355,13 +186,108 @@ def observe(hook: ExecHook) -> HookRegistration:
     return HookRegistration(hook, "observe")
 
 
+class ExecutableBindingRegistration(_TokenRegistration):
+    """Registration handle for a scoped executable binding.
+
+    The binding is layered onto any bindings already present in the current
+    context, so nested registrations behave as a stack: the innermost binding
+    for a program is the one an execution resolves. The token-restoration
+    discipline is documented on :class:`_TokenRegistration`.
+
+    A binding supplies the executable a permitted program runs. It is not a
+    permission: the allowlist continues to decide which logical programs may
+    run at all, and resolution happens only after that decision has been made.
+    """
+
+    __slots__ = ("_binding", "_program")
+
+    def __init__(
+        self,
+        program: Program,
+        binding: ExecutableBinding,
+    ) -> None:
+        """Register ``binding`` for ``program`` in the current context.
+
+        Parameters
+        ----------
+        program:
+            The logical program to bind.
+        binding:
+            The executable the program should run within the scope.
+        """
+        super().__init__()
+        self._program = program
+        self._binding = binding
+        self._install(current_context().with_executable_binding(program, binding))
+
+    @property
+    def program(self) -> Program:
+        """The logical program this registration bound."""
+        return self._program
+
+    @property
+    def binding(self) -> ExecutableBinding:
+        """The binding this registration applied."""
+        return self._binding
+
+
+def bind_executable(
+    program: Program,
+    path_or_resolver: str | Path | ExecutableResolver,
+    *,
+    allow_relative: bool = False,
+) -> ExecutableBindingRegistration:
+    """Bind a logical program to an executable for the enclosing scope.
+
+    The binding applies only inside the scope; leaving it restores the
+    bindings that were in effect before. A nested registration for the same
+    program overrides the outer one for the inner scope alone, and bindings
+    for distinct programs compose.
+
+    Parameters
+    ----------
+    program:
+        The logical program to bind.
+    path_or_resolver:
+        The executable path, or a zero-argument callable returning one. A
+        resolver is evaluated once per execution, at spawn time.
+    allow_relative:
+        When True, a relative path is permitted and anchored at the
+        execution's working directory. Ignored for a resolver.
+
+    Returns
+    -------
+    ExecutableBindingRegistration
+        A handle that can be detached or used as a context manager.
+
+    Raises
+    ------
+    InvalidExecutableBindingError
+        A supplied path failed validation. The error names the logical
+        program, quotes the path, and carries the classified reason.
+
+    Examples
+    --------
+    >>> with bind_executable(ECHO, "/opt/tools/echo"):
+    ...     # Commands for ECHO run /opt/tools/echo inside this scope.
+    ...     pass
+
+    """  # ruff: ignore[docstring-extraneous-exception] - InvalidExecutableBindingError propagates from executable_binding.
+    return ExecutableBindingRegistration(
+        program,
+        executable_binding(program, path_or_resolver, allow_relative=allow_relative),
+    )
+
+
 __all__ = [
     "AllowRegistration",
     "EnvRegistration",
+    "ExecutableBindingRegistration",
     "HookRegistration",
     "after",
     "allow",
     "before",
+    "bind_executable",
     "env",
     "observe",
     "scoped",

@@ -17,8 +17,8 @@ import dataclasses as dc
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
+from cuprum._context_policy import _collect_hooks
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor
@@ -27,10 +27,10 @@ from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
+    _resolve_executable_for,
     _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
-from cuprum._pipeline_internals import _collect_hooks
 from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,
@@ -42,6 +42,7 @@ from cuprum._sink_lifecycle import (
     _outcome_for_result,
     _SinkBracket,
 )
+from cuprum._subprocess_context import _execution_cwd
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
@@ -99,8 +100,14 @@ def _prepare_execution_observation(
     output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
-    cwd = Path(context.cwd) if context.cwd is not None else None
+    # Anchored once, here, for the reason documented on ``_execution_cwd``.
+    cwd = _execution_cwd(context.cwd)
     env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
+    # Resolved here, after the caller's allowlist check, so the resolver runs
+    # once for a command that is actually going to run. The anchored form of
+    # the working directory is what the child will see, so a relative binding
+    # resolves against the same directory the spawn uses.
+    resolved_path = _resolve_executable_for(cmd, cwd=cwd)
     tags = _merge_tags(
         _base_stage_tags(
             cmd,
@@ -120,6 +127,7 @@ def _prepare_execution_observation(
         pending_tasks=tracking.pending_tasks,
         wall_clock=time.time,
         env_mode=env_mode,
+        resolved_path=resolved_path,
     )
 
 

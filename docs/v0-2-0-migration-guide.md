@@ -89,6 +89,68 @@ does not list the program. Pass an explicit `catalogue=` argument where that is
 the intent. The two enforcement points are described under
 [Two enforcement points](users-guide.md#two-enforcement-points).
 
+## Executable bindings
+
+`bind_executable()` is opt-in and additive. A caller that binds nothing keeps
+running each catalogued program under its own name, and the new `resolved_path`
+field is `None` on every `ExecEvent` and `CommandResult`, so existing consumers
+read the same values they read before.
+
+The change is for the case where the executable and the identity must differ.
+Before, the only way to run a pinned path was to register the path *as* the
+program, which made that path the catalogue identity, the policy key, and the
+telemetry label. Now the binding is a scope and the identity is untouched:
+
+<!-- tested-example: migration-executable-bindings -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, bind_executable, scoped, sh
+
+PYTHON = Program("python")
+catalogue = ProgramCatalogue.from_programs(PYTHON, name="migration-bindings")
+python = sh.make(PYTHON, catalogue=catalogue)
+
+with (
+    scoped(ScopeConfig(allowlist=frozenset([PYTHON]))),
+    bind_executable(PYTHON, sys.executable),
+):
+    result = python("-c", "import sys; sys.stdout.write(sys.executable)").run_sync()
+    assert result.program == PYTHON, "the catalogue identity is preserved"
+    assert result.resolved_path == sys.executable, "the bound path ran instead"
+```
+
+A binding does not grant permission. If a caller's program is inside the
+allowlist it ran before and runs now; if it was outside, it is still refused
+with `ForbiddenProgramError`, and the binding's resolver is never called for
+it. Nested scopes override one program at a time and leave sibling bindings
+intact, so introducing a binding cannot silently change what a neighbouring
+scope runs.
+
+A resolver must return a `str`; anything else is rejected, which keeps `None`
+meaning only "no binding" rather than doubling as a resolver's answer. Where
+that rejection surfaces depends on the boundary: `resolve_binding()` called
+directly raises `TypeError` naming the type the resolver returned, whereas an
+execution reports it as `ExecutableResolutionError`. Any resolver failure at an
+execution boundary — a wrong return type, a virtual environment that was never
+created, a toolchain that is not installed — surfaces the same way, naming the
+logical program with the original exception chained as `__cause__`. That is a
+change for callers migrating a hand-rolled resolver: a `FileNotFoundError`
+raised inside one no longer escapes as itself, so catch
+`ExecutableResolutionError` (a `RuntimeError`) or inspect `__cause__`, and do
+not expect `TypeError` to catch a resolver that returned the wrong type.
+
+Two limits apply. Path validation is advisory — construction rejects malformed
+paths, but the file at the bound path may be replaced between the check and the
+`exec`, so filesystem ownership, write permissions, and read-only deployment
+remain the operator's responsibility. And `resolved_path` is a *string* the run
+reports, not a hash or a descriptor: it names the executable that was started,
+which is the same path the child received, but it does not attest to the bytes
+at that path. See
+[§5.1.2 of the design document](cuprum-design.md#512-executable-bindings) for
+the full boundary.
+
 ## Environment policies
 
 `EnvMode`, `UNSET`, and the `env_mode` fields on `ScopeConfig`,

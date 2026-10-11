@@ -35,6 +35,7 @@ _OPTIONAL_FIELDS = (
     "resource_usage_mode",
     "env_mode",
     "terminal_outcome",
+    "resolved_path",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 
@@ -73,6 +74,11 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
+        # An absolute path when present, so the projection carries a string
+        # rather than an object needing rendering. ``resolved_path`` is the
+        # one verbatim field that names the executed binary, so it must travel
+        # unchanged and must not be stringified the way ``cwd`` is.
+        resolved_path=draw(st.none() | st.just("/opt/tools/echo")),
     )
 
 
