@@ -66,6 +66,40 @@ def _reject_unexpected_payload(
     raise ValueError(msg)
 
 
+def _reject_sentinel_descriptor(value: int | typ.IO[bytes] | typ.IO[str]) -> None:
+    """Refuse a negative descriptor before it can reach ``subprocess``.
+
+    Negative integers are not descriptors; they are ``subprocess``'s sentinels,
+    and the child's runtime reads them as such: ``-1`` is ``PIPE``, ``-2`` is
+    ``STDOUT``, and ``-3`` is ``DEVNULL``. Accepting one would make the
+    resolved binding disagree with the execution that follows — a
+    ``StdioTarget.fd(-1)`` reaching an output stream would have ``subprocess``
+    *create* a pipe that no part of cuprum owns, tracks, or reads, leaving the
+    child to block on a full pipe buffer that nothing drains. Refusing here
+    keeps the rule at the boundary the caller writes against, where the fault
+    is theirs, rather than at the spawn, where the result is a hang.
+
+    Parameters
+    ----------
+    value : int | IO[bytes] | IO[str]
+        The ``fd`` variant's payload. File objects are left alone: they are
+        resolved to a descriptor later, and a file object is never a sentinel.
+
+    Raises
+    ------
+    ValueError
+        If the payload is a negative integer.
+    """
+    if isinstance(value, int) and value < 0:
+        msg = (
+            f"StdioTarget.fd cannot take the descriptor {value}: negative "
+            "values are subprocess sentinels (-1 is PIPE, -2 is STDOUT, -3 is "
+            "DEVNULL), not borrowed descriptors. Pass a real descriptor, or "
+            "use StdioTarget.pipe() or StdioTarget.inherit()."
+        )
+        raise ValueError(msg)
+
+
 def _normalize_payload(target: StdioTarget) -> None:
     """Check a payload-bearing variant and store what the kind requires.
 
@@ -79,13 +113,14 @@ def _normalize_payload(target: StdioTarget) -> None:
     Raises
     ------
     ValueError
-        If the ``fd`` variant carries no resource, or the ``path`` variant
-        carries something other than a path.
+        If the ``fd`` variant carries no resource or a negative descriptor, or
+        the ``path`` variant carries something other than a path.
     """
     if target.kind == "fd":
         if target.value is None:
             msg = "StdioTarget.fd requires a descriptor or file object"
             raise ValueError(msg)
+        _reject_sentinel_descriptor(target.value)
         return
     if target.kind != "path":
         return
