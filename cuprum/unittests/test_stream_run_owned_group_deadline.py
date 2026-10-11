@@ -26,7 +26,11 @@ boundary that is merely entered from one whose cleanup actually completes.
 
 Each case asserts the descendant is gone as well as the run being over. A fix
 that stopped waiting without settling the group would satisfy the timing
-assertions alone and still leak the process the policy exists to reclaim.
+assertions alone and still leak the process the policy exists to reclaim. One
+case asserts the raised ``TimeoutExpired`` payload too: both expiry routes end
+in the same public exception, so a capturing run's text has to survive this
+route as it does the other, or the run reports ``None`` for output it was asked
+to capture.
 """
 
 from __future__ import annotations
@@ -71,6 +75,11 @@ pytestmark = _posix_only
 # and announced itself before the deadline can fire; the run's own timeout is
 # what ends it either way, so this only has to outlast start-up.
 _DEADLINE_S = 1.0
+
+# What the child announces on stdout before it spawns anything. The expiry is
+# expected to report it back, so the assertion is on text only this run could
+# have produced.
+_CHILD_MARKER = "child-stdout-before-the-deadline"
 
 
 def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
@@ -117,6 +126,64 @@ def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
                 "group its child led, not merely stop waiting on consumers "
                 "that can never see end-of-file",
             )
+        finally:
+            reap_descendant(pid_file, descendant_pid)
+
+    asyncio.run(run_case())
+
+
+def test_a_deadline_expiry_still_reports_what_the_child_printed(
+    owned_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
+) -> None:
+    """The expiry hands the caller the output the run had already read.
+
+    Both of a streamed run's expiry routes end in the same public
+    ``TimeoutExpired``, and a caller cannot tell which one it got, so the two
+    must carry the same shape of payload. The exit-wait expiry preserves the
+    drained text; the collection expiry has to as well, or a capturing run
+    reports ``None`` for output the run was explicitly asked to capture — and
+    loses it silently, because the run still *raises* either way.
+
+    The child prints and flushes *before* it spawns the descendant, so the text
+    is in the run's capture buffer well before the deadline. That ordering is
+    what keeps this a test of the payload and not of how promptly a reader
+    happens to reach the pipe: by the time collection overruns, the bytes are
+    already read.
+    """
+    pid_file = tmp_path / "post-exit-deadline-output.pid"
+    command = owned_builder(
+        *descendant_then_exit_argv(
+            pid_file,
+            exit_code=0,
+            stdout_marker=_CHILD_MARKER,
+        ),
+    )
+
+    async def run_case() -> None:
+        """Run to its deadline and assert the expiry carried the child's text."""
+        descendant_pid: int | None = None
+        try:
+            expired = await run_to_its_own_deadline(
+                command.run(
+                    output=RunOutputOptions(capture=True, echo=False),
+                    timeout=_DEADLINE_S,
+                    context=ExecutionContext(
+                        process_group=ProcessGroupPolicy.OWN_GROUP,
+                    ),
+                ),
+            )
+            assert isinstance(expired.output, str), (
+                "a capturing run that expires during stream collection must "
+                "report the output its consumers had already read; a ``None`` "
+                f"payload is indistinguishable from a run that printed nothing; "
+                f"got {expired.output!r}"
+            )
+            assert _CHILD_MARKER in expired.output, (
+                "the expiry must carry the text the child printed, not merely "
+                f"some non-empty payload; got {expired.output!r}"
+            )
+            descendant_pid = recorded_descendant_or_fail(pid_file)
         finally:
             reap_descendant(pid_file, descendant_pid)
 

@@ -1,9 +1,9 @@
 """Cancellation during stream collection of an owned single-command run.
 
 A streamed run has two halves: waiting for the child to exit, and collecting
-the stream consumers that carry its output. Only the first half is covered by
-the deadline machinery in ``cuprum._subprocess_timeout``; the second half
-awaits the consumers directly, outside any timeout.
+the stream consumers that carry its output. A configured timeout now bounds
+both halves; the runs here configure none, so their collection is bounded only
+by the caller's cancellation — which is the gap these tests cover.
 
 For an owning run that gap is reachable. The direct child can exit while a
 descendant it left behind still holds the run's inherited pipes, so the

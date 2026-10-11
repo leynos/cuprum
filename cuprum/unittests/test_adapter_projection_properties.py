@@ -16,6 +16,7 @@ from cuprum.context import EnvMode
 from cuprum.events import (
     ExecEvent,
     ExecPhase,
+    GroupTeardownOutcome,
     ResourceUsageMode,
     TerminalOutcome,
 )
@@ -36,7 +37,76 @@ _OPTIONAL_FIELDS = (
     "env_mode",
     "terminal_outcome",
 )
+# Deliberately absent from ``_OPTIONAL_FIELDS``: ``owns_group``,
+# ``group_outcome``, and ``settle_s`` are not common fields, so
+# ``_event_common_fields`` never yields them and the canonical projection must
+# not either. They reach a log record through the teardown whitelist alone,
+# which ``_expected_group_teardown_fields`` reproduces.
 _PHASES = typ.get_args(ExecPhase.__value__)
+# The bounded whitelist a group teardown may expose, pairing each field with
+# the name the projection gives it. ``program`` is unconditional; every other
+# field is present exactly where the event carries a value, so a ``None``
+# reads as absent rather than as a null the reader must special-case.
+_GROUP_TEARDOWN_LOG_FIELDS = (
+    ("pid", "cuprum_pid"),
+    ("project", "cuprum_project"),
+    ("exec_id", "cuprum_exec_id"),
+    ("operation", "cuprum_operation"),
+    ("owns_group", "cuprum_owns_group"),
+    ("group_outcome", "cuprum_group_outcome"),
+    ("settle_s", "cuprum_settle_s"),
+)
+
+
+def _expected_group_teardown_fields(event: ExecEvent) -> set[str]:
+    """Return the fields a group-teardown event's log record may expose."""
+    return {"program"} | {
+        field
+        for field, _ in _GROUP_TEARDOWN_LOG_FIELDS
+        if getattr(event, field) is not None
+    }
+
+
+def _assert_group_teardown_rules(event: ExecEvent, extra: dict[str, object]) -> None:
+    """Assert a teardown record carries correlation and no caller data."""
+    assert "cuprum_argv" not in extra, (
+        "teardown extras must omit the raw argument vector"
+    )
+    if event.exec_id is not None:
+        assert extra["cuprum_exec_id"] == event.exec_id, (
+            "teardown extras must preserve the execution correlation token"
+        )
+    rendered = {
+        name: extra[name] for _, name in _GROUP_TEARDOWN_LOG_FIELDS if name in extra
+    }
+    # The category must be the plain string operators filter on, not the
+    # member's ``repr``: the counter this record accompanies is labelled from
+    # the same value, and a label that read ``GroupTeardownOutcome.X`` would
+    # silently change the series name.
+    if event.group_outcome is not None:
+        assert rendered["cuprum_group_outcome"] == str(event.group_outcome), (
+            "teardown extras must render the category as its value, got "
+            f"{rendered['cuprum_group_outcome']!r}"
+        )
+    # The duration is carried through unmodified where it is present. Its
+    # *presence* is already pinned by the field-set equality in
+    # ``_assert_logging_projection``, so what is asserted here is the half that
+    # equality cannot see: that the figure survives rather than being
+    # re-derived, rounded, or dropped by the projection.
+    #
+    # "A settle duration appears only on an outcome that measured one" is a
+    # producer-side claim and is deliberately not asserted here. The projection
+    # is a faithful carrier — it emits whatever non-``None`` value it is given
+    # — and this generator draws the outcome and the duration independently so
+    # the teardown branch is exercised in states no real producer emits.
+    # Asserting the coherence claim against such an event would fail on a
+    # correct projection. It is checked where it can hold, in
+    # ``test_group_teardown_metrics.py``.
+    if event.settle_s is not None:
+        assert isinstance(rendered.get("cuprum_settle_s"), float), (
+            "a measured settle duration must survive the projection as a float, "
+            f"got {rendered.get('cuprum_settle_s')!r}"
+        )
 
 
 @st.composite
@@ -73,6 +143,15 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
+        # Drawn independently of the phase, like every other optional field, so
+        # the teardown branch is exercised both with and without each one. That
+        # independence is what lets the oracle below catch a projection that
+        # emits a settle duration on an outcome which measured none: a
+        # generator that only ever produced coherent tuples would agree with
+        # the projection by construction and could not fail.
+        owns_group=draw(st.none() | st.booleans()),
+        group_outcome=draw(st.none() | st.sampled_from(GroupTeardownOutcome)),
+        settle_s=draw(st.none() | st.floats(min_value=0.0, max_value=30.0)),
     )
 
 
@@ -165,24 +244,47 @@ class TestAdapterProjectionProperties:
 
     @staticmethod
     def _expected_logging_fields(event: ExecEvent, canonical: set[str]) -> set[str]:
-        """Return the structured-log fields the event phase may expose."""
+        """Return the structured-log fields the event phase may expose.
+
+        The three telemetry phases that can be reached while a run is
+        unwinding — fail-fast, the EOF grace expiry, and a group teardown —
+        project a *whitelist* rather than the canonical common fields. The
+        reason is shared: they are reached from cancellation and timeout paths
+        where the raw argument vector and caller tags are exactly what must not
+        reach a channel operators commonly retain. Each names its own bounded
+        set, and this oracle reproduces each one rather than asserting the
+        common set and passing vacuously.
+
+        Parameters
+        ----------
+        event : ExecEvent
+            The event whose phase selects which whitelist applies.
+        canonical : set[str]
+            The canonical common fields, for the phases that project them.
+
+        Returns
+        -------
+        set[str]
+            The field names that phase's record may expose.
+        """
         if event.phase == "pipeline_fail_fast":
             return (canonical - {"argv"}) | {"exec_id"}
-        if event.phase != "capture_eof_grace_expired":
-            return canonical
-
-        trusted_fields = (
-            "pid",
-            "project",
-            "exec_id",
-            "operation",
-            "eof_grace_s",
-            "pending_readers",
-            "env_mode",
-        )
-        return {"program"} | {
-            field for field in trusted_fields if getattr(event, field) is not None
-        }
+        if event.phase == "capture_eof_grace_expired":
+            trusted_fields = (
+                "pid",
+                "project",
+                "exec_id",
+                "operation",
+                "eof_grace_s",
+                "pending_readers",
+                "env_mode",
+            )
+            return {"program"} | {
+                field for field in trusted_fields if getattr(event, field) is not None
+            }
+        if event.phase == "group_teardown":
+            return _expected_group_teardown_fields(event)
+        return canonical
 
     @staticmethod
     def _assert_phase_specific_logging_rules(
@@ -205,6 +307,8 @@ class TestAdapterProjectionProperties:
                 assert extra["cuprum_exec_id"] == event.exec_id, (
                     "grace-expiry extras must preserve execution correlation"
                 )
+        elif event.phase == "group_teardown":
+            _assert_group_teardown_rules(event, extra)
         else:
             assert extra["cuprum_argv"] == event.argv, (
                 "logging extras must preserve argv as a tuple"

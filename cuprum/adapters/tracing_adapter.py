@@ -145,6 +145,7 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
                 | "timeout"
                 | "teardown_error"
                 | "capture_eof_grace_expired"
+                | "group_teardown"
             ):
                 if event.phase not in {"stdout", "stderr"} or self._record_output:
                     self._record_span_event(event)

@@ -33,6 +33,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_execution import _SubprocessExecution
 
 
 # A capturing drain gives readers a short bounded chance to observe the EOF
@@ -73,6 +74,37 @@ class _RunTaskOwnership:
     discard_on_cancel: asyncio.Event
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
     idle: _IdleMonitor | None = None
+
+
+def _drain_context(
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    pid: int | None,
+    *,
+    capture: bool,
+) -> _DrainContext:
+    """Build the drain context for one reconciliation of *tasks*.
+
+    Every reconciliation route a streamed run has needs the same four values,
+    and the only one they disagree about is *capture*: the expiry routes
+    preserve the text their ``TimeoutExpired`` will report, while a route
+    re-raising some other error discards it rather than spending the capture
+    grace on text nobody will read. Building the bundle at each site instead is
+    how a route drifts from the others, so the one value that legitimately
+    differs is the one asked for here.
+
+    Returns
+    -------
+    _DrainContext
+        The context that reconciliation, and the drain beneath it, read their
+        capture choice, pid, observation, and cancellation policy from.
+    """
+    return _DrainContext(
+        capture=capture,
+        pid=pid,
+        observation=execution.observation,
+        discard_on_cancel=tasks.discard_on_cancel,
+    )
 
 
 async def _await_eof_grace(
@@ -263,6 +295,7 @@ __all__ = [
     "_await_eof_grace",
     "_cancel_pending_consumers",
     "_decode_consumer_result",
+    "_drain_context",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
     "_report_drain_failures",

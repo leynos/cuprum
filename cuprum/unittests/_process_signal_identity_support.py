@@ -226,6 +226,8 @@ def _teardown(
     return _process_signal._terminate_process_with_wait(
         _as_process(target),
         policy=_TeardownPolicy(0.05, owns_group=owns_group),
-        is_done=lambda: target.returncode is not None,
-        wait_for_exit=wait_for_exit,
+        target=_process_signal._SettlementTarget(
+            is_done=lambda: target.returncode is not None,
+            wait_for_exit=wait_for_exit,
+        ),
     )

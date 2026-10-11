@@ -70,6 +70,7 @@ async def _abandon_unstarted_run(
             execution.ctx.cancel_grace,
             owns_group=execution.owns_process_group,
         ),
+        observations=(execution.observation,),
     )
     await _discard_drain(run, run.process.pid, execution)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)

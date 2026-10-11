@@ -59,6 +59,11 @@ class LogLevels:
         the other phases this reports an abnormal outcome, and it would
         otherwise fall through to the unhandled-phase default of DEBUG and be
         invisible in a normal configuration.
+    group_teardown_level:
+        Log level for ``group_teardown`` events (an owning teardown ended with
+        the group still holding members). Default WARNING for the same reason
+        as ``fail_fast_level``: every outcome the phase reports left a process
+        running after its run had ended, so each is abnormal by definition.
 
     """
 
@@ -67,6 +72,7 @@ class LogLevels:
     output_level: int = logging.DEBUG
     exit_level: int = logging.INFO
     fail_fast_level: int = logging.WARNING
+    group_teardown_level: int = logging.WARNING
 
 
 class _StructuredLoggingHook:
@@ -85,6 +91,7 @@ class _StructuredLoggingHook:
             "exit": levels.exit_level,
             "settled": levels.exit_level,
             "pipeline_fail_fast": levels.fail_fast_level,
+            "group_teardown": levels.group_teardown_level,
         }
 
     def __call__(self, event: ExecEvent) -> None:
@@ -169,6 +176,27 @@ def structured_logging_hook(
     )
 
 
+def _group_teardown_extra(event: ExecEvent) -> dict[str, object]:
+    """Build bounded, trusted fields for a group-teardown report."""
+    optional_fields = (
+        ("cuprum_pid", event.pid),
+        ("cuprum_project", event.project),
+        ("cuprum_exec_id", event.exec_id),
+        ("cuprum_operation", event.operation),
+        ("cuprum_owns_group", event.owns_group),
+        (
+            "cuprum_group_outcome",
+            None if event.group_outcome is None else str(event.group_outcome),
+        ),
+        ("cuprum_settle_s", event.settle_s),
+    )
+    return {
+        "cuprum_phase": event.phase,
+        "cuprum_program": str(event.program),
+        **{name: value for name, value in optional_fields if value is not None},
+    }
+
+
 def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
     """Build bounded, trusted fields for a capture EOF-grace expiry."""
     # ``env_mode`` earns its place on the same test this whitelist applies to
@@ -199,6 +227,11 @@ def _build_extra(event: ExecEvent) -> dict[str, object]:
         # The grace expiry can occur after a timeout, so retain only bounded,
         # trusted correlation fields—not caller tags or the raw argument vector.
         return _capture_eof_grace_extra(event)
+
+    if event.phase == "group_teardown":
+        # A teardown report is reached from the same cancellation and timeout
+        # paths, so it applies the same whitelist for the same reason.
+        return _group_teardown_extra(event)
 
     extra: dict[str, object] = {"cuprum_phase": event.phase}
     common_fields = _event_common_fields(event, _prefixed("cuprum_"))

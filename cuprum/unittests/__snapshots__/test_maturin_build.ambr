@@ -16,6 +16,7 @@
       'cuprum/_constants.py',
       'cuprum/_echo_truncation.py',
       'cuprum/_execution_tracking.py',
+      'cuprum/_group_teardown.py',
       'cuprum/_idle_diagnostic.py',
       'cuprum/_idle_heartbeat.py',
       'cuprum/_line_callbacks.py',

@@ -50,13 +50,13 @@ every other exit route uses.
 from __future__ import annotations
 
 import asyncio
-import time
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_drain import (
+    _drain_context,
     _DrainContext,
     _reconcile_run_tasks,
     _RunTaskOwnership,
@@ -64,6 +64,7 @@ from cuprum._subprocess_drain import (
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _deadline_for_collection,
     _wait_for_exit_code_within_timeout,
 )
 from cuprum._teardown_policy import _TeardownPolicy
@@ -102,6 +103,7 @@ async def _settle_owned_group_before_draining(
             execution.ctx.cancel_grace,
             owns_group=True,
         ),
+        observations=(execution.observation,),
     )
 
 
@@ -126,11 +128,11 @@ async def _wait_for_streamed_process_exit(
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
                 tasks,
-                _DrainContext(
+                _drain_context(
+                    execution,
+                    tasks,
+                    pid,
                     capture=execution.capture,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
                 ),
             )
         )
@@ -148,12 +150,7 @@ async def _wait_for_streamed_process_exit(
         await _shielded_cleanup(
             _reconcile_run_tasks(
                 tasks,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
+                _drain_context(execution, tasks, pid, capture=False),
             )
         )
         raise
@@ -255,31 +252,6 @@ async def _run_subprocess_with_streams(
     return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
 
 
-def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
-    """Return the seconds left for the post-exit boundary, or ``None`` unbounded.
-
-    The awaits this bounds are reached only once the exit wait has returned, so
-    a run whose deadline was already consumed has no budget left for them. It is
-    a remainder from the same ``perf_counter`` reference the exit wait was
-    scheduled against, and it is measured here rather than earlier on purpose: a
-    duration computed before the awaits it bounds would let them spend part of
-    the budget and still hand the whole of it to what follows. The caller passes
-    this straight to one ``asyncio.timeout`` covering all three awaits. Returning
-    ``None`` for an unconfigured timeout keeps a run without a deadline
-    unbounded here, exactly as it is everywhere else.
-
-    Returns
-    -------
-    float | None
-        The seconds remaining before the run's deadline, possibly negative if
-        the exit wait overran it, or ``None`` when no timeout is configured.
-    """
-    if execution.timeout is None:
-        return None
-    elapsed = time.perf_counter() - execution.started_at
-    return execution.timeout - elapsed
-
-
 async def _collect_stream_output(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -311,24 +283,27 @@ async def _collect_stream_output(
             await _await_stdin_writer(tasks)
             stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
     except TimeoutError as exc:
-        await _settle_group_and_discard_consumers(
+        # Capture-aware, matching the exit-wait route: a capturing run's text
+        # is what the resulting ``TimeoutExpired`` reports, so discarding it
+        # here would lose output the caller was explicitly promised.
+        stdout_text, stderr_text = await _settle_group_and_reconcile_consumers(
             process,
             execution,
             tasks,
-            pid,
+            _drain_context(execution, tasks, pid, capture=execution.capture),
         )
         _handle_stream_timeout(
             exc,
-            stdout_text=None,
-            stderr_text=None,
+            stdout_text=stdout_text,
+            stderr_text=stderr_text,
             timeout=execution.timeout,
         )
     except BaseException:
-        await _settle_group_and_discard_consumers(
+        await _settle_group_and_reconcile_consumers(
             process,
             execution,
             tasks,
-            pid,
+            _drain_context(execution, tasks, pid, capture=False),
         )
         raise
     for diagnostics in tasks.relay_diagnostics:
@@ -336,12 +311,12 @@ async def _collect_stream_output(
     return stdout_text, stderr_text
 
 
-async def _settle_group_and_discard_consumers(
+async def _settle_group_and_reconcile_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     tasks: _RunTaskOwnership,
-    pid: int | None,
-) -> None:
+    context: _DrainContext,
+) -> tuple[str | None, str | None]:
     """Settle an owned group, then reconcile every task the run still owns.
 
     The leader has exited but its group may not have, so the group is settled
@@ -364,8 +339,15 @@ async def _settle_group_and_discard_consumers(
     reader wedged on a pipe would outlive the run it belonged to. Reconcile it
     the way every other exit path does: the drain absorbs what it finds, which
     is right while another error is propagating — and here the consumer failure
-    *is* that error. ``capture=False`` matches those paths, so this settles
-    promptly rather than spending the capture grace on text nobody will read.
+    *is* that error.
+
+    *context* is the caller's, built by :func:`_drain_context`, because the two
+    routes disagree about what the drained text is for. The deadline's own
+    expiry converts to a ``TimeoutExpired`` the caller receives, so a capturing
+    run asks for ``execution.capture`` and hands the drained text on — the same
+    text the exit-wait route preserves. A route re-raising some other error asks
+    for ``False``, settling promptly rather than spending the capture grace on
+    text nobody will read, exactly as ``_wait_for_streamed_process_exit`` does.
 
     Both phases run under **one** shield, not two. ``_shielded_cleanup``
     finishes the task it was given and then re-raises the caller's cancellation,
@@ -375,22 +357,19 @@ async def _settle_group_and_discard_consumers(
     diagnostics unsettled. Composing them into a single coroutine makes the
     shield cover the pair, and the cancellation is re-raised only once both have
     finished.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        The drained stdout and stderr text, as the reconciliation decoded it.
     """
 
-    async def settle_then_reconcile() -> None:
+    async def settle_then_reconcile() -> tuple[str | None, str | None]:
         """Settle the group, then reconcile every run task, as one unit."""
         await _settle_owned_group_before_draining(process, execution)
-        await _reconcile_run_tasks(
-            tasks,
-            _DrainContext(
-                capture=False,
-                pid=pid,
-                observation=execution.observation,
-                discard_on_cancel=tasks.discard_on_cancel,
-            ),
-        )
+        return await _reconcile_run_tasks(tasks, context)
 
-    await _shielded_cleanup(settle_then_reconcile())
+    return await _shielded_cleanup(settle_then_reconcile())
 
 
 __all__ = [

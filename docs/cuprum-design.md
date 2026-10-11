@@ -1984,7 +1984,18 @@ Deciding *which* completion triggers that termination is separated from the
 asyncio machinery that observes it, so the ordering rules can be verified
 without processes or a clock. `cuprum/_pipeline_wait.py` splits the decision
 into a command and a query on `_PipelineWaitState`, following the project's
-command/query segregation rule:
+command/query segregation rule.
+
+That seam is also a module boundary. `cuprum/_pipeline_wait_state.py` owns the
+pure `_PipelineWaitState` transition — the command, the query, and the
+`from_processes` constructor — while `cuprum/_pipeline_wait.py` owns the
+asyncio orchestration (`_wait_for_pipeline`, `_process_completed_task`, and the
+`asyncio.wait` batch tie-break). The class is imported into `_pipeline_wait.py`
+from the state module, and the existing importers — `_pipeline_wait_records.py`
+and the symbolic, state-machine, and async test modules — keep reaching it
+through `cuprum._pipeline_wait`, so the compatibility surface is the import
+target rather than the definition. New code imports it from
+`cuprum._pipeline_wait_state` directly.
 
 - `record_completion(completed_idx, exit_code, *, ended_at)` is the command. It
   stamps the stage's exit code and end time — the clock is injected rather than

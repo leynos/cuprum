@@ -26,6 +26,7 @@ from cuprum._timeout_reporting import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import ExecutionContext
 
@@ -35,6 +36,7 @@ async def _wait_for_exit_code(
     ctx: ExecutionContext,
     *,
     owns_group: bool,
+    observation: _StageObservation | None = None,
 ) -> tuple[int, float]:
     """Wait for a subprocess exit code, terminating it on expiry or cancel.
 
@@ -49,6 +51,12 @@ async def _wait_for_exit_code(
     makes an omitted ownership value a ``TypeError`` at the call site instead
     of a lost guarantee, and every caller that targets the child alone must
     say so.
+
+    *observation* is the run being waited on, carried through to that teardown
+    so a group it could not reach publishes the ``group_teardown`` event
+    against the execution it belongs to. One process is waited on, so one
+    execution is named; the default is ``None`` for the callers with no
+    execution in hand, which keep the log record alone.
 
     Callers also own the deadline: wrap the call in ``async with
     asyncio.timeout(...)`` to bound the wait. A deadline expiry cancels this
@@ -87,6 +95,7 @@ async def _wait_for_exit_code(
         await _terminate_all_shielded(
             (process,),
             _TeardownPolicy(ctx.cancel_grace, owns_group=owns_group),
+            observations=(observation,) if observation is not None else (),
         )
         raise
     exited_at = time.perf_counter()
@@ -141,6 +150,7 @@ async def _wait_for_exit_code_within_timeout(
                 execution.ctx.cancel_grace,
                 owns_group=execution.owns_process_group,
             ),
+            observations=(execution.observation,),
         )
         _report_timeout_expiry(
             execution.observation,
@@ -155,6 +165,7 @@ async def _wait_for_exit_code_within_timeout(
                 process,
                 execution.ctx,
                 owns_group=execution.owns_process_group,
+                observation=execution.observation,
             )
     except TimeoutError as exc:
         # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
@@ -169,7 +180,39 @@ async def _wait_for_exit_code_within_timeout(
         raise
 
 
+def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
+    """Return the seconds left for the post-exit boundary, or ``None`` unbounded.
+
+    The awaits this bounds are reached only once the exit wait has returned, so
+    a run whose deadline was already consumed has no budget left for them. It is
+    a remainder from the same ``perf_counter`` reference the exit wait was
+    scheduled against, and it is measured where it is used rather than earlier
+    on purpose: a duration computed before the awaits it bounds would let them
+    spend part of the budget and still hand the whole of it to what follows. The
+    caller passes this straight to one ``asyncio.timeout`` covering all three
+    awaits a streamed run has left after its child exited. Returning ``None``
+    for an unconfigured timeout keeps a run without a deadline unbounded here,
+    exactly as it is everywhere else.
+
+    It lives here, beside the exit wait, because the remainder is only
+    meaningful against the reference that wait was scheduled from — splitting
+    the two would leave the subtraction with no way to state which start it is
+    measured from.
+
+    Returns
+    -------
+    float | None
+        The seconds remaining before the run's deadline, possibly negative if
+        the exit wait overran it, or ``None`` when no timeout is configured.
+    """
+    if execution.timeout is None:
+        return None
+    elapsed = time.perf_counter() - execution.started_at
+    return execution.timeout - elapsed
+
+
 __all__ = [
+    "_deadline_for_collection",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

@@ -4,16 +4,35 @@ from __future__ import annotations
 
 import re
 
-_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+
+
+def _closes_fence(run: str, rest: str, opener: tuple[str, int]) -> bool:
+    """Report whether *run* closes the CommonMark block *opener* began."""
+    if run[0] != opener[0] or len(run) < opener[1]:
+        return False
+    return not rest.strip()
 
 
 def _fenced_line_indexes(markdown: str) -> set[int]:
     """Return the indexes of the lines enclosed by fenced code blocks.
 
-    A fence opens on a run of at least three backticks or tildes and closes on a
-    run of the same character. Knowing which lines are fenced lets a caller pass
-    over code without rewriting it, so the text it goes on to return is still
-    the document's own.
+    A fence opens on a run of at least three backticks or tildes. Knowing which
+    lines are fenced lets a caller pass over code without rewriting it, so the
+    text it goes on to return is still the document's own.
+
+    Closing follows CommonMark rather than simply matching the opening
+    character. A closer is a run of the *same* character at least as long as the
+    opener, with nothing but whitespace after it. A shorter run, or one with
+    trailing text, is content: a four-backtick block may therefore contain a
+    three-backtick line, which is exactly how a document nests one example
+    inside another. Treating any same-character run as a closer ended the block
+    early, so every line after it was misclassified — a heading inside the
+    example became structure, and this helper's callers truncated the section
+    there.
+
+    An opening backtick fence whose info string contains a backtick is not a
+    fence either, per the same rule; such a line is ordinary content.
 
     Parameters
     ----------
@@ -26,17 +45,23 @@ def _fenced_line_indexes(markdown: str) -> set[int]:
         Zero-based indexes of the fenced lines, including both fence markers.
     """
     fenced: set[int] = set()
-    opener: str | None = None
-    for index, line in enumerate(markdown.splitlines()):
+    opener: tuple[str, int] | None = None
+    # Split on newlines rather than using ``str.splitlines``: the caller locates
+    # a match with ``count("\n", ...)``, and ``splitlines`` also breaks on
+    # form feed, vertical tab, and the Unicode line separators. Any of those in
+    # a document would shift every index after it and desynchronize the two.
+    for index, line in enumerate(markdown.split("\n")):
         match = _FENCE.match(line)
         if match is None:
             if opener is not None:
                 fenced.add(index)
             continue
-        marker = match.group(1)[0]
+        run, rest = match.group(1), match.group(2)
         if opener is None:
-            opener = marker
-        elif marker == opener:
+            if run[0] == "`" and "`" in rest:
+                continue
+            opener = (run[0], len(run))
+        elif _closes_fence(run, rest, opener):
             opener = None
         fenced.add(index)
     return fenced

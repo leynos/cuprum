@@ -130,6 +130,16 @@ def test_exec_id_keeps_its_positional_slot() -> None:
         "exec_id must directly follow error_type so existing positional callers "
         f"keep binding it, got {fields}"
     )
+    # The check above is order-relative and so cannot see a field inserted
+    # ahead of ``error_type``: both indices shift together and it still holds.
+    # Pinning the slot's absolute position closes that gap, and is the only
+    # form that catches the regression without also firing on every legitimate
+    # append — an assertion on the fields now trailing ``exec_id`` would break
+    # on the next addition while the positional contract was still intact.
+    assert fields.index("exec_id") == 15, (
+        "exec_id's positional slot must not move: a field inserted ahead of it "
+        f"rebinds every existing positional caller, got {fields}"
+    )
     exec_id = new_exec_id()
     event = c.ExecEvent(
         "start",  # phase

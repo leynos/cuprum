@@ -485,3 +485,30 @@ Publishing the alias is what lets callers annotate their own wrappers with the
 same domain the builders enforce, without repeating the union or reaching for
 `object`. The contract itself, including which values are rejected at run time,
 is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
+
+## Addendum (2026-10-11): the pipeline wait state split from its orchestration
+
+The `_PipelineWaitState` command/query seam was drawn across two modules rather
+than kept inside one. `cuprum/_pipeline_wait_state.py` now owns the pure
+transition — `record_completion`, `should_terminate_others`, and the
+`from_processes` constructor — while `cuprum/_pipeline_wait.py` keeps the
+asyncio orchestration around it (`_wait_for_pipeline`,
+`_process_completed_task`, and the `asyncio.wait` batch tie-break).
+
+Two constraints met on the same line, which is why the split is drawn there and
+not elsewhere. The module-size ceiling forced a decomposition:
+`_pipeline_wait.py` stood at 415 lines against the repository's 400-line
+`max-module-lines` limit. The command/query seam was already the natural
+boundary, because the transition has different readers and different
+verification needs from the orchestration — it has no I/O, no signals, and no
+clock of its own, so Hypothesis and CrossHair can drive it directly where the
+asyncio machinery around it cannot be cheaply exercised by those tools.
+
+The compatibility rule is about the import target, not the definition.
+`_PipelineWaitState` is imported into `cuprum/_pipeline_wait.py` from the state
+module, so existing importers — `cuprum/_pipeline_wait_records.py` and the
+symbolic, state-machine, async, batch, examples, and process-exit test modules
+— continue to reach it through `cuprum._pipeline_wait` unchanged. That name is
+retained for callers written before the split; new code imports from
+`cuprum._pipeline_wait_state` directly, and re-exporting through the
+orchestration module is not the preferred entry point going forward.

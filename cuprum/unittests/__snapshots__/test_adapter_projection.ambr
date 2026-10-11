@@ -81,6 +81,43 @@
     'tracing_span_event': None,
   })
 # ---
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[group_teardown]
+  dict({
+    'logging_extra': dict({
+      'cuprum_group_outcome': 'signal_refused',
+      'cuprum_operation': 'teardown_signal_15',
+      'cuprum_owns_group': True,
+      'cuprum_phase': 'group_teardown',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+      'cuprum_project': 'proj',
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.env_mode': 'replace',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': dict({
+      'error_type': 'ValueError',
+      'group_outcome': <GroupTeardownOutcome.SIGNAL_REFUSED: 'signal_refused'>,
+      'name': 'cuprum.group_teardown',
+      'operation': 'teardown_signal_15',
+      'owns_group': True,
+    }),
+  })
+# ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[pipeline_fail_fast]
   dict({
     'logging_extra': dict({

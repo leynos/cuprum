@@ -228,14 +228,19 @@ def test_zero_timeout_reconciles_pipe_tasks(
     async def no_termination(
         processes: cabc.Sequence[asyncio.subprocess.Process],
         policy: _TeardownPolicy,
+        *,
+        observations: cabc.Sequence[_StageObservation] = (),
     ) -> None:
         """Stand in for stage termination without settling anything.
 
-        The parameters mirror the real helper's positional shape, so a change
-        to how termination is asked for shows up here as a mismatch rather
-        than being absorbed by a permissive stand-in.
+        The parameters mirror the real helper's, keyword-only ones included, so
+        a change to how termination is asked for shows up here as a mismatch
+        rather than being absorbed by a permissive stand-in. The call sites
+        pass the stage observations positionally and by keyword respectively;
+        accepting both is what keeps this stub shape-compatible with the real
+        one rather than merely call-compatible with today's caller.
         """
-        del processes, policy
+        del processes, policy, observations
         await asyncio.sleep(0)
 
     pipeline = python(

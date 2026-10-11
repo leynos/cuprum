@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
-from cuprum._process_signal import _terminate_process_with_wait
+from cuprum._process_signal import _SettlementTarget, _terminate_process_with_wait
 from cuprum.context import current_context
 from cuprum.context._policy import _resolve_env_policy
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
@@ -40,19 +41,25 @@ from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._teardown_policy import _TeardownPolicy
 
 
 async def _terminate_process(
     process: asyncio.subprocess.Process,
     policy: _TeardownPolicy,
+    *,
+    observation: _StageObservation | None = None,
 ) -> None:
     """Terminate a running process, escalating to kill after the grace period."""
     await _terminate_process_with_wait(
         process,
         policy=policy,
-        is_done=lambda: process.returncode is not None,
-        wait_for_exit=lambda: _await_process_exit(process),
+        target=_SettlementTarget(
+            is_done=lambda: process.returncode is not None,
+            wait_for_exit=lambda: _await_process_exit(process),
+        ),
+        observation=observation,
     )
 
 
@@ -86,15 +93,30 @@ async def _await_teardown_shielded(
 async def _terminate_all_shielded(
     processes: cabc.Iterable[asyncio.subprocess.Process],
     policy: _TeardownPolicy,
+    *,
+    observations: cabc.Sequence[_StageObservation] = (),
 ) -> None:
     """Terminate every process before re-raising caller cancellation.
 
     *policy* carries the per-process ownership flags, so each process is
     signalled the way it was spawned. A policy whose sequence is shorter than
     ``processes`` leaves the rest on the direct-child route.
+
+    *observations* carries the executions these processes belong to, in the
+    same order, so each termination is reported against the execution whose
+    process it signalled. Pairing is by index and the sequence is not passed
+    on whole: a run-level report drawn from the front of the sequence would
+    attribute every stage's refusal to the first execution, which is a
+    different run from the one that was signalled. The default is empty for
+    the routes with no execution to correlate with; those keep the log record
+    alone.
     """
     await _await_teardown_shielded(
-        _terminate_process(process, policy.for_index(index))
+        _terminate_process(
+            process,
+            policy.for_index(index),
+            observation=observations[index] if index < len(observations) else None,
+        )
         for index, process in enumerate(processes)
     )
 
@@ -103,13 +125,15 @@ async def _cleanup_pipeline_on_error(
     processes: list[asyncio.subprocess.Process],
     pipe_tasks: list[asyncio.Task[None]],
     policy: _TeardownPolicy,
+    *,
+    observations: cabc.Sequence[_StageObservation] = (),
 ) -> list[object]:
     """Clean up pipeline resources after an error or cancellation."""
     # Terminate every process, then cancel and collect the pipe tasks owned by
     # the caller. This delivers cancellation to a native pump before waiting
     # for it to return descriptor ownership. Stream consumer tasks remain
     # owned by the caller (``_run_pipeline``), not by this helper.
-    await _terminate_all_shielded(processes, policy)
+    await _terminate_all_shielded(processes, policy, observations=observations)
     return await _reconcile_pipe_tasks(pipe_tasks)
 
 
@@ -132,17 +156,42 @@ def _merge_env(
     return render_env(overlay, mode)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StageHandle:
+    """One pipeline stage, as teardown addresses it.
+
+    A stage is only ever terminated through its process and its waiter
+    together: the process is what gets signalled and the waiter is what says
+    whether it has settled. Held as one row rather than as two parallel lists
+    so a stage's two halves cannot be paired with the wrong stage by an
+    enumeration that walks them separately.
+
+    The stage's own *observation* is a member for the same reason. A teardown
+    reports against the execution it signalled, so the pairing of process to
+    observation is part of what the row means; carrying the observations as a
+    separate sequence would let a loop index one list while signalling from
+    the other, which is how a refusal for stage two came to be filed against
+    stage zero.
+    """
+
+    process: asyncio.subprocess.Process
+    wait_task: asyncio.Task[int]
+    observation: _StageObservation | None = None
+
+
 async def _terminate_process_via_wait_task(
-    process: asyncio.subprocess.Process,
-    wait_task: asyncio.Task[int],
+    stage: _StageHandle,
     policy: _TeardownPolicy,
 ) -> bool:
-    """Terminate a process and report whether its provided waiter completed."""
+    """Terminate a stage and report whether its provided waiter completed."""
     return await _terminate_process_with_wait(
-        process,
+        stage.process,
         policy=policy,
-        is_done=wait_task.done,
-        wait_for_exit=lambda: asyncio.shield(wait_task),
+        target=_SettlementTarget(
+            is_done=stage.wait_task.done,
+            wait_for_exit=lambda: asyncio.shield(stage.wait_task),
+        ),
+        observation=stage.observation,
     )
 
 
@@ -174,8 +223,8 @@ def _stages_to_terminate(
       waiter is not settlement: a descendant the stage left behind can still
       hold an inherited pipe. Whether anything is actually signalled is decided
       later, by the group probe in
-      :func:`cuprum._process_signal._teardown_is_settled`, which answers for
-      the group rather than for the leader.
+      :func:`cuprum._process_signal._settlement_of`, which answers for the
+      group rather than for the leader.
 
     ``owns_group`` is per stage, so a short or absent sequence leaves the
     remaining stages on the direct-child rule: an ownership bookkeeping slip
@@ -202,6 +251,8 @@ def _stages_to_terminate(
 async def _terminate_timed_out_stages(
     processes: cabc.Sequence[asyncio.subprocess.Process],
     policy: _TeardownPolicy,
+    *,
+    observations: cabc.Sequence[_StageObservation] = (),
 ) -> None:
     """Terminate every still-running stage after a pipeline deadline expires.
 
@@ -219,7 +270,7 @@ async def _terminate_timed_out_stages(
     Failures are absorbed — this runs while a timeout is already propagating,
     and must not replace the ``TimeoutExpired`` the caller awaits.
     """
-    await _terminate_all_shielded(processes, policy)
+    await _terminate_all_shielded(processes, policy, observations=observations)
 
 
 def _has_stages_to_terminate(
@@ -252,10 +303,9 @@ def _has_stages_to_terminate(
 
 
 async def _terminate_pipeline_remaining_stages(
-    processes: list[asyncio.subprocess.Process],
-    wait_tasks: list[asyncio.Task[int]],
-    failure_index: int,
+    stages: cabc.Sequence[_StageHandle],
     policy: _TeardownPolicy,
+    failure_index: int,
 ) -> tuple[bool, ...]:
     """Terminate all still-running stages after a stage fails.
 
@@ -264,6 +314,14 @@ async def _terminate_pipeline_remaining_stages(
     hanging on long-running producers/consumers when downstream work is no
     longer meaningful.
 
+    Each stage is terminated through its own :class:`_StageHandle`, so a
+    refusal is reported against the execution whose process was signalled.
+    The selection is ascending but need not start at stage zero — when the
+    first stage has already exited and a later one fails, the first target is
+    the next stage still running — so an observation drawn from the front of
+    a run-level sequence would name a different execution from the one
+    signalled.
+
     Returns
     -------
     tuple[bool, ...]
@@ -271,25 +329,18 @@ async def _terminate_pipeline_remaining_stages(
         process accepted termination and its waiter completed; ``False`` means
         it had already settled or could not be signalled.
     """
-    targets = set(
-        _stages_to_terminate(
-            failure_index,
-            [wait_task.done() for wait_task in wait_tasks],
-            owns_group=policy.ownership_of(len(wait_tasks)),
-        )
+    targets = _stages_to_terminate(
+        failure_index,
+        [stage.wait_task.done() for stage in stages],
+        owns_group=policy.ownership_of(len(stages)),
     )
+    known = set(targets)
     termination_tasks = [
         asyncio.create_task(
-            _terminate_process_via_wait_task(
-                process,
-                wait_task,
-                policy.for_index(idx),
-            ),
+            _terminate_process_via_wait_task(stage, policy.for_index(idx)),
         )
-        for idx, (process, wait_task) in enumerate(
-            zip(processes, wait_tasks, strict=True),
-        )
-        if idx in targets
+        for idx, stage in enumerate(stages)
+        if idx in known
     ]
     if not termination_tasks:
         return ()

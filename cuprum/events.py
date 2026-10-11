@@ -24,7 +24,10 @@ if typ.TYPE_CHECKING:
 # pipeline coordinator took about a stage: its non-zero exit was the first
 # failure and every other still-running stage — upstream producer and downstream
 # consumer alike — is about to be torn down. The stage's own ``exit`` event
-# still follows.
+# still follows. ``group_teardown`` is different again: it reports that an
+# owning run's teardown ended with members of the child's process group still
+# alive, which is a fact about a run that has already finished rather than a
+# phase of it.
 type ExecPhase = typ.Literal[
     "plan",
     "start",
@@ -38,7 +41,31 @@ type ExecPhase = typ.Literal[
     "teardown_error",
     "capture_eof_grace_expired",
     "pipeline_fail_fast",
+    "group_teardown",
 ]
+
+
+class GroupTeardownOutcome(enum.StrEnum):
+    """Why an owning teardown ended with members of the group still running.
+
+    A closed vocabulary because these values label a metric: an operator
+    filters on the set of reasons a group was left behind, so every member is a
+    stable, low-cardinality string that no runtime value can reach.
+
+    ``UNSIGNALABLE`` and ``SETTLEMENT_TIMEOUT`` both leave members running, and
+    what separates them is what can still be done about it. An unsignalable
+    group is outside this run's authority: nothing it sends reaches those
+    members, so the teardown stops rather than waiting out a process it can
+    never end. A settlement timeout was within reach in principle — the members
+    were compelled with ``SIGKILL`` — and the capped wait expired because
+    something outside this run owns their reaping. The first is a permissions
+    fact about the group; the second is a race with an init process, and only
+    the second is worth retrying.
+    """
+
+    UNSIGNALABLE = "unsignalable"
+    SETTLEMENT_TIMEOUT = "settlement_timeout"
+    SIGNAL_REFUSED = "signal_refused"
 
 
 class TerminalOutcome(enum.StrEnum):
@@ -286,6 +313,23 @@ class ExecEvent:
         failure and cannot tell it apart from an overlay run. ``None`` only on
         legacy or manually constructed events; the execution paths always
         resolve a mode.
+    owns_group:
+        Whether the teardown that produced a ``group_teardown`` event was
+        signalling the child's whole process group rather than the direct child
+        alone. ``None`` for other phases. Carried because the same outcome means
+        different things on the two routes: a group left holding members is a
+        failure the ownership policy introduced, while a direct-child signal
+        that could not be delivered is the behaviour every run had before it.
+    group_outcome:
+        Closed category for a ``group_teardown`` event. See
+        :class:`~cuprum.events.GroupTeardownOutcome`. It is this field, rather
+        than ``note`` or ``error_type``, that a bounded metric is labelled
+        from, so no pid, path, or error string can reach a metric label.
+        ``None`` for other phases.
+    settle_s:
+        How long the group-settlement wait had run when it expired, carried by
+        a ``settlement_timeout`` event. ``None`` on the other outcomes, so an
+        absent figure is not read as an instant one.
 
     New optional fields are appended to the end of the declaration to preserve
     existing positional argument slots. In particular, inserting one ahead of
@@ -327,6 +371,14 @@ class ExecEvent:
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
     terminal_outcome: TerminalOutcome | None = None
+    # Appended after ``terminal_outcome`` rather than beside the other
+    # ancillary-diagnostic fields, and for the reason the class docstring
+    # records: a positional construction would otherwise rebind an existing
+    # slot. ``group_outcome`` labels a bounded counter, so it is typed as the
+    # closed enum rather than as a string that a caller could set freely.
+    owns_group: bool | None = None
+    group_outcome: GroupTeardownOutcome | None = None
+    settle_s: float | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
@@ -337,6 +389,7 @@ __all__ = [
     "ExecHook",
     "ExecId",
     "ExecPhase",
+    "GroupTeardownOutcome",
     "ResourceUsageMode",
     "TerminalOutcome",
     "TimeoutMode",

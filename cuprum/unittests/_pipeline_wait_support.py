@@ -61,6 +61,33 @@ async def _still_running() -> int:
     return await never
 
 
+class _StubStageProcess:
+    """A process stand-in for stages whose teardown is intercepted.
+
+    These tests never signal anything — each installs its own termination stub
+    so it can inspect the requested stage index and count. What the double has
+    to satisfy is the *pairing*: production addresses a stage through its
+    process and its waiter together, and pairs them by position, so a state
+    built without processes has nothing to pair its wait tasks with. One double
+    per stage keeps the shape the real pipeline builds, which is what lets a
+    future divergence surface here instead of inside the production zip.
+    """
+
+    def __init__(self) -> None:
+        """Create a process that has not exited and has not been signalled."""
+        self.returncode: int | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+
+    def terminate(self) -> None:
+        """Record the signal a stage double would have been sent."""
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        """Record the escalation a stage double would have reached."""
+        self.kill_calls += 1
+
+
 def make_stage_observations(
     stage_count: int,
     hooks: tuple[ExecHook, ...],
@@ -165,13 +192,12 @@ def record_terminations(
     terminations: list[tuple[int, float]] = []
 
     async def fake_terminate(
-        processes: object,
-        wait_tasks: object,
-        failure_index: int,
+        stages: object,
         policy: _TeardownPolicy,
+        failure_index: int,
     ) -> tuple[bool, ...]:
         """Record the termination request instead of signalling processes."""
-        del processes, wait_tasks
+        del stages
         await asyncio.sleep(0)
         terminations.append((failure_index, policy.grace_period))
         return (True,) * terminated_count
@@ -243,11 +269,14 @@ def apply_completions(
     stand-in would make every sibling look already settled and suppress the
     teardown these tests are about.
 
+    A process double is built per stage for the same reason, and it is not
+    optional: production pairs the two sequences positionally, so a state given
+    wait tasks but no processes has no counterpart for the tasks it selects.
+    The doubles are never signalled — every caller installs a termination stub
+    first so it can inspect the requested stage index and count independently.
+
     ``before_each`` is called with the zero-based step index just before each
     completion, for tests that move the clock between them.
-
-    Tests install their own termination stub before calling this helper, so
-    each can inspect the requested stage index and count independently.
     """
 
     async def drive() -> None:
@@ -255,6 +284,10 @@ def apply_completions(
         standins = [asyncio.create_task(_still_running()) for _ in state.exit_codes]
         state.wait_tasks = list(standins)
         state.task_to_index = {task: idx for idx, task in enumerate(standins)}
+        processes = typ.cast(
+            "list[asyncio.subprocess.Process]",
+            [_StubStageProcess() for _ in state.exit_codes],
+        )
         try:
             for step, (idx, exit_code) in enumerate(completions):
                 if before_each is not None:
@@ -266,7 +299,7 @@ def apply_completions(
                 await _pipeline_wait._process_completed_task(
                     task,
                     state,
-                    [],
+                    processes,
                     _TeardownPolicy(0.25),
                 )
         finally:

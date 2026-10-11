@@ -77,6 +77,33 @@ def test_the_fenced_example_is_returned_verbatim() -> None:
     )
 
 
+def test_a_longer_fence_holds_a_shorter_one_without_closing() -> None:
+    """A nested example is content, not the end of the block that holds it.
+
+    A four-backtick fence exists so a document can *show* a three-backtick
+    example. Reading the inner run as a closer ends the block one line in, and
+    the comment line below it then looks like a heading — which truncates the
+    section silently, the exact failure this helper exists to prevent.
+    """
+    document = (
+        "### Timeouts\n\n"
+        "````markdown\n"
+        "```python\n"
+        "# A nested comment at column zero.\n"
+        "value = 1\n"
+        "```\n"
+        "````\n\n"
+        "After the nested example.\n"
+    )
+
+    section = extract_markdown_subsection(document, heading="Timeouts")
+
+    assert "After the nested example." in section, (
+        "a three-backtick run inside a four-backtick block is content, not a "
+        f"closer; reading it as one truncates the section; got {section!r}"
+    )
+
+
 def test_an_indented_fence_is_still_a_fence() -> None:
     """A fence nested in a list item delimits code like any other.
 

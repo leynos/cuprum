@@ -31,7 +31,7 @@ import sys
 
 import pytest
 
-from cuprum import _process_signal
+from cuprum import _group_teardown
 from cuprum.unittests._process_signal_identity_support import (
     _teardown,
     _TeardownTarget,
@@ -45,8 +45,13 @@ _posix_only = pytest.mark.skipif(
 pytestmark = _posix_only
 
 # Resolved from the module rather than spelled out, so a rename of the module
-# cannot leave these tests watching a logger nothing writes to.
-_SIGNAL_LOGGER = _process_signal.__name__
+# cannot leave these tests watching a logger nothing writes to. It is the
+# reporting module, not ``_process_signal``: the decision to signal belongs to
+# the latter, but every record these tests read is written by
+# ``_group_teardown.report_group_teardown``, and binding the logger to the
+# deciding module would leave them capturing nothing while still passing the
+# assertions that only require *no* record.
+_SIGNAL_LOGGER = _group_teardown.__name__
 
 
 class _RefusingKernel:

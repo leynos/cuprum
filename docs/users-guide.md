@@ -1107,7 +1107,7 @@ the single-command case.
 
 #### Reclaim a descendant with process-group ownership
 
-When the command that a deadline expires has spawned descendants of its own,
+When a command whose deadline expires has spawned descendants of its own,
 terminating the direct child does not terminate them. Cuprum then gives the run
 a brief window to observe end of file, cancels whatever is still waiting when
 it closes, and raises `TimeoutExpired` — correct, but the work the timeout was
@@ -1186,19 +1186,25 @@ not the default.
 
 #### Cleanup diagnostics
 
-An owned teardown reports the outcomes it cannot resolve, so a run that left
-something behind is visible rather than silent. Each record goes to the
-`cuprum._process_signal` or `cuprum._process_group` logger at `WARNING`:
+A teardown reports the outcomes it cannot resolve, so a run that left something
+behind is visible rather than silent. Which records you can receive depends on
+the policy: `cuprum.teardown_signal_failed` is raised under either policy,
+because a direct child can refuse a signal too, while the two `process_group`
+records can only come from a run that owns its group. Each record goes to the
+`cuprum._group_teardown` logger at `WARNING`:
 
 - `cuprum.teardown_signal_failed` — a signal the kernel refused for a target
   the run still believed was running. It names the signal, so a refused
   `SIGTERM` (a process never asked to leave) is distinguishable from a refused
   `SIGKILL` (a process asked and unmoved). A target that had already gone is
-  not a failure and is not recorded.
+  not a failure and is not recorded. This one is recorded for any teardown,
+  owned or not: a direct child can refuse a signal too.
 - `cuprum.process_group_settlement_timeout` — the bounded wait after the
-  escalation expired with group members still outstanding.
+  escalation expired with group members still outstanding. Recorded only for a
+  run that owns its group, since only an owned group can be left outstanding.
 - `cuprum.process_group_unsignalable` — the group holds members this process
-  may not signal, so it was reported unreachable rather than settled.
+  may not signal, so it was reported unreachable rather than settled. Also
+  recorded only for a run that owns its group.
 
 A refused signal therefore reads as `cuprum.teardown_signal_failed`, carrying
 `pid`, `signal`, `owns_group`, and `error` fields — for example

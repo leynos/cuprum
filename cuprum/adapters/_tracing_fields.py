@@ -33,6 +33,12 @@ _SPAN_FIELDS = (
     "timeout_mode",
     "eof_grace_s",
     "pending_readers",
+    # The group-teardown fields. ``group_outcome`` is a bounded ``StrEnum`` and
+    # ``owns_group`` a bool, so a span attribute carries no caller data; the
+    # pid stays a field rather than a label, as it does on the metric.
+    "owns_group",
+    "group_outcome",
+    "settle_s",
 )
 
 # Terminal child-resource fields, written from the child ``exit`` event. The

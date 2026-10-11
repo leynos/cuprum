@@ -48,6 +48,7 @@ import sys
 import pytest
 
 from cuprum import _process_signal
+from cuprum._process_group import _GroupProbe
 from cuprum.unittests._process_signal_identity_support import (
     _LEADER_PID,
     _as_process,
@@ -176,13 +177,16 @@ def test_a_settled_group_reports_settlement_without_regard_to_the_child(
     target = _TeardownTarget(is_group_live=False, has_exited=False)
     monkeypatch.setattr(os, "killpg", target.record_killpg)
 
-    settled = _process_signal._teardown_is_settled(
+    settled = _process_signal._settlement_of(
         _as_process(target),
         owns_group=True,
-        is_done=lambda: target.returncode is not None,
+        target=_process_signal._SettlementTarget(
+            is_done=lambda: target.returncode is not None,
+            wait_for_exit=target.wait,
+        ),
     )
 
-    assert settled is True, (
+    assert settled is _GroupProbe.EMPTY, (
         "an owning run is settled by its group, not by its child: the child "
         "here is still running, and the group has no members left, so there is "
         "nothing left for a teardown to reach"
@@ -207,13 +211,16 @@ def test_an_inherited_run_asks_the_child_rather_than_probing_a_group(
     target = _TeardownTarget(is_group_live=True, has_exited=False)
     monkeypatch.setattr(os, "killpg", target.record_killpg)
 
-    settled = _process_signal._teardown_is_settled(
+    settled = _process_signal._settlement_of(
         _as_process(target),
         owns_group=False,
-        is_done=lambda: target.returncode is not None,
+        target=_process_signal._SettlementTarget(
+            is_done=lambda: target.returncode is not None,
+            wait_for_exit=target.wait,
+        ),
     )
 
-    assert settled is False, (
+    assert settled is _GroupProbe.MEMBERS, (
         "an inherited run is settled by its child's exit, and this child has "
         "not exited, so the run is not settled however many groups hold its pid"
     )

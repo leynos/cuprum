@@ -301,7 +301,7 @@ async def assert_reclaimed(descendant_pid: int, message: str) -> None:
 
 async def run_to_its_own_deadline(
     run: cabc.Coroutine[object, object, object],
-) -> None:
+) -> TimeoutExpired:
     """Await *run*, requiring it to end on its own deadline and in time.
 
     The run is given the deadline under test *and* an outer bound, and the two
@@ -310,15 +310,23 @@ async def run_to_its_own_deadline(
     on the elapsed time is what shows the run ended because of *its* deadline
     rather than because the outer one gave up on it. Both are asserted here so
     a test cannot accidentally check one and read it as the other.
+
+    Returns
+    -------
+    TimeoutExpired
+        The exception the run raised, so a caller can assert on the payload the
+        expiry carried — the drained output, for instance — rather than only on
+        the fact that it raised.
     """
     started = time.monotonic()
-    with pytest.raises(TimeoutExpired):
+    with pytest.raises(TimeoutExpired) as raised:
         await asyncio.wait_for(run, RUN_BUDGET_S)
     elapsed = time.monotonic() - started
     assert elapsed < RUN_BUDGET_S, (
         "the run reached this assertion too late to have been bounded by its "
         "own deadline rather than by the test's outer bound"
     )
+    return raised.value
 
 
 def recorded_descendant_or_fail(pid_file: Path) -> int:

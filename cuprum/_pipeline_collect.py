@@ -201,6 +201,7 @@ async def _collect_pipeline_inputs(
                 config.ctx.cancel_grace,
                 owns_group=spawn.owns_group,
             ),
+            observations=spawn.stages.observations,
         )
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)

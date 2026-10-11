@@ -11,219 +11,153 @@ use them.
 A child spawned with ``start_new_session=True`` is the leader of both a new
 session and a new process group, so its group identifier equals its process
 identifier. That equality is what makes ``os.killpg(process.pid, sig)`` the
-right name to signal here: the group was named by a process this run started,
-so the name begins as one this run created rather than one it was handed. A run
-that does not own the group signals exactly the process it always did.
+right name to signal: the group was named by a process this run started, so the
+name begins as one this run created rather than one it was handed. A run that
+does not own the group signals exactly the process it always did.
 
 Beginning as this run's is not the same as still being this run's at the moment
-of the signal, and the rest of this docstring is about that gap. Nothing below
-should be read as a licence to signal on the strength of the name alone.
+of the signal. The probe is a veto rather than a licence — "no such group" is
+conclusive, "yes" is only that some group holds the number.
 
-What the name does *not* carry is a guarantee that no unrelated group can ever
-hold it. The kernel keeps a group addressable for as long as it has a member,
-but once the group has emptied its identifier is an ordinary free slot the
-kernel may hand to anyone. The liveness probe reads the kernel's answer about
-the *number*, and the kernel cannot answer about the *group*: every ``killpg``
-takes a number, so nothing can distinguish this run's group from a stranger's
-that inherited it. The probe is therefore a veto rather than a licence — "no
-such group" is conclusive, "yes" is only that some group holds the number.
-
-Two windows follow, and they are separate hazards rather than one.
-
-The larger one is reuse **before** the probe: the group empties, the kernel
+Two reuse windows follow from that, and they are separate hazards rather than
+one. The larger is reuse **before** the probe: the group empties, the kernel
 recycles the number onto an unrelated group, and the next probe answers for the
-stranger exactly as it would for this run's own. Nothing here can detect that,
-and the signal that follows is delivered to the stranger. Every probe in this
-module has it, and no stronger probe is available to be asked for. The probe
-that guards the escalation is the one exception, in the weaker direction only:
-it fires *after* the group was known live, so it can see that the name has
-since stopped answering for anyone — which is conclusive — but it cannot
-establish that an answering name is this run's.
+stranger exactly as it would for this run's own. The smaller is reuse
+**between** the probe and the signal: they are two separate syscalls, so a
+group that empties in the gap is signalled under a name the kernel may already
+have recycled. :mod:`cuprum._process_group` states why no process-group
+equivalent of ``pidfd`` closes them and how far the kernel's own recycling rate
+bounds them.
 
-The smaller one is reuse **between** the probe and the signal: they are two
-separate syscalls, so a group that empties in the gap is signalled under a name
-the kernel may already have recycled.
-
-Neither window is closable here. A lifetime-safe handle on the target would
-close both, which is what ``pidfd`` gives for a single process, but ``pidfd``
-is per-pid — ``os.pidfd_open`` and ``signal.pidfd_send_signal`` take a process
-identifier — and no process-group equivalent exists on this platform. The
-residual is therefore the one ``Popen`` documents between its own liveness
-check and its ``os.kill`` (bpo-38630), bounded in practice by how long the
-kernel takes to recycle an identifier.
+This module answers *what to signal* and *what to wait for*. The delivery
+itself, and everything a teardown that could not reach its target *reports* —
+the log record and the execution event, why they travel together, the message
+templates, and the bounded metric labels — belongs to
+:mod:`cuprum._group_teardown`. The two modules answer different questions, and
+the census below is what keeps a reader from having to guess which one holds
+the answer they want.
 
 Everything in this module is private to the package. It is a split, not a
-promotion: callers that previously imported these helpers from
-``cuprum._process_lifecycle`` now import them from here.
+promotion: what callers imported from ``cuprum._process_lifecycle`` is here.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
+import dataclasses as dc
 import signal
 import typing as typ
 
+from cuprum._group_teardown import (
+    GroupTeardownReport,
+    report_group_teardown,
+    signal_target_or_report,
+    unsignalable_report,
+)
 from cuprum._process_group import (
     _POST_KILL_SETTLEMENT_S,
-    _await_group_exit,
+    _await_group_settlement,
     _await_group_teardown,
-    _group_has_members,
+    _GroupProbe,
+    _probe_group,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._teardown_policy import _TeardownPolicy
 
-_LOGGER = logging.getLogger(__name__)
+
+@dc.dataclass(frozen=True, slots=True)
+class _SettlementTarget:
+    """How a teardown observes the target it is trying to settle.
+
+    The pair is one value because neither callable means anything alone: a
+    caller can construct neither without knowing both, since the two are the
+    same target observed two ways — *is_done* answers *has the target already
+    settled?* from a flag the caller already holds, and *wait_for_exit*
+    answers *wait until it does* when it has not. Every route through the
+    teardown carries both to the same places, so they are grouped rather than
+    threaded separately through each signature that needs them.
+
+    They are genuinely two answers, though, and the probe asks them in
+    different places: :func:`_settlement_of` consults *is_done* because asking
+    whether the target has settled must not wait, while
+    :func:`_settle_after_escalation` awaits *wait_for_exit* because reaping a
+    child that already exited is exactly what it owes the run.
+    """
+
+    #: Whether the direct child has been reaped, asked without waiting.
+    is_done: cabc.Callable[[], bool]
+    #: Await the direct child's exit, reaping it when it is still outstanding.
+    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]]
 
 
-def _teardown_is_settled(
+def _report_teardown(
+    observation: _StageObservation | None,
+    report: GroupTeardownReport | None,
+    error: OSError | None = None,
+) -> None:
+    """Report one teardown outcome against the execution it acted for.
+
+    The observation is the one paired with the target being signalled, never
+    the front of a run-level sequence: a pipeline teardown signals several
+    stages, and the stage it is reporting on is whichever one the caller
+    reached, not whichever happens to be first. Taking the first would file a
+    refusal against stage zero for a signal delivered to stage two.
+    """
+    if report is None:
+        return
+    report_group_teardown(observation, report, error)
+
+
+def _settlement_of(
     process: asyncio.subprocess.Process,
     *,
     owns_group: bool,
-    is_done: cabc.Callable[[], bool],
-) -> bool:
-    """Return whether the run's teardown target has nothing left to signal.
+    target: _SettlementTarget,
+) -> _GroupProbe:
+    """Report what the run's teardown target has left to signal.
 
     An inherited-group run targets the direct child alone, so a completed child
-    *is* settlement and the caller's *is_done* answers it.
+    *is* settlement and the caller's *is_done* answers it — reported as
+    ``EMPTY``, since the question is about the target rather than any group.
 
-    An owning run targets the child's whole group, and that group can outlive
-    the child that led it. The kernel holds a group addressable for as long as
-    it has a member, so a probe that answers says a group is still there, and
-    it knows something *is_done* cannot: whether a descendant is still in the
-    group. Such a descendant is exactly the process that keeps an inherited
-    pipe open past a graceful child exit, so treating the reaped leader as
-    settlement would leak the very descendant this policy exists to reclaim.
+    An owning run targets the child's whole group, which can outlive the child
+    that led it, so a reaped leader is not settlement: a descendant the run
+    left behind is exactly the process that keeps an inherited pipe open past a
+    graceful child exit, and ignoring it would leak what this policy exists to
+    reclaim. What the probe can and cannot establish is stated with the probe
+    in :mod:`cuprum._process_group` and in this module's docstring.
 
-    What the probe cannot do is attribute the answer. It reports whether the
-    *number* is held, never whether the group holding it is this run's; the
-    kernel offers nothing stronger, because every ``killpg`` a process can make
-    takes a number. So the two answers are not equally informative. A probe
-    that has stopped answering proves the group has emptied and is conclusive.
-    A probe that still answers proves only that some group holds the name — the
-    original could have emptied and been re-used before the probe ran, which no
-    probe can detect. The probe is a veto that did not fire, not a licence.
-
-    The weaker answer is still worth having, which is why settlement rests on
-    it rather than on *is_done*: a two-way guarantee is not needed for the
-    deduction above, since a group with a live descendant answers and this run
-    has no other way to ask. See the module docstring for the residual this
-    leaves and why no handle closes it.
-
-    The probe is asked only where :func:`_signal_child` would signal the group.
+    The probe is asked only where
+    :func:`~cuprum._group_teardown.signal_target_or_report` would signal.
     A child with no pid has no group name to ask about, and that helper falls
-    back to the direct route there, so settlement is decided the same way.
+    back to the direct route there, so the run is judged by the direct route
+    here rather than by a probe neither of them would make.
+
+    This is a query. It reports what it found, including the group it could not
+    signal, and leaves both the decision and the diagnostic to its caller,
+    which is where the module's logging convention puts them.
 
     Returns
     -------
-    bool
-        Whether the teardown target has nothing left to signal, so no signal
-        need be sent.
+    _GroupProbe
+        ``EMPTY`` when the target has nothing left to signal, ``MEMBERS`` when
+        it still does, and ``UNSIGNALABLE`` when the group holds members this
+        process may not signal and so cannot settle by waiting.
     """
     if owns_group and process.pid is not None:
-        return not _group_has_members(process.pid)
-    return is_done()
-
-
-def _signal_child(
-    process: asyncio.subprocess.Process,
-    *,
-    group_signal: int,
-    direct: cabc.Callable[[], None],
-    owns_group: bool,
-) -> None:
-    """Signal the child alone, or the whole group when this run owns it.
-
-    *owns_group* is only true for a child spawned with
-    ``start_new_session=True``, which makes that child the leader of its own
-    session and process group. The group is therefore named by the child's own
-    process identifier: no ``os.getpgid`` lookup is needed, and the identifier
-    is one this run created rather than one it was handed.
-
-    The name identifies a group this run made; it does not guarantee that group
-    still exists or still holds the name. The caller reaches this function only
-    after the settlement probe declined to veto, and a probe that answers
-    cannot attribute the name to this run. The module docstring records both
-    reuse windows, why no process-group equivalent of ``pidfd`` closes them,
-    and how far the kernel's own recycling rate bounds them.
-
-    Signalling the group rather than the direct child is what lets a child's
-    descendants reach end-of-file on inherited pipes; a descendant that left
-    the group deliberately is outside this call's reach, exactly as
-    :class:`~cuprum.sh.ProcessGroupPolicy` documents.
-
-    *direct* is the child-only route — ``process.terminate`` or
-    ``process.kill`` — passed in so a run that does not own the group signals
-    exactly the process it always did. The routes report an absent target
-    differently: ``os.killpg`` raises ``ProcessLookupError`` where
-    :meth:`subprocess.Popen.send_signal` suppresses it (bpo-40550).
-    """
-    if owns_group and process.pid is not None:
-        os.killpg(process.pid, group_signal)
-        return
-    direct()
-
-
-def _signal_child_or_report(
-    process: asyncio.subprocess.Process,
-    *,
-    group_signal: int,
-    direct: cabc.Callable[[], None],
-    owns_group: bool,
-) -> bool:
-    """Deliver one teardown signal, reporting what cannot report itself.
-
-    The two ways a signal can fail to arrive are not the same. A
-    ``ProcessLookupError`` is the race both routes already tolerate — the
-    target went before the signal could be delivered — so it is passed over
-    silently. A wider ``OSError`` is a target this run believes is there and
-    could not signal, and silence there conflates two outcomes: a teardown that
-    found nothing to do, and one that failed. Both reach the caller as the same
-    ``False``, so only a record distinguishes them.
-
-    The wrapper reports; it does not change control flow. A logging handler the
-    application installed can still raise out of the ``warning`` call, which is
-    left to propagate: the branch is already abnormal, and swallowing it would
-    hide the failure a second time.
-
-    Returns
-    -------
-    bool
-        Whether the signal call returned without raising. That is weaker than
-        "the signal was delivered", for the ``send_signal`` suppression noted
-        on :func:`_signal_child`.
-    """
-    try:
-        _signal_child(
-            process,
-            group_signal=group_signal,
-            direct=direct,
-            owns_group=owns_group,
-        )
-    except ProcessLookupError:
-        return False
-    except OSError as exc:
-        _LOGGER.warning(
-            "cuprum.teardown_signal_failed pid=%s signal=%s owns_group=%s "
-            "error=%r; the target was not signalled, so a process this run "
-            "believes is running may have outlived its teardown",
-            process.pid,
-            group_signal,
-            owns_group,
-            exc,
-        )
-        return False
-    return True
+        return _probe_group(process.pid)
+    return _GroupProbe.EMPTY if target.is_done() else _GroupProbe.MEMBERS
 
 
 async def _settlement(
     process: asyncio.subprocess.Process,
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    target: _SettlementTarget,
     *,
+    observation: _StageObservation | None,
     owns_group: bool,
 ) -> None:
     """Wait for the run's teardown target to settle.
@@ -240,6 +174,11 @@ async def _settlement(
     Both waits are composed rather than replaced so the direct child's exit is
     still awaited, and therefore reaped, on every route.
 
+    An unsignalable group ends the wait as promptly as an emptied one, and is
+    reported here rather than by the probe that found it: the probe answers,
+    this command reports. Waiting on such a group cannot reach its members, so
+    the wait returns either way; only the record separates the causes.
+
     This is a coroutine rather than a function returning an awaitable so the
     waiter is built only once the grace period is actually being waited on.
     Building it eagerly would construct a coroutine that a timed-out
@@ -247,34 +186,43 @@ async def _settlement(
     ``RuntimeWarning`` from the teardown path.
     """
     if not owns_group or process.pid is None:
-        await wait_for_exit()
+        await target.wait_for_exit()
         return
-    await _await_group_teardown(wait_for_exit(), process.pid)
+    outcome = await _await_group_teardown(target.wait_for_exit(), process.pid)
+    _report_teardown(observation, unsignalable_report(outcome, process.pid))
 
 
 async def _terminate_process_with_wait(
     process: asyncio.subprocess.Process,
     *,
     policy: _TeardownPolicy,
-    is_done: cabc.Callable[[], bool],
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    target: _SettlementTarget,
+    observation: _StageObservation | None = None,
 ) -> bool:
     """Terminate a process and report whether its waiter completed.
 
     The two-phase grace is unchanged whether the run owns the child's group or
     not: the first phase asks every member of the target to exit, the second
     compels whichever of them outlived the grace period. Only the target of
-    those signals, and of the settlement they wait on, differs, and
-    :func:`_signal_child` and :func:`_settlement` are the two places that
-    decide it.
+    those signals, and of the settlement they wait on, differs.
+    :func:`~cuprum._group_teardown.signal_target_or_report` delivers to it and
+    :func:`_settlement` waits on it, so those are the two places that decide
+    which target this run has.
 
-    Settled is decided by :func:`_teardown_is_settled` rather than by *is_done*
-    alone. For an inherited-group run the two are the same question, but an
-    owning run's target is the child's whole group, and that group survives the
-    child that led it: a descendant left holding an inherited pipe is still a
-    member after the child has been reaped. Short-circuiting on the child alone
-    would leave that descendant running and the run's pipes held open, which is
-    the failure this policy exists to prevent.
+    Settled is decided by :func:`_settlement_of` rather than by *is_done* alone.
+    For an inherited-group run the two are the same question, but an owning
+    run's target is the child's whole group, and that group survives the child
+    that led it: a descendant left holding an inherited pipe is still a member
+    after the child has been reaped. Short-circuiting on the child alone would
+    leave that descendant running and the run's pipes held open, which is the
+    failure this policy exists to prevent.
+
+    *observation* is the execution this teardown is acting for, so a target
+    that could not be reached is reported against the span and the metric of
+    the run it belongs to. It defaults to ``None`` because several teardown
+    routes have no execution to correlate with — the spawn-failure and
+    abandoned-run paths reach here before any observation exists — and those
+    keep the log record without inventing an identity for the event.
 
     Returns
     -------
@@ -283,40 +231,48 @@ async def _terminate_process_with_wait(
         ``False`` has three causes the caller cannot tell apart: the target had
         already settled or gone, the signal call raised, or the grace period
         expired with it still running. Only the second is a kernel refusal, and
-        it is the one reported through :func:`_signal_child_or_report`.
+        it is the one reported through
+        :func:`~cuprum._group_teardown.signal_target_or_report`.
     """
     grace_period = max(0.0, policy.grace_period)
     owns_group = policy.owns_group_for(0)
-    if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
+    settled = _settlement_of(process, owns_group=owns_group, target=target)
+    _report_teardown(observation, unsignalable_report(settled, process.pid))
+    if settled is not _GroupProbe.MEMBERS:
         return False
-    if not _signal_child_or_report(
+    if not signal_target_or_report(
         process,
-        group_signal=signal.SIGTERM,
-        direct=process.terminate,
+        observation=observation,
         owns_group=owns_group,
+        group_signal=signal.SIGTERM,
     ):
         return False
     try:
         await asyncio.wait_for(
-            _settlement(process, wait_for_exit, owns_group=owns_group),
+            _settlement(
+                process,
+                target,
+                observation=observation,
+                owns_group=owns_group,
+            ),
             grace_period,
         )
     except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
         return await _escalate_after_grace(
             process,
-            wait_for_exit,
+            target,
+            observation=observation,
             owns_group=owns_group,
-            is_done=is_done,
         )
     return True
 
 
 async def _escalate_after_grace(
     process: asyncio.subprocess.Process,
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    target: _SettlementTarget,
     *,
+    observation: _StageObservation | None,
     owns_group: bool,
-    is_done: cabc.Callable[[], bool],
 ) -> bool:
     """Compel a target that outlived its grace period, or report it settled.
 
@@ -327,10 +283,9 @@ async def _escalate_after_grace(
     freed. An absent name is conclusive, so this ask is worth making even
     though a *live* answer here proves no more than a live answer ever could —
     it cannot tell this run's group from one the kernel has since handed the
-    number to.
-    What the ask removes is the weaker failure: escalating into a name that
-    currently answers for nobody, which is a signal at best wasted and at worst
-    aimed at whatever the kernel puts there next.
+    number to. What the ask removes is the weaker failure: escalating into a
+    name that currently answers for nobody, which is a signal at best wasted and
+    at worst aimed at whatever the kernel puts there next.
 
     Returns
     -------
@@ -338,25 +293,34 @@ async def _escalate_after_grace(
         Whether the escalation was delivered. ``False`` means the target had
         settled or gone by the time it was considered, or the escalation itself
         raised. Only the last is a kernel refusal, reported through
-        :func:`_signal_child_or_report`; the others are silent by design.
+        :func:`~cuprum._group_teardown.signal_target_or_report`; the others
+        are silent by design.
     """
-    if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
+    settled = _settlement_of(process, owns_group=owns_group, target=target)
+    _report_teardown(observation, unsignalable_report(settled, process.pid))
+    if settled is not _GroupProbe.MEMBERS:
         return False
-    if not _signal_child_or_report(
+    if not signal_target_or_report(
         process,
-        group_signal=signal.SIGKILL,
-        direct=process.kill,
+        observation=observation,
         owns_group=owns_group,
+        group_signal=signal.SIGKILL,
     ):
         return False
-    await _settle_after_escalation(process, wait_for_exit, owns_group=owns_group)
+    await _settle_after_escalation(
+        process,
+        target,
+        observation=observation,
+        owns_group=owns_group,
+    )
     return True
 
 
 async def _settle_after_escalation(
     process: asyncio.subprocess.Process,
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    target: _SettlementTarget,
     *,
+    observation: _StageObservation | None,
     owns_group: bool,
 ) -> None:
     """Reap the escalated target, bounding only the group's wait.
@@ -379,22 +343,40 @@ async def _settle_after_escalation(
     recorded only when something outside this run reaps it. Waiting for that
     without a bound is what would let a teardown run past its grace period
     forever, so the group wait is capped and outstanding members are reported
-    rather than waited on.
+    rather than waited on — with the bound that was applied, from the constant
+    that applied it, so the figure in the record cannot drift from the one the
+    wait actually used.
 
     The child is reaped before the group is probed, which also keeps the probe
     sound: a zombie still counts as a member of its group, so probing first
     would report a group that has in fact already emptied.
+
+    Both ways the capped wait can end without an emptied group are reported,
+    and they are distinct facts. The bound expiring leaves members this run
+    cannot reap; the probe being refused leaves members this run may not
+    signal. Neither is settlement, so neither may be passed over in silence.
+    ``_await_group_settlement`` reports the first as ``MEMBERS``, which is what
+    tells the two apart here without a clock of this module's own.
     """
-    await wait_for_exit()
+    await target.wait_for_exit()
     if not owns_group or process.pid is None:
         return
-    try:
-        async with asyncio.timeout(_POST_KILL_SETTLEMENT_S):
-            await _await_group_exit(process.pid)
-    except TimeoutError:
-        _LOGGER.warning(
-            "cuprum.process_group_settlement_timeout pid=%s bound_s=%s; "
-            "the group still holds members this run cannot reap",
-            process.pid,
-            _POST_KILL_SETTLEMENT_S,
+    outcome = await _await_group_settlement(process.pid)
+    if outcome is _GroupProbe.MEMBERS:
+        _report_teardown(
+            observation,
+            GroupTeardownReport.settlement_timeout(
+                process.pid,
+                settle_s=_POST_KILL_SETTLEMENT_S,
+            ),
         )
+    else:
+        _report_teardown(observation, unsignalable_report(outcome, process.pid))
+
+
+__all__ = [
+    "_escalate_after_grace",
+    "_settle_after_escalation",
+    "_settlement_of",
+    "_terminate_process_with_wait",
+]

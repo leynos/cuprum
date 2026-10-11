@@ -249,15 +249,21 @@ reach, as do ancestors and siblings. Teardown of a child that never had a pid
 falls back to the direct route, matching where `_signal_child` would signal, so
 there is no group name to probe and nothing to probe it with.
 
-## Addendum (2026-10-11): settlement is decided in `_teardown_is_settled`
+## Addendum (2026-10-11): settlement is decided in `_settlement_of`
 
 The addendum above names `_terminate_process_with_wait` as the place the
 short-circuit was corrected, and that is the function that consults the rule.
-The rule itself is stated in `_teardown_is_settled`, which the correction
-introduced in place of the bare `is_done()` the entry point evaluated before it.
+The rule itself is stated in `_settlement_of`, which the correction introduced
+in place of the bare `is_done()` the entry point evaluated before it.
 `_terminate_process_with_wait` no longer holds a settlement condition of its
 own: it reads its target's settlement from the helper, so there is no
 `is_done()` call left in that function for a later reader to inspect.
+
+The helper answers with the probe's three-way `_GroupProbe` rather than a
+boolean, so that an unsignalable group is distinguishable from an emptied one,
+and `_report_settlement` is its companion: the query reports what it found and
+the command boundary decides and logs. Keeping the two apart is what leaves the
+query assertable without a log capture.
 
 That single definition is the point rather than an implementation detail, and
 the kernel argument is why it can be stated once. The question "is this
@@ -271,8 +277,8 @@ that the run does not own keeps the `is_done()` short-circuit byte for byte.
 
 Every teardown route reaches this one helper. The pipeline cleanup path goes
 through `_terminate_all_shielded` and `_terminate_process` to
-`_terminate_process_with_wait`, the single caller of `_teardown_is_settled`, so
-a pipeline stage and a single command are settled by the same code.
+`_terminate_process_with_wait`, the single caller of `_settlement_of`, so a
+pipeline stage and a single command are settled by the same code.
 
 The mandatory `owns_group` keyword on the wait helper, and the explicit
 `owns_group=False` at every direct caller, are part of the same boundary: with
@@ -461,8 +467,9 @@ with the cardinality an operator needs.
 
 The three records, all WARNING because each reports an abnormal outcome:
 
-- ``cuprum.process_group_unsignalable`` — the probe found members this process
-  may not signal, so the group was reported unreachable rather than settled.
+- ``cuprum.process_group_unsignalable`` — the teardown command found a group
+  holding members this process may not signal, so the group was reported
+  unreachable rather than settled.
 - ``cuprum.process_group_settlement_timeout`` — the capped post-escalation group
   wait expired with members still outstanding.
 - ``cuprum.teardown_signal_failed`` — a signal the kernel refused with an

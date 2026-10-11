@@ -1531,11 +1531,11 @@ Table 1: process-group ownership modules and their responsibilities
 
 ### The liveness probe
 
-`_group_has_members(pgid)` answers a null signal to the group. The kernel keeps
-a group addressable while it has a member, so while the probe answers, the name
-— the leader's pid — names *some* live group. What it knows that the direct
-child's waiter cannot is whether a descendant is still inside the group the run
-created.
+`_probe_group(pgid)` answers a null signal to the group, reporting one of
+`_GroupProbe`'s three outcomes. The kernel keeps a group addressable while it
+has a member, so while the probe answers, the name — the leader's pid — names
+*some* live group. What it knows that the direct child's waiter cannot is
+whether a descendant is still inside the group the run created.
 
 The guarantee is one-directional, and the difference is worth stating. The
 probe is a **veto, never a licence**:
@@ -1568,9 +1568,14 @@ recycle an identifier.
 members exist that this process may not signal: neither the grace period nor
 the escalation could reach them, so waiting longer cannot settle the group and
 the probe reports it as having no reachable members. Those two answers are not
-the same, and only the permission case leaves a member running past teardown,
-so it is logged as `cuprum.process_group_unsignalable` before being reported as
-settled.
+the same, and only the permission case leaves a member running past teardown.
+`_probe_group` is a query and keeps them apart without judging them: it returns
+`EMPTY` or `UNSIGNALABLE` and leaves both the decision and the diagnostic to
+its caller. The teardown command is where the two are separated — an
+unsignalable group is logged as `cuprum.process_group_unsignalable` before
+being reported as unsettled — because moving the log into the probe would give
+a read an externally visible side-effect, and because the caller that acts on
+the answer is the one that owns the reporting.
 
 ### Observability of group teardown
 
@@ -1598,14 +1603,21 @@ reach, and why.
 
 The records, all at WARNING because each one reports an abnormal outcome:
 
-- `cuprum.process_group_unsignalable` (`_process_group.py`) — the probe found
-  members this process may not signal, so the group is reported unreachable
-  rather than settled.
-- `cuprum.process_group_settlement_timeout` (`_process_signal.py`) — the capped
+- `cuprum.process_group_unsignalable` (`_group_teardown.py`) — the teardown
+  command found a group holding members this process may not signal, so the
+  group is reported unreachable rather than settled.
+- `cuprum.process_group_settlement_timeout` (`_group_teardown.py`) — the capped
   post-`SIGKILL` wait expired with members still outstanding.
-- `cuprum.teardown_signal_failed` (`_process_signal.py`) — a signal the kernel
+- `cuprum.teardown_signal_failed` (`_group_teardown.py`) — a signal the kernel
   refused with an `OSError` wider than the tolerated race, naming the signal so
   a refused graceful signal is distinguishable from a refused escalation.
+
+The first two are emitted only for a run that owns its group, since only an
+owned group can be left unreachable or unsettled. The third is emitted on both
+routes: a refused signal is reported for a direct child as well, because the
+wrapper is shared and the default policy is the one that inherits. Both are
+reported through `_group_teardown.py`, which owns the report, the log record,
+and the `group_teardown` observe event together.
 
 The last of those is the subtle one, and the reason `_signal_child_or_report`
 exists as a wrapper rather than the two signal sites each growing their own
@@ -1631,15 +1643,26 @@ latter itself before the wrapper could see it.
 
 ### Settlement
 
-`_teardown_is_settled` decides whether a teardown target has anything left to
-signal, and it is the one place that decision is made. An owning run asks the
-group probe; a run that does not own its group, and a child that never had a
-pid, keep the `is_done()` short-circuit byte for byte. Every teardown route
-reads this helper, and it is `_terminate_process_with_wait` that reads it —
-including for the pipeline stages, which reach that function through
-`_terminate_all_shielded` and `_terminate_process`. The rule is stated once, in
-the helper, so the entry point holds no settlement condition of its own to
-audit.
+`_settlement_of` decides whether a teardown target has anything left to signal,
+and it is the one place that decision is made. An owning run asks the group
+probe; a run that does not own its group, and a child that never had a pid,
+keep the `is_done()` short-circuit byte for byte. Every teardown route reads
+this helper, and it is `_terminate_process_with_wait` that reads it — including
+for the pipeline stages, which reach that function by two different chains:
+partial-spawn, timeout, and error cleanup arrive through
+`_terminate_all_shielded` and `_terminate_process`, while fail-fast arrives
+through `_terminate_pipeline_remaining_stages` and
+`_terminate_process_via_wait_task`. The rule is stated once, in the helper, so
+the entry point holds no settlement condition of its own to audit.
+
+The answer is the probe's three-way `_GroupProbe` rather than a boolean, and
+`_report_settlement` is the companion that reports it. Splitting observation
+from reporting is what keeps the query free of side-effects: a query that logs
+cannot be asserted on independently of a log capture, and it makes an
+environmental permission failure look like an answer about the group. The
+command boundary calls the two in sequence — query, report, then act on the
+answer — in `_terminate_process_with_wait`, `_escalate_after_grace`, and
+`_settle_after_escalation`.
 
 `_await_group_exit` polls because a process group has no completion event to
 await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`
@@ -1979,6 +2002,30 @@ have succeeded into a failure. `cuprum/unittests/test_pump_observation.py` and
 `cuprum/_pipeline_wait.py` splits completion handling on the same command-query
 line, so the fail-fast ordering rules can be verified without processes or a
 clock.
+
+The seam is also a module boundary. `cuprum/_pipeline_wait_state.py` owns the
+pure `_PipelineWaitState` transition — the command, the query, and the
+`from_processes` constructor that builds the wait tasks — while
+`cuprum/_pipeline_wait.py` owns the asyncio orchestration around it
+(`_wait_for_pipeline`, `_process_completed_task`, and the `asyncio.wait` batch
+tie-break below). The class is imported into `_pipeline_wait.py` from the state
+module rather than defined there, and that import is the compatibility surface:
+existing importers — including `_pipeline_wait_records.py` and the symbolic,
+state-machine, and async test modules — keep reaching `_PipelineWaitState`
+through `cuprum._pipeline_wait`, so the split moved the definition without
+moving the import target. New code should import it from
+`cuprum._pipeline_wait_state` directly; the `_pipeline_wait` name is retained
+for callers and tests written before the split, not as the preferred entry
+point.
+
+The split has two reasons, and they reinforce each other. The first is
+verification: the state module has no I/O, no signals, and no clock of its own,
+which is what lets Hypothesis and CrossHair drive it directly, and folding it
+back into `_pipeline_wait.py` would put it behind the asyncio machinery those
+tools cannot cheaply exercise. The second is module size: `_pipeline_wait.py`
+had grown to 415 lines against the repository's 400-line `max-module-lines`
+limit, so the seam drawn on the command-query line is also the line the
+decomposition had to follow. See the addendum to ADR-007.
 
 - `_PipelineWaitState.record_completion(completed_idx, exit_code, *, ended_at)`
   is a **command**. It writes the completed stage's exit code and the injected
@@ -6709,7 +6756,7 @@ terminate on its deadline under both policies; the shield only shortens the
 path to that termination under `OWN_GROUP`.
 
 Expiry takes the ordinary error route rather than a special one:
-`_settle_group_and_discard_consumers` settles the group — precisely what
+`_settle_group_and_reconcile_consumers` settles the group — precisely what
 releases the pipes the descendant held — before `_handle_stream_timeout` raises
 the internal `_SubprocessTimeoutError`, which `_subprocess_execution.py`
 converts into the public `TimeoutExpired` just as it does for a deadline
@@ -6722,9 +6769,9 @@ follows a cancellation in any of them is **one** shielded unit.
 `_shielded_cleanup` finishes its task and then re-raises the caller's
 cancellation, so two sequential shielded calls are not one shielded sequence: a
 second cancel arriving during the group settlement would exit before
-reconciliation was ever awaited. `_settle_group_and_discard_consumers` composes
-the two phases into a single coroutine held under one shield for exactly that
-reason.
+reconciliation was ever awaited. `_settle_group_and_reconcile_consumers`
+composes the two phases into a single coroutine held under one shield for
+exactly that reason.
 
 That cleanup reconciles **every** task the run still owns, not the consumers
 alone, because a cancellation can arrive before the writer was ever awaited.
@@ -6734,16 +6781,22 @@ there is no group signal to release it at all. The phase therefore calls
 `_reconcile_run_tasks`, which stops the monitor, cancels and collects the stdin
 writer, drains the consumers, and settles the diagnostics.
 
-The drain boundary carries an important teardown policy. Only the timeout path
-passes `capture=True`, allowing the fixed `_CAPTURE_EOF_GRACE_S` window to
-preserve text that is about to arrive at EOF. Cancellation, stdin-writer
-failure, and consumer-failure cleanup pass `capture=False`, so they cancel and
-settle promptly without waiting for that window or retaining output. The
-timeout and cancellation reconciliations run under `_shielded_cleanup`; if
-cancellation arrives during capture grace, both consumer tasks are settled
-before `CancelledError` is re-raised. Keep these choices at the drain boundary:
-moving capture draining into generic cleanup changes both timeout output and
-cancellation latency.
+The drain boundary carries an important teardown policy. The routes that reach
+the caller as a `TimeoutExpired` pass `capture=True`, allowing the fixed
+`_CAPTURE_EOF_GRACE_S` window to preserve text that is about to arrive at EOF.
+There are two such routes, and they must agree: a deadline expiring during the
+*exit wait* drains from `_wait_for_streamed_process_exit`, and one expiring
+*after* the child has exited — in the post-exit boundary the module docstring
+describes — drains from `_settle_group_and_reconcile_consumers`. Both pass
+`execution.capture` and hand the drained text to `_handle_stream_timeout`, so a
+capturing run reports its output whichever half of the run the deadline landed
+in. Cancellation, stdin-writer failure, and consumer-failure cleanup pass
+`capture=False`, so they cancel and settle promptly without waiting for that
+window or retaining output. The timeout and cancellation reconciliations run
+under `_shielded_cleanup`; if cancellation arrives during capture grace, both
+consumer tasks are settled before `CancelledError` is re-raised. Keep these
+choices at the drain boundary: moving capture draining into generic cleanup
+changes both timeout output and cancellation latency.
 
 All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,

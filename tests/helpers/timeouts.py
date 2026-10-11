@@ -156,7 +156,13 @@ def pipe_holding_child_argv(
 # Joined with newlines rather than the semicolons the one-statement sources
 # above use, because this child needs a loop and the compound-statement form
 # cannot be written on one line. The indentation is part of the source.
-_DESCENDANT_THEN_EXIT_SOURCE = "\n".join((
+#
+# A caller may have the child announce itself on stdout first. That write is
+# placed ahead of the spawn so it is already sitting in the run's capture
+# buffer by the time the leader exits: a capturing run that goes on to time out
+# over the descendant still holds text to report, which is what distinguishes a
+# payload-preserving expiry from one that discards.
+_DESCENDANT_THEN_EXIT_LINES = (
     "import pathlib, subprocess, sys, time",
     "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])",
     "target = pathlib.Path(sys.argv[2])",
@@ -164,13 +170,14 @@ _DESCENDANT_THEN_EXIT_SOURCE = "\n".join((
     "while not target.exists() and time.monotonic() < deadline:",
     "    time.sleep(0.01)",
     "sys.exit(int(sys.argv[3]))",
-))
+)
 
 
 def descendant_then_exit_argv(
     pid_file: Path,
     *,
     exit_code: int,
+    stdout_marker: str | None = None,
 ) -> tuple[str, ...]:
     """Return ``-c`` argv for a child that leaves a pipe-holding descendant behind.
 
@@ -188,15 +195,32 @@ def descendant_then_exit_argv(
     exit_code:
         Status the child exits with, so a caller can choose between a failing
         stage and a successful one that merely left work behind.
+    stdout_marker:
+        When given, a line the child writes to stdout and flushes before it
+        spawns anything. The text is therefore already readable by the run
+        well before the deadline it may go on to overrun.
 
     Returns
     -------
     tuple[str, ...]
         ``-c`` argv, ready to spread into a spawn call.
     """
+    announce = (
+        ()
+        if stdout_marker is None
+        else (
+            f"sys.stdout.write({stdout_marker!r} + chr(10))",
+            "sys.stdout.flush()",
+        )
+    )
+    lines = (
+        *_DESCENDANT_THEN_EXIT_LINES[:1],
+        *announce,
+        *_DESCENDANT_THEN_EXIT_LINES[1:],
+    )
     return (
         "-c",
-        _DESCENDANT_THEN_EXIT_SOURCE,
+        "\n".join(lines),
         _GRANDCHILD_SOURCE,
         str(pid_file),
         str(exit_code),

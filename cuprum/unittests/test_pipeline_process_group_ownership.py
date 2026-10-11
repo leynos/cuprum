@@ -321,17 +321,19 @@ def test_an_exited_owned_stage_still_reaches_its_live_group(
     group holds the inherited pipes open.
 
     The group name is the reaped leader's pid, so the probe that decides this
-    must itself be safe — and it is, because the kernel keeps a group
-    addressable while it has a member, so a name that still answers cannot have
-    been recycled. Signalling it therefore reaches this run's own descendant
-    rather than the stranger the old blanket short-circuit feared.
+    has to be safe to act on. It is a veto and not a licence: a name that has
+    stopped answering is conclusive — the group is empty — while a name that
+    still answers proves only that *some* group holds the number, which is all
+    the signal needs to be worth sending. The reuse windows that leaves are
+    recorded in ``cuprum._process_signal``.
     """
     doubles = [_RecordingProcess(7005)]
     doubles[0].returncode = 0
     group_signals: list[tuple[int, int]] = []
-    # A group stays addressable while it holds a member, which is what makes
-    # the probe safe. Model a member that ignores SIGTERM, so the probe keeps
-    # answering until the escalation empties the group.
+    # Model a member that ignores SIGTERM, so the probe keeps answering until
+    # the escalation empties the group. A live answer only shows that *some*
+    # group holds the number — it does not authenticate the group as this
+    # run's — but that is enough: the probe vetoes, it never licenses.
     is_live = True
 
     def live_group_killpg(pgid: int, sig: int) -> None:

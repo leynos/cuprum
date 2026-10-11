@@ -18,6 +18,7 @@ from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
 from cuprum.events import (
     ExecEvent,
     ExecPhase,
+    GroupTeardownOutcome,
     ResourceUsageMode,
     TerminalOutcome,
     TimeoutMode,
@@ -97,6 +98,12 @@ class _EventDetails:
     user_cpu_seconds: float | None = None
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
+    # Appended so every existing positional construction keeps its slots; see
+    # the note on ``ExecEvent``. ``group_outcome`` is the closed enum rather
+    # than a string because it labels a bounded metric.
+    owns_group: bool | None = None
+    group_outcome: GroupTeardownOutcome | None = None
+    settle_s: float | None = None
 
 
 @dc.dataclass(slots=True)
@@ -175,6 +182,9 @@ class _StageObservation:
             user_cpu_seconds=details.user_cpu_seconds,
             system_cpu_seconds=details.system_cpu_seconds,
             resource_usage_mode=details.resource_usage_mode,
+            owns_group=details.owns_group,
+            group_outcome=details.group_outcome,
+            settle_s=details.settle_s,
             env_mode=self.env_mode,
         )
         self._emit_event(event)

@@ -18,6 +18,7 @@ import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum._process_lifecycle import (
+    _StageHandle,
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
 )
@@ -289,12 +290,17 @@ def test_fail_fast_teardown_completes_despite_caller_cancellation() -> None:
         task = asyncio.create_task(
             _terminate_pipeline_remaining_stages(
                 [
-                    typ.cast("asyncio.subprocess.Process", failed),
-                    typ.cast("asyncio.subprocess.Process", survivor),
+                    _StageHandle(
+                        process=typ.cast("asyncio.subprocess.Process", failed),
+                        wait_task=wait_tasks[0],
+                    ),
+                    _StageHandle(
+                        process=typ.cast("asyncio.subprocess.Process", survivor),
+                        wait_task=wait_tasks[1],
+                    ),
                 ],
-                wait_tasks,
-                0,
                 _TeardownPolicy(0.2),
+                0,
             )
         )
         await survivor.signalled.wait()

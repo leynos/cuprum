@@ -20,7 +20,8 @@ import pytest
 from cuprum._process_group import (
     _await_group_exit,
     _await_group_teardown,
-    _group_has_members,
+    _GroupProbe,
+    _probe_group,
 )
 
 # The probe is a POSIX process-group probe; there is no group to ask about
@@ -45,7 +46,7 @@ def test_a_live_leaders_group_still_has_members() -> None:
     """The probe reports a group whose leader is running."""
     leader = _spawn_blocking_session_leader()
     try:
-        assert _group_has_members(leader.pid), (
+        assert _probe_group(leader.pid) is _GroupProbe.MEMBERS, (
             "a running session leader's group must report members"
         )
     finally:
@@ -63,24 +64,57 @@ def test_a_group_whose_members_have_gone_has_none() -> None:
     leader = _spawn_blocking_session_leader()
     leader.kill()
     leader.wait()
-    assert not _group_has_members(leader.pid), "a reaped group must report no members"
+    assert _probe_group(leader.pid) is _GroupProbe.EMPTY, (
+        "a reaped group must report no members"
+    )
 
 
 def test_members_this_process_may_not_signal_are_not_awaited(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An unreachable group reports settled, because waiting cannot reach it.
+    """An unreachable group reports its own outcome, and does not sleep on it.
 
     ``killpg`` raising ``PermissionError`` means members exist that neither the
     grace period nor the ``SIGKILL`` escalation could signal. Treating that as
     "still running" would make teardown wait out a process it can never end, so
-    the probe reports the group as having nothing left to wait for.
+    the wait returns on the first such probe.
 
-    Settled and gone are not the same answer, though, and only this one leaves
-    a member running past the teardown. The probe therefore says which of the
-    two it found, so a clean-looking teardown can still be traced to a group
-    that outlived it.
+    It must not answer "empty" either. Both outcomes stop the wait, but only an
+    emptied group means nothing outlived the teardown, so the probe keeps the
+    two apart and the *caller* decides what to report. That is what leaves this
+    query free of the logging side-effect an observation of the environment
+    would otherwise carry.
+    """
+
+    def unreachable(pgid: int, sig: int) -> None:
+        """Stand in for a group owned by another user."""
+        del pgid, sig
+        raise PermissionError
+
+    async def run_case() -> None:
+        """Await an unreachable group, which must not be waited on."""
+        monkeypatch.setattr(os, "killpg", unreachable)
+        assert _probe_group(1234) is _GroupProbe.UNSIGNALABLE, (
+            "a group this process cannot signal is neither absent nor signalled"
+        )
+        assert await asyncio.wait_for(_await_group_exit(1234), timeout=1.0) is (
+            _GroupProbe.UNSIGNALABLE
+        ), "waiting on an unreachable group cannot settle it, so it must not hang"
+
+    asyncio.run(run_case())
+
+
+def test_the_probe_reports_an_unsignalled_group_without_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The probe answers, and the reporting is left to the teardown command.
+
+    A query that logs is a query with an externally visible side-effect, and it
+    makes the outcome it reports impossible to assert on independently of a log
+    capture. The diagnostic therefore belongs to the command boundary that acts
+    on the answer — see
+    ``test_report_settlement_*`` in ``test_process_signal_failure_reporting``.
     """
 
     def unreachable(pgid: int, sig: int) -> None:
@@ -89,16 +123,12 @@ def test_members_this_process_may_not_signal_are_not_awaited(
         raise PermissionError
 
     monkeypatch.setattr(os, "killpg", unreachable)
-    with caplog.at_level(logging.WARNING, logger="cuprum._process_group"):
-        assert not _group_has_members(1234), (
-            "a group this process cannot signal must not be awaited"
-        )
+    with caplog.at_level(logging.DEBUG, logger="cuprum._process_group"):
+        assert _probe_group(1234) is _GroupProbe.UNSIGNALABLE
 
-    assert any(
-        "process_group_unsignalable" in record.getMessage() for record in caplog.records
-    ), (
-        "an unsignalable group must be reported rather than passed over "
-        f"silently, got {caplog.messages}"
+    assert not caplog.records, (
+        "the probe must report its answer to its caller rather than to a log; "
+        f"it emitted {caplog.messages}"
     )
 
 
@@ -126,7 +156,7 @@ def test_the_wait_returns_once_the_group_empties() -> None:
             leader.wait()
 
         try:
-            assert _group_has_members(leader.pid), (
+            assert _probe_group(leader.pid) is _GroupProbe.MEMBERS, (
                 "the group must start with a member, or this test proves nothing"
             )
             killer = asyncio.get_running_loop().call_later(
@@ -137,7 +167,7 @@ def test_the_wait_returns_once_the_group_empties() -> None:
                 await asyncio.wait_for(_await_group_exit(leader.pid), timeout=10.0)
             finally:
                 killer.cancel()
-            assert not _group_has_members(leader.pid), (
+            assert _probe_group(leader.pid) is _GroupProbe.EMPTY, (
                 "the wait must not return until the group has emptied"
             )
         finally:
@@ -176,7 +206,7 @@ def test_a_failing_child_wait_leaves_no_group_poller_behind() -> None:
                     _await_group_teardown(failing_exit(), leader.pid),
                     timeout=10.0,
                 )
-            assert _group_has_members(leader.pid), (
+            assert _probe_group(leader.pid) is _GroupProbe.MEMBERS, (
                 "the group must still be open, or this test cannot observe a "
                 "stranded poller"
             )

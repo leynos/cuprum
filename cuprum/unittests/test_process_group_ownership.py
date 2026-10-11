@@ -21,7 +21,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _process_signal
+from cuprum import _group_teardown, _process_group
 from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
@@ -142,12 +142,17 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
                 "an unowned teardown must not reach the grandchild"
             )
         finally:
-            os.killpg(run.process.pid, signal.SIGKILL)
-            await asyncio.to_thread(
-                wait_for_process_death,
-                run.grandchild_pid,
-                context="grandchild cleanup",
-            )
+            # Guarded because the leader is already reaped: if the assertion
+            # above failed because the grandchild had gone, the group is empty
+            # and an unguarded ``killpg`` would raise ``ProcessLookupError`` and
+            # replace the assertion failure with its own report.
+            if process_is_running(run.grandchild_pid):
+                _kill_ignoring_missing(run.process.pid, group=True)
+                await asyncio.to_thread(
+                    wait_for_process_death,
+                    run.grandchild_pid,
+                    context="grandchild cleanup",
+                )
             os.kill(run.unrelated_pid, signal.SIGKILL)
             await asyncio.to_thread(
                 wait_for_process_death,
@@ -196,7 +201,9 @@ def test_owned_teardown_reaches_a_group_its_reaped_leader_left_behind(
     stays behind in the group the child led — and the child is reaped by the
     time teardown starts, so a check on the direct child alone would call the
     run settled and never signal the group at all. The kernel keeps the group
-    addressable while that member lives, so the name is still this run's.
+    addressable while that member lives, so the signal has somewhere to land;
+    a live answer cannot prove that group is this run's, but the probe only
+    ever vetoes, so an addressable name is all the teardown needs.
     """
 
     async def run_case() -> None:
@@ -364,17 +371,20 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
         # complete without ever suspending, which would settle the run on the
         # first phase and skip the bounded wait this test exists to pin.
         started = time.monotonic()
-        with caplog.at_level(logging.WARNING, logger=_process_signal.__name__):
+        # The reporting module writes this record, not the module that decided
+        # to signal: binding here to ``_process_signal`` would capture nothing
+        # and the assertion below would fail for the wrong reason.
+        with caplog.at_level(logging.WARNING, logger=_group_teardown.__name__):
             await _terminate_all_shielded(
                 (process,),
                 _TeardownPolicy(0.1, owns_group=True),
             )
         return time.monotonic() - started
 
-    # Patched where it is looked up rather than where it is defined: the
-    # teardown calls the name it imported, so patching the defining module
-    # would leave the real poll loop running and the test would pass on it.
-    monkeypatch.setattr(_process_signal, "_await_group_exit", refusing_group_wait)
+    # The cap lives with the poll it bounds, so the double replaces the poll
+    # itself: patching a name the capped wrapper does not call would leave the
+    # real loop running and this test would pass without the bound engaging.
+    monkeypatch.setattr(_process_group, "_await_group_exit", refusing_group_wait)
 
     async def run_case() -> None:
         """Escalate against a group that will never settle."""

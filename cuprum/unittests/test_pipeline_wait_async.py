@@ -29,15 +29,30 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_wait import _PipelineWaitState
+    from cuprum._process_lifecycle import _StageHandle
 
 
 class _TerminationProcess:
-    """Process double that confirms termination by completing its wait future."""
+    """Process double that confirms termination by completing its wait future.
 
-    def __init__(self, waiter: asyncio.Future[int], order: list[str]) -> None:
+    The pid is present because teardown reads it: a refusal is reported against
+    the execution whose process was signalled, and an owning run's probe names
+    the group by it. A double without one raises on that read, and the teardown
+    gather absorbs the exception into a ``False`` outcome — so the absence would
+    show up as a target that merely 'did not settle' rather than as the missing
+    attribute it is.
+    """
+
+    def __init__(
+        self,
+        waiter: asyncio.Future[int],
+        order: list[str],
+        pid: int = 4321,
+    ) -> None:
         """Keep the wait future and shared event order for this process."""
         self._waiter = waiter
         self._order = order
+        self.pid = pid
         self.terminate_calls = 0
         self.kill_calls = 0
 
@@ -150,18 +165,12 @@ async def _run_late_settled_termination(
         return targets
 
     async def capture_outcomes(
-        processes: list[asyncio.subprocess.Process],
-        wait_tasks: list[asyncio.Task[int]],
-        failure_index: int,
+        stages: cabc.Sequence[_StageHandle],
         policy: _TeardownPolicy,
+        failure_index: int,
     ) -> tuple[bool, ...]:
         """Run the real teardown and retain each selected target outcome."""
-        result = await terminate_stages(
-            processes,
-            wait_tasks,
-            failure_index,
-            policy,
-        )
+        result = await terminate_stages(stages, policy, failure_index)
         outcomes.append(result)
         return result
 

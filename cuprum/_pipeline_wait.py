@@ -70,6 +70,7 @@ from cuprum._pipeline_wait_state import _PipelineWaitState
 from cuprum._process_lifecycle import (
     _cleanup_pipeline_on_error,
     _has_stages_to_terminate,
+    _StageHandle,
     _terminate_pipeline_remaining_stages,
 )
 
@@ -96,10 +97,18 @@ async def _terminate_and_report(
     )
     started = perf_counter()
     termination_outcomes = await _terminate_pipeline_remaining_stages(
-        processes,
-        state.wait_tasks,
-        fields.stage_index,
+        [
+            _StageHandle(
+                process=process,
+                wait_task=wait_task,
+                observation=state.observation(index),
+            )
+            for index, (process, wait_task) in enumerate(
+                zip(processes, state.wait_tasks, strict=True)
+            )
+        ],
         policy,
+        fields.stage_index,
     )
     _report_completion_event(
         observation,
@@ -248,6 +257,7 @@ async def _wait_for_pipeline(
             processes,
             pipe_tasks,
             policy,
+            observations=state.observations,
         )
         await asyncio.gather(*state.wait_tasks, return_exceptions=True)
         raise
