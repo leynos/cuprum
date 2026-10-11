@@ -10,144 +10,59 @@ opened" and "cuprum closed a descriptor it did not open" are indistinguishable
 from the child's exit code; only the caller's own use of a borrowed resource
 afterwards tells them apart, which is why every borrowed case here writes to
 its descriptor *after* the run.
+
+The execution and spawn axes, the borrowed-versus-owned fixtures, and the child
+programs live in ``_stdio_redirect_support``, shared with the standard-stream
+ownership suite that exercises the same two axes.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import io
 import os
 import typing as typ
 
 import pytest
 
-from cuprum import _wait4_process
 from cuprum.sh import RunOutputOptions, StdioTarget
-from tests.helpers.catalogue import python_builder as build_python_builder
+from cuprum.unittests._stdio_redirect_support import (
+    _NEVER_EXITS,
+    _READ_BACK_STDERR,
+    _WRITE_BOTH,
+    _WRITE_STDOUT,
+    _WRITE_THEN_FAIL,
+    DescriptorLog,
+    _assert_no_descriptor_leak,
+    _posix_only,
+    _redirect_options,
+    execution_strategy,
+    python_builder,
+    refusing_spawn,
+    spawn_backend,
+    target_descriptor_log,
+)
+
+# The fixtures are re-exported into this module's namespace on purpose: pytest
+# resolves a fixture by looking the name up in the test module, whether it
+# arrives as a parameter or as the string in a ``usefixtures`` marker. Naming
+# them here says so, and keeps a name that is only ever a parameter -- or only
+# ever a marker string -- from being read as an unused import.
+__all__ = [
+    "DescriptorLog",
+    "execution_strategy",
+    "python_builder",
+    "refusing_spawn",
+    "spawn_backend",
+    "target_descriptor_log",
+]
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum.sh import CommandResult, LineStream, SafeCmd
-    from tests.helpers.execution import ExecuteFn, _RunKwargs
-
-
-_WRITE_STDOUT = "import sys; sys.stdout.write('out\\n'); sys.stdout.flush()"
-_WRITE_STDERR = "import sys; sys.stderr.write('err\\n'); sys.stderr.flush()"
-_WRITE_BOTH = f"{_WRITE_STDOUT}; {_WRITE_STDERR}"
-_WRITE_THEN_FAIL = f"{_WRITE_BOTH}; raise SystemExit(3)"
-
-# The child reports the contents of the descriptor it was handed on fd 2 onto
-# its own stdout, which is where the line stream can see it. A report sent back
-# on stderr would travel through the very descriptor under test.
-_READ_BACK_STDERR = (
-    "import os, sys; os.lseek(2, 0, 0); sys.stdout.write(os.read(2, 4096).decode())"
-)
-
-# Only POSIX descriptor semantics are asserted: on Windows a "borrowed
-# descriptor" is a CRT file descriptor, whose inheritance and reuse rules are a
-# different contract that this change does not claim to implement.
-_posix_only = pytest.mark.skipif(
-    os.name != "posix",
-    reason="asserts POSIX descriptor inheritance and ownership",
-)
-
-
-def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
-    """Execute a SafeCmd using the async run() method."""
-    return asyncio.run(cmd.run(**kwargs))
-
-
-def _execute_sync(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
-    """Execute a SafeCmd using the sync run_sync() method."""
-    return cmd.run_sync(**kwargs)
-
-
-@pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
-def execution_strategy(request: pytest.FixtureRequest) -> tuple[str, ExecuteFn]:
-    """Provide parameterized execution strategies for run() and run_sync().
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        The injected fixture request whose ``param`` selects the asynchronous
-        or synchronous execution strategy returned here.
-
-    Returns
-    -------
-    tuple[str, ExecuteFn]
-        The strategy label and its execution callable.
-    """
-    if request.param == "async":
-        return ("async", _execute_async)
-    return ("sync", _execute_sync)
-
-
-@pytest.fixture(params=["wait4", "asyncio"], ids=["wait4", "asyncio"])
-def spawn_backend(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> str:
-    """Select the backend a direct command is spawned through.
-
-    A direct command has two spawn routes, chosen inside the backend by
-    ``wait4_resource_measurement_available``: the ``wait4`` reaper, which is
-    the only one that can return the child's own resource usage, and
-    asyncio's ``create_subprocess_exec`` transport. The choice is made
-    *below* the stdio mapping this module tests, and the two routes receive
-    the identical three stdio values, so this axis establishes that the
-    ownership and flush rules hold on both rather than on the one a Linux
-    machine happens to prefer.
-
-    The value returned is the label, useful in assertion messages; the
-    selection is a side effect of requesting the fixture.
-
-    Returns
-    -------
-    str
-        ``"wait4"`` or ``"asyncio"``, naming the route under test.
-    """
-    if request.param == "asyncio":
-        # ``spawn_direct_process`` reads this at call time, so patching it
-        # selects the fallback for this test alone. Patching the dispatch
-        # itself would replace the branch under test.
-        monkeypatch.setattr(
-            _wait4_process, "wait4_resource_measurement_available", lambda: False
-        )
-    return str(request.param)
-
-
-@pytest.fixture
-def python_builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a SafeCmd builder for the current Python interpreter.
-
-    Returns
-    -------
-    collections.abc.Callable[..., SafeCmd]
-        A builder that creates SafeCmd instances for the running interpreter.
-    """
-    return build_python_builder()
-
-
-def _redirect_options(
-    stdout: StdioTarget | None = None, stderr: StdioTarget | None = None
-) -> RunOutputOptions:
-    """Build options that redirect both streams, leaving capture off.
-
-    Capture reads a parent-side pipe, so it is incompatible with a redirected
-    stream and must be disabled for these runs; ``RunOutputOptions`` rejects
-    the combination rather than silently choosing one.
-
-    Returns
-    -------
-    RunOutputOptions
-        Options naming the given targets for stdout and stderr, with capture
-        off. An argument left ``None`` leaves that stream at its unset default,
-        which resolves to a library-owned pipe.
-    """
-    return RunOutputOptions(capture=False, stdout=stdout, stderr=stderr)
+    from cuprum.sh import LineStream, SafeCmd
+    from tests.helpers.execution import ExecuteFn
 
 
 @_posix_only
@@ -174,94 +89,19 @@ def test_path_target_receives_the_children_bytes(
     )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class DescriptorLog:
-    """Descriptors cuprum opened for one path target, and those closed again."""
-
-    opened: list[int]
-    closed: list[int]
-
-
-@pytest.fixture
-def target_descriptor_log(
-    monkeypatch: pytest.MonkeyPatch,
-) -> cabc.Callable[[Path], DescriptorLog]:
-    """Track descriptor opens and closes for a named owned path.
-
-    Both hooks are process-wide, so they also see asyncio's own pipe
-    descriptors and the interpreter's file writes; narrowing to the descriptors
-    opened *for this target* is what makes the comparison mean what it says. A
-    leaked target descriptor still fails, since it is counted as opened and then
-    never appears among the closes.
-
-    Returns
-    -------
-    collections.abc.Callable[[Path], DescriptorLog]
-        A starter that installs the hooks for one target path and returns the
-        log they fill for it.
-    """
-
-    def track(log: Path) -> DescriptorLog:
-        """Install the hooks and return the lists they fill."""
-        opened: list[int] = []
-        closed: list[int] = []
-        real_open = os.open
-        real_close = os.close
-
-        def tracking_open(path: object, flags: int, *args: object) -> int:
-            """Open the file, recording a descriptor the target owns."""
-            fd = real_open(path, flags, *args)  # ty: ignore[invalid-argument-type]
-            if str(path) == str(log):
-                opened.append(fd)
-            return fd
-
-        def tracking_close(fd: int) -> None:
-            """Close a descriptor, recording it when the target opened it."""
-            if fd in opened:
-                closed.append(fd)
-            real_close(fd)
-
-        monkeypatch.setattr(os, "open", tracking_open)
-        monkeypatch.setattr(os, "close", tracking_close)
-        return DescriptorLog(opened, closed)
-
-    return track
-
-
-def _assert_no_descriptor_leak(descriptors: DescriptorLog) -> None:
-    """Fail unless the target was opened and every open was matched by a close.
-
-    Reopening the file and checking it is a regular file would not show this:
-    both a closed and a leaked descriptor leave the path intact. Only counting
-    the closes against the opens distinguishes them.
-    """
-    assert descriptors.opened, "the path target must actually have been opened"
-    assert sorted(descriptors.closed) == sorted(descriptors.opened), (
-        "every descriptor cuprum opened for the target must be closed again; "
-        f"opened={descriptors.opened} closed={descriptors.closed}"
-    )
-
-
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_path_target_does_not_leak_the_descriptor(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
     target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
-    *,
-    spawn_backend: str,
 ) -> None:
     """Cuprum's copy of a path descriptor is closed once the child has it.
 
     The run is observed from the spawn layer, which is the only place the
     descriptor exists: :func:`_spawn_subprocess` opens it, hands it to the
     child, and closes its own copy.
-
-    ``spawn_backend`` is requested for its side effect rather than its value,
-    so it is keyword-only: the ownership rule must hold on both routes, but
-    neither the label nor the choice is read here. Five positional parameters
-    would exceed the configured limit, and the four that are read positionally
-    are the ones the case is about.
     """
     _, execute = execution_strategy
     log = tmp_path / "out.log"
@@ -346,10 +186,10 @@ def test_partial_owned_open_closes_what_it_already_opened(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_redirected_stream_is_not_captured(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """A redirected stream reaches no parent-side pipe, so capture sees nothing."""
@@ -373,10 +213,10 @@ def test_redirected_stream_is_not_captured(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_inherit_target_leaves_the_parent_stream_alone(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     """An inherited stdout is the parent's own stream, not a pipe cuprum reads.
@@ -409,10 +249,10 @@ def test_inherit_target_leaves_the_parent_stream_alone(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_borrowed_descriptor_survives_the_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """Cuprum never closes a descriptor it borrowed.
@@ -444,10 +284,10 @@ def test_borrowed_descriptor_survives_the_run(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_borrowed_file_object_is_flushed_before_spawn(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
     tmp_path: Path,
 ) -> None:
     """A borrowed file object's buffered bytes are visible to the child.
@@ -554,7 +394,7 @@ def test_path_target_closed_after_a_timeout(
     """A timed-out run still closes the descriptor cuprum opened."""
     _, execute = execution_strategy
     log = tmp_path / "out.log"
-    command = python_builder("-c", "import time; time.sleep(30)")
+    command = python_builder("-c", _NEVER_EXITS)
     descriptors = target_descriptor_log(log)
 
     with pytest.raises(TimeoutError):
@@ -573,13 +413,12 @@ def test_path_target_closed_after_a_timeout(
 
 
 @_posix_only
+@pytest.mark.usefixtures("refusing_spawn")
 def test_path_target_closed_after_a_spawn_failure(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
     target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
-    *,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A spawn that raised still closes the descriptor cuprum opened for it.
 
@@ -594,16 +433,6 @@ def test_path_target_closed_after_a_spawn_failure(
     log = tmp_path / "out.log"
     command = python_builder("-c", _WRITE_STDOUT)
     descriptors = target_descriptor_log(log)
-
-    def refuse_to_spawn(*_: object, **__: object) -> typ.NoReturn:
-        """Fail the spawn the way a missing executable does."""
-        message = "missing"
-        raise FileNotFoundError(message)
-
-    # Patched at the backend's spawn entry point, which is the last statement
-    # inside the ``try``. Replacing the executor's ``_spawn_subprocess`` would
-    # swap out the whole body, including the ``finally`` under test.
-    monkeypatch.setattr(_wait4_process, "spawn_direct_process", refuse_to_spawn)
 
     with pytest.raises(FileNotFoundError):
         execute(command, {"output": _redirect_options(stdout=StdioTarget.path(log))})
@@ -643,10 +472,10 @@ def test_both_streams_can_be_redirected_at_once(
 
 
 @_posix_only
+@pytest.mark.usefixtures("spawn_backend")
 def test_pipe_target_still_captures(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
 ) -> None:
     """An explicit pipe target keeps capture working, proving the rule is a boundary.
 
@@ -787,7 +616,7 @@ def test_borrowed_descriptor_survives_a_timeout(
     log = tmp_path / "borrowed.log"
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     try:
-        command = python_builder("-c", "import time; time.sleep(30)")
+        command = python_builder("-c", _NEVER_EXITS)
 
         with pytest.raises(TimeoutError):
             execute(
@@ -810,9 +639,9 @@ def test_borrowed_descriptor_survives_a_timeout(
 
 
 @_posix_only
+@pytest.mark.usefixtures("refusing_spawn")
 def test_borrowed_descriptor_survives_a_spawn_failure(
     python_builder: cabc.Callable[..., SafeCmd],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """A spawn that never happened leaves the caller's descriptor alone.
@@ -827,18 +656,6 @@ def test_borrowed_descriptor_survives_a_spawn_failure(
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     try:
         command = python_builder("-c", _WRITE_STDOUT)
-
-        def refuse_to_spawn(*_: object, **__: object) -> typ.NoReturn:
-            """Fail the spawn the way a missing executable does."""
-            message = "missing"
-            raise FileNotFoundError(message)
-
-        # Patched at the backend's own spawn entry point, which is the last
-        # statement inside ``_spawn_subprocess``'s ``try``. Patching the
-        # executor's ``_spawn_subprocess`` instead would replace the whole
-        # body — including the ``finally`` under test — so the run would never
-        # reach the close this case exists to observe.
-        monkeypatch.setattr(_wait4_process, "spawn_direct_process", refuse_to_spawn)
 
         with pytest.raises(FileNotFoundError):
             command.run_sync(output=_redirect_options(stdout=StdioTarget.fd(fd)))
