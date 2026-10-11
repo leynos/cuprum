@@ -28,6 +28,32 @@ fn message_of(error: RustStreamError) -> String {
     }
 }
 
+/// Assert a descriptor value is refused as a descriptor with exactly `expected`.
+///
+/// The Unix and Windows arms refuse different values with different texts, but
+/// they assert one rule: a refused value surfaces as `InvalidDescriptor`
+/// carrying the platform's stable message. That message is what the Python
+/// boundary branches on, so both arms must keep reporting it through
+/// `convert_fd` and not merely through the raw platform conversion.
+///
+/// Sharing the body keeps the arms from drifting apart, or from being corrected
+/// in one and left stale in the other. `rstest` still supplies a named case per
+/// value, so a failure names the value as well as the message. It stays outside
+/// the `#[cfg(unix)]` arm because both arms call it and only ever one is
+/// compiled.
+///
+/// # Panics
+/// Panics when the value is accepted, or when it is refused as a variant other
+/// than `InvalidDescriptor`, naming the value and the variant actually found.
+fn assert_descriptor_refused(value: i64, expected: &str) {
+    let error = convert_fd(value).expect_err("an invalid descriptor must be rejected");
+    assert_eq!(
+        message_of(error),
+        expected,
+        "descriptor {value} must report its stable message",
+    );
+}
+
 #[rstest]
 #[case::zero(0, "buffer_size must be greater than zero")]
 #[case::negative_one(-1, "buffer_size must be greater than zero")]
@@ -98,12 +124,7 @@ fn invalid_descriptors_are_classified_with_their_message(
     #[case] value: i64,
     #[case] expected: &str,
 ) {
-    let error = convert_fd(value).expect_err("an invalid descriptor must be rejected");
-    assert_eq!(
-        message_of(error),
-        expected,
-        "descriptor {value} must report its stable message",
-    );
+    assert_descriptor_refused(value, expected);
 }
 
 #[cfg(unix)]
@@ -120,12 +141,7 @@ fn accepted_descriptors_convert(#[case] value: i64) {
 #[case::negative(-1, "file handle must be non-negative")]
 #[case::i64_min(i64::MIN, "file handle must be non-negative")]
 fn invalid_handles_are_classified_with_their_message(#[case] value: i64, #[case] expected: &str) {
-    let error = convert_fd(value).expect_err("an invalid handle must be rejected");
-    assert_eq!(
-        message_of(error),
-        expected,
-        "handle {value} must report its stable message",
-    );
+    assert_descriptor_refused(value, expected);
 }
 
 /// A buffer size is rejected as a buffer size, never as anything else.
