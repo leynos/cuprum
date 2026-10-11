@@ -2460,15 +2460,15 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   frames at once, exactly as the prediction-failure entry above records.
 
   A provenance correction, added rather than folded into the text beside it:
-  the derivation was first written naming only `16b15718`, and that tree is
-  the merge tree of `3f34f8d9`, this entry's parent, not of the `71d69bb2`
-  head that commits the entry. Re-derived at the tip, `HEAD` merges to
-  `a94b1c0c`. Both are printed above because the count is what the entry turns
-  on, and the count does not move: 21 paths either way, 19 excluding the
-  lockfile and this plan, so the surface is one over the tolerance on both
-  heads and the breach stands as recorded. Only the citation was taken a
-  commit early, which is the failure mode an unlabelled `HEAD` in a transcript
-  invites — the reader cannot tell which commit a bare `HEAD` was.
+  the derivation was first written naming only `16b15718`, and that tree is the
+  merge tree of `3f34f8d9`, this entry's parent, not of the `71d69bb2` head
+  that commits the entry. Re-derived at the tip, `HEAD` merges to `a94b1c0c`.
+  Both are printed above because the count is what the entry turns on, and the
+  count does not move: 21 paths either way, 19 excluding the lockfile and this
+  plan, so the surface is one over the tolerance on both heads and the breach
+  stands as recorded. Only the citation was taken a commit early, which is the
+  failure mode an unlabelled `HEAD` in a transcript invites — the reader cannot
+  tell which commit a bare `HEAD` was.
 
   The nineteenth file is `tests/test_native_pipeline_stall_properties.py`. It
   is not branch work: it is `main`'s own module, added by `main`'s commit
@@ -2552,7 +2552,6 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `cs delta <ref> <ref>` reads **committed** refs, so the working tree is
   invisible to it — the first post-edit delta still showed the finding, and it
   had to be re-run after the commit.
-
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
 coverage percentage.** `stream_error_behaviour.rs` carried two `#[scenario]`
