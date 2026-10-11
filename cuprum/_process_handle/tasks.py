@@ -114,11 +114,14 @@ async def _start_handle_run(
 ) -> _HandleRun:
     """Spawn the child, announce it, and take ownership of its tasks.
 
-    The record is built by rebuilding rather than mutating, because the two
-    clock readings have to be taken at their stated points: the monotonic
-    reference *before* the spawn, so the child's recorded duration includes the
-    time its spawn blocked, and the wall-clock instant *before* the spawn too,
-    so a result's ``started_at`` is never later than the child it describes.
+    The record is built by rebuilding rather than mutating, because the
+    readings it carries have to be taken at their stated points. Both clocks
+    are sampled *before* the spawn — the monotonic reference so the child's
+    recorded duration includes the time its spawn blocked, the wall-clock
+    instant so a result's ``started_at`` is never later than the child it
+    describes — and the monotonic reading is stamped onto the bundle the child
+    is spawned with, because the stream callbacks read the start instant from
+    there rather than from the record this returns.
 
     Everything after the spawn is emission-free until the ``start`` event, so
     the child is never running without a stamped record and an announced PID to
@@ -154,6 +157,12 @@ async def _start_handle_run(
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission raised
     started_at = perf_counter()
     wall_clock_started_at = execution.observation.wall_clock()
+    # Set on the bundle before the spawn, because the record this returns is
+    # what the spawn was driven with and the line callbacks built from the
+    # bundle read ``started_at`` to timestamp each line: left at its zero
+    # default, every ``LineEvent.at`` would report the machine's monotonic
+    # uptime instead of seconds since the command started.
+    execution = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(execution)
     try:
         execution.observation.emit("start", _EventDetails(pid=process.pid))

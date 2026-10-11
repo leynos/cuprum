@@ -20,12 +20,11 @@ resource usage: the wait here can begin after the child has already been
 reaped, so a figure measured then would describe a different window than the
 one it claims. Leaving it unmeasured is honest; measuring it late is not.
 
-A deadline is the one route where the caller's error and the child's outcome
-diverge, so it reports both. The wait that expires stops the child exactly as a
-cancelled ``run()`` does and the child is gone by the time the drain runs, so
-there is a real outcome to publish — but the caller whose deadline elapsed is
-still owed a ``TimeoutExpired``. :class:`_HandleSettlement` carries the pair,
-which is what lets the handle record the outcome before it raises.
+A deadline is applied by the caller, not here. The wait under this module is
+unbounded — the child's end is the only thing that stops it — and
+:mod:`cuprum._process_handle.settlement` is where a caller's own clock is
+turned into a stop and an expiry. Keeping the two apart is what stops one
+caller's deadline from being imposed on another's wait.
 
 Reconciliation always runs shielded, and always *after* the process is gone.
 The order matters. Cancelling a stream consumer while the child is still
@@ -37,20 +36,12 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
-from cuprum._subprocess_timeout import (
-    _emit_exit_event,
-    _ExitEventDetails,
-    _get_exit_code,
-    _resolve_timeout_payload,
-    _SubprocessTimeoutError,
-    _TimeoutFallback,
-)
+from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
 from cuprum._subprocess_wait import (
     _DrainContext,
     _reconcile_run_tasks,
@@ -59,7 +50,7 @@ from cuprum._subprocess_wait import (
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum.sh import CommandResult, TimeoutExpired
+    from cuprum.sh import CommandResult
 
 __all__ = [
     "_finalize_settled_run",
@@ -80,6 +71,10 @@ async def _finalize_settled_run(
     every exit path in the library uses. It runs shielded so a cancellation
     arriving now cannot strand half the tasks, and it is idempotent, so the
     several routes into it do not have to coordinate.
+
+    The drain is what makes the captured output available to whoever reports
+    the run's end — the settled result, or the expiry a caller's deadline is
+    owed — and it happens exactly once per run.
 
     Parameters
     ----------
@@ -110,61 +105,36 @@ async def _finalize_settled_run(
     )
 
 
-async def _settle_handle_run(
-    run: _HandleRun,
-    execution: _SubprocessExecution,
-) -> _HandleSettlement:
+async def _settle_handle_run(run: _HandleRun) -> CommandResult:
     """Wait for the child, reconcile its tasks, and assemble the outcome.
 
     The watchdog is armed here rather than at spawn, so the time a caller
     spends holding a handle without waiting is not counted as the child's
     silence; arming is idempotent, so a later stop is unaffected.
 
-    A child that was stopped before this ran is already gone, so the wait
-    returns at once and the exit code it reports is the signal that ended the
-    child — ``-15`` for a cooperative ``SIGTERM``, ``-9`` for one that had to
-    be killed — rather than whatever a stop path happened to guess.
+    The wait is unbounded. A child that was stopped before this ran is already
+    gone, so the wait returns at once and the exit code it reports is the
+    signal that ended the child — ``-15`` for a cooperative ``SIGTERM``,
+    ``-9`` for one that had to be killed — rather than whatever a stop path
+    happened to guess.
 
     Returns
     -------
-    _HandleSettlement
-        The command's outcome, and the deadline error to raise in place of
-        offering it when a deadline is what ended the wait.
+    CommandResult
+        The command's outcome, with its streams drained exactly once.
 
     Raises
     ------
     asyncio.CancelledError
-        If the caller cancelled while waiting, once the run is reconciled.
+        If the settlement task was cancelled while waiting, once the run is
+        reconciled.
     """  # ruff: ignore[docstring-extraneous-exception] - CancelledError propagates from the wait
+    execution = run.execution
     _launch_idle_monitor(execution)
     try:
         exit_code, exited_at = await _wait_for_exit_code_within_timeout(
             run.process,
             execution,
-        )
-    except (TimeoutError, _SubprocessTimeoutError) as exc:
-        stdout_text, stderr_text = await _finalize_settled_run(
-            run,
-            execution,
-            capture=True,
-        )
-        # The child is stopped and drained by this point, so its outcome is a
-        # settled fact worth keeping. It is recorded beside the error the
-        # caller's deadline earned rather than instead of it.
-        return _HandleSettlement(
-            result=_build_handle_result(
-                run,
-                _HandleOutcome(
-                    exit_code=_get_exit_code(run.process),
-                    # The exit was never observed here, so the reading taken
-                    # now is the best available one — the same value the
-                    # streamed path uses as its fallback.
-                    exited_at=perf_counter(),
-                    stdout_text=stdout_text,
-                    stderr_text=stderr_text,
-                ),
-            ),
-            deadline_error=_deadline_error(execution, exc),
         )
     except BaseException:
         # Cancellation, and any other failure escaping the wait, still needs
@@ -177,77 +147,14 @@ async def _settle_handle_run(
         execution,
         capture=True,
     )
-    return _HandleSettlement(
-        result=_build_handle_result(
-            run,
-            _HandleOutcome(
-                exit_code=exit_code,
-                exited_at=exited_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-            ),
+    return _build_handle_result(
+        run,
+        _HandleOutcome(
+            exit_code=exit_code,
+            exited_at=exited_at,
+            stdout_text=stdout_text,
+            stderr_text=stderr_text,
         ),
-        deadline_error=None,
-    )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _HandleSettlement:
-    """What one settlement produced: the outcome, and why a wait did not get it.
-
-    The two travel together because a deadline is the one route where both
-    exist. Every other route to the end of a run — the child exiting, a stop,
-    a kill, a teardown — has an outcome and nothing to raise, so the handle can
-    offer the result straight back. A deadline has an outcome *and* an error:
-    the child was stopped and reaped, and the caller whose clock ran out is
-    owed the error rather than the outcome.
-
-    ``deadline_error`` is deliberately built here rather than raised here, so
-    the handle can record the outcome before it raises. Raising from this
-    module would discard it, because the settlement task's own exception is
-    what every later operation would then re-raise.
-    """
-
-    result: CommandResult
-    deadline_error: TimeoutExpired | None
-
-    @property
-    def has_deadline_expired(self) -> bool:
-        """Whether the settlement ended because a wait's deadline elapsed."""
-        return self.deadline_error is not None
-
-
-def _deadline_error(
-    execution: _SubprocessExecution,
-    exc: TimeoutError | _SubprocessTimeoutError,
-) -> TimeoutExpired:
-    """Build the ``TimeoutExpired`` the streamed path would have raised.
-
-    The resolution is delegated to the same seam the streamed path uses, so a
-    timeout reports the same command, the same configured timeout, and the same
-    captured output whichever entry point hit it. Only the raising is left to
-    the handle, which needs the outcome this error would otherwise displace.
-
-    Returns
-    -------
-    TimeoutExpired
-        The report of the expiry, chained onto the internal timeout that
-        carried the captured output.
-    """
-    details = _resolve_timeout_payload(
-        exc,
-        _TimeoutFallback(
-            configured_timeout=execution.timeout,
-            stdout=None,
-            stderr=None,
-            exited_at=perf_counter(),
-        ),
-    )
-    return _sh_module().TimeoutExpired(
-        cmd=execution.cmd.argv_with_program,
-        timeout=details.timeout,
-        output=details.stdout,
-        stderr=details.stderr,
     )
 
 

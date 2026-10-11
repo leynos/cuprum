@@ -4,35 +4,48 @@
 tear it down, and several of those can be in flight at once — a ``wait`` racing
 a ``terminate``, a teardown arriving while a concurrent wait is still running.
 All of them have to see one outcome, and :class:`_Settlement` is where that is
-decided: the single task that drives a run to its end, the record that task
-produced, and the rule for how long the handle keeps it.
+decided: the single task that drives a run to its end, the outcome that task
+produced, and the rule for who hears about a deadline.
 
-The rule is what makes the handle's operations composable rather than merely
-re-entrant. A caller whose deadline elapses stops the child and records its
-outcome *before* raising, so the error reaches the caller whose clock produced
-it and nobody else: every later wait, stop, or teardown reads the recorded
-outcome, because the child is already gone and an expiry about it would be a
-claim about a process that no longer exists.
+The task carries no deadline of its own. It waits for the child, and the child
+only ends early because some caller stopped it, so the task is a plain wait and
+each caller bounds *its own* await of that shared task. That is what makes
+``wait(timeout=...)`` a limit on one caller rather than on the handle: a caller
+that names a deadline and runs out of time stops the child, records the outcome
+that stop produced, and raises its own expiry, while every other caller — the
+one that named no deadline, the one that named a longer one, the one that
+arrived after — simply reads the one recorded outcome.
+
+Because the deadline belongs to the caller, the error does too. The expiry is
+built from the caller's own deadline and the outcome the shared settlement
+recorded, drained output included, so a caller that expired learns how the
+child ended as well as that its clock ran out.
+
+The deadline is recorded on the settlement before the child is stopped, so the
+one settlement finalizes as the timeout it was: the terminal outcome a consumer
+observes for a deadline-ended run is ``TIMEOUT``, matching what the streamed
+``run()`` path reports for the same condition.
 
 A settlement that raises rather than recording is a different matter. Nothing
-is kept, because there is nothing worth keeping, and the next caller builds a
-fresh task rather than being handed a failure another caller already met.
+is kept, because there is nothing worth keeping, and the failed task stays where
+it is: a later caller awaits the same task and meets the same failure, which is
+the error the first caller never got to return.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 from cuprum._command_internals import (
     _finalize_command_run_failure,
     _finalize_command_run_success,
 )
+from cuprum._process_handle.control import _terminate_shielded
 from cuprum._process_handle.coordinator import _settle_handle_run
+from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
-    from cuprum._process_handle.coordinator import _HandleSettlement
     from cuprum._process_handle.tasks import _HandleRun
     from cuprum._subprocess_spawn import _SubprocessExecution
     from cuprum.sh import CommandResult, TimeoutExpired
@@ -49,22 +62,22 @@ class _Settlement:
 
     Three states are reachable, and each transition out of the idle one happens
     at most once. The task is started under the same lock that reads the
-    record, so two callers arriving together cannot both decide to start one,
-    and a caller arriving after the record exists starts nothing at all.
+    outcome, so two callers arriving together cannot both decide to start one,
+    and a caller arriving after the outcome exists starts nothing at all.
     """
 
-    __slots__ = ("_handle", "_lock", "_result", "_settled", "_task")
+    __slots__ = ("_deadline", "_handle", "_lock", "_result", "_task")
 
     def __init__(self, handle: _HandleRun) -> None:
         """Hold *handle*'s run, with no settlement yet begun."""
         self._handle = handle
         self._lock = asyncio.Lock()
+        #: The deadline the first expiring caller named, if one has expired.
+        self._deadline: float | None = None
         #: The outcome a completed settlement left, for ``RunningCommand.result``.
         self._result: CommandResult | None = None
-        #: The record a completed settlement left, if it completed.
-        self._settled: _HandleSettlement | None = None
-        #: The task driving the run, while one is running.
-        self._task: asyncio.Task[_HandleSettlement] | None = None
+        #: The task driving the run, while one is running or has failed.
+        self._task: asyncio.Task[CommandResult] | None = None
 
     @property
     def result(self) -> CommandResult | None:
@@ -85,8 +98,7 @@ class _Settlement:
         ----------
         deadline : float | None, default=None
             The deadline this caller is measured against, or ``None`` when it
-            supplied none and this settlement is therefore one no clock can
-            run out.
+            supplied none and its wait is therefore one no clock can run out.
 
         Returns
         -------
@@ -98,31 +110,40 @@ class _Settlement:
         Raises
         ------
         TimeoutExpired
-            If *deadline* is what ended the run. The outcome is recorded all
-            the same, and readable from :attr:`result`.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised here from the settlement this wait drove
-        settlement, was_waiting = await self._await_settlement(deadline)
-        expiry = _expiry_for(settlement, deadline, was_waiting=was_waiting)
-        if expiry is not None:
-            raise expiry
-        return settlement.result
+            If *deadline* elapsed before the child finished. The child is
+            stopped and reaped, the outcome is recorded, and a later caller
+            reads that outcome rather than meeting this error again.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised here from the deadline this wait drove
+        if deadline is None:
+            return await self._await_settlement()
+        if deadline <= 0:
+            # An already-elapsed deadline expires deterministically: the child
+            # is never given the chance to exit on its own first, matching the
+            # non-positive branch of the streamed wait.
+            return await self._expire(deadline)
+        try:
+            async with asyncio.timeout(deadline):
+                return await self._await_settlement()
+        except TimeoutError:
+            # Only this caller's clock ran out. The settlement task is shielded
+            # from the cancellation the timeout delivered, so it is still
+            # driving the run and the child is stopped here rather than left.
+            return await self._expire(deadline)
 
-    async def settle_and_record(self, deadline: float | None) -> _HandleSettlement:
+    async def settle_and_record(self) -> CommandResult:
         """Settle the run and keep what it produced; used by the task itself.
 
         Returns
         -------
-        _HandleSettlement
-            The command's outcome, also stored for :attr:`result`, together
-            with the deadline error when one ended the wait.
+        CommandResult
+            The command's outcome, also stored for :attr:`result`.
         """
         run = self._handle
-        # Rebuilt rather than mutated, so a wait's deadline is applied to the
-        # copy this run is waited with and never to the bundle the child was
-        # spawned from.
-        execution = _with_deadline(run.execution, deadline)
+        # The bundle the child was spawned from, with no deadline in it: the
+        # task is driven by no clock, so nothing here can expire on its own.
+        execution = run.execution
         try:
-            settlement = await _settle_handle_run(run, execution)
+            result = await _settle_handle_run(run)
         except BaseException as run_error:
             await _finalize_command_run_failure(
                 execution,
@@ -131,87 +152,113 @@ class _Settlement:
                 run_error,
             )
             raise
-        await _finalize_command_run_success(
-            execution,
-            run.tracking,
-            settlement.result,
-        )
-        self._result = settlement.result
-        return settlement
+        deadline = self._deadline
+        if deadline is None:
+            await _finalize_command_run_success(execution, run.tracking, result)
+        else:
+            # A caller's deadline is what stopped the child, so the run settles
+            # as the timeout it was rather than as the ordinary non-zero exit
+            # the signal itself would report.
+            await _finalize_command_run_failure(
+                execution,
+                run.tracking,
+                result,
+                _expiry_error(execution, result, deadline),
+            )
+        self._result = result
+        return result
 
-    async def _await_settlement(
-        self,
-        deadline: float | None,
-    ) -> tuple[_HandleSettlement, bool]:
+    async def _await_settlement(self) -> CommandResult:
         """Await the one settlement, driving it if nobody has yet.
-
-        ``was_waiting`` distinguishes the callers a deadline belongs to from
-        the ones that merely arrived afterwards. A caller that awaited the live
-        settlement was waiting on the child when the clock ran out, so the
-        expiry is its to hear about. A caller that found a recorded settlement
-        is reading history: the child is already gone, and there is nothing
-        left for a fresh deadline to interrupt.
 
         Returns
         -------
-        tuple[_HandleSettlement, bool]
-            The settlement's record, and whether this call awaited a
-            settlement that was still in progress.
+        CommandResult
+            The outcome the shared settlement recorded.
         """
         async with self._lock:
-            settlement = self._settled
-            if settlement is not None:
-                return settlement, False
+            settled = self._result
+            if settled is not None:
+                return settled
             settling = self._task
             if settling is None:
-                settling = asyncio.ensure_future(self.settle_and_record(deadline))
+                settling = asyncio.ensure_future(self.settle_and_record())
                 self._task = settling
         # Shielded so a cancelled waiter does not take the settlement with it:
         # the task is the handle's, and the next waiter still gets its outcome.
         awaited = await asyncio.shield(settling)
         async with self._lock:
-            self._settled = awaited
+            self._result = awaited
             self._task = None
-        return awaited, True
+        return awaited
+
+    async def _expire(self, deadline: float) -> CommandResult:
+        """Stop the child this caller gave up on and raise this caller's expiry.
+
+        The deadline is recorded before the child is stopped, so the settlement
+        task — which is what finalizes the run — can tell that a clock rather
+        than the child ended it. Stopping an already-stopped child delivers
+        nothing: the stop path short-circuits on a child that has exited, so a
+        second expiry neither signals twice nor builds a second outcome.
+
+        Returns
+        -------
+        CommandResult
+            The recorded outcome when the run had already settled, which is
+            history rather than something a fresh deadline can interrupt.
+
+        Raises
+        ------
+        TimeoutExpired
+            The expiry the caller's own deadline produced, carrying the output
+            the settled run captured.
+        """  # ruff: ignore[docstring-missing-exception, docstring-extraneous-exception] - the raise names a factory the call returns a TimeoutExpired from
+        run = self._handle
+        async with self._lock:
+            settled = self._result
+            if settled is not None:
+                return settled
+            self._record_deadline(deadline)
+            settling = self._task
+            if settling is None:
+                settling = asyncio.ensure_future(self.settle_and_record())
+                self._task = settling
+        await _terminate_shielded(run.process, run.execution.ctx.cancel_grace)
+        # Unbounded: the child is already stopping, and the task is the only
+        # thing that reaps it, so waiting here is what guarantees the child
+        # this caller gave up on does not outlive the error it is owed.
+        result = await asyncio.shield(settling)
+        async with self._lock:
+            self._result = result
+            self._task = None
+        raise _expiry_error(run.execution, result, deadline)
+
+    def _record_deadline(self, deadline: float) -> None:
+        """Keep the first deadline that expired, for the settlement to finalize with."""
+        if self._deadline is None:
+            self._deadline = deadline
 
 
-def _with_deadline(
+def _expiry_error(
     execution: _SubprocessExecution,
-    deadline: float | None,
-) -> _SubprocessExecution:
-    """Return *execution* as the bundle a wait is measured against.
+    result: CommandResult,
+    deadline: float,
+) -> TimeoutExpired:
+    """Build the expiry a deadline-ran-out caller is owed.
+
+    The command and the deadline are the caller's own; the output is the
+    outcome the shared settlement drained, so the expiry reports what the child
+    had written before it was stopped — exactly the contract the streamed
+    ``run()`` path's ``TimeoutExpired`` keeps.
 
     Returns
     -------
-    _SubprocessExecution
-        The run's own bundle with its timeout replaced. The standing deadline
-        was stripped at spawn, so this copy is the only place a wait's deadline
-        comes from.
+    TimeoutExpired
+        The report of the expiry, carrying the drained streams.
     """
-    return dc.replace(execution, timeout=deadline)
-
-
-def _expiry_for(
-    settlement: _HandleSettlement,
-    deadline: float | None,
-    *,
-    was_waiting: bool,
-) -> TimeoutExpired | None:
-    """Return the expiry a wait owes its caller, if it owes one.
-
-    All three conditions have to hold. The settlement must have ended on a
-    deadline, because otherwise there is no expiry to report. The caller must
-    have supplied a deadline, because a wait with none cannot be said to have
-    run out of time. And the caller must have been waiting on the live
-    settlement rather than reading a record, because a caller who arrived
-    afterwards is looking at a child that is already gone.
-
-    Returns
-    -------
-    TimeoutExpired | None
-        The expiry to raise, or ``None`` when the caller should read the
-        outcome instead.
-    """
-    if not was_waiting or deadline is None:
-        return None
-    return settlement.deadline_error
+    return _sh_module().TimeoutExpired(
+        cmd=execution.cmd.argv_with_program,
+        timeout=deadline,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
