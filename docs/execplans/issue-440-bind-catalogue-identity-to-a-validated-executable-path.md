@@ -1654,6 +1654,46 @@ escalation, not a workaround.
   The local gate run for this head is recorded on the pull request rather than
   here, so that the record of it cannot invalidate the run it reports.
 
+- [x] (2026-10-11 03:05Z) **A fourth rebase, onto `390fcf83`, and the one
+  commit whose content the rebase changed.** `main` advanced from `a026142e` to
+  `390fcf83` ("Fix the PID-file handshake race in subprocess tests (#500)
+  (#504)") after the previous head was pushed, so the branch was replayed again:
+  `a026142e..ad4c90cc` (62 commits, none a merge) onto
+  `390fcf834a63257d4c9fb6e65cb92175281ffa65`, with weave disabled by
+  `core.attributesFile=/dev/null` and the merge backend under
+  `merge.conflictStyle=zdiff3`.
+
+  All 62 commits replayed without conflict, and `range-diff` shows every patch
+  identical but one. Commit 48 (`b52dbb8e`, "Correct four plan claims against
+  the shipped code") had folded in a `typos.toml` regeneration; `390fcf83`
+  happens to change the same `extend-ignore-re` line independently, so the
+  rebase reduced that hunk to nothing and the commit is now markdown-only. The
+  `typos.toml` blob is byte-identical at `390fcf83`, at the old head, and at
+  the new head (`f74c524f9121944736e3fc49ea67bd58b3033224`), so the tree is
+  what regeneration produces either way. Only the commit message needed
+  updating, and it did not, at first: the message still described a hunk the
+  commit no longer carried. That message was rewritten before publication, and
+  the replayed tree is unchanged by doing so — the rebuild and replay were
+  verified tree-identical to the pre-amend head at
+  `05e3c059c1d58d3f6c5d080b1286c2d02c5db911`, which is also the tree
+  `git merge-tree` had predicted for this pair.
+
+  The files `390fcf83` changed are `cuprum/unittests/test_safe_cmd_lines.py`,
+  `cuprum/unittests/test_safe_cmd_timeout.py` and `typos.toml`; the first two
+  are byte-identical to `main`'s versions at the new head, and none of the
+  three appears in this branch's own delta. There is therefore no file overlap
+  between the new base commit and the child series. The overlap that existed is
+  behavioural rather than textual: `390fcf83` fixes a PID-file handshake race
+  in subprocess *tests* while this branch changes
+  `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_context.py` and
+  `cuprum/_line_stream/coordinator.py`. That is the shape that produced the
+  three earlier composition defects, so the gates — not the diff — settle it.
+
+  New head: `eca2f2ae2892669fc9705e40fa691678ae324e55`.
+
+  The local gate run for this head is recorded on the pull request rather than
+  here, so that the record of it cannot invalidate the run it reports.
+
 ## Surprises & discoveries
 
 - Observation: there are three spawn call sites but only two `argv[0]`
