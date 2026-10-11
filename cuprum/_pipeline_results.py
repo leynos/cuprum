@@ -80,7 +80,7 @@ def _emit_terminal_events(
 
 def _emit_result_terminal_events(
     observations: tuple[_StageObservation, ...],
-    stage_results: list[CommandResult],
+    stage_results: list[_AnyCommandResult],
     *,
     outcome: TerminalOutcome | None = None,
     best_effort: bool = False,

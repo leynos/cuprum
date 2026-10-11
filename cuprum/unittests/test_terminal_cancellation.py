@@ -15,6 +15,10 @@ from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from cuprum._subprocess_wait_types import (
+        _StreamConsumerTask,
+        _StreamPayloadPair,
+    )
     from cuprum.program import Program
 
 # The pipeline's cleanup reads this name from the finalization module, which is
@@ -54,8 +58,8 @@ class _PipelineCancellationScenario:
 
     async def cancel_stream_tasks(
         self,
-        stderr_tasks: list[asyncio.Task[str | None] | None],
-        stdout_task: asyncio.Task[str | None] | None,
+        stderr_tasks: list[_StreamConsumerTask | None],
+        stdout_task: _StreamConsumerTask | None,
     ) -> None:
         """Hold outer cleanup open while additional cancellations arrive."""
         self.cleanup_entered.set()
@@ -160,9 +164,9 @@ def test_repeated_cancellation_settles_one_command_once(
             started.set()
 
     async def gated_drain(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
         context: _subprocess_wait._DrainContext,
-    ) -> tuple[str | None, str | None]:
+    ) -> _StreamPayloadPair:
         """Hold reconciliation open while repeated cancellation arrives."""
         gate.entered.set()
         await gate.release.wait()
