@@ -32,11 +32,55 @@ from cuprum._process_lifecycle import _shielded_cleanup
 # still being waited for is a pipe end held open by the child's own
 # descendants. A writer that can finish at all finishes in well under this; one
 # that cannot will never finish, however long it is given.
+#
+# It is the unit every other budget below is counted in, because a cleanup
+# *step* is exactly one bounded wait of this length. Budgets are declared as
+# whole numbers of steps and multiplied out rather than written as literals,
+# for the reason the nesting below makes concrete: cuprum's cleanup runs
+# inside the very task cuprum is reclaiming, so a reclaim window that does not
+# account for the nested steps expires while the cleanup it is waiting for is
+# still running — and then reports the reclaim as done. Deriving the outer
+# figure from the inner ones is what keeps the two in step; a hand-written
+# total would have to be re-derived by hand every time a step is added.
 _STDIN_SETTLE_GRACE_S = 0.25
 
+# Finalizing a producer is a two-step sequence, not one wait: the window the
+# finalizer is given to finish on its own, and then a reclaim in which a
+# finalizer that is still suspended is cancelled and awaited. A finalizer
+# interrupted partway through is exactly the case that needs the second step —
+# it has been asked to stop and has not stopped yet.
+_STDIN_FINALIZE_STEPS = 2
 
-async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
-    """Cancel and drain a stdin writer task, tolerating any raised error.
+# A writer's teardown releases the pipe and *then* finalizes whatever producer
+# it was pulling from, so it is that whole finalization plus the pipe-release
+# wait of its own. This is the nesting CodeRabbit identified: a writer given
+# only one step is cancelled, spends its own three, and outlives the window
+# that was supposed to contain it.
+_STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS
+
+# What a finalizer *task* is allowed when it is reclaimed: one step, on its
+# own. It is deliberately not the writer budget — a finalizer task runs caller
+# code and nothing of cuprum's, so it has no nested steps to account for, and
+# giving it the writer's figure would re-open the same nesting one level down.
+_STDIN_FINALIZER_RECLAIM_S = _STDIN_SETTLE_GRACE_S
+
+# What cancelling a *writer* is allowed. It must cover the writer's whole
+# teardown, because the writer runs that teardown inside its own cancellation:
+# `_close_stdin` bounded by one step, then `_finalize_stdin_source` bounded by
+# `_STDIN_FINALIZE_STEPS`. A cooperative writer — one that needs the pipe
+# released and a suspended finalizer cancelled, but never ignores the
+# cancellation it is given — therefore settles inside this window, which is
+# the guarantee a cancelled run depends on before it reports that its tasks
+# are gone.
+_STDIN_RECLAIM_BUDGET_S = _STDIN_SETTLE_GRACE_S * _STDIN_WRITER_TEARDOWN_STEPS
+
+
+async def _cancel_stdin_writer(
+    stdin_task: asyncio.Task[None] | None,
+    *,
+    budget: float = _STDIN_RECLAIM_BUDGET_S,
+) -> None:
+    """Cancel and drain a task, tolerating any raised error.
 
     Used on the timeout and cancellation paths to reclaim a writer that may be
     blocked draining bytes into an unread pipe, so its cleanup cannot delay the
@@ -47,11 +91,26 @@ async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
     pipe close used to do. Reclaiming a writer is meant to *bound* the wait for
     it, so an unbounded drain here would hand that guarantee back to the thing
     it was written to contain.
+
+    ``budget`` defaults to the writer's whole teardown because a *writer* is
+    what this was written for, and a writer's cancellation runs its own nested
+    cleanup: a pipe release and a producer finalization. Reclaiming anything
+    else — a bare finalizer task, which nests nothing — passes its own smaller
+    figure rather than inheriting a window sized for work it will never do.
+
+    Parameters
+    ----------
+    stdin_task : asyncio.Task[None] | None
+        The task to cancel and drain. ``None`` is a no-op, so a caller need not
+        test for the inherited-stdin case before calling.
+    budget : float
+        How long the task is given to finish its own cleanup after being
+        cancelled.
     """
     if stdin_task is None:
         return
     stdin_task.cancel()
-    await asyncio.wait((stdin_task,), timeout=_STDIN_SETTLE_GRACE_S)
+    await asyncio.wait((stdin_task,), timeout=budget)
 
 
 async def _settle_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
@@ -138,7 +197,11 @@ async def _expire_or_reclaim_writer(stdin_task: asyncio.Task[None]) -> None:
 
 
 __all__ = [
+    "_STDIN_FINALIZER_RECLAIM_S",
+    "_STDIN_FINALIZE_STEPS",
+    "_STDIN_RECLAIM_BUDGET_S",
     "_STDIN_SETTLE_GRACE_S",
+    "_STDIN_WRITER_TEARDOWN_STEPS",
     "_cancel_stdin_writer",
     "_settle_stdin_writer",
 ]

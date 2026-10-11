@@ -29,6 +29,7 @@ import typing as typ
 import pytest
 
 from cuprum import _subprocess_stdin_finalize as finalize
+from cuprum import _subprocess_stdin_reclaim as reclaim_module
 from cuprum._subprocess_stdin_finalize import _finalize_stdin_source
 from cuprum._subprocess_stdin_stream import _stdin_codec, _write_stdin_stream
 from cuprum.sh import ExecutionContext, StdinStream
@@ -221,6 +222,41 @@ def test_the_settle_window_is_the_one_the_writer_uses() -> None:
         "the finalizer's window has drifted from the stdin writer's settle "
         f"grace ({finalize._STDIN_SETTLE_GRACE_S}); update this test's "
         "expectation only alongside that constant"
+    )
+
+
+def test_the_reclaim_budget_covers_the_cleanup_it_waits_for() -> None:
+    """The writer's reclaim window outlasts the cleanup that runs inside it.
+
+    This is the nesting the budget is derived to avoid, asserted as arithmetic
+    rather than trusted to the derivation. Cancelling a writer delivers a
+    cancellation *into* that task, and the writer's own teardown runs there:
+    one bounded wait releasing the pipe, then a finalization that is itself a
+    window plus a reclaim. A writer given less than the sum would be reported
+    as reclaimed while its cleanup was still running — and cooperative cleanup
+    would be lost, which is the failure this pins.
+
+    The finalizer's own reclaim is asserted separately for the same reason: it
+    is the smaller figure precisely because it nests nothing, and giving it the
+    writer's total would re-open the nesting one level down.
+    """
+    reclaim = reclaim_module._STDIN_RECLAIM_BUDGET_S
+    finalize_steps = reclaim_module._STDIN_FINALIZE_STEPS
+    window = reclaim_module._STDIN_SETTLE_GRACE_S
+    expected = window * (1 + finalize_steps)
+
+    assert reclaim == expected, (
+        f"the writer reclaim budget is {reclaim}s but the teardown it spans "
+        f"needs {expected}s (one pipe release plus {finalize_steps} "
+        "finalization steps)"
+    )
+    assert reclaim > window, (
+        "the reclaim budget has collapsed to a single window, which cannot "
+        "cover the cleanup a cancelled writer runs"
+    )
+    assert window == reclaim_module._STDIN_FINALIZER_RECLAIM_S, (
+        "a finalizer task nests nothing, so its reclaim must stay the single "
+        f"window, not the writer's {reclaim}s total"
     )
 
 
