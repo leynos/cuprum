@@ -54,6 +54,7 @@
       'cuprum/_process_handle/__init__.py',
       'cuprum/_process_handle/control.py',
       'cuprum/_process_handle/coordinator.py',
+      'cuprum/_process_handle/settlement.py',
       'cuprum/_process_handle/state.py',
       'cuprum/_process_handle/tasks.py',
       'cuprum/_process_handle_errors.py',

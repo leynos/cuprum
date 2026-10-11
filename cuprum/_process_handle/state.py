@@ -12,56 +12,32 @@ implies: the process, the bundle its streams and deadline came from, the
 tracking that owns its sink bracket and observe-hook tasks, and the task
 ownership that reconciles its stdin writer and stream consumers.
 
-Settlement happens once. ``self._settling`` holds the single task that drives
-a run to its end, and every operation that needs an outcome awaits that same
-task rather than starting a second one. That is what makes concurrent ``wait``
-calls a single settlement with several readers, and it is also what keeps
-``terminate`` from racing a wait: stopping the child first unblocks the shared
-task, which then completes normally and hands every waiter the result.
-
-Because the task is a real task rather than a lock held across the wait, a
-caller who is cancelled leaves the settlement running; the next caller awaits
-the same task and gets the same outcome, whether that is a result or the error
-the first caller never saw. Nothing here can deadlock a stop behind a wait that
-has no deadline.
-
-A wait that expires is the one route that produces both an outcome and an
-error, and the handle keeps both rather than letting the task's exception
-decide for every later caller. The child is stopped and reaped by the time the
-deadline is reported, so its outcome is recorded first and the error raised
-afterwards — which is why the settlement task *completes* on a deadline, with
-the error carried in the settlement rather than thrown out of it. A later
-``wait``, ``terminate``, or ``kill`` on the same handle therefore sees the
-outcome the first caller's deadline denied them, instead of a resurrected
-exception describing a child that is already gone.
+Settlement is the other half, and it lives in
+:mod:`cuprum._process_handle.settlement`: one task drives the run to its end,
+every operation that needs an outcome awaits that same task, and the rule for
+who hears about a deadline — and for what is recorded either way — is stated
+once, there. This module is the handle's surface: what a caller can ask of it,
+and what each answer guarantees.
 """
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses as dc
 import typing as typ
 
-from cuprum._command_internals import (
-    _finalize_command_run_failure,
-    _finalize_command_run_success,
-)
 from cuprum._process_handle.control import (
     _deliver_signal,
     _kill_shielded,
     _terminate_shielded,
 )
-from cuprum._process_handle.coordinator import _settle_handle_run
+from cuprum._process_handle.settlement import _Settlement
 from cuprum._process_lifecycle import _shielded_cleanup
 
 if typ.TYPE_CHECKING:
     import types
 
-    from cuprum._process_handle.coordinator import _HandleSettlement
     from cuprum._process_handle.tasks import _HandleRun
-    from cuprum._subprocess_spawn import _SubprocessExecution
     from cuprum.events import ExecId
-    from cuprum.sh import CommandResult, TimeoutExpired
+    from cuprum.sh import CommandResult
 
 __all__ = ["RunningCommand"]
 
@@ -94,15 +70,12 @@ class RunningCommand:
     re-raising an error about a child that is already gone.
     """
 
-    __slots__ = ("_lock", "_result", "_run", "_settled_run", "_settling")
+    __slots__ = ("_run", "_settlement")
 
     def __init__(self, run: _HandleRun) -> None:
         """Take ownership of a spawned child and its execution record."""
         self._run = run
-        self._lock = asyncio.Lock()
-        self._result: CommandResult | None = None
-        self._settled_run: _HandleSettlement | None = None
-        self._settling: asyncio.Task[_HandleSettlement] | None = None
+        self._settlement = _Settlement(run)
 
     @property
     def pid(self) -> int | None:
@@ -142,7 +115,7 @@ class RunningCommand:
             publishes the outcome here too, because the child it stopped is
             nonetheless reaped and has one.
         """
-        return self._result
+        return self._settlement.result
 
     async def wait(
         self,
@@ -176,7 +149,7 @@ class RunningCommand:
             If *timeout*, or the deadline ``start()`` resolved, elapsed before
             the command finished.
         """  # ruff: ignore[docstring-extraneous-exception] - TimeoutExpired propagates from the deadline path
-        return await self._settled(self._default_deadline(timeout))
+        return await self._settlement.outcome(self._default_deadline(timeout))
 
     def _default_deadline(self, timeout: float | None) -> float | None:
         """Return *timeout*, or the deadline ``start()`` resolved in its place.
@@ -243,7 +216,7 @@ class RunningCommand:
             The ended command's outcome.
         """
         await self._stop(grace)
-        return await self._settled(None)
+        return await self._settlement.outcome()
 
     async def kill(self) -> CommandResult:
         """Stop the command immediately, without a grace period.
@@ -261,7 +234,7 @@ class RunningCommand:
             The ended command's outcome.
         """
         await _kill_shielded(self._run.process)
-        return await self._settled(None)
+        return await self._settlement.outcome()
 
     async def __aenter__(self) -> RunningCommand:
         """Return self, so ``async with`` owns the child for the block."""
@@ -294,7 +267,7 @@ class RunningCommand:
         except BaseException as stop_failure:  # ruff: ignore[blind-except] - held, not handled: settling must still run
             stop_error = stop_failure
         try:
-            await _shielded_cleanup(self._settled(None))
+            await _shielded_cleanup(self._settlement.outcome())
         except BaseException as settle_failure:  # ruff: ignore[blind-except] - held, not handled: the stop's failure takes precedence
             if stop_error is None:
                 stop_error = settle_failure
@@ -304,148 +277,9 @@ class RunningCommand:
         # caller has to see, so teardown's own failure is left on the
         # observation stream rather than allowed to take its place.
 
-    def _execution(self, deadline: float | None) -> _SubprocessExecution:
-        """Return the bundle this run is waited with, carrying *deadline*.
-
-        Returns
-        -------
-        _SubprocessExecution
-            The run's own bundle with its timeout replaced. The standing
-            deadline was stripped at spawn, so this copy is the only place a
-            wait's deadline comes from.
-        """
-        return dc.replace(self._run.execution, timeout=deadline)
-
     async def _stop(self, grace: float | None) -> None:
         """Escalate the child to a stop; idempotent, and never waits to settle."""
         await _terminate_shielded(
             self._run.process,
             self._run.execution.ctx.cancel_grace if grace is None else grace,
         )
-
-    async def _settled(self, deadline: float | None) -> CommandResult:
-        """Return the run's outcome, settling it if nobody has yet.
-
-        The settlement task completes even when a deadline ended the run, so
-        this awaits an outcome rather than an error. A deadline is reported to
-        a caller that both asked for one and was still waiting when it elapsed;
-        everyone else — a later wait, a stop, a teardown — reads the outcome
-        the child actually has, because it has already been stopped and reaped.
-
-        Returns
-        -------
-        CommandResult
-            The outcome of the one settlement, whichever caller started it and
-            whichever route — an ordinary exit, a stop, a kill, or a deadline —
-            produced it.
-
-        Raises
-        ------
-        TimeoutExpired
-            If this call's deadline is what ended the run. The outcome is
-            recorded all the same, and readable from :attr:`result`.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised here from the settlement this wait drove
-        settlement, was_waiting = await self._await_settlement(deadline)
-        expiry = self._expiry_for(settlement, deadline, was_waiting=was_waiting)
-        if expiry is not None:
-            raise expiry
-        return settlement.result
-
-    @staticmethod
-    def _expiry_for(
-        settlement: _HandleSettlement,
-        deadline: float | None,
-        *,
-        was_waiting: bool,
-    ) -> TimeoutExpired | None:
-        """Return the expiry this call owes its caller, if it owes one.
-
-        All three conditions have to hold. The settlement must have ended on a
-        deadline, because otherwise there is no expiry to report. The caller
-        must have supplied a deadline, because a wait with none cannot be said
-        to have run out of time. And the caller must have been waiting on the
-        live settlement rather than reading a record, because a caller who
-        arrived afterwards is looking at a child that is already gone.
-
-        Returns
-        -------
-        TimeoutExpired | None
-            The expiry to raise, or ``None`` when this call should read the
-            outcome instead.
-        """
-        if not was_waiting or deadline is None:
-            return None
-        return settlement.deadline_error
-
-    async def _await_settlement(
-        self,
-        deadline: float | None,
-    ) -> tuple[_HandleSettlement, bool]:
-        """Await the one settlement, driving it if nobody has yet.
-
-        ``was_waiting`` distinguishes the callers a deadline belongs to from
-        the ones that merely arrived afterwards. A caller that awaited the live
-        settlement was waiting on the child when the clock ran out, so the
-        expiry is its to hear about. A caller that found a recorded settlement
-        is reading history: the child is already gone, and there is nothing
-        left for a fresh deadline to interrupt.
-
-        Returns
-        -------
-        tuple[_HandleSettlement, bool]
-            The settlement's outcome, and whether this call awaited a
-            settlement that was still in progress.
-        """
-        async with self._lock:
-            settlement = self._settled_run
-            if settlement is not None:
-                return settlement, False
-            settling = self._settling
-            if settling is None:
-                settling = asyncio.ensure_future(self._settle(deadline))
-                self._settling = settling
-        # Shielded so a cancelled waiter does not take the settlement with it:
-        # the task is the handle's, and the next waiter still gets its outcome.
-        awaited = await asyncio.shield(settling)
-        async with self._lock:
-            self._settled_run = awaited
-        return awaited, True
-
-    async def _settle(self, deadline: float | None) -> _HandleSettlement:
-        """Drive the run to its end once, and publish what it produced.
-
-        The run's own tasks are reconciled by :func:`_settle_handle_run`, which
-        also carries the deadline; what remains here is the command-level
-        framing — closing the presentation-sink session and draining the tasks
-        an observer scheduled — and recording the outcome every later caller
-        reads.
-
-        A deadline does not raise from here. The outcome is recorded and the
-        task completes, so the error describing the expiry reaches only the
-        caller whose clock produced it rather than being re-raised at every
-        operation that touches the handle afterwards.
-
-        Returns
-        -------
-        _HandleSettlement
-            The command's outcome, also stored for :attr:`result`, together
-            with the deadline error when one ended the wait.
-        """
-        execution = self._execution(deadline)
-        try:
-            settlement = await _settle_handle_run(self._run, execution)
-        except BaseException as run_error:
-            await _finalize_command_run_failure(
-                execution,
-                self._run.tracking,
-                None,
-                run_error,
-            )
-            raise
-        await _finalize_command_run_success(
-            execution,
-            self._run.tracking,
-            settlement.result,
-        )
-        self._result = settlement.result
-        return settlement
