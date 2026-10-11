@@ -1563,6 +1563,35 @@ caller. With the settlement rule in one place, the flag selecting between its
 two routes is the thing a caller can get wrong, so an omitted keyword is a
 `TypeError` at the call site rather than a silently lost guarantee.
 
+### Identity guarantee coverage
+
+`cuprum/unittests/test_process_signal_identity.py` pins the one-directional
+probe guarantee above as deterministic tests rather than leaving it as prose.
+The hazard it guards is a teardown that signals on the strength of the name
+having been this run's at spawn time, rather than on a live probe: once the
+group has emptied, the identifier is an ordinary free slot and `killpg` under
+it would reach a group this run never created.
+
+Three cases are covered, with the probe's answer as the only input, so the
+signalled names are read directly and no timing is involved:
+
+- a group whose probe no longer answers is never signalled under its name, by
+  either the graceful phase or the escalation, and the direct route is not
+  substituted for the group route;
+- a group whose probe still answers *is* signalled, and the probe is asserted
+  to have run first, because it is what licenses the signal — the leader in
+  this case has already been reaped, which a direct-child-only teardown would
+  mistake for settlement;
+- an inherited run reaches its target through the process handle alone, with
+  neither the probe nor a group signal touched. The child is `SIGTERM`-immune
+  so both phases of the direct route run, making "no group was used" a
+  statement about both signals rather than only the first.
+
+The double models a group signal killing the direct child, because the child
+is a member of its own group. Without that, a signal sent down the wrong route
+presents as a hang rather than as a failed assertion, and the diagnostic is
+lost.
+
 ## Timeout and fail-fast reducer verification
 
 The temporal, branch-heavy subprocess-timeout and pipeline-cleanup paths are
