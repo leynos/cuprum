@@ -3055,7 +3055,8 @@ EP-M3, execution and telemetry. Add `resolved_path: str | None = None` to
 `_build_pipeline_observations` (each stage), both after that path's
 `_enforce_allowlist` call. Read it at both spawn sites via a small module-level
 helper so the fallback rule exists once. Pass it to every `CommandResult`
-construction site. Add `resolved_path: str | None = None` after `env_mode` on
+construction site. Add
+`resolved_path: str | None = dc.field(default=None, kw_only=True)` on
 `ExecEvent`, populate it in `_StageObservation.emit`, leave it `None` in
 `emit_fail_fast`, and add it to `_verbatim_fields` in
 `cuprum/adapters/_support.py`. Leave `cuprum/adapters/metrics_adapter.py`
@@ -3404,10 +3405,13 @@ def bind_executable(
 ```
 
 `cuprum/events.py` addition, declared after `env_mode` and ahead of main's
-tail-pinned `terminal_outcome`:
+tail-pinned `terminal_outcome`. It is `kw_only` because `terminal_outcome`
+already holds a positional slot on the comparison base: a plain field declared
+ahead of it would shift that slot, so a base-compatible positional call would
+bind its outcome to `resolved_path` and silently leave `terminal_outcome=None`:
 
 ```python
-resolved_path: str | None = None
+resolved_path: str | None = dc.field(default=None, kw_only=True)
 ```
 
 `cuprum/sh/results.py` addition, `kw_only` beside the other measurements:
