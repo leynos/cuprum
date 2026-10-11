@@ -504,6 +504,52 @@ def test_safe_cmd_and_make_type_hints_resolve_at_runtime() -> None:
     )
 
 
+def test_executable_binding_type_hints_resolve_at_runtime() -> None:
+    """The binding vocabulary resolves its public annotations at runtime.
+
+    ``ExecutableResolver`` is a ``type`` statement, so it is evaluated when the
+    module is imported rather than only by a checker: an import it names being
+    confined to ``TYPE_CHECKING`` makes the alias itself unreadable, and the
+    ``program`` annotations on the factory and the errors unresolvable. Both
+    surfaces are public, so a caller reaching either one through
+    ``typing.get_type_hints`` must not meet a ``NameError``.
+    """
+    import collections.abc as cabc
+    import typing as typ
+
+    from cuprum import executable_binding as binding_module
+
+    assert binding_module.ExecutableResolver.__value__ == cabc.Callable[[], str], (
+        "the resolver alias must be readable at runtime, got "
+        f"{binding_module.ExecutableResolver!r}"
+    )
+    hints = typ.get_type_hints(binding_module.executable_binding)
+    assert hints["program"] is c.Program, (
+        f"the factory must resolve its Program annotation, got {hints['program']!r}"
+    )
+    assert (
+        typ.get_type_hints(binding_module.ExecutableResolutionError.__init__)["program"]
+        is c.Program
+    ), "the resolution error must resolve its Program annotation"
+
+
+def test_executable_path_api_type_hints_resolve_at_runtime() -> None:
+    """The path vocabulary resolves its public annotations at runtime.
+
+    The sibling of the binding-module test above: the rejection error is raised
+    by both modules, so its ``program`` annotation is public surface of this
+    one and must survive the same runtime inspection.
+    """
+    import typing as typ
+
+    from cuprum import executable_paths as paths_module
+
+    hints = typ.get_type_hints(paths_module.InvalidExecutableBindingError.__init__)
+    assert hints["program"] == c.Program | None, (
+        f"the error must resolve its Program annotation, got {hints['program']!r}"
+    )
+
+
 def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
     """RelayFallback is immutable and carries only closed-set vocabulary."""
     from cuprum.echo_events import EchoErrorCategory, EchoStream

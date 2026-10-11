@@ -1762,6 +1762,24 @@ escalation, not a workaround.
   Decision log; the falsified premise is corrected in the Constraints entry and
   in the Progress entry above; the general lesson is in
   `Surprises & discoveries`.
+- [x] (2026-10-11 06:20Z) Two defects in this feature's own new modules were
+  found by an external review after the PR was marked ready, repaired, and
+  proven non-vacuous. Both are in files this branch *adds*, so both are in
+  scope. The traversal bypass (`cuprum/executable_paths.py`) is fixed by
+  parsing a drive-letter value with `PureWindowsPath`; the unresolvable public
+  annotations (`cuprum/executable_binding.py`, and the sibling error in the
+  paths module) are fixed by promoting the `cabc` and `Program` imports to
+  runtime with the repository's marker idiom. Both are recorded in
+  `Surprises & discoveries`, and the EP-M1 conformance check and the
+  `PurePath.parts` axiom above are corrected to state what the code now does.
+  Evidence: the pre-fix reproduction, the post-fix behaviour on both modules,
+  the two mutation probes (each new test failing under a reverted
+  fix for the intended reason, the F2 probe with Codex's exact
+  `NameError: name 'cabc' is not defined`), and 128 passing tests across the
+  four affected modules. Two neighbouring defects on the base revision —
+  `classify_path_string` in `cuprum/builders/args.py` and `ExecEvent.program`
+  in `cuprum/events.py` — are deliberately left alone, because neither file is
+  in this branch's diff; they are recorded rather than repaired.
 
 ## Surprises & discoveries
 
@@ -2288,6 +2306,60 @@ escalation, not a workaround.
   and the tests that read its output would not report an error — they would
   report an empty decision and fail on a count, which is the harmless version
   of the same trap.
+
+- Observation: **recognising a drive-letter path as absolute is not the same
+  as parsing it as one, and the difference is a traversal the restriction
+  missed.** `classify_executable_path` matched `_WINDOWS_ABS_PATTERN` and then
+  inspected `PurePath(raw_value).parts`, but on a POSIX host that object is a
+  `PurePosixPath`, so `r"C:\tools\..\evil.exe"` was a single part with no `..`
+  in it. The path classified as acceptable and `executable_path` returned it,
+  while the identical POSIX spelling was correctly rejected. Evidence: a
+  reproduction at the assessed head returned `None` for
+  `r"C:\tools\..\evil.exe"` under `allow_relative=False`, where `/opt/../evil`
+  returned `PARENT_SEGMENT`; after the repair the Windows form returns
+  `PARENT_SEGMENT` and the pre-existing
+  `test_classify_accepts_a_windows_absolute_path` still accepts the
+  traversal-free `r"C:\tools\tool.exe"`. Impact: a drive-letter value is now
+  parsed with `PureWindowsPath`, which splits on both separators, so the
+  rejection sees the segments a Windows loader would see. The general lesson is
+  that a platform-specific recognition branch must be followed by a parse
+  using that platform's rules — a regex that identifies a shape, and a `parts`
+  sequence that reflects a *different* separator convention, agree about
+  nothing.
+- Observation: **the plan already required the property its own stage check
+  then recorded as satisfied by its absence.** The runtime-resolution
+  observation above states that `ExecutableBinding`'s annotations must remain
+  resolvable, because the repository calls `get_type_hints` on public
+  dataclasses; the EP-M1 conformance check nevertheless recorded "`Program` is
+  referenced only under `TYPE_CHECKING`" as a virtue. Both cannot hold.
+  Evidence: `ExecutableResolver.__value__` raised
+  `NameError: name 'cabc' is not defined`, and `get_type_hints` raised
+  `NameError: name 'Program' is not defined` for `executable_binding`,
+  `ExecutableResolutionError.__init__`, and
+  `InvalidExecutableBindingError.__init__` in the sibling paths module; after
+  the repair all four resolve. Impact: both the `cabc` and `Program` imports
+  are runtime imports carrying the repository's marker idiom, matching
+  `cuprum/catalogue.py` and `cuprum/context/scoped.py`, and the conformance
+  check now states the narrower truth — neither module imports the context
+  package, and the only other runtime `cuprum` import is the public-annotation
+  `Program`. The general lesson is that a conformance check is an assertion
+  about the code and can be falsified by it: "the annotation resolves at
+  runtime" and "the annotation's names are confined to a type-checking block"
+  are contradictory requirements, and the plan held both until an external
+  review pointed at the seam.
+- Observation: the same Windows-separator defect and the same
+  `get_type_hints` failure both exist in pre-existing base-revision code this
+  branch does not touch — `classify_path_string` in `cuprum/builders/args.py`
+  has the identical `PurePath`-plus-regex combination, and
+  `ExecEvent.program` in `cuprum/events.py` is unresolvable for the same
+  `TYPE_CHECKING` reason. Evidence: the reproduction returns `None` for
+  `r"C:\tools\..\evil.exe"` on `390fcf83`, and `git diff --name-status
+  390fcf83..HEAD` does not list either file. Impact: neither is repaired here,
+  because both are outside this feature's diff and the issue's acceptance
+  criteria; they are recorded so the latent defects are not mistaken for
+  consequences of this change. The lesson is the one this plan has already
+  recorded once — a defect found next to new code is not automatically a
+  defect *of* it, and the difference is decided by the diff, not by proximity.
 
 ## Decision log
 
@@ -2980,11 +3052,17 @@ Axioms relied on, and why they are not verified here:
   interface rather than a stub.
 - `PurePath.parts` splits on the platform separator, and a POSIX path
   containing no separator is `PATH`-searched rather than looked up relative to
-  the working directory. Two pieces of repository-owned logic depend on these
-  facts. `advisory_path_rejection` relies on the separator test to decide
-  whether a filesystem probe is meaningful at all; `resolve_binding` relies on
-  them by *declining* to guess, anchoring a relative binding at `cwd` when one
-  is supplied and otherwise returning it unchanged for the platform to resolve.
+  the working directory. A drive-letter value is the exception the classifier
+  must name explicitly: it is parsed with `PureWindowsPath`, which splits on
+  both separators, because on a POSIX host the platform `PurePath` treats
+  backslashes as ordinary name characters and would not expose a `..` between
+  them as a part. Three pieces of repository-owned logic depend on these facts.
+  `advisory_path_rejection` relies on the separator test to decide whether a
+  filesystem probe is meaningful at all; `classify_executable_path` relies on
+  the Windows flavour to see the traversal segments the loader would see; and
+  `resolve_binding` relies on the separator facts by *declining* to guess,
+  anchoring a relative binding at `cwd` when one is supplied and otherwise
+  returning it unchanged for the platform to resolve.
   Both are verified directly, and `resolve_binding`'s two branches are pinned
   by named tests (`test_resolve_anchors_a_bare_relative_name_in_the_same_way`
   and `test_resolve_leaves_a_bare_name_alone_when_there_is_no_cwd`).
@@ -3088,10 +3166,12 @@ EP-M1 — the pure binding modules exist and are fully tested.
   `test_executable_binding_property_based.py` present; all three failed before
   the modules existed. 99 tests, 25 named examples for the path vocabulary, 34
   for the binding types, and 15 properties.
-- Conformance check: neither module imports a `cuprum` module at runtime other
-  than their own pair — `Program` is referenced only under `TYPE_CHECKING` —
-  and neither imports the context package at all; the `Program` type is
-  untouched; no new dependency is added; both modules are under pylint's
+- Conformance check: neither module imports the context package at all, and
+  neither imports a `cuprum` module at runtime other than their own pair and
+  `cuprum.program` — the `Program` annotations are public, so the import is
+  deliberate and carries the repository's marker idiom, as the runtime-hint
+  observation above requires; the `Program` type is untouched; no new
+  dependency is added; both modules are under pylint's
   400-line ceiling.
 - Recovery: the milestone is additive and self-contained; `git revert` of its
   single commit restores the prior state with no other file affected.

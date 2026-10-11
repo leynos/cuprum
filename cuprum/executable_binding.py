@@ -38,8 +38,8 @@ tree read-only.
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import dataclasses as dc
-import typing as typ
 from pathlib import Path
 
 from cuprum.executable_paths import (
@@ -51,11 +51,9 @@ from cuprum.executable_paths import (
     coerce_path_string,
     executable_path,
 )
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum.program import Program
+from cuprum.program import (  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+    Program,
+)
 
 type ExecutableResolver = cabc.Callable[[], str]
 """A zero-argument callable producing the executable to run.

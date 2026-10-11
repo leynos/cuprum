@@ -89,6 +89,48 @@ def test_classify_reports_each_syntactic_category() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        r"C:\tools\..\evil.exe",
+        r"C:\..\evil.exe",
+        "C:/tools/../evil.exe",
+        r"C:\tools\bin\..\..\evil.exe",
+    ],
+    ids=["nested", "root", "mixed-separators", "double"],
+)
+def test_classify_rejects_a_traversal_behind_windows_separators(raw: str) -> None:
+    """A drive-letter path is split as Windows would split it, on any host.
+
+    ``PurePath`` on a POSIX host is a ``PurePosixPath``, so backslashes are
+    ordinary name characters and a ``..`` between them never appears as a path
+    part. Recognising ``C:`` as absolute therefore cannot be the last thing the
+    classifier does with a Windows value: the traversal hiding behind those
+    separators would classify as acceptable, and ``executable_path`` would hand
+    the caller a path the documented restriction forbids.
+    """
+    assert (
+        classify_executable_path(raw, allow_relative=False)
+        is PathBindingRejection.PARENT_SEGMENT
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [r"C:\tools\..\evil.exe", "C:/tools/../evil.exe"],
+    ids=["backslash", "mixed-separators"],
+)
+def test_executable_path_rejects_a_traversal_behind_windows_separators(
+    raw: str,
+) -> None:
+    """The constructor refuses what the classifier refuses, for Windows too."""
+    rejection = classify_executable_path(raw, allow_relative=False)
+    assert rejection is not None, "the classifier must have rejected the path"
+    with pytest.raises(InvalidExecutableBindingError) as exc_info:
+        executable_path(raw)
+    assert exc_info.value.reason is rejection
+
+
 def test_classification_is_pure_and_repeatable() -> None:
     """Classifying the same input twice yields the same category."""
     raw = "bin/tool"

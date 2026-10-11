@@ -24,10 +24,11 @@ import enum
 import os
 import re
 import typing as typ
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PureWindowsPath
 
-if typ.TYPE_CHECKING:
-    from cuprum.program import Program
+from cuprum.program import (  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+    Program,
+)
 
 ExecutablePath = typ.NewType("ExecutablePath", str)
 """A validated string naming an executable to run.
@@ -103,7 +104,7 @@ def classify_executable_path(
     *,
     allow_relative: bool,
 ) -> PathBindingRejection | None:
-    """Classify why a raw executable-path string is rejected, or ``None``.
+    r"""Classify why a raw executable-path string is rejected, or ``None``.
 
     Mirrors :func:`cuprum.builders.args.classify_path_string`: the checks run in
     declaration order, and the first match wins, so a NUL-bearing traversal is
@@ -129,9 +130,18 @@ def classify_executable_path(
     'NOT_ABSOLUTE'
     >>> classify_executable_path("bin/tool", allow_relative=True) is None
     True
+    >>> classify_executable_path(r"C:\tools\..\evil.exe", allow_relative=False)
+    <PathBindingRejection.PARENT_SEGMENT: "ExecutablePath cannot contain '..' segments">
     """
-    path = PurePath(raw_value)
-    is_absolute = path.is_absolute() or bool(_WINDOWS_ABS_PATTERN.match(raw_value))
+    is_windows = bool(_WINDOWS_ABS_PATTERN.match(raw_value))
+    # A drive-letter path is parsed with the Windows flavour even on a POSIX
+    # host. ``PurePath`` there is a ``PurePosixPath``, so backslashes are
+    # ordinary name characters: the ``..`` between them would never appear as
+    # a path part, and a traversal hidden behind them would classify as
+    # acceptable. ``PureWindowsPath`` splits on both separators, so the
+    # rejection below sees the same segments the Windows loader would.
+    path = PureWindowsPath(raw_value) if is_windows else PurePath(raw_value)
+    is_absolute = is_windows or path.is_absolute()
     if not raw_value:
         return PathBindingRejection.EMPTY
     if "\x00" in raw_value:
