@@ -42,6 +42,16 @@ A fence with no marker, or with a marker for the other kind of block, fails the
 suite. That way a Python example cannot be marked as a shell example to avoid
 being run.
 
+Separately, the contract tests that assert on documentation prose read whole
+sections through `tests/helpers/markdown.py::extract_markdown_subsection`,
+which returns a section body up to the next heading of the same or a higher
+level. That boundary is fence-aware: a `#` line inside a fenced code block is
+comment or shell syntax, not a heading, and does not close the section. Before
+that, such a line truncated the section silently, and the contract failed as a
+*missing clause* — pointing whoever read the failure at the prose rather than
+at the extractor. A section whose extracted length looks wrong is worth
+checking against that helper first.
+
 ## Boundary compilation selections
 
 [`scripts/boundary_compile.py`](../scripts/boundary_compile.py) defines named
@@ -1500,14 +1510,24 @@ spawn path that forgets to record ownership therefore degrades to the
 direct-child route, which is why the record, not the policy, is the source of
 truth at teardown time.
 
+The conversion from policy to spawn arguments is `_ownership_spawn_kwargs`
+(`cuprum/_subprocess_context.py`), beside `_cwd_arg`. It is the single place a
+policy becomes `start_new_session=True`, and it is applied at the two spawn
+sites rather than duplicated: `_subprocess_execution.py` for a single command
+and `_pipeline_spawn.py` for a pipeline. A third spawn route that did not call
+it would leave its children unowned whatever the caller asked for, so the
+function exists to make that omission a missing call rather than a divergent
+copy of the keyword.
+
 Table 1: process-group ownership modules and their responsibilities
 
-| Module                  | Owns                                                       |
-| ----------------------- | ---------------------------------------------------------- |
-| `_process_group.py`     | The liveness probe, the backoff poll, and the capped wait  |
-| `_process_signal.py`    | Signal delivery and the settlement decision                |
-| `_teardown_policy.py`   | The grace period and the per-process ownership record      |
-| `_process_lifecycle.py` | The two-phase escalation and the fail-fast stage selection |
+| Module                   | Owns                                                                |
+| ------------------------ | ------------------------------------------------------------------- |
+| `_process_group.py`      | The liveness probe, the backoff poll, and the capped wait           |
+| `_process_signal.py`     | Signal delivery and the settlement decision                         |
+| `_teardown_policy.py`    | The grace period and the per-process ownership record               |
+| `_process_lifecycle.py`  | The two-phase escalation and the fail-fast stage selection          |
+| `_subprocess_context.py` | The policy-to-spawn-argument conversion (`_ownership_spawn_kwargs`) |
 
 ### The liveness probe
 
@@ -1551,6 +1571,49 @@ the probe reports it as having no reachable members. Those two answers are not
 the same, and only the permission case leaves a member running past teardown,
 so it is logged as `cuprum.process_group_unsignalable` before being reported as
 settled.
+
+### Observability of group teardown
+
+Process-group cleanup is observable through diagnostic log records, not through
+observe events or metrics. That is the deliberate application of the convention
+stated above — private helpers emit diagnostic logs rather than installing a
+global metrics or tracing backend — and it is recorded here because the nearest
+analogous teardown bound *does* have a counter (`capture_eof_grace_expired`
+maps to `cuprum_capture_eof_grace_expired_total`), so an omission without a
+stated reason would read as an oversight.
+
+The reason is that these helpers have no `_StageObservation` to emit through.
+An observe event is emitted from a stage's observation, and the group teardown
+is reached from `_terminate_all_shielded` — including from the pipeline
+fail-fast path, which has no single stage to attribute a group event to, and
+from routes whose caller has already abandoned the run. Threading an
+observation down would mean inventing an attribution for a signal that belongs
+to the run rather than to any one stage. What an operator needs from this path
+is bounded and low-cardinality anyway: whether a group was left holding members
+this run could not reach, and why.
+
+The records, all at WARNING because each one reports an abnormal outcome:
+
+- `cuprum.process_group_unsignalable` (`_process_group.py`) — the probe found
+  members this process may not signal, so the group is reported unreachable
+  rather than settled.
+- `cuprum.process_group_settlement_timeout` (`_process_signal.py`) — the capped
+  post-`SIGKILL` wait expired with members still outstanding.
+- `cuprum.teardown_signal_failed` (`_process_signal.py`) — a signal the kernel
+  refused with an `OSError` wider than the tolerated race, naming the signal so
+  a refused graceful signal is distinguishable from a refused escalation.
+
+The last of those is the subtle one, and the reason `_signal_child_or_report`
+exists as a wrapper rather than the two signal sites each growing their own
+handler. Both ways a signal can fail to arrive reach the caller as the same
+`False` — "nothing left to do here" — and the fail-fast path reads that as a
+stage that had already settled, counting it into
+`cuprum_terminated_stage_count`. `ProcessLookupError` is the tolerated race and
+stays silent; a wider `OSError` is a process this run believes is running and
+could not signal, so it is reported before it is passed over.
+`cuprum/unittests/test_process_signal_failure_reporting.py` pins both
+directions: that the benign race stays quiet, and that a refused signal is
+recorded once, naming the signal.
 
 ### Settlement
 
