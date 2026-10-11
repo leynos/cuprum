@@ -2766,7 +2766,7 @@ further, the production modules they import — `_subprocess_timeout.py`,
 obligations those harnesses discharge are untouched by construction rather than
 by re-running them. Verus is present as vendored tooling only
 (`tools/verus/{SHA256SUMS,VERSION}`) with no proof authored, so no `verus`
-obligation exists to scrutinise. This determination was re-derived at the
+obligation exists to scrutinize. This determination was re-derived at the
 current head rather than inherited from the earlier one: the previous basis
 (zero Rust files changed) covered only Kani, whereas for a Python branch
 CrossHair is the family that could actually have been affected, so it was
