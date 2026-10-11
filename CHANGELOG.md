@@ -106,8 +106,12 @@
   `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX process groups
   and would need a Job Object whose assignment cannot be made atomic with
   process creation, so containment could begin only after a child might already
-  have spawned a descendant. See
-  [ADR-019](docs/adr-019-process-group-ownership.md)
+  have spawned a descendant. A teardown signal the kernel refuses with an
+  `OSError` wider than the tolerated race — a group this process may not
+  signal, or a name already handed on — is reported as
+  `cuprum.teardown_signal_failed`, naming the signal, so a failed teardown is
+  not read as an orderly one; a target that had already gone stays silent, as
+  that race is expected. See [ADR-019](docs/adr-019-process-group-ownership.md)
   ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state

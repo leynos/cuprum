@@ -438,3 +438,45 @@ the group has been settled; here the question is what bounds the gather that
 precedes it. The two are complementary: the deadline decides how long the run
 may wait, and the EOF window decides how long a reader may hold on once the run
 has decided.
+
+## Addendum (2026-10-11): group teardown is reported through log records, not events
+
+Process-group teardown is observable through three diagnostic log records and
+nothing else: no observe event and no metric. The adjacent teardown bound that
+this feature most resembles — the bounded capture EOF grace — *does* have a
+counter (`cuprum_capture_eof_grace_expired_total`), so the omission was
+recorded as a decision rather than left to read as an oversight.
+
+The reason is attribution. An observe event is emitted from a stage's
+``_StageObservation``, and group teardown has none to emit through. It is
+reached from ``_terminate_all_shielded``, which the pipeline fail-fast path
+calls for every still-running stage at once: there is no single stage a group
+event could be attributed to, and the single-command routes reach the same
+helper from callers that have already abandoned the run. Threading an
+observation down would mean inventing an attribution for a signal that belongs
+to the run rather than to any one stage. Metrics are declined for the same
+reason and one more: the useful signal here is whether a group survived a
+teardown this run could not complete, and the records below already carry it
+with the cardinality an operator needs.
+
+The three records, all WARNING because each reports an abnormal outcome:
+
+- ``cuprum.process_group_unsignalable`` — the probe found members this process
+  may not signal, so the group was reported unreachable rather than settled.
+- ``cuprum.process_group_settlement_timeout`` — the capped post-escalation group
+  wait expired with members still outstanding.
+- ``cuprum.teardown_signal_failed`` — a signal the kernel refused with an
+  ``OSError`` wider than the tolerated race.
+
+The third is new here and closes a defect that was more than a logging gap. A
+teardown signal had two ways to fail to arrive and reported both as the same
+``False``, meaning "nothing left to do here". ``ProcessLookupError`` is the
+race both signal routes already tolerate — the target went between the probe
+and the signal — and silence is correct for it. A wider ``OSError`` is a
+process this run believes is running and could not signal, and reporting it as
+an orderly settlement made a failed teardown indistinguishable from a
+successful one: the fail-fast path reads that ``False`` as a stage that had
+already settled and counts it into ``cuprum_terminated_stage_count``. A refusal
+was therefore trended as a clean outcome. The two signal sites now share one
+wrapper that separates the arms, so the tolerated race stays quiet and a
+refusal is recorded once, naming the signal it could not deliver.

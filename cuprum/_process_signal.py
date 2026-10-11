@@ -167,12 +167,57 @@ def _signal_child(
     ``process.kill`` — passed in rather than selected here so a run that does
     not own the group signals exactly the process it always did. Both
     ``os.killpg`` and those two raise ``ProcessLookupError`` when the target
-    has already gone, so callers keep one handler across either route.
+    has already gone; :func:`_signal_child_or_report` is the wrapper that turns
+    either route's outcome into the boolean its callers branch on.
     """
     if owns_group and process.pid is not None:
         os.killpg(process.pid, group_signal)
         return
     direct()
+
+
+def _signal_child_or_report(
+    process: asyncio.subprocess.Process,
+    *,
+    group_signal: int,
+    direct: cabc.Callable[[], None],
+    owns_group: bool,
+) -> bool:
+    """Deliver one teardown signal, reporting what cannot report itself.
+
+    The two ways a signal can fail to arrive are not the same. A
+    ``ProcessLookupError`` is the race both routes already tolerate — the
+    target went before the signal could be delivered — so it is passed over
+    silently. A wider ``OSError`` is a target this run believes is there and
+    could not signal, which the caller would otherwise read as an orderly
+    teardown, so it is logged before it is reported.
+
+    Returns
+    -------
+    bool
+        Whether the signal was delivered to anything.
+    """
+    try:
+        _signal_child(
+            process,
+            group_signal=group_signal,
+            direct=direct,
+            owns_group=owns_group,
+        )
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        _LOGGER.warning(
+            "cuprum.teardown_signal_failed pid=%s signal=%s owns_group=%s "
+            "error=%r; the target was not signalled, so a process this run "
+            "believes is running may have outlived its teardown",
+            process.pid,
+            group_signal,
+            owns_group,
+            exc,
+        )
+        return False
+    return True
 
 
 async def _settlement(
@@ -242,14 +287,12 @@ async def _terminate_process_with_wait(
     owns_group = policy.owns_group_for(0)
     if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
         return False
-    try:
-        _signal_child(
-            process,
-            group_signal=signal.SIGTERM,
-            direct=process.terminate,
-            owns_group=owns_group,
-        )
-    except (ProcessLookupError, OSError):
+    if not _signal_child_or_report(
+        process,
+        group_signal=signal.SIGTERM,
+        direct=process.terminate,
+        owns_group=owns_group,
+    ):
         return False
     try:
         await asyncio.wait_for(
@@ -296,14 +339,12 @@ async def _escalate_after_grace(
     """
     if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
         return False
-    try:
-        _signal_child(
-            process,
-            group_signal=signal.SIGKILL,
-            direct=process.kill,
-            owns_group=owns_group,
-        )
-    except (ProcessLookupError, OSError):
+    if not _signal_child_or_report(
+        process,
+        group_signal=signal.SIGKILL,
+        direct=process.kill,
+        owns_group=owns_group,
+    ):
         return False
     await _settle_after_escalation(process, wait_for_exit, owns_group=owns_group)
     return True

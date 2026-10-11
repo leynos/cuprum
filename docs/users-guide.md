@@ -1184,6 +1184,36 @@ other direction too: signalling that group reaches the caller's own process and
 its siblings. Ownership is what makes the group signal safe, which is why it is
 not the default.
 
+#### Cleanup diagnostics
+
+An owned teardown reports the outcomes it cannot resolve, so a run that left
+something behind is visible rather than silent. Each record goes to the
+`cuprum._process_signal` or `cuprum._process_group` logger at `WARNING`:
+
+- `cuprum.teardown_signal_failed` — a signal the kernel refused for a target
+  the run still believed was running. It names the signal, so a refused
+  `SIGTERM` (a process never asked to leave) is distinguishable from a refused
+  `SIGKILL` (a process asked and unmoved). A target that had already gone is
+  not a failure and is not recorded.
+- `cuprum.process_group_settlement_timeout` — the bounded wait after the
+  escalation expired with group members still outstanding.
+- `cuprum.process_group_unsignalable` — the group holds members this process
+  may not signal, so it was reported unreachable rather than settled.
+
+A refused signal therefore reads as `cuprum.teardown_signal_failed`, carrying
+`pid`, `signal`, `owns_group`, and `error` fields — for example
+`pid=4319 signal=9 owns_group=True`. The trailing clause states the
+consequence: the target was not signalled, so a process the run believes is
+running may have outlived its teardown.
+
+The records propagate to the root logger, so an application that configures
+logging receives them with no further setup; with no handler configured,
+Python's last-resort handler still prints them to standard error.
+
+These are diagnostic rather than structured execution telemetry, so they have
+no observe event and no metric alongside them; see the developers' guide for
+why the attribution would not be meaningful.
+
 #### Timeout diagnostics
 
 Every expiry writes a structured `WARNING` record to the `cuprum.timeout`

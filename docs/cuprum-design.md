@@ -1818,8 +1818,10 @@ sequenceDiagram
   the surface is shared: both the single-command wait path and the pipeline
   deadline path report through it, and the pipeline caller cannot import
   `_subprocess_timeout` without closing an import cycle.
-- `cuprum/_subprocess_context.py` owns small shared context helpers
-  (`_cwd_arg`, `_sh_module`) used across the subprocess modules.
+- `cuprum/_subprocess_context.py` owns small shared context helpers used across
+  the subprocess modules (`_cwd_arg`, `_sh_module`, and
+  `_ownership_spawn_kwargs`, which converts a process-group policy into the
+  spawn keyword `start_new_session` for both spawn routes).
 
 Pipeline spawning applies the same ownership rule per stage. `_pipeline_spawn`
 uses `_SpawnedPipelineStages` to retain started processes, capture tasks, start
