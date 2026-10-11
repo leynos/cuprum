@@ -10,10 +10,14 @@ use them.
 
 A child spawned with ``start_new_session=True`` is the leader of both a new
 session and a new process group, so its group identifier equals its process
-identifier. That equality is what makes ``os.killpg(process.pid, sig)`` safe
-here: the group is named by a process this run started, so every signal this
-module sends is aimed at a group the run itself created. A run that does not
-own the group signals exactly the process it always did.
+identifier. That equality is what makes ``os.killpg(process.pid, sig)`` the
+right name to signal here: the group was named by a process this run started,
+so the name begins as one this run created rather than one it was handed. A run
+that does not own the group signals exactly the process it always did.
+
+Beginning as this run's is not the same as still being this run's at the moment
+of the signal, and the rest of this docstring is about that gap. Nothing below
+should be read as a licence to signal on the strength of the name alone.
 
 What the name does *not* carry is a guarantee that no unrelated group can ever
 hold it. The kernel keeps a group addressable for as long as it has a member,
@@ -143,7 +147,8 @@ def _signal_child(
     is one this run created rather than one it was handed.
 
     The name identifies a group this run made; it does not by itself guarantee
-    that group still exists. The caller reaches this function only after the
+    that group still exists, nor that it is still the group holding the name.
+    The caller reaches this function only after the
     settlement probe has declined to veto — but a probe that answers cannot
     attribute the name to this run. The original group could have emptied and
     the kernel recycled the number onto a stranger's group *before* the probe

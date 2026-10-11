@@ -1600,8 +1600,11 @@ read directly and no timing is involved:
   would mistake for settlement;
 - reuse before the probe is pinned as a **witness** rather than a prohibition:
   the double models the kernel faithfully, so when a stranger's group holds the
-  number the signal reaches the stranger, and the test asserts that outcome. It
-  is written so that reading a live probe as proof of ownership fails it;
+  number the signal reaches the stranger, and the test asserts that outcome.
+  The witness covers the signalling, not the reasoning — a teardown that read a
+  live answer as proof of ownership would send the same signals to the same
+  name, so the suite cannot adjudicate between the readings and the claim rests
+  on the prose above;
 - a group that empties during the grace period is not escalated into. Every
   poll the grace took was answered live, so the escalation is reached on an
   answer that has since stopped being true; the fresh check before the
@@ -6583,22 +6586,58 @@ consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
 
-A configured timeout covers **both** halves of a streamed run, not only the
-exit wait. The direct child exiting settles the wait and nothing else: for an
-owning run a descendant the child left behind can still hold the run's
+A configured timeout covers **all** of a streamed run after its exit, not only
+the exit wait. The direct child exiting settles the wait and nothing else: for
+an owning run a descendant the child left behind can still hold the run's
 inherited pipes, so the consumers never see EOF and the run would otherwise
 wait past its own deadline — the timeout silently covering only the first half.
-`_collect_stream_output` in `cuprum/_subprocess_stream_run.py` therefore bounds
-the consumer gather with `_deadline_for_collection`, which returns what remains
-of the same `perf_counter`-based budget the exit wait was scheduled against (or
-`None` for an unconfigured timeout, keeping a run without a deadline unbounded
-here exactly as everywhere else). Expiry inside the gather takes the ordinary
-error route rather than a special one: `_settle_group_and_discard_consumers`
-settles the group — precisely what releases the pipes the descendant held —
-before `_handle_stream_timeout` raises the internal `_SubprocessTimeoutError`,
-which `_subprocess_execution.py` converts into the public `TimeoutExpired` just
-as it does for a deadline expiring during the exit wait. One failure contract
-covers both halves, and no expiry path leaves the group unsettled.
+`_collect_stream_output` in `cuprum/_subprocess_stream_run.py` therefore puts
+the whole post-exit boundary under one `asyncio.timeout`, whose argument is
+`_deadline_for_collection`: what remains of the same `perf_counter`-based
+budget the exit wait was scheduled against, or `None` for an unconfigured
+timeout, keeping a run without a deadline unbounded here exactly as everywhere
+else.
+
+The deadline is passed as the `asyncio.timeout` argument rather than read into
+a local, so it is measured immediately before the scope it bounds. Computing a
+duration first and reusing it would let the awaits before the gather spend part
+of the budget and still hand the gather the whole of it, so the run would
+outlast the timeout it was given. Bounding the heartbeat stop and the writer
+await matters as much as bounding the gather: a descendant that inherits the
+child's stdin without reading it leaves the writer parked in `drain` on a full
+pipe, and a timeout starting after that await would never be reached at all.
+
+Bounding the scope is necessary but not sufficient, because a deadline can
+expire and still never reach its handler inside it. Cancelling a task suspended
+on `await other_task` cancels the *inner* task and delivers the
+`CancelledError` outward only once that task finishes, so an await parked
+somewhere it will not finish defers the expiry meant to interrupt it. That was
+observed directly: the run at `cancelling() == 1` with the writer parked at
+`wait_closed` for as long as the probe ran. The writer's close in
+`cuprum/_subprocess_stdin.py` is therefore bounded by `_CLOSE_GRACE_S` — the
+reader end may never drain, so `wait_closed` cannot be awaited unbounded — and
+the writer await in `_await_stdin_writer` is additionally shielded so the
+cancellation returns to the boundary immediately rather than after the writer
+has spent that grace. Measured against a 1.0 s deadline with a parked writer,
+the expiry lands at 1.52 s shielded and 2.02 s unshielded.
+
+The shield is a latency improvement, not the fix, and the distinction is worth
+keeping because the intuitive reading is the wrong one. With `wait_closed` left
+unbounded, shielding the await still left the run hanging past a 90 s cap: the
+shield returns the cancellation to the boundary at once, but the expiry
+handler's reconciliation then calls `_cancel_stdin_writer`, whose `gather`
+waits for the cancelled writer — which never finishes. The hang moved into the
+cleanup rather than disappearing. The bounded close is what makes the run
+terminate on its deadline under both policies; the shield only shortens the
+path to that termination under `OWN_GROUP`.
+
+Expiry takes the ordinary error route rather than a special one:
+`_settle_group_and_discard_consumers` settles the group — precisely what
+releases the pipes the descendant held — before `_handle_stream_timeout` raises
+the internal `_SubprocessTimeoutError`, which `_subprocess_execution.py`
+converts into the public `TimeoutExpired` just as it does for a deadline
+expiring during the exit wait. One failure contract covers both halves, and no
+expiry path leaves the group unsettled.
 
 The three post-exit awaits — stopping the idle monitor, awaiting the stdin
 writer, and the gather — sit inside **one** boundary, and the cleanup that
@@ -6609,6 +6648,14 @@ second cancel arriving during the group settlement would exit before
 reconciliation was ever awaited. `_settle_group_and_discard_consumers` composes
 the two phases into a single coroutine held under one shield for exactly that
 reason.
+
+That cleanup reconciles **every** task the run still owns, not the consumers
+alone, because a cancellation can arrive before the writer was ever awaited.
+Settling the group releases the child's stdin, but releasing a pipe is not the
+same as having settled the task that was writing to it, and under `INHERIT`
+there is no group signal to release it at all. The phase therefore calls
+`_reconcile_run_tasks`, which stops the monitor, cancels and collects the stdin
+writer, drains the consumers, and settles the diagnostics.
 
 The drain boundary carries an important teardown policy. Only the timeout path
 passes `capture=True`, allowing the fixed `_CAPTURE_EOF_GRACE_S` window to

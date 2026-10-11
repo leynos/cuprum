@@ -27,7 +27,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_stream_run, scoped
+from cuprum import ScopeConfig, _subprocess_drain, _subprocess_stream_run, scoped
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder, python_catalogue
 from tests.helpers.timeouts import (
@@ -40,6 +40,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_drain import _DrainContext, _RunTaskOwnership
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import SafeCmd
@@ -116,6 +117,13 @@ class TeardownWatch:
     as a run that never reaches its boundary — a slow, misleading way to report
     a test defect. The originals are captured before the module attributes are
     rebound, because the wrappers have to call through to them.
+
+    The drain is bound on ``cuprum._subprocess_drain``, not on the stream-run
+    module. Nothing in the stream-run module calls ``_drain_stream_consumers``;
+    reconciliation calls it, and reconciliation resolves the name in its own
+    module's globals — so a rebound attribute on the importing module would
+    watch a name no production path reads, and the drain would go unrecorded
+    while the test reported a boundary that was never reached.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,7 +133,7 @@ class TeardownWatch:
         self.drained = asyncio.Event()
         self._await_writer = _subprocess_stream_run._await_stdin_writer
         self._settle_group = _subprocess_stream_run._settle_owned_group_before_draining
-        self._drain = _subprocess_stream_run._drain_stream_consumers
+        self._drain = _subprocess_drain._drain_stream_consumers
         monkeypatch.setattr(
             _subprocess_stream_run,
             "_await_stdin_writer",
@@ -137,7 +145,7 @@ class TeardownWatch:
             self._gated_settle,
         )
         monkeypatch.setattr(
-            _subprocess_stream_run,
+            _subprocess_drain,
             "_drain_stream_consumers",
             self._recording_drain,
         )
@@ -164,6 +172,49 @@ class TeardownWatch:
         """Run the real drain, recording that reconciliation was reached."""
         self.drained.set()
         return await self._drain(consumers, context)
+
+
+class SpawnedWriter:
+    """Instruments the stdin writer a run spawns, without replacing it.
+
+    A test that has to look at the writer *while* the run is in flight needs a
+    handle on the task, and the run builds it internally. Only the spawn is
+    intercepted, so the task itself is the production one and the cancellation
+    under test is the production cleanup's; the handle is an observation, not a
+    substitute.
+
+    Arming is part of construction, for the same reason it is on
+    :class:`TeardownWatch`: a watch installed in a second step is one a test can
+    forget, and the forgotten watch reports as a run that never spawned a
+    writer rather than as the test defect it is.
+
+    What this deliberately does *not* offer is a record of every writer a run
+    ever spawned. A run spawns at most one, so a list would only invite
+    assertions over it that read as "every task the run retained" while being
+    satisfied by the group signal that releases the writer anyway. Use
+    :attr:`task` for the precondition that the writer was live, and pin
+    settlement where nothing else can stand in for it.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Rebind the spawn so the task it creates is retained here."""
+        self.task: asyncio.Task[None] | None = None
+        self._spawn = _subprocess_stream_run._spawn_stdin_writer
+        monkeypatch.setattr(
+            _subprocess_stream_run,
+            "_spawn_stdin_writer",
+            self._watching_spawn,
+        )
+
+    def _watching_spawn(
+        self,
+        process: asyncio.subprocess.Process,
+        stdin_data: bytes | None,
+        observation: _StageObservation,
+    ) -> asyncio.Task[None] | None:
+        """Spawn the writer unchanged, keeping a handle on the task it made."""
+        self.task = self._spawn(process, stdin_data, observation)
+        return self.task
 
 
 def recorded_descendant(pid_file: Path) -> int | None:

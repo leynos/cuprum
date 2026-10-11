@@ -17,13 +17,21 @@ matters:
   ran. A live probe is necessary for a signal to be sound, never sufficient
   to make it so.
 
-The second case is the hazard these tests exist to catch, and it is easy to
-mistake for safety: an implementation that treats an answering probe as proof
-of ownership will happily `killpg` a stranger's group. The double behind these
-tests makes that deterministic by modelling the kernel faithfully — it cannot
-tell whose group holds a number either, so it delivers wherever the name
-answers. The set of signalled names is therefore read directly, and no timing
-is involved.
+The second case is the residual these tests **witness** rather than forbid, and
+it is easy to mistake for safety. The double behind them models the kernel
+faithfully — it cannot tell whose group holds a number either, so it delivers
+wherever the name answers — and the set of signalled names is read directly, so
+no timing is involved.
+
+What these tests pin is observable signalling behaviour, and that is a weaker
+thing than it might look. A teardown that treats an answering probe as proof of
+ownership sends *exactly* the same signals as one that treats it as a veto that
+did not fire: same names, same order, same refusal when the probe goes dark.
+The two readings differ in what they conclude, not in what they do, so no input
+here can separate them and no assertion below fails under the wrong one. The
+misreading is prevented by the documentation that states the direction, not by
+these tests; what the tests establish is that the behaviour on the wire is the
+behaviour the documentation describes.
 
 The direct-child route is covered too, as the control. A run that did not
 create a group has no identity to ask about, so it must reach its target
@@ -80,6 +88,12 @@ def test_reuse_by_an_unrelated_live_group_is_indistinguishable_from_our_own(
     descendants the option exists to reclaim. What the code owes is an honest
     statement of the residual, and what this test owes is a witness: the
     stranger is signalled, with the probe as the only input consulted.
+
+    The witness is of the signalling, not of the reasoning. An implementation
+    that read the live probe as *proof* of ownership would send the same two
+    signals to the same name, so nothing asserted below would change; what
+    separates the readings is what they claim about the name, and the place to
+    fix a wrong claim is the documentation that makes it.
     """
     stranger = _TeardownTarget(is_group_live=True)
     monkeypatch.setattr(os, "killpg", stranger.record_killpg)

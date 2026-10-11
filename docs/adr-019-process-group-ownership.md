@@ -355,12 +355,16 @@ while widening exposure. Recording the one-way inference here is what prevents
 that.
 
 The tests in `cuprum/unittests/test_process_signal_identity.py` pin the
-direction. They assert the outcome rather than forbidding it — a stranger's
-group is signalled when the name answers, because that is what the kernel does
-with a number — and they are written so that treating a live probe as proof of
-ownership fails them. The same statement is in the module docstring of
-`cuprum/_process_signal.py`, which names both reuse windows: the larger one
-before the probe and the smaller one between the probe and the signal.
+behaviour the direction implies. They assert the outcome rather than forbidding
+it — a stranger's group is signalled when the name answers, because that is
+what the kernel does with a number — and they record that the test suite cannot
+adjudicate the reading itself: a teardown taking a live answer as proof of
+ownership sends the same signals to the same names as one taking it as a veto
+that did not fire, so no input separates them and no assertion fails under
+either. The claim is enforced by this document and the module docstring of
+`cuprum/_process_signal.py`, which names both reuse windows — the larger one
+before the probe and the smaller one between the probe and the signal — and not
+by the tests.
 
 ## Addendum (2026-10-11): a configured timeout bounds the stream collection
 
@@ -391,6 +395,42 @@ releases the pipes the descendant was holding, and only then does the resulting
 execution boundary, the public `TimeoutExpired` — the same exception a deadline
 expiring during the exit wait produces. One failure contract covers both
 halves, and no expiry path leaves the group unsettled.
+
+Bounding the second half is itself not enough, and the residual gap is worth
+recording because it is not visible from the shape of the scope. A deadline can
+expire and still never reach its handler *inside* it. Cancelling a task that is
+suspended on ``await other_task`` cancels the *inner* task and forwards the
+``CancelledError`` out only once that inner task finishes, so an await that
+parks indefinitely defers the very expiry meant to interrupt it. The stdin
+writer is exactly such an await: a descendant that inherits the child's stdin
+without reading it leaves the writer parked in ``drain``, and the cancellation
+that reaches it lands inside its own ``finally`` at ``wait_closed``, which
+waits for a protocol waiter a cancelled close never resolves. That was not a
+theoretical hazard — it was observed with the run at ``cancelling() == 1`` and
+the writer parked at ``wait_closed`` for as long as the probe ran.
+
+Two changes close it, and the split between them is deliberate. The close
+itself now has a bounded grace, so the writer always finishes promptly once
+cancelled; that bound is the necessary one, because it is also what the expiry
+handler's reconciliation needs when it cancels and collects the writer. The
+writer await is additionally shielded, so the cancellation returns to the
+boundary at once instead of after the writer has spent that grace. Measured
+against a 1.0 s deadline with a parked writer, the expiry lands at 1.52 s
+shielded and 2.02 s unshielded. Shielding alone is *not* a fix: with the close
+left unbounded, the run still hung past a 90 s cap, because the shield only
+moved the wait from the boundary into the reconciliation that awaits the writer
+it cancels. The bounded close is what makes the run terminate; the shield
+shortens the path to that termination.
+
+The ``INHERIT`` policy is what makes this observable, and the deadline tests
+run both policies for that reason. Under ``OWN_GROUP`` the expiry's cleanup
+signals the group, which closes the pipes and releases the writer whether or
+not reconciliation ever reaches it — so a run that bounded the writer await and
+never settled the writer still returns on time. Under ``INHERIT`` there is no
+group signal: the writer stays parked unless reconciliation cancels it, and a
+cleanup that does not reach the writer hangs the run past its deadline. Only
+the pair distinguishes a boundary that is merely entered from one whose cleanup
+actually completes.
 
 This does not disturb the fixed post-exit EOF window recorded under "Timeouts"
 in the users' guide. That window belongs to the drain, which is reached once

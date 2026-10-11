@@ -30,22 +30,16 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 import typing as typ
 
 import pytest
 
 from cuprum import _subprocess_stream_run
-from cuprum.sh import (
-    ExecutionContext,
-    ProcessGroupPolicy,
-    RunOutputOptions,
-    StdinInput,
-)
+from cuprum.sh import StdinInput
 from cuprum.unittests._post_exit_teardown_support import (
     PARKING_STDIN_BYTES,
-    RUN_BUDGET_S,
     Gate,
+    SpawnedWriter,
     TeardownWatch,
     assert_reclaimed,
     await_within,
@@ -54,14 +48,10 @@ from cuprum.unittests._post_exit_teardown_support import (
     owned_scope,
     reach_gate_and_cancel,
     reap_descendant,
-    recorded_descendant,
     settle,
     start_owned_run,
 )
-from tests.helpers.timeouts import (
-    descendant_then_exit_argv,
-    wait_for_pid_file,
-)
+from tests.helpers.timeouts import wait_for_pid_file
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -113,21 +103,46 @@ def test_a_cancel_at_the_heartbeat_stop_still_settles_the_group(
     flight. What is under test is where the boundary falls, which is the one
     thing the holding cannot fabricate: a boundary drawn after this call lets
     the cancellation through unhandled, and the descendant below says so.
+
+    The run is given a stdin payload nothing will read, so a writer task is
+    outstanding when the cancellation lands and the run has more to reclaim
+    than the group. Note what that writer being *finished* afterwards would not
+    show: settling the group closes the pipes the writer was parked on, which
+    releases it whether or not reconciliation ever reaches it. Only the
+    descendant's absence is evidence here; the writer's settlement is pinned
+    where no group signal can stand in for reconciliation, in the ``INHERIT``
+    arm of the deadline module's parked-writer case.
     """
     pid_file = tmp_path / "post-exit-heartbeat.pid"
     gate = Gate()
     gated = held_by(gate, _subprocess_stream_run._stop_idle_monitor)
     monkeypatch.setattr(_subprocess_stream_run, "_stop_idle_monitor", gated)
+    watch = SpawnedWriter(monkeypatch)
 
     async def run_case() -> None:
-        """Cancel the run while it is at the heartbeat stop."""
+        """Cancel at the heartbeat stop with a stdin writer still outstanding."""
         descendant_pid: int | None = None
-        run_task = start_owned_run(builder, pid_file)
+        run_task = start_owned_run(
+            builder,
+            pid_file,
+            stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
+        )
         try:
             descendant_pid = await asyncio.to_thread(
                 wait_for_pid_file,
                 pid_file,
                 context="the descendant a cancelled run must still reach",
+            )
+            await await_within(gate.reached.wait(), context="the heartbeat stop")
+            writer = watch.task
+            assert writer is not None, (
+                "the run spawned no stdin writer, so this run had nothing "
+                "outstanding for its cleanup to reclaim"
+            )
+            assert not writer.done(), (
+                "the stdin writer had already finished before the run was "
+                "cancelled, so the cancellation did not land with a run task "
+                "outstanding"
             )
             await reach_gate_and_cancel(
                 run_task,
@@ -214,70 +229,6 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
             await assert_reclaimed(descendant_pid, _LEAKED_ON_CANCEL)
         finally:
             gate.released.set()
-            reap_descendant(pid_file, descendant_pid)
-
-    asyncio.run(run_case())
-
-
-def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
-    tmp_path: Path,
-) -> None:
-    """A configured timeout covers the stream collection, not just the exit wait.
-
-    The child exits well before the deadline, so the exit wait succeeds and the
-    run moves on to collecting its consumers — where a descendant it left
-    behind holds the inherited pipes, and the readers therefore never see
-    end-of-file. Nothing in that second half used to look at the deadline at
-    all, so the timeout measured from the run's start silently covered only its
-    first half and the run hung indefinitely: the descendant was never
-    signalled, because the cleanup that would signal it is what the hang
-    prevented.
-
-    The deadline now bounds the collection as well, and expiry takes the
-    ordinary cleanup route — so this also asserts the descendant is gone. A fix
-    that merely stopped waiting, without settling the group, would return on
-    time and leave the descendant holding the pipes, which is the failure the
-    policy exists to prevent.
-    """
-    pid_file = tmp_path / "post-exit-deadline.pid"
-    command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
-    deadline = 1.0
-
-    async def run_case() -> None:
-        """Run with a deadline the child meets but the collection cannot."""
-        descendant_pid: int | None = None
-        started = time.monotonic()
-        try:
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(
-                    command.run(
-                        output=RunOutputOptions(capture=True, echo=False),
-                        timeout=deadline,
-                        context=ExecutionContext(
-                            process_group=ProcessGroupPolicy.OWN_GROUP,
-                        ),
-                    ),
-                    RUN_BUDGET_S,
-                )
-            elapsed = time.monotonic() - started
-            assert elapsed < RUN_BUDGET_S, (
-                "the run reached this assertion too late to have been bounded "
-                "by its own deadline"
-            )
-            descendant_pid = recorded_descendant(pid_file)
-            assert descendant_pid is not None, (
-                "the child never recorded the descendant it left behind, so "
-                "this run did not reach the state under test"
-            )
-            await assert_reclaimed(
-                descendant_pid,
-                "a deadline expiring during stream collection must settle the "
-                "group its child led, not merely stop waiting on consumers "
-                "that can never see end-of-file",
-            )
-        finally:
             reap_descendant(pid_file, descendant_pid)
 
     asyncio.run(run_case())

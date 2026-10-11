@@ -9,28 +9,42 @@ per-stream relay diagnostics collectors back to the caller settled.
 The post-exit phase has a shape that is not obvious from the code, and it is
 load-bearing:
 
-*Every* await between the child's exit and the completed gather has to sit
-inside one boundary, because each of them can be cancelled and each of them
-needs the same aftermath. The idle monitor is stopped first — the child has
-exited, so silence no longer means anything. Then the stdin writer, which
-closes the child's stdin before the consumers are gathered. Then the gather
-itself. A cancellation reaching any of the three takes the run's full post-exit
-cleanup: settle the owned group, then reconcile the consumers.
+*Every* await between the child's exit and the completed gather sits inside one
+boundary, because each can be cancelled and each needs the same aftermath. The
+idle monitor is stopped first — the child has exited, so silence no longer means
+anything. Then the stdin writer, which closes the child's stdin before the
+consumers are gathered. Then the gather itself. A cancellation reaching any of
+the three takes the run's full post-exit cleanup: settle the owned group, then
+reconcile every task the run still owns.
 
-The gather is also the one post-exit await a deadline has to bound. The direct
+The deadline has to bound that whole boundary, not just the gather, and as *one*
+absolute deadline rather than a duration measured before the awaits. The direct
 child exiting settles the *exit wait* and nothing else: a child that led an
-owned group can exit before its deadline while a descendant it left behind
-holds the run's inherited pipes, so the consumers never see end-of-file and an
-unbounded gather hangs forever — the configured timeout silently covering only
-the first half of the run. Bounding the gather by the remainder of the same
-deadline makes the timeout mean what it says: measured from the run's start,
-and expiring whether the child or a descendant was what kept it alive. Expiry
-takes the ordinary error route rather than a special one, so the cleanup that
-settles the group — precisely what releases the pipes the descendant was
-holding — runs before the ``TimeoutError`` becomes the internal
+owned group can exit before its deadline while a descendant it left behind holds
+the run's inherited pipes, so the consumers never see end-of-file and an
+unbounded gather hangs forever. The writer is exposed the same way and one await
+earlier, parked in ``drain`` on a pipe a descendant inherited without reading
+it. Expiry takes the ordinary error route rather than a special one, so the
+cleanup that settles the group — precisely what releases the pipes the
+descendant was holding — runs before the ``TimeoutError`` becomes the internal
 ``_SubprocessTimeoutError`` that the execution boundary converts into the
 public ``TimeoutExpired``, the same exception a deadline expiring during the
 exit wait produces.
+
+Bounding those awaits is necessary but not sufficient, because a deadline can
+expire and still never reach its handler *inside* the scope: cancellation
+reaching an await whose ``_fut_waiter`` is a task is forwarded into that task,
+and the boundary is woken only once it finishes. Each await inside the boundary
+is therefore responsible for its own cancellation being both deliverable and
+prompt — a task parked somewhere it will not finish holds the boundary open
+past its own expiry. The writer is the one such await here: its close is
+bounded in ``cuprum/_subprocess_stdin.py``, which is what makes it eventually
+finish, and the shield on that await only means the run reaches the expiry
+without first waiting out the close's grace. Neither substitutes for the other;
+ADR 019 records the measurements and why the intuitive reading is wrong. What
+the module guarantees is that the boundary is *woken* on expiry; settlement of
+the tasks it owns is the expiry handler's, through the same reconciliation
+every other exit route uses.
 """
 
 from __future__ import annotations
@@ -43,7 +57,6 @@ from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_drain import (
-    _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
     _RunTaskOwnership,
@@ -155,10 +168,19 @@ async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     or cancellation here propagates to the caller's post-exit boundary, which
     owns the whole cleanup — group teardown included. Cleaning up here instead
     would be the narrower repair that leaves the group unsettled.
+
+    The wait is shielded. Awaiting the writer task makes it this await's
+    ``_fut_waiter``, and ``Task.cancel()`` forwards — so without the shield the
+    boundary is woken only after the writer has finished dying, including the
+    close grace it now bounds. The shield returns the cancellation at once
+    instead. It is a latency improvement and *not* what makes the run terminate:
+    the writer's bounded close does that, and ADR 019 records the measurements
+    showing a shielded await over an unbounded close still hangs, because the
+    expiry handler's reconciliation awaits the writer it cancels.
     """
     if tasks.stdin_task is None:
         return
-    await tasks.stdin_task
+    await asyncio.shield(tasks.stdin_task)
 
 
 async def _run_subprocess_with_streams(
@@ -234,15 +256,17 @@ async def _run_subprocess_with_streams(
 
 
 def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
-    """Return the seconds left for collecting the streams, or ``None`` unbounded.
+    """Return the seconds left for the post-exit boundary, or ``None`` unbounded.
 
-    The consumers are reached only once the exit wait has returned, so a run
-    whose deadline has already been consumed has no budget left for them: the
-    remainder is measured from the same ``perf_counter`` reference the exit
-    wait's deadline was scheduled against, and a remainder at or below zero
-    means the run is already past its deadline. Returning ``None`` for an
-    unconfigured timeout is what keeps a run without a deadline unbounded here,
-    exactly as it is everywhere else.
+    The awaits this bounds are reached only once the exit wait has returned, so
+    a run whose deadline was already consumed has no budget left for them. It is
+    a remainder from the same ``perf_counter`` reference the exit wait was
+    scheduled against, and it is measured here rather than earlier on purpose: a
+    duration computed before the awaits it bounds would let them spend part of
+    the budget and still hand the whole of it to what follows. The caller passes
+    this straight to one ``asyncio.timeout`` covering all three awaits. Returning
+    ``None`` for an unconfigured timeout keeps a run without a deadline
+    unbounded here, exactly as it is everywhere else.
 
     Returns
     -------
@@ -264,19 +288,27 @@ async def _collect_stream_output(
 ) -> tuple[str | None, str | None]:
     """Collect the stream consumers, settling the run's group if that fails.
 
-    The three awaits below form one boundary; the module docstring records why
-    that matters and what each of them is for.
+    The three awaits below form one boundary *and* share one deadline; the
+    module docstring records why both matter and what each await is for. The
+    deadline is read as the argument to ``asyncio.timeout`` so it is measured
+    immediately before the scope it bounds, and it covers the heartbeat stop
+    and the writer await as well as the gather — a writer parked on a pipe a
+    descendant never reads is a hang the gather's own bound would never reach.
+
+    Expiry and cancellation are handled apart deliberately. Only the timer's
+    own expiry is a ``TimeoutError``; a cancellation still arrives as
+    ``CancelledError`` and takes the re-raising route, which is what keeps a
+    caller's cancellation distinguishable from the run's own deadline.
 
     Returns
     -------
     tuple[str | None, str | None]
         The decoded stdout and stderr text of the completed gather.
     """
-    deadline = _deadline_for_collection(execution)
     try:
-        await _stop_idle_monitor(execution.idle)
-        await _await_stdin_writer(tasks)
-        async with asyncio.timeout(deadline):
+        async with asyncio.timeout(_deadline_for_collection(execution)):
+            await _stop_idle_monitor(execution.idle)
+            await _await_stdin_writer(tasks)
             stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
     except TimeoutError as exc:
         await _settle_group_and_discard_consumers(
@@ -310,33 +342,46 @@ async def _settle_group_and_discard_consumers(
     tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> None:
-    """Settle an owned group, then reconcile the consumers that were gathering.
+    """Settle an owned group, then reconcile every task the run still owns.
 
     The leader has exited but its group may not have, so the group is settled
-    before reaching for the consumers: a descendant still holding the pipes is
-    what makes the gather fail, and no drain can succeed until it is gone.
+    before reaching for the tasks: a descendant still holding the pipes is what
+    makes the gather fail, and no drain can succeed until it is gone.
+
+    What follows is the run's *whole* reconciliation, not the consumers alone.
+    A cancellation can arrive at either of the two awaits that precede the
+    gather, and at the heartbeat stop the stdin writer has not been reached at
+    all: settling the group releases the child's stdin, but releasing a pipe is
+    not the same as having settled the task that was writing to it. A writer
+    parked on a full pipe — a descendant that inherited stdin without reading
+    it — would then outlive the run that spawned it, and under ``INHERIT``
+    there is no group signal to release it either. ``_reconcile_run_tasks``
+    stops the monitor, cancels and collects the writer, drains the consumers,
+    and settles the diagnostics, so every task is accounted for on this route
+    exactly as it is on the others.
 
     ``gather`` re-raises the first failure and leaves its sibling running, so a
     reader wedged on a pipe would outlive the run it belonged to. Reconcile it
     the way every other exit path does: the drain absorbs what it finds, which
     is right while another error is propagating — and here the consumer failure
-    *is* that error.
+    *is* that error. ``capture=False`` matches those paths, so this settles
+    promptly rather than spending the capture grace on text nobody will read.
 
     Both phases run under **one** shield, not two. ``_shielded_cleanup``
     finishes the task it was given and then re-raises the caller's cancellation,
     so two sequential shielded calls are not one shielded sequence: a
     cancellation arriving during the first would exit this helper before the
-    second was ever awaited, leaving the consumers unreconciled and their
+    second was ever awaited, leaving the tasks unreconciled and their
     diagnostics unsettled. Composing them into a single coroutine makes the
     shield cover the pair, and the cancellation is re-raised only once both have
     finished.
     """
 
-    async def settle_then_drain() -> None:
-        """Settle the group, then reconcile the consumers, as one unit."""
+    async def settle_then_reconcile() -> None:
+        """Settle the group, then reconcile every run task, as one unit."""
         await _settle_owned_group_before_draining(process, execution)
-        await _drain_stream_consumers(
-            tasks.consumers,
+        await _reconcile_run_tasks(
+            tasks,
             _DrainContext(
                 capture=False,
                 pid=pid,
@@ -344,10 +389,8 @@ async def _settle_group_and_discard_consumers(
                 discard_on_cancel=tasks.discard_on_cancel,
             ),
         )
-        for diagnostics in tasks.relay_diagnostics:
-            diagnostics.settle()
 
-    await _shielded_cleanup(settle_then_drain())
+    await _shielded_cleanup(settle_then_reconcile())
 
 
 __all__ = [
