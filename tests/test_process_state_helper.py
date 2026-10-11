@@ -1,4 +1,11 @@
-"""Contract tests for Linux process-state diagnostic helpers."""
+"""Contract tests for Linux process-state diagnostic helpers.
+
+These contracts run against a live host: real procfs entries, a real pipe, a
+real zombie. They pin what the helpers answer when the host *does* respond.
+The answers they give when it does not -- the degradations the helper module
+documents -- cannot be produced by any host state, so they are driven
+separately in :mod:`tests.test_process_state_degradations`.
+"""
 
 from __future__ import annotations
 

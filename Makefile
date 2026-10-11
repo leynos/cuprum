@@ -160,6 +160,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_native_pipeline_stall_properties.py \
   tests/test_native_pipeline_stdout_capture.py \
   tests/test_native_sdist.py \
+  tests/test_process_state_degradations.py \
   tests/test_process_state_helper.py \
   tests/test_py_typed_marker.py \
   scripts/tests/test_boundary_*.py \
