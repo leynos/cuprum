@@ -1136,11 +1136,32 @@ The serializer contract itself:
   as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- accepted values are `str`, `int`, `float`, `bool`, and `Path`;
+- accepted values are `str`, `int`, `float`, `bool`, and path-like values:
+  `Path` and any other `os.PathLike[str]` implementation. A path-like is
+  converted with `os.fspath()` rather than `str()`, which is the conversion the
+  standard library uses for command arguments and the one the protocol
+  documents;
 - `None` raises `TypeError` in positional and keyword positions;
 - `bytes` raises `TypeError` in positional and keyword positions, with the
   offending value in the message, because `str()` would otherwise pass the
-  value's Python `repr` to the child process.
+  value's Python `repr` to the child process. A path-like whose `__fspath__`
+  returns `bytes` is rejected the same way, and named `bytes` rather than by
+  its own class, because the payload is what would have reached argv;
+- any other value outside `ArgValue`
+  (`str | int | float | bool | Path | os.PathLike[str]`) raises `TypeError`
+  naming the real type, in either position. The accepted-type tuple is derived
+  at runtime from `ArgValue` with `typing.get_args(ArgValue.__value__)`, so the
+  validation and the published annotation cannot drift. `ArgValue` is a PEP 695
+  alias, so the union is reached through `__value__` rather than by calling
+  `typing.get_args` on the alias object directly. Each member is reduced to a
+  runtime-checkable class with `typing.get_origin(member) or member`, because
+  `os.PathLike[str]` is a parameterized generic that `issubclass` rejects;
+- the domain test uses `issubclass` over the value's real type, not
+  `isinstance`. A proxy that overrides `__class__` satisfies `isinstance`
+  against a supported type while remaining a different object, and `str()` on
+  it would put that object's `repr` on the command line. The real type is not
+  spoofable, and `issubclass` still admits genuine subclasses of `str` and
+  `Path`.
 
 The boundary, and why a warning or a per-builder opt-out was rejected instead,
 is recorded in [Cuprum design](cuprum-design.md) §6.2.6.
@@ -1163,6 +1184,20 @@ Property coverage for this contract lives in
 reserved run-option names to `SafeCmd.run_sync` lives in
 `cuprum/unittests/test_sh.py`. Update those properties whenever argv
 construction semantics change.
+
+The positive half of the static-check contract is the checked-in fixture
+`cuprum/unittests/typing_fixtures/sh_make_valid.py`, which the repository-wide
+`make typecheck` run walks as ordinary source. The negative half is
+`cuprum/unittests/test_sh_typing_contract.py`, which writes each rejected call
+to a temporary directory and requires the pinned `ty` to report
+`invalid-argument-type` with a non-zero exit. Those negative cases stay outside
+the repository-wide check scope deliberately: a file the checker is meant to
+reject cannot be checked in without failing the gate.
+
+The protocol lives in `cuprum/sh/builder.py` and is deliberately not
+`typing.runtime_checkable`. `safe_cmd` must not import it back, because the
+protocol imports `SafeCmd` from `safe_cmd` and the reverse import would close a
+cycle.
 
 ## Program catalogue duplicate diagnostics
 

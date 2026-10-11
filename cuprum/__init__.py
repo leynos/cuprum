@@ -90,6 +90,7 @@ from cuprum.pump_span_events import PumpHopOutcome
 from cuprum.pump_span_observation import PumpHopSpanRegistration, observe_pump_span
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
+    ArgValue,
     CommandResult,
     ExecutionContext,
     IOOptions,
@@ -119,6 +120,7 @@ __all__ = [
     "TAR",
     "AfterHook",
     "AllowRegistration",
+    "ArgValue",
     "BeforeHook",
     "BrokenPipePolicy",
     "CommandResult",

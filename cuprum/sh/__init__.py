@@ -6,7 +6,8 @@ them with predictable semantics.
 
 The implementation is split across submodules by responsibility:
 
-- ``argv`` builds argument vectors.
+- ``argv`` builds argument vectors and publishes ``ArgValue``.
+- ``builder`` holds the ``SafeCmdBuilder`` callable contract.
 - ``execution`` holds the execution context, stdin, and timeout types.
 - ``results`` holds ``CommandResult`` and ``PipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
@@ -51,11 +52,12 @@ from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 from cuprum.echo_events import RelayFallback as RelayFallback
 from cuprum.program import Program as Program
+from cuprum.sh.argv import ArgValue as ArgValue
 from cuprum.sh.argv import Path as Path
-from cuprum.sh.argv import _ArgValue as _ArgValue
 from cuprum.sh.argv import _serialize_kwargs as _serialize_kwargs
 from cuprum.sh.argv import _stringify_arg as _stringify_arg
 from cuprum.sh.argv import build_argv
+from cuprum.sh.builder import SafeCmdBuilder as SafeCmdBuilder
 from cuprum.sh.execution import _DEFAULT_CANCEL_GRACE as _DEFAULT_CANCEL_GRACE
 from cuprum.sh.execution import _DEFAULT_ENCODING as _DEFAULT_ENCODING
 from cuprum.sh.execution import _DEFAULT_ERROR_HANDLING as _DEFAULT_ERROR_HANDLING
@@ -76,11 +78,12 @@ from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
 from cuprum.sh.results import CommandResult, PipelineResult
 from cuprum.sh.results import dc as dc
-from cuprum.sh.safe_cmd import Pipeline, SafeCmd, SafeCmdBuilder
+from cuprum.sh.safe_cmd import Pipeline, SafeCmd
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
+    "ArgValue",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",

@@ -133,13 +133,31 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts text (`str`), `int`, `float`,
-`bool`, and `Path` values as positional and keyword arguments. Keyword
-arguments become `--name=value`; underscores in names become hyphens. This
-suits tools that actually accept that form. For flags such as `--check`, pass a
-positional argument: `check=True` would produce `--check=True`. `bytes` values
-raise `TypeError`, as `None` does, so decode bytes before passing them to the
-builder. An argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts
+`str | int | float | bool | Path | os.PathLike[str]` in positional and keyword
+positions alike. Keyword arguments become `--name=value`; underscores in names
+become hyphens. This suits tools that actually accept that form. For flags such
+as `--check`, pass a positional argument: `check=True` would produce
+`--check=True`. Booleans are values, not presence switches: `porcelain=True`
+produces `--porcelain=True`, and `porcelain=False` produces `--porcelain=False`.
+`None` raises `TypeError` in either position, so decide whether to omit or
+substitute an optional flag before building. An argument containing spaces
+remains one argument.
+
+Any other type raises `TypeError` naming the real type, not rendering it with
+`str()`: `bytes`, `list`, and a bare `object()` all fail. A path-like value is
+converted with `os.fspath()`, so a `pathlib.Path` and any other object
+implementing `__fspath__` both serialize to the same text; this matches the
+convention the standard library follows for command arguments. `ArgValue` names
+`os.PathLike[str]` rather than the unparameterized `os.PathLike` because only a
+`__fspath__` returning text is accepted: one returning `bytes` is rejected with
+the offending value quoted, as are `bytes` arguments generally, so decode bytes
+before passing them to the builder. Rejection tests the value's real type, so a
+proxy that reports a supported `__class__` while remaining a different type is
+still refused. That domain is the `ArgValue` alias, importable from both
+`cuprum` and `cuprum.sh`; the builder `sh.make()` returns is a
+`SafeCmdBuilder`, and this is the contract a static type checker enforces at
+the call site.
 
 `os.fsdecode()` converts caller-held filesystem bytes to text using the
 configured filesystem encoding and error handler. On POSIX, the default

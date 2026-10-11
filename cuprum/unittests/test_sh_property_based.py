@@ -8,8 +8,13 @@ The invariants checked here are:
 
 - ``build_argv``: positional arguments are stringified in order and
   precede keyword flags; keyword flags preserve insertion order and
-  normalize underscores in keys to hyphens; ``None`` and ``bytes`` are
-  rejected with ``TypeError`` in both positional and keyword positions.
+  normalize underscores in keys to hyphens; a text-returning
+  ``os.PathLike`` object is accepted and converted through
+  ``os.fspath``. ``None`` and ``bytes`` are rejected with ``TypeError``
+  in both positional and keyword positions, and any other type outside
+  ``ArgValue`` is rejected with ``TypeError`` naming the type -- except a
+  path-like whose ``__fspath__`` returns bytes, which is named
+  ``bytes`` because the payload is what would have reached argv.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
   entry; unknown programs are rejected with ``UnknownProgramError``;
@@ -22,6 +27,7 @@ The invariants checked here are:
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import typing as typ
 from pathlib import Path
 
@@ -36,6 +42,8 @@ from cuprum.sh.factory import _RESERVED_OPTIONS
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.sh import ArgValue
 
 # Bounded alphabets keep examples small and shrinkable while still
 # covering multi-character tokens and key normalization.
@@ -119,12 +127,149 @@ def test_build_argv_rejects_invalid_values_everywhere(
         st.integers(min_value=0, max_value=len(args)),
         label="insertion position",
     )
+    key = data.draw(_KWARG_KEYS, label="poisoned key")
     positional = [*args[:position], poisoned, *args[position:]]
     with pytest.raises(TypeError, match=specimen.pattern):
         build_argv(*positional, **kwargs)
-    key = data.draw(_KWARG_KEYS, label="poisoned key")
     with pytest.raises(TypeError, match=specimen.pattern):
         build_argv(*args, **{**kwargs, key: poisoned})
+
+
+_ECHO = DEFAULT_CATALOGUE.lookup(Program("echo")).program
+
+
+class _TextPath(os.PathLike[str]):
+    """A text-returning path-like that is not a ``pathlib.Path``.
+
+    ``ArgValue`` names ``os.PathLike[str]``, so this is inside the contract and
+    must serialize to exactly the text its ``__fspath__`` returns.
+    """
+
+    def __init__(self, path: str) -> None:
+        """Wrap ``path`` behind the ``os.PathLike`` protocol."""
+        self._path = path
+
+    def __fspath__(self) -> str:
+        """Return the wrapped path string."""
+        return self._path
+
+    def __str__(self) -> str:
+        """Return a decoy, so a ``str()`` fallback cannot pass the property."""
+        return f"<not the path: {self._path!r}>"
+
+
+class _BytesPath(os.PathLike[bytes]):
+    """A path-like whose ``__fspath__`` returns bytes.
+
+    ``os.PathLike`` is structural, so this class satisfies it while its
+    conversion result would put a byte sequence on the command line. It must be
+    rejected, and the message names ``bytes`` rather than this class because the
+    payload is the problem.
+    """
+
+    def __fspath__(self) -> bytes:
+        """Return a raw byte path, which argv must never carry."""
+        return b"raw/path"
+
+
+class _SpoofedInt:
+    """A value whose ``__class__`` claims membership of the domain.
+
+    ``isinstance`` consults ``__class__``, so this object satisfies
+    ``isinstance(value, int)`` while remaining its own unsupported type. It
+    stands in for ``unittest.mock.Mock(spec=int)`` and any other proxy that
+    overrides ``__class__``.
+    """
+
+    @property
+    def __class__(self) -> type:
+        """Report ``int`` regardless of the real type."""
+        return int
+
+    def __str__(self) -> str:
+        """Render a repr-like text, which is what would reach argv."""
+        return "<spoofed int>"
+
+
+def _rejecting(value: object, named: str) -> _RejectedValue:
+    """Pair a value with the type name its rejection message must report."""
+    return _RejectedValue(value, named)
+
+
+# Each row pairs a value with the type name its rejection must report. The
+# path-like row reports ``bytes`` rather than the wrapper class, because the
+# offending payload, not the wrapper, is what the message names.
+_UNSUPPORTED = st.one_of(
+    st.builds(_rejecting, st.builds(object), st.just("object")),
+    st.builds(_rejecting, st.binary(max_size=6), st.just("bytes")),
+    st.builds(_rejecting, st.lists(st.integers(), max_size=3), st.just("list")),
+    st.builds(_rejecting, st.builds(_BytesPath), st.just("bytes")),
+    st.builds(_rejecting, st.builds(_SpoofedInt), st.just("_SpoofedInt")),
+)
+
+
+@settings(max_examples=150)
+@given(
+    args=_ARGS,
+    kwargs=_KWARGS,
+    specimen=_UNSUPPORTED,
+    data=st.data(),
+)
+def test_argv_construction_rejects_unsupported_types(
+    args: list[str | int | bool | Path],
+    kwargs: dict[str, str | int | bool | Path],
+    specimen: _RejectedValue,
+    data: st.DataObject,
+) -> None:
+    """Every entry point rejects a value outside ``ArgValue`` in either position."""
+    expected = f"{specimen.pattern} is not a valid argv element"
+    # Deliberately defeat static typing: the property under test is the
+    # runtime rejection of the value, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", specimen.value)
+    position = data.draw(
+        st.integers(min_value=0, max_value=len(args)),
+        label="insertion position",
+    )
+    positional = [*args[:position], poisoned, *args[position:]]
+    key = data.draw(_KWARG_KEYS, label="poisoned key")
+    calls = (
+        lambda: build_argv(*positional, **kwargs),
+        lambda: build_argv(*args, **{**kwargs, key: poisoned}),
+        lambda: make(_ECHO)(*positional, **kwargs),
+        lambda: make(_ECHO)(*args, **{**kwargs, key: poisoned}),
+    )
+    for call in calls:
+        with pytest.raises(TypeError, match=expected):
+            call()
+
+
+@settings(max_examples=150)
+@given(path=_TEXT_VALUES, args=_ARGS, kwargs=_KWARGS)
+def test_path_like_arguments_convert_through_fspath(
+    path: str,
+    args: list[str | int | bool | Path],
+    kwargs: dict[str, str | int | bool | Path],
+) -> None:
+    """A text path-like serializes through ``os.fspath``, never through ``str``.
+
+    ``_TextPath.__str__`` returns a decoy carrying the repr of the path, so a
+    regression that fell back to ``str()`` would emit that decoy. The decoy
+    always differs from ``path``: the ``_TEXT_VALUES`` alphabet cannot produce
+    the angle brackets the decoy introduces.
+    """
+    path_like = _TextPath(path)
+    assert str(path_like) != path, "the decoy must be distinguishable from the path"
+
+    stringified = build_argv(*args)
+    flags = build_argv(**kwargs)
+    positional = build_argv(*args, path_like, **kwargs)
+    assert positional == (*stringified, path, *flags), (
+        "a path-like positional must render as its os.fspath result"
+    )
+    flagged = build_argv(*args, **kwargs, target=path_like)
+    assert flagged == (*stringified, *flags, f"--target={path}"), (
+        "a path-like keyword must serialize through os.fspath too"
+    )
 
 
 @settings(max_examples=200)
