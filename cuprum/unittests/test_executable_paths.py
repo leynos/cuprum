@@ -104,7 +104,7 @@ def test_classify_rejects_a_traversal_behind_windows_separators(raw: str) -> Non
 
     ``PurePath`` on a POSIX host is a ``PurePosixPath``, so backslashes are
     ordinary name characters and a ``..`` between them never appears as a path
-    part. Recognising ``C:`` as absolute therefore cannot be the last thing the
+    part. Recognizing ``C:`` as absolute therefore cannot be the last thing the
     classifier does with a Windows value: the traversal hiding behind those
     separators would classify as acceptable, and ``executable_path`` would hand
     the caller a path the documented restriction forbids.

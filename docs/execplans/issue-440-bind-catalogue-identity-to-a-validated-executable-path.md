@@ -1773,13 +1773,13 @@ escalation, not a workaround.
   `Surprises & discoveries`, and the EP-M1 conformance check and the
   `PurePath.parts` axiom above are corrected to state what the code now does.
   Evidence: the pre-fix reproduction, the post-fix behaviour on both modules,
-  the two mutation probes (each new test failing under a reverted
-  fix for the intended reason, the F2 probe with Codex's exact
+  the two mutation probes (each new test failing under a reverted fix for the
+  intended reason, the F2 probe with Codex's exact
   `NameError: name 'cabc' is not defined`), and 128 passing tests across the
   four affected modules. Two neighbouring defects on the base revision —
-  `classify_path_string` in `cuprum/builders/args.py` and `ExecEvent.program`
-  in `cuprum/events.py` — are deliberately left alone, because neither file is
-  in this branch's diff; they are recorded rather than repaired.
+  `classify_path_string` in `cuprum/builders/args.py` and `ExecEvent.program` in
+  `cuprum/events.py` — are deliberately left alone, because neither file is in
+  this branch's diff; they are recorded rather than repaired.
 
 ## Surprises & discoveries
 
@@ -2307,7 +2307,7 @@ escalation, not a workaround.
   report an empty decision and fail on a count, which is the harmless version
   of the same trap.
 
-- Observation: **recognising a drive-letter path as absolute is not the same
+- Observation: **recognizing a drive-letter path as absolute is not the same
   as parsing it as one, and the difference is a traversal the restriction
   missed.** `classify_executable_path` matched `_WINDOWS_ABS_PATTERN` and then
   inspected `PurePath(raw_value).parts`, but on a POSIX host that object is a
@@ -2322,8 +2322,8 @@ escalation, not a workaround.
   traversal-free `r"C:\tools\tool.exe"`. Impact: a drive-letter value is now
   parsed with `PureWindowsPath`, which splits on both separators, so the
   rejection sees the segments a Windows loader would see. The general lesson is
-  that a platform-specific recognition branch must be followed by a parse
-  using that platform's rules — a regex that identifies a shape, and a `parts`
+  that a platform-specific recognition branch must be followed by a parse using
+  that platform's rules — a regex that identifies a shape, and a `parts`
   sequence that reflects a *different* separator convention, agree about
   nothing.
 - Observation: **the plan already required the property its own stage check
@@ -2350,16 +2350,16 @@ escalation, not a workaround.
 - Observation: the same Windows-separator defect and the same
   `get_type_hints` failure both exist in pre-existing base-revision code this
   branch does not touch — `classify_path_string` in `cuprum/builders/args.py`
-  has the identical `PurePath`-plus-regex combination, and
-  `ExecEvent.program` in `cuprum/events.py` is unresolvable for the same
-  `TYPE_CHECKING` reason. Evidence: the reproduction returns `None` for
-  `r"C:\tools\..\evil.exe"` on `390fcf83`, and `git diff --name-status
-  390fcf83..HEAD` does not list either file. Impact: neither is repaired here,
-  because both are outside this feature's diff and the issue's acceptance
-  criteria; they are recorded so the latent defects are not mistaken for
-  consequences of this change. The lesson is the one this plan has already
-  recorded once — a defect found next to new code is not automatically a
-  defect *of* it, and the difference is decided by the diff, not by proximity.
+  has the identical `PurePath`-plus-regex combination, and `ExecEvent.program`
+  in `cuprum/events.py` is unresolvable for the same `TYPE_CHECKING` reason.
+  Evidence: the reproduction returns `None` for `r"C:\tools\..\evil.exe"` on
+  `390fcf83`, and `git diff --name-status 390fcf83..HEAD` does not list either
+  file. Impact: neither is repaired here, because both are outside this
+  feature's diff and the issue's acceptance criteria; they are recorded so the
+  latent defects are not mistaken for consequences of this change. The lesson
+  is the one this plan has already recorded once — a defect found next to new
+  code is not automatically a defect *of* it, and the difference is decided by
+  the diff, not by proximity.
 
 ## Decision log
 
@@ -3062,10 +3062,10 @@ Axioms relied on, and why they are not verified here:
   the Windows flavour to see the traversal segments the loader would see; and
   `resolve_binding` relies on the separator facts by *declining* to guess,
   anchoring a relative binding at `cwd` when one is supplied and otherwise
-  returning it unchanged for the platform to resolve.
-  Both are verified directly, and `resolve_binding`'s two branches are pinned
-  by named tests (`test_resolve_anchors_a_bare_relative_name_in_the_same_way`
-  and `test_resolve_leaves_a_bare_name_alone_when_there_is_no_cwd`).
+  returning it unchanged for the platform to resolve. Both are verified
+  directly, and `resolve_binding`'s two branches are pinned by named tests
+  (`test_resolve_anchors_a_bare_relative_name_in_the_same_way` and
+  `test_resolve_leaves_a_bare_name_alone_when_there_is_no_cwd`).
 - `ContextVar` isolation across threads and tasks is the mechanism every
   existing scoped policy already relies on; it is not re-derived here, but the
   new bindings are tested through it rather than assumed to inherit it.
@@ -3171,8 +3171,7 @@ EP-M1 — the pure binding modules exist and are fully tested.
   `cuprum.program` — the `Program` annotations are public, so the import is
   deliberate and carries the repository's marker idiom, as the runtime-hint
   observation above requires; the `Program` type is untouched; no new
-  dependency is added; both modules are under pylint's
-  400-line ceiling.
+  dependency is added; both modules are under pylint's 400-line ceiling.
 - Recovery: the milestone is additive and self-contained; `git revert` of its
   single commit restores the prior state with no other file affected.
 - Remaining gaps: nothing consumes the modules yet, which is deliberate — the
