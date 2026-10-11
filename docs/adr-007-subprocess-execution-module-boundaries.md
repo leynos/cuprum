@@ -469,6 +469,7 @@ discards output, and cancellation during capture grace still settles the
 consumers before propagating. Reconciliation remains one shielded unit.
 
 No public API changes, and the module-size suppression is still unnecessary.
+
 ## Addendum (2026-10-11): typed `sh.make` argument contract
 
 The 2026-09-25 addendum's inventory is historical for two entries.
