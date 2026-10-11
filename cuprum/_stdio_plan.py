@@ -18,6 +18,13 @@ it.
 The module is small on purpose (ADR-007): it owns one value type per stream,
 the two resolvers, and the vocabulary shared by the execution, spawn, and
 stream-wiring layers, and nothing about how a run is driven.
+
+Whether a resolved binding can actually be honoured is the separate question
+``cuprum._stdio_binding_guards`` answers, and it was split out when the two
+refusals pushed this module past the ceiling. Deciding *which* binding a target
+resolves to and deciding whether the child may be given it are different jobs;
+this module does the first, and a target it resolves is one the guards have not
+yet been asked about.
 """
 
 from __future__ import annotations
@@ -32,6 +39,10 @@ from cuprum._constants import (
     STDIN_STREAM,
     STDOUT_STREAM,
     PipeStream,
+)
+from cuprum._stdio_binding_guards import (
+    _ensure_redirection_supported,
+    _reject_negative_descriptor,
 )
 from cuprum.sh.execution import StdinStream
 
@@ -49,7 +60,6 @@ __all__ = [
     "_StdioBinding",
     "_StreamStdin",
     "_open_owned_path",
-    "_reject_negative_descriptor",
     "_resolve_stdin_plan",
     "_resolve_stdio",
     "_resolve_stdio_binding",
@@ -159,38 +169,6 @@ class _ResolvedStdio:
             binding.stream for binding in (self.stdout, self.stderr) if binding.is_pipe
         )
         return frozenset(names)
-
-
-def _ensure_redirection_supported(stream: PipeStream, kind: str) -> None:
-    """Refuse descriptor redirection where the platform cannot honour it.
-
-    Only the descriptor arms are gated. Inheriting a stream is handled by
-    ``Popen`` itself on every platform, and a library-owned pipe is an ordinary
-    ``os.pipe``, so neither is a POSIX-specific claim and neither is refused
-    here — a supported combination must keep working on a platform that cannot
-    redirect.
-
-    Parameters
-    ----------
-    stream : str
-        The stream being redirected, for the message.
-    kind : str
-        The target variant being refused.
-
-    Raises
-    ------
-    ValueError
-        If redirection is attempted on a platform without POSIX descriptors.
-    """
-    if os.name == "posix":
-        return
-    msg = (
-        f"RunOutputOptions {stream} cannot be redirected to {kind!r} on this "
-        "platform: cuprum opens and closes standard-stream descriptors with "
-        "POSIX semantics, which it does not have here. Leave stdout and stderr "
-        "unset on this platform."
-    )
-    raise ValueError(msg)
 
 
 def _open_owned_path(stream: PipeStream, path: Path) -> int:
@@ -306,49 +284,6 @@ def _resolve_stdio_binding(
     # actually handed to ``subprocess``, which is this one.
     _reject_negative_descriptor(stream, descriptor, resource=type(borrowed).__name__)
     return _StdioBinding(stream=stream, descriptor=descriptor, borrowed=borrowed)
-
-
-def _reject_negative_descriptor(
-    stream: PipeStream,
-    descriptor: int,
-    *,
-    resource: str,
-) -> None:
-    """Refuse a subprocess sentinel masquerading as a borrowed descriptor.
-
-    ``subprocess`` reads negative integers as sentinels rather than
-    descriptors: ``-1`` is ``PIPE``, ``-2`` is ``STDOUT``, and ``-3`` is
-    ``DEVNULL``. A binding that names one would be a lie — for an *output*
-    stream, ``-1`` makes ``subprocess`` create a pipe that cuprum neither owns
-    nor reads, so the child blocks on a full buffer and the run hangs. Both
-    routes into a descriptor land here: an ``int`` payload, and whatever a
-    caller's ``fileno()`` returned.
-
-    Parameters
-    ----------
-    stream : str
-        ``"stdout"`` or ``"stderr"``, named in the refusal.
-    descriptor : int
-        The value about to be handed to ``subprocess``.
-    resource : str
-        How the descriptor was obtained, for the message: ``"int"`` for a
-        literal payload, otherwise the file object's type name.
-
-    Raises
-    ------
-    ValueError
-        If the descriptor is negative.
-    """
-    if descriptor >= 0:
-        return
-    msg = (
-        f"RunOutputOptions {stream} resolved to the descriptor "
-        f"{descriptor} from {resource}; negative values are subprocess "
-        "sentinels (-1 is PIPE, -2 is STDOUT, -3 is DEVNULL), which would "
-        "have subprocess act on the stream itself rather than bind this one. "
-        "Pass a non-negative descriptor."
-    )
-    raise ValueError(msg)
 
 
 def _resolve_stdin_plan(

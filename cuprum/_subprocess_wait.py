@@ -33,7 +33,7 @@ from cuprum._subprocess_deadline import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
-from cuprum._subprocess_stdin import _cancel_stdin_writer
+from cuprum._subprocess_stdin_reclaim import _cancel_stdin_writer
 from cuprum._timeout_reporting import (
     _report_capture_eof_grace_expiry,
     _report_teardown_drain_failure,

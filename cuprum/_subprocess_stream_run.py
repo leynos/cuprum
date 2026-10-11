@@ -15,7 +15,11 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _settle_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _cancel_stdin_writer,
+    _settle_stdin_writer,
+)
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -104,13 +108,15 @@ async def _await_stdin_writer_and_reconcile_consumers(
     execution: _SubprocessExecution,
     pid: int | None,
 ) -> None:
-    """Await the stdin writer, reconciling the consumers if that fails.
+    """Await the stdin writer, reconciling it and the consumers if that fails.
 
     An unexpected stdin-writer failure (or a cancellation landing on this
-    await) must still reconcile the stdout/stderr consumers, mirroring the
-    timeout and cancellation paths, so those tasks are cancelled and drained
-    before the error propagates. The writer has already settled here, so only
-    the consumers need draining. A run with no stdin writer returns at once.
+    await) must still reconcile every task the run owns, mirroring the timeout
+    and cancellation paths, so nothing is left pending behind the error. That
+    means the writer as well as the stdout/stderr consumers: the settle is
+    what reclaims a writer whose bounded window expired, so a failure delivered
+    through it else leaves the writer and its producer running. A run with no
+    stdin writer returns at once.
     """
     if tasks.stdin_task is None:
         return
@@ -118,8 +124,8 @@ async def _await_stdin_writer_and_reconcile_consumers(
         await _settle_stdin_writer(tasks.stdin_task)
     except BaseException:
         await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
+            _reconcile_stdin_writer_and_drain_consumers(
+                tasks,
                 _DrainContext(
                     capture=False,
                     pid=pid,
@@ -129,6 +135,22 @@ async def _await_stdin_writer_and_reconcile_consumers(
             )
         )
         raise
+
+
+async def _reconcile_stdin_writer_and_drain_consumers(
+    tasks: _RunTaskOwnership,
+    context: _DrainContext,
+) -> None:
+    """Reclaim the stdin writer, then drain the stream consumers.
+
+    The writer goes first. Draining the consumers first would leave a writer
+    still blocked on a pipe those readers are about to stop reading, so the
+    order is the same one
+    :func:`~cuprum._subprocess_wait._reconcile_run_tasks` uses on the other
+    teardown paths — and a settle failure does not make those paths reachable.
+    """
+    await _cancel_stdin_writer(tasks.stdin_task)
+    await _drain_stream_consumers(tasks.consumers, context)
 
 
 async def _run_subprocess_with_streams(
