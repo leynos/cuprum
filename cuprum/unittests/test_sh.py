@@ -336,9 +336,13 @@ def test_make_rejects_the_first_reserved_keyword_in_insertion_order(
     message matches the parameter the caller can pass straight to ``run_sync``.
     """
     builder = sh.make(ECHO)
+    # Deliberately defeat static typing: a real caller reaching for ``env=``
+    # is exactly the mistake this guard exists for, and the annotations
+    # already forbid it, so the runtime rejection is the property under test.
+    poisoned = typ.cast("ArgValue", {"A": "1"})
 
     with pytest.raises(TypeError) as excinfo:
-        builder("x", cwd=tmp_path, env={"A": "1"}, timeout=5)
+        builder("x", cwd=tmp_path, env=poisoned, timeout=5)
 
     assert str(excinfo.value) == (
         "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
