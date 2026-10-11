@@ -25,6 +25,8 @@ rows from being evidence of a blanket refusal.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 from cuprum._stdio_binding_guards import _reject_negative_descriptor
@@ -61,6 +63,25 @@ class _LyingFile:
 
     def flush(self) -> None:
         """Accept the pre-spawn flush cuprum performs on a borrowed object."""
+
+
+def _lying_fd_target(descriptor: int) -> StdioTarget:
+    """Bind a borrowed stream to a file double reporting *descriptor*.
+
+    The cast is the honest description of what is happening: ``_LyingFile``
+    implements the part of the file protocol cuprum reaches — ``fileno`` and
+    ``flush`` — and not the rest, so it is passed as the borrowed object it
+    stands in for. ``fileno`` is the whole point of the double, and ``flush``
+    exists so the pre-spawn flush is not the thing under test. This mirrors
+    ``borrowed_flush_target`` in ``_stdio_classification_support``, which
+    confines the same kind of cast to one place for the same reason.
+
+    Returns
+    -------
+    StdioTarget
+        An ``fd`` target whose borrowed object reports *descriptor*.
+    """
+    return StdioTarget.fd(typ.cast("typ.IO[str]", _LyingFile(descriptor)))
 
 
 @pytest.mark.parametrize(("sentinel", "meaning"), _SENTINELS)
@@ -122,7 +143,7 @@ def test_a_file_object_reporting_a_sentinel_is_refused_at_resolution(
     """
     options = RunOutputOptions(
         capture=False,
-        stdout=StdioTarget.fd(_LyingFile(sentinel)),
+        stdout=_lying_fd_target(sentinel),
     )
 
     with pytest.raises(ValueError, match=r"resolved to the descriptor") as info:
@@ -148,7 +169,7 @@ def test_a_file_object_reporting_a_genuine_descriptor_resolves() -> None:
     to the *value* rather than to file objects as a class. A guard that refused
     every ``fileno`` result would satisfy each rejection above.
     """
-    options = RunOutputOptions(capture=False, stdout=StdioTarget.fd(_LyingFile(7)))
+    options = RunOutputOptions(capture=False, stdout=_lying_fd_target(7))
 
     binding = _resolve_output_binding("stdout", _target_from(options))
 
