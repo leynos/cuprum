@@ -218,6 +218,43 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) The head advanced one commit to `89f12f8e`, and the
+  Markdown gates were re-run against it rather than inherited. The delta
+  `8547b209..89f12f8e` is exactly one path,
+  `docs/execplans/issue-445-support-streaming-stdin-and-explicit-file-redirection.md`,
+  and `git diff --quiet` over `*.py`, `*.rs`, `*.toml`, `*.yml`, `*.yaml`, and
+  `Makefile` reports the code tree byte-identical, so `8547b209`'s
+  certification transfers for every code gate and only `markdownlint` (which
+  nests `spelling`) and `nixie` needed re-running. Both exit 0 at `89f12f8e`,
+  and the changed file's blob id (`0026f5334c`) is identical at each gate's
+  start and end, so no in-place edit occurred inside either window — the guard
+  added after the mid-round contamination incident, now used by the scrutineer
+  rather than only by me. The earlier certification is retained as history for
+  its own scope; it is not transferred to `89f12f8e` for the Markdown gates.
+- [x] (2026-10-11) The two probe sets the previous round left unmeasured are
+  measured, at `8547b209`, after the certifying run — probes belong *after* the
+  gate they could invalidate, because restoring a file is not the same as never
+  having changed it. **Matrix guard:** dropping the `spawn_backend` marker from
+  `test_borrowed_descriptor_survives_the_run` fails two guards, and the
+  combination check names that case alone. Collapsing `run_sync()` out of the
+  `execution_strategy` fixture fails the combination check naming **exactly
+  seven** cells, which is the entire backed population and matches the seven
+  `_MATRIX` rows in that module carrying the route axis; only the combination
+  check fires, because the route-axis check asserts the axis is *requested*,
+  not how many strategies it offers. **One probe passed and is reported rather
+  than dropped:** removing the marker from `test_pipe_target_still_captures`
+  changes nothing, because that case is the boundary near-miss for the
+  capture/redirect rejection and is deliberately not a matrix row. It reads as
+  the guard failing to notice a removal; it is the guard correctly ignoring a
+  case the table does not claim. **Finalizer:** removing the hold
+  (`await self.release.wait()`) fails with
+  `the finalizer failed before it was released` — the test refusing to run its
+  own subject rather than asserting it. Removing the
+  `_retrieve_finalizer_outcome` registration fails with the loop reporting
+  `Task exception was never retrieved`, which is the exact noise the retrieval
+  exists to prevent and therefore the exact evidence that the test can see it.
+  All four probe mutations were restored and verified by committed-blob id
+  before the next ran; the tree was clean at `89f12f8e` at every gate boundary.
 - [x] (2026-10-11) All six deterministic gates are certified green at
   `8547b209` on a tree that stayed clean throughout, and the leaf that had
   never been observed finally ran. Every earlier `make lint` this round aborted
