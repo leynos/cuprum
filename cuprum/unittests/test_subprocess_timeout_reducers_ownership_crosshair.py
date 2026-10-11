@@ -91,6 +91,17 @@ def _decoded_flags(stage_count: int, mask: int) -> list[bool]:
     return [bool((mask >> idx) & 1) for idx in range(stage_count)]
 
 
+def _decoded_scenario(
+    stage_count: int,
+    masks: tuple[int, int],
+) -> tuple[list[bool], list[bool]]:
+    """Decode the completion and ownership masks, in that order."""
+    done_mask, owned_mask = masks
+    return _decoded_flags(stage_count, done_mask), _decoded_flags(
+        stage_count, owned_mask
+    )
+
+
 def _selection_is_well_shaped(selected: list[int], stage_count: int) -> bool:
     """Report whether a selection is in range, free of repeats, and ordered."""
     return (
@@ -156,9 +167,7 @@ def _owned_selection_is_well_formed(
     bool
         Whether the selection is both well shaped and exactly the right set.
     """
-    done_mask, owned_mask = masks
-    done = _decoded_flags(stage_count, done_mask)
-    owns_group = _decoded_flags(stage_count, owned_mask)
+    done, owns_group = _decoded_scenario(stage_count, masks)
     selected = _stages_to_terminate(failure_index, done, owns_group=owns_group)
     return _selection_is_well_shaped(
         selected, stage_count
@@ -232,9 +241,7 @@ def _short_ownership_keeps_direct_child_rule(
     bool
         Whether every prefix selects exactly its own rule.
     """
-    done_mask, owned_mask = masks
-    done = _decoded_flags(stage_count, done_mask)
-    owns_group = _decoded_flags(stage_count, owned_mask)
+    done, owns_group = _decoded_scenario(stage_count, masks)
     prefixes = [
         _stages_to_terminate(failure_index, done, owns_group=owns_group[:cut])
         for cut in range(len(owns_group) + 1)

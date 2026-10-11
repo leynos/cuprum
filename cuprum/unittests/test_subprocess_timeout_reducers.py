@@ -213,6 +213,34 @@ def _is_recorded_as_owner(idx: int, truncated: list[bool]) -> bool:
     return idx < len(truncated) and truncated[idx]
 
 
+def _assert_every_owned_stage_is_selected(
+    result: list[int],
+    owns_group: list[bool],
+) -> None:
+    """Assert every owned stage stayed selectable."""
+    for idx, owned in enumerate(owns_group):
+        if owned:
+            assert idx in result, (
+                f"an owned stage ({idx}) must stay selectable whatever its "
+                "wait task reports, because its group outlives its leader"
+            )
+
+
+def _assert_running_inherited_stages_are_selected(
+    result: list[int],
+    failure_index: int,
+    done: list[bool],
+    owns_group: list[bool],
+) -> None:
+    """Assert every running, unowned, non-failed stage is still selected."""
+    for idx in range(len(done)):
+        if not owns_group[idx] and _must_be_selected(idx, failure_index, done):
+            assert idx in result, (
+                "a running inherited stage must still be selected exactly as "
+                "it was before ownership existed"
+            )
+
+
 @given(scenario=_owned_termination_scenario())
 def test_owned_stages_are_selectable_whatever_their_waiter_says(
     *,
@@ -246,18 +274,10 @@ def test_owned_stages_are_selectable_whatever_their_waiter_says(
         "the selection must be the inherited rule unioned with every owned "
         f"stage; got {result!r}"
     )
-    for idx, owned in enumerate(owns_group):
-        if owned:
-            assert idx in result, (
-                f"an owned stage ({idx}) must stay selectable whatever its "
-                "wait task reports, because its group outlives its leader"
-            )
-    for idx in range(len(done)):
-        if not owns_group[idx] and _must_be_selected(idx, failure_index, done):
-            assert idx in result, (
-                "a running inherited stage must still be selected exactly as "
-                "it was before ownership existed"
-            )
+    _assert_every_owned_stage_is_selected(result, owns_group)
+    _assert_running_inherited_stages_are_selected(
+        result, failure_index, done, owns_group
+    )
     assert len(result) == len(set(result)), (
         "no stage may be scheduled for termination twice"
     )

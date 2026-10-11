@@ -61,6 +61,29 @@ def _recorded_descendant(pid_file: Path) -> int | None:
         return None
 
 
+def _reap_descendant(pid_file: Path, descendant_pid: int | None) -> None:
+    """Kill a descendant the run left behind, so a failure reaps what it found.
+
+    Resolves the pid from the file when the test never captured one, which is
+    the case when it failed before the wait returned. A failure here means the
+    descendant outlived its group teardown — the very thing under test — so it
+    is reaped before the failure is reported, rather than left running.
+    """
+    if descendant_pid is None:
+        descendant_pid = _recorded_descendant(pid_file)
+    if descendant_pid is not None and process_is_running(descendant_pid):
+        os.kill(descendant_pid, signal.SIGKILL)
+
+
+def _assert_descendant_reclaimed(descendant_pid: int, message: str) -> None:
+    """Assert the run reclaimed the descendant that held the inherited pipes."""
+    wait_for_process_death(
+        descendant_pid,
+        context="an owned failing stage's group teardown",
+    )
+    assert not process_is_running(descendant_pid), message
+
+
 def test_a_public_owned_pipeline_run_reaches_its_grandchildren(tmp_path: Path) -> None:
     """A pipeline run asked for ownership reclaims the grandchild it started.
 
@@ -93,16 +116,13 @@ def test_a_public_owned_pipeline_run_reaches_its_grandchildren(tmp_path: Path) -
                     ),
                 )
             grandchild_pid = int(pid_file.read_text(encoding="utf-8").strip())
-            assert not process_is_running(grandchild_pid), (
+            _assert_descendant_reclaimed(
+                grandchild_pid,
                 "an owned pipeline run must reclaim the descendant its stage "
-                "left behind, rather than leaving it holding the inherited pipes"
+                "left behind, rather than leaving it holding the inherited pipes",
             )
         finally:
-            # A failure here means the descendant outlived its group teardown,
-            # which is the very thing under test. Reap it before reporting, so
-            # an assertion failure cannot leave a live process behind.
-            if grandchild_pid is not None and process_is_running(grandchild_pid):
-                os.kill(grandchild_pid, signal.SIGKILL)
+            _reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
 
@@ -167,19 +187,13 @@ def test_an_owned_failing_stage_reaches_the_descendant_it_left(tmp_path: Path) -
                 pid_file,
                 context="the failing stage's descendant",
             )
-            wait_for_process_death(
+            _assert_descendant_reclaimed(
                 grandchild_pid,
-                context="an owned failing stage's group teardown",
-            )
-            assert not process_is_running(grandchild_pid), (
                 "the stage that failed owns a group that outlives it, so its "
                 "descendant must be reclaimed even though the stage itself "
-                "had already exited when the failure latched"
+                "had already exited when the failure latched",
             )
         finally:
-            if grandchild_pid is None:
-                grandchild_pid = _recorded_descendant(pid_file)
-            if grandchild_pid is not None and process_is_running(grandchild_pid):
-                os.kill(grandchild_pid, signal.SIGKILL)
+            _reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())

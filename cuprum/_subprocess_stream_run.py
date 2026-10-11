@@ -224,29 +224,47 @@ async def _run_subprocess_with_streams(
         for diagnostics in tasks.relay_diagnostics:
             diagnostics.settle()
     except BaseException:
-        # The leader has exited but its group may not have, so settle the group
-        # before reaching for the consumers: a descendant still holding the
-        # pipes is what makes this gather fail, and no drain can succeed until
-        # it is gone.
-        await _settle_owned_group_before_draining(process, execution)
-        # `gather` re-raises the first failure and leaves its sibling running,
-        # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
-        # drain absorbs what it finds, which is right while another error is
-        # propagating — and here the consumer failure *is* that error.
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
+        await _settle_group_and_discard_consumers(
+            process,
+            execution,
+            tasks,
+            pid,
         )
         raise
     return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
+
+
+async def _settle_group_and_discard_consumers(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    pid: int | None,
+) -> None:
+    """Settle an owned group, then reconcile the consumers that were gathering.
+
+    The leader has exited but its group may not have, so the group is settled
+    before reaching for the consumers: a descendant still holding the pipes is
+    what makes the gather fail, and no drain can succeed until it is gone.
+
+    ``gather`` re-raises the first failure and leaves its sibling running, so a
+    reader wedged on a pipe would outlive the run it belonged to. Reconcile it
+    the way every other exit path does: the drain absorbs what it finds, which
+    is right while another error is propagating — and here the consumer failure
+    *is* that error. Both halves are shielded so a cancellation arriving during
+    them cannot skip the escalation.
+    """
+    await _settle_owned_group_before_draining(process, execution)
+    await _shielded_cleanup(
+        _drain_stream_consumers(
+            tasks.consumers,
+            _DrainContext(
+                capture=False,
+                pid=pid,
+                observation=execution.observation,
+                discard_on_cancel=tasks.discard_on_cancel,
+            ),
+        )
+    )
 
 
 __all__ = [
