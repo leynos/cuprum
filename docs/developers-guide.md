@@ -1582,12 +1582,12 @@ analogous teardown bound *does* have a counter (`capture_eof_grace_expired`
 maps to `cuprum_capture_eof_grace_expired_total`), so an omission without a
 stated reason would read as an oversight.
 
-The reason is attribution, but it is narrower than "no observation exists".
-The helpers themselves have no `_StageObservation` to emit through, and the
-routes that reach them divide in two. The pipeline fail-fast path *does* carry
-one — `_terminate_pipeline_remaining_stages` is given a stage index and its
-caller holds the observation it emits `cuprum_terminated_stage_count` through,
-so a per-stage group metric is constructible there. The other routes reach
+The reason is attribution, but it is narrower than "no observation exists". The
+helpers themselves have no `_StageObservation` to emit through, and the routes
+that reach them divide in two. The pipeline fail-fast path *does* carry one —
+`_terminate_pipeline_remaining_stages` is given a stage index and its caller
+holds the observation it emits `cuprum_terminated_stage_count` through, so a
+per-stage group metric is constructible there. The other routes reach
 `_terminate_all_shielded` from callers that have already abandoned the run, and
 what they would have to hand down is a group signal that belongs to the run
 rather than to any one stage. Since the remaining routes can only report at run
