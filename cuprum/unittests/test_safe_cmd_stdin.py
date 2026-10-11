@@ -27,6 +27,7 @@ from tests.helpers.stream_pipes import drain_blocking_payload_size
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum._pipeline_internals import _StageObservation
     from cuprum.sh import CommandResult, SafeCmd

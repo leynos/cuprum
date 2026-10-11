@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import functools
+import io
 import logging
 import time
 import typing as typ
@@ -31,7 +32,7 @@ import pytest
 
 from cuprum import sh
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
-from cuprum._stdio_diagnostics import _emit_stdio_error
+from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_execution import _SubprocessExecution
 from cuprum._subprocess_spawn import (
@@ -56,11 +57,11 @@ if typ.TYPE_CHECKING:
 _SENTINEL = "sentinel-must-not-be-exported-4f1c"
 
 
-class _FlushFailure(Exception):
+class _FlushFailureError(Exception):
     """The failure a borrowed object's ``flush`` raises."""
 
 
-class _ObserveFailure(Exception):
+class _ObserveFailureError(Exception):
     """The failure a broken observe hook raises."""
 
 
@@ -73,6 +74,11 @@ def _probe_command() -> SafeCmd:
     :func:`~cuprum._timeout_reporting._safe_emit` swallows whatever that
     raises. A stub would therefore produce no event at all, and every
     assertion below would pass vacuously against an empty list.
+
+    Returns
+    -------
+    SafeCmd
+        A real command whose fields the emitter can read.
     """
     catalogue, program = python_catalogue()
     builder = sh.make(program, catalogue=catalogue)
@@ -123,6 +129,12 @@ def _execution(
     beside either is refused at construction, because there is no parent-side
     pipe left to read. These helpers are reached only for runs that make that
     choice, so the fixture makes it too.
+
+    Returns
+    -------
+    _SubprocessExecution
+        The run bundle, with every stream the caller did not redirect
+        inherited.
     """
     options = RunOutputOptions(
         capture=False,
@@ -176,6 +188,11 @@ class _RecordingHandler(logging.Handler):
         together. A secret search limited to the formatted message would miss a
         value smuggled in through ``extra`` or an unformatted ``%s`` argument,
         and those are precisely the routes this emits through.
+
+        Returns
+        -------
+        str
+            Every part of the record, rendered as text.
         """
         record = self.records[index]
         return " ".join((
@@ -230,10 +247,12 @@ class TestEveryBoundaryNamesItself:
 
         _emit_stdio_error(
             _observation(_recording_hooks(events)),
-            category,
-            operation=operation,
-            error_type="ValueError",
-            pid=4321,
+            _StdioFailure(
+                category=category,
+                operation=operation,
+                error_type="ValueError",
+                pid=4321,
+            ),
         )
 
         assert len(events) == 1, f"expected exactly one event, found {events}"
@@ -268,10 +287,12 @@ class TestEveryBoundaryNamesItself:
 
         _emit_stdio_error(
             _observation(_recording_hooks(events)),
-            StdioFailureCategory.OWNED_PATH_OPEN,
-            operation="open",
-            error_type="FileNotFoundError",
-            pid=pid,
+            _StdioFailure(
+                category=StdioFailureCategory.OWNED_PATH_OPEN,
+                operation="open",
+                error_type="FileNotFoundError",
+                pid=pid,
+            ),
         )
 
         fields = stdio_log.fields()
@@ -295,10 +316,12 @@ class TestEveryBoundaryNamesItself:
         """
         _emit_stdio_error(
             _observation(),
-            StdioFailureCategory.PRODUCER,
-            operation="produce",
-            error_type="ValueError",
-            pid=4321,
+            _StdioFailure(
+                category=StdioFailureCategory.PRODUCER,
+                operation="produce",
+                error_type="ValueError",
+                pid=4321,
+            ),
         )
 
         assert stdio_log.fields()["cuprum_error_category"] == "producer", (
@@ -337,10 +360,12 @@ class TestDiagnosticsReachEveryChannel:
 
         _emit_stdio_error(
             observation,
-            StdioFailureCategory.ENCODER,
-            operation="write",
-            error_type="LookupError",
-            pid=None,
+            _StdioFailure(
+                category=StdioFailureCategory.ENCODER,
+                operation="write",
+                error_type="LookupError",
+                pid=None,
+            ),
         )
 
         assert [op.name for op in collector.calls] == ["cuprum_stdio_errors_total"], (
@@ -370,10 +395,12 @@ class TestDiagnosticsReachEveryChannel:
 
         _emit_stdio_error(
             observation,
-            StdioFailureCategory.PIPE,
-            operation="write",
-            error_type="BrokenPipeError",
-            pid=99,
+            _StdioFailure(
+                category=StdioFailureCategory.PIPE,
+                operation="write",
+                error_type="BrokenPipeError",
+                pid=99,
+            ),
         )
 
         assert events[0].exec_id == observation.exec_id, (
@@ -405,10 +432,12 @@ class TestDiagnosticsReachEveryChannel:
         )
         _emit_stdio_error(
             observation,
-            StdioFailureCategory.INVALID_CHUNK,
-            operation="write",
-            error_type="TypeError",
-            pid=4321,
+            _StdioFailure(
+                category=StdioFailureCategory.INVALID_CHUNK,
+                operation="write",
+                error_type="TypeError",
+                pid=4321,
+            ),
         )
 
         span = tracer.spans[0]
@@ -457,10 +486,12 @@ class TestCallerSecretsStayOutOfDiagnostics:
 
         _emit_stdio_error(
             observation,
-            StdioFailureCategory.PRODUCER,
-            operation="produce",
-            error_type="PermissionError",
-            pid=4321,
+            _StdioFailure(
+                category=StdioFailureCategory.PRODUCER,
+                operation="produce",
+                error_type="PermissionError",
+                pid=4321,
+            ),
         )
 
         assert events, "the emitter must have produced an event to inspect"
@@ -501,7 +532,7 @@ class TestCallerSecretsStayOutOfDiagnostics:
             hooks=_recording_hooks(events),
         )
 
-        with pytest.raises(OSError) as info:
+        with pytest.raises(OSError, match=_SENTINEL) as info:
             _open_owned_stdio(execution)
 
         assert _SENTINEL in str(info.value), (
@@ -539,7 +570,7 @@ class TestCallerSecretsStayOutOfDiagnostics:
         exception still propagates.
         """
         events: list[ExecEvent] = []
-        borrowed = _FailingFlush(
+        borrowed = _FailingFlushFile(
             tmp_path / "caller-owned.txt",
             f"{_SENTINEL}: the caller's own failure",
         )
@@ -549,10 +580,10 @@ class TestCallerSecretsStayOutOfDiagnostics:
         )
 
         try:
-            with pytest.raises(_FlushFailure) as info:
+            with pytest.raises(_FlushFailureError) as info:
                 _flush_borrowed_stdio(execution)
         finally:
-            borrowed.file.close()
+            borrowed.close()
 
         assert _SENTINEL in str(info.value), (
             "the caller's own exception must propagate unchanged"
@@ -583,7 +614,7 @@ class TestFailingConsumersDoNotAlterTheOutcome:
     @pytest.mark.parametrize(
         "failure",
         [
-            pytest.param(_ObserveFailure("hook exploded"), id="hook-raises"),
+            pytest.param(_ObserveFailureError("hook exploded"), id="hook-raises"),
             pytest.param(asyncio.CancelledError(), id="hook-cancels"),
         ],
     )
@@ -607,10 +638,12 @@ class TestFailingConsumersDoNotAlterTheOutcome:
 
         _emit_stdio_error(
             _observation((exploding_hook,)),
-            StdioFailureCategory.PRODUCER,
-            operation="produce",
-            error_type="ValueError",
-            pid=4321,
+            _StdioFailure(
+                category=StdioFailureCategory.PRODUCER,
+                operation="produce",
+                error_type="ValueError",
+                pid=4321,
+            ),
         )
 
     def test_a_failing_log_handler_does_not_stop_the_observe_event(self) -> None:
@@ -622,16 +655,17 @@ class TestFailingConsumersDoNotAlterTheOutcome:
         """
         events: list[ExecEvent] = []
         logger = logging.getLogger("cuprum.stdio")
-        exploding = logging.Handler()
-        exploding.emit = _raise_from_handler  # type: ignore[method-assign]
+        exploding = _ExplodingHandler()
         logger.addHandler(exploding)
         try:
             _emit_stdio_error(
                 _observation(_recording_hooks(events)),
-                StdioFailureCategory.PIPE,
-                operation="write",
-                error_type="OSError",
-                pid=1,
+                _StdioFailure(
+                    category=StdioFailureCategory.PIPE,
+                    operation="write",
+                    error_type="OSError",
+                    pid=1,
+                ),
             )
         finally:
             logger.removeHandler(exploding)
@@ -639,33 +673,59 @@ class TestFailingConsumersDoNotAlterTheOutcome:
         assert events, "a failing log handler must not suppress the observe event"
 
 
-class _FailingFlush:
-    """A borrowed file object whose ``flush`` always fails.
+class _FailingFlushFile(io.FileIO):
+    """A borrowed file object whose ``flush`` fails until it is closed.
 
-    It is a real open file, not a stand-in: the binding resolves an ``fd``
-    target by taking the object's descriptor, so a double without ``fileno``
-    would fail in resolution and never reach the flush this test is about.
+    Subclassing a real descriptor rather than standing in for one is what the
+    boundary under test demands. ``StdioTarget.fd`` accepts only an ``int`` or
+    an open file object, and resolution then takes the object's real
+    ``fileno()``; a double carrying a ``fileno`` attribute would satisfy the
+    test while exercising a path no caller can reach. Being a file also keeps
+    the descriptor genuine, so the failure under test is the flush and nothing
+    else.
+
+    The failure is armed until :meth:`close`, because a real descriptor's
+    ``close`` flushes too: a double that failed unconditionally would raise
+    from the test's own cleanup and mask the assertions it had just made.
     """
 
     def __init__(self, path: Path, message: str) -> None:
-        """Open a real file at *path* and capture the failure's message."""
-        self.file = path.open("wb")
+        """Open *path* for writing and capture the failure's message."""
+        super().__init__(path, mode="wb")
         self._message = message
-
-    def fileno(self) -> int:
-        """Return the borrowed descriptor the child would inherit."""
-        return self.file.fileno()
+        self._failing = True
 
     def flush(self) -> None:
-        """Fail, carrying the caller's own message."""
-        raise _FlushFailure(self._message)
+        """Fail, carrying the caller's own message.
+
+        Real descriptor close also flushes, so the failure is armed only while
+        the test is still watching. Left armed, the ``finally`` cleanup would
+        raise from ``close`` and mask whatever the assertions had established.
+        """
+        if self._failing:
+            raise _FlushFailureError(self._message)
+
+    def close(self) -> None:
+        """Stop failing, then close the descriptor normally."""
+        self._failing = False
+        super().close()
 
 
-def _raise_from_handler(record: logging.LogRecord) -> None:
-    """Raise from inside a log handler, as a broken sink would."""
-    del record
-    msg = "handler exploded"
-    raise _ObserveFailure(msg)
+class _ExplodingHandler(logging.Handler):
+    """A handler whose every emit fails, as a broken sink would.
+
+    Subclassed rather than given a patched ``emit``: the logger calls ``emit``
+    on the handler instance, so overriding it here is the same call a broken
+    sink makes while keeping the override a real method. Assigning a function
+    onto an instance would work at runtime and leave the type of ``emit``
+    wrong, which is the defect the type checker exists to catch.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Fail, so the emitter's separate guard is what this measures."""
+        del record
+        msg = "handler exploded"
+        raise _ObserveFailureError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)

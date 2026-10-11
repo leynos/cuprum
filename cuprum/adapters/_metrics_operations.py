@@ -206,27 +206,42 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
             return _resource_operations(event)
         case "settled":
             return _settled_operations(event)
-        case "stdio_error":
-            # A per-operation label rather than a fourth common one: the
-            # boundary category belongs only on this counter, and adding it to
-            # ``_extract_labels`` would attach it to every series the hook
-            # emits, where it is ``None`` for all but this phase. The metric
-            # name still comes from ``_PHASE_COUNTERS``, so it has one
-            # definition like the other unit counters.
-            labels = (
-                {}
-                if event.error_category is None
-                else {"error_category": str(event.error_category)}
-            )
-            return (_CounterOp("cuprum_stdio_errors_total", 1.0, labels),)
         case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
             # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
             # than repeated as a literal alternation, so the metric names have
-            # exactly one definition.
-            labels = _env_mode_label(event) if phase in _ENV_MODE_PHASES else {}
-            return (_CounterOp(counter_name, 1.0, labels),)
+            # exactly one definition. ``stdio_error`` is one of them, and what
+            # distinguishes it is its label rather than its name, so it is the
+            # label that is decided per phase.
+            return (_CounterOp(counter_name, 1.0, _phase_labels(event)),)
         case _:
             raise _UnhandledMetricsPhaseError(phase)
+
+
+def _phase_labels(event: ExecEvent) -> cabc.Mapping[str, str]:
+    """Return the extra labels this phase's counter carries, if any.
+
+    Two phases carry one and the rest carry none, for the same reason: a
+    label multiplies every series its counter produces, so it is worth adding
+    only when an operator needs to filter on it. The environment mode
+    describes the execution as a whole, and the event's phase is the only
+    place it is known; the boundary category is the whole reason a
+    ``stdio_error`` is counted separately, and it is a bounded set chosen by
+    cuprum rather than anything a caller supplies.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, str]
+        The label mapping, empty for a phase that carries none and for an
+        event that records no value for the one its phase would carry, so a
+        hand-built event never fabricates a label.
+    """
+    if event.phase == "stdio_error":
+        if event.error_category is None:
+            return {}
+        return {"error_category": str(event.error_category)}
+    if event.phase in _ENV_MODE_PHASES:
+        return _env_mode_label(event)
+    return {}
 
 
 __all__ = [

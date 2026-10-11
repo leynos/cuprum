@@ -53,6 +53,8 @@ from tests.helpers.timeouts import pending_tasks
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum._subprocess_stdin_stream import _StdinCodec
     from cuprum.sh import CommandResult, SafeCmd
 
 # The child blocks far longer than any window here, so a run that has finished
@@ -151,16 +153,16 @@ def _install_probe(
 
     async def tracked_write(
         process: asyncio.subprocess.Process,
-        stream: object,
-        codec: object,
-        observation: object,
+        stream: StdinStream,
+        codec: _StdinCodec,
+        observation: _StageObservation,
     ) -> None:
         """Record the run's process and writer task, then stream as usual."""
         probe.processes.append(process)
         # The writer runs as its own task, so this is that task's handle: the
         # one cuprum created and is therefore responsible for settling.
         probe.writer_task = asyncio.current_task()
-        await real_write(process, stream, codec, observation)  # type: ignore[arg-type]
+        await real_write(process, stream, codec, observation)
 
     async def tracked_drain(self: asyncio.StreamWriter) -> None:
         """Signal that the chunk write has entered ``drain()``, then drain."""
@@ -204,6 +206,31 @@ async def _reclaim_run(task: asyncio.Task[CommandResult]) -> None:
         await asyncio.wait_for(asyncio.shield(task), timeout=_UNWIND_S)
 
 
+def _settlement_outcome(task: asyncio.Task[CommandResult]) -> str:
+    """Describe how a cancelled run settled, without re-raising its outcome.
+
+    Reading the task's result or exception is what keeps this a query: the
+    caller learns how the run ended without the ending propagating, so the
+    assertion it feeds is reached with a diagnosis instead of being skipped by
+    the very failure it exists to report.
+
+    Returns
+    -------
+    str
+        ``"still unwinding"`` if the run outlasted its window,
+        ``"cancelled"`` for the expected unwrapped cancellation, and otherwise
+        the ending's type and message.
+    """
+    if not task.done():
+        return "still unwinding"
+    if task.cancelled():
+        return "cancelled"
+    error = task.exception()
+    if error is None:
+        return "completed without raising"
+    return f"ended with {type(error).__name__}: {error!s}"
+
+
 async def _cancel_when_ready(
     command: SafeCmd,
     probe: _CancellationProbe,
@@ -214,12 +241,12 @@ async def _cancel_when_ready(
 ) -> _CancelledRunEvidence:
     """Start the run, cancel it once *ready* fires, and record the aftermath.
 
-    Raises
-    ------
-    AssertionError
-        If the run did not propagate ``CancelledError`` unwrapped, or if it
-        ended before the writer reached the stance under test — which would
-        mean this case never cancelled a live writer at all.
+    Returns
+    -------
+    _CancelledRunEvidence
+        What the cancelled run left behind. The assertions below are what
+        report a run that did not propagate ``CancelledError`` unwrapped, or
+        that ended before the writer reached the stance under test.
     """
     task = asyncio.create_task(
         command.run(
@@ -244,16 +271,12 @@ async def _cancel_when_ready(
             "the post-cancellation census proves nothing"
         )
         task.cancel()
-        outcome = "still unwinding"
-        try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=_UNWIND_S)
-        except asyncio.CancelledError:
-            outcome = "cancelled"
-        except Exception as exc:
-            # Recorded by type rather than raised: the caller's assertion below
-            # is what reports this, and wrapping the run's own error here would
-            # replace the diagnosis with the recursion of Report.
-            outcome = f"ended with {type(exc).__name__}: {exc!s}"
+        # Settlement is queried rather than awaited. Awaiting the task would
+        # propagate its outcome, forcing this caller to catch it — and a catch
+        # wide enough to record "ended some other way" is also wide enough to
+        # swallow the very cancellation the assertion below is about.
+        await asyncio.wait({task}, timeout=_UNWIND_S)
+        outcome = _settlement_outcome(task)
         assert outcome == "cancelled", (
             "cancelling a run that is streaming stdin must propagate "
             "CancelledError unwrapped and promptly; got " + outcome
@@ -323,6 +346,12 @@ def test_cancelling_a_streaming_run_tears_everything_down(
         Suspending after the first chunk is the point: it is what leaves the
         writer with nothing to fail against, so only the run's teardown can
         end this producer.
+
+        Yields
+        ------
+        bytes
+            One chunk, large enough to block the writer's ``drain()`` when the
+            blocked-write stance asked for that.
         """
         try:
             await asyncio.sleep(0)

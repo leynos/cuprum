@@ -39,15 +39,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import logging
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
 from cuprum._timeout_reporting import _safe_emit
-from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
+    from cuprum.stdio_events import StdioFailureCategory
 
 # ``cuprum.stdio`` rather than a module-path name, mirroring ``cuprum.stdin``
 # and ``cuprum.timeout``: these are stable logger names an observability
@@ -56,26 +57,19 @@ if typ.TYPE_CHECKING:
 _LOGGER = logging.getLogger("cuprum.stdio")
 
 
-def _emit_stdio_error(
-    observation: _StageObservation,
-    category: StdioFailureCategory,
-    *,
-    operation: str,
-    error_type: str,
-    pid: int | None,
-) -> None:
-    """Emit a best-effort ``stdio_error`` diagnostic for a failing boundary.
+@dc.dataclass(frozen=True, slots=True)
+class _StdioFailure:
+    """The bounded payload every stdio diagnostic carries.
 
-    The log record and the observe event carry the same bounded payload, so a
-    consumer reading either sees the same boundary name. Each is guarded
-    separately: both run where another failure is already propagating, and
-    neither a logging handler nor an observe hook may become the outcome the
-    caller sees.
+    Grouping these four fields is what makes the payload policy a property of
+    one type rather than a convention restated at each call site: the log
+    record and the observe event are two projections of this object, so a
+    field added here reaches both channels or neither. It also keeps the
+    emitter itself down to the two things it actually needs — where to emit,
+    and what to say.
 
     Parameters
     ----------
-    observation : _StageObservation
-        The stage to emit the observe event on.
     category : StdioFailureCategory
         Which boundary failed. See the module docstring for why it is passed
         rather than inferred.
@@ -90,31 +84,58 @@ def _emit_stdio_error(
         The child's process identifier, or ``None`` for a boundary that fails
         before the fork.
     """
+
+    category: StdioFailureCategory
+    operation: str
+    error_type: str
+    pid: int | None
+
+
+def _emit_stdio_error(
+    observation: _StageObservation,
+    failure: _StdioFailure,
+) -> None:
+    """Emit a best-effort ``stdio_error`` diagnostic for a failing boundary.
+
+    The log record and the observe event carry the same bounded payload, so a
+    consumer reading either sees the same boundary name. Each is guarded
+    separately: both run where another failure is already propagating, and
+    neither a logging handler nor an observe hook may become the outcome the
+    caller sees.
+
+    Parameters
+    ----------
+    observation : _StageObservation
+        The stage to emit the observe event on.
+    failure : _StdioFailure
+        The bounded boundary, operation, error class, and process identifier
+        this diagnostic reports.
+    """
     logging_extra = {
-        "cuprum_pid": pid,
-        "cuprum_operation": operation,
-        "cuprum_error_type": error_type,
-        "cuprum_error_category": str(category),
+        "cuprum_pid": failure.pid,
+        "cuprum_operation": failure.operation,
+        "cuprum_error_type": failure.error_type,
+        "cuprum_error_category": str(failure.category),
     }
     with contextlib.suppress(Exception, asyncio.CancelledError):
         _LOGGER.error(
             "stdio_%s_failed category=%s pid=%s error=%s",
-            operation,
-            category,
-            pid,
-            error_type,
+            failure.operation,
+            failure.category,
+            failure.pid,
+            failure.error_type,
             extra=logging_extra,
         )
     _safe_emit(
         observation,
         "stdio_error",
         _EventDetails(
-            pid=pid,
-            operation=operation,
-            error_type=error_type,
-            error_category=category,
+            pid=failure.pid,
+            operation=failure.operation,
+            error_type=failure.error_type,
+            error_category=failure.category,
         ),
     )
 
 
-__all__ = ["_emit_stdio_error"]
+__all__ = ["_StdioFailure", "_emit_stdio_error"]

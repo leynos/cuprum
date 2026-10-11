@@ -29,7 +29,15 @@ if typ.TYPE_CHECKING:
 # module raises itself. ``None`` for a pipe write, because whether that was the
 # child closing its end or a genuine pipe fault is a question only the caller's
 # classifier can answer.
-type _ChunkBoundary = typ.Literal[StdioFailureCategory.INVALID_CHUNK]
+#
+# ``ENCODER`` is marked here even though the encoder is not a chunk: it is built
+# lazily on the first ``str`` chunk, so a mistyped codec fails *inside* a write,
+# and ``_write_boundary_category`` reads this mark to name it rather than
+# guessing from the exception type.
+type _ChunkBoundary = typ.Literal[
+    StdioFailureCategory.INVALID_CHUNK,
+    StdioFailureCategory.ENCODER,
+]
 
 
 @dc.dataclass(slots=True)
