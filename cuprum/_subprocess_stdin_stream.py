@@ -37,13 +37,19 @@ ceiling reason: the pair that builds the public ``StdinSourceError`` reads
 neither the sink nor the process, so keeping it here put the module over the
 line without deepening the seam the code draws. This module owns which side
 failed; that one owns what the caller is told about it.
+
+Bounding the producer's finalization lives in
+``cuprum._subprocess_stdin_finalize``, the fourth split for the same reason
+and the one that carries the cooperation limit: ``aclose`` is caller code, so
+cuprum bounds how long it waits rather than promising the cleanup finished.
+The order it is called in stays here, because that is a fact about this
+module's two resources rather than about the wait.
 """
 
 from __future__ import annotations
 
 import asyncio
 import codecs
-import contextlib
 import dataclasses as dc
 import logging
 import typing as typ
@@ -52,6 +58,7 @@ from cuprum import _subprocess_stdin_write as _write
 from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
 from cuprum._subprocess_stdin_errors import _stdin_source_error
+from cuprum._subprocess_stdin_finalize import _finalize_stdin_source
 from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
@@ -111,25 +118,6 @@ def _stdin_codec(ctx: ExecutionContext) -> _StdinCodec:
     return _StdinCodec(encoding=ctx.encoding, errors=ctx.errors)
 
 
-async def _finalize_stdin_source(
-    source: cabc.AsyncIterator[str | bytes] | None,
-) -> None:
-    """Close a producer's iterator, tolerating one without ``aclose``.
-
-    A caller may hand cuprum an async *iterable* whose ``__aiter__`` returns a
-    generator, or an object whose iterator has no ``aclose`` at all. Only the
-    generator protocol's clean-up is attempted, and a failure to finalize a
-    producer cuprum no longer needs must not mask the run's real outcome.
-    """
-    if source is None:
-        return
-    aclose = getattr(source, "aclose", None)
-    if aclose is None:
-        return
-    with contextlib.suppress(Exception):
-        await aclose()
-
-
 async def _write_stdin_stream(
     process: asyncio.subprocess.Process,
     stream: StdinStream,
@@ -146,8 +134,12 @@ async def _write_stdin_stream(
 
     The pipe is closed and the producer finalized on every exit path,
     including the raising ones, so a caller who sees a failure still knows
-    that nothing cuprum owns outlives the run. Which failures raise at all is
-    the policy of :func:`_drain_source_into_pipe`, which this delegates to.
+    that nothing cuprum owns outlives the run. Both belong to
+    :func:`_drain_source_into_pipe` — which is why this adds no ``finally`` of
+    its own — for the reason its docstring gives: the order of the two is part
+    of the contract rather than an incidental arrangement, and splitting them
+    across two ``finally`` blocks would leave the dependency implicit in the
+    nesting.
     """
     stdin = process.stdin
     if stdin is None:
@@ -159,10 +151,7 @@ async def _write_stdin_stream(
         codec=codec,
         observation=observation,
     )
-    try:
-        await _drain_source_into_pipe(stream, sink, process, observation)
-    finally:
-        await _close_stdin(process, stdin, observation)
+    await _drain_source_into_pipe(stream, sink, process, observation)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
@@ -241,7 +230,24 @@ async def _drain_source_into_pipe(
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
     finally:
-        await _finalize_stdin_source(source)
+        # The pipe is released *before* the producer is finalized, and that
+        # order is the point rather than an incidental arrangement. The
+        # producer is the caller's code and its cleanup may suspend; the pipe
+        # is cuprum's, and the child's EOF depends on this close reaching it.
+        # Finalizing first let a stalled producer hold the child's input open
+        # for as long as its cleanup chose, which is the dependency this
+        # reverses: whatever the caller's finalizer does, cuprum's own pipe is
+        # already released.
+        #
+        # The nested ``finally`` keeps the producer from being abandoned when
+        # this close is itself interrupted. A cancellation arriving inside the
+        # close propagates from it, and a plain sequence would skip the
+        # finalization that follows — leaving a producer cuprum owned still
+        # open on exactly the teardown path that most needs it closed.
+        try:
+            await _close_stdin(process, sink.stdin, observation)
+        finally:
+            await _finalize_stdin_source(source)
 
 
 def _start_producer(
@@ -375,7 +381,6 @@ async def _pump_chunks(
 
 __all__ = [
     "_StdinCodec",
-    "_finalize_stdin_source",
     "_stdin_codec",
     "_write_stdin_stream",
 ]

@@ -324,10 +324,21 @@ class StdinStream:
 
     Cuprum owns the producer for the duration of the run. On every exit path
     -- normal completion, producer failure, exceeding the timeout, and
-    cancellation -- it calls the iterator's ``aclose()`` when the producer
-    provides one, closes the pipe, and awaits ``wait_closed()``. A caller
-    therefore does not need to finalize their own generator; a caller must
-    not yield from a generator that something else is concurrently driving.
+    cancellation -- it closes the child's pipe and then calls the iterator's
+    ``aclose()`` when the producer provides one. That order is deliberate: the
+    pipe is cuprum's own resource and the child's EOF depends on the close
+    reaching it, so releasing it first means a caller's cleanup, however slow,
+    cannot hold the child's input open.
+
+    Both steps are bounded. Closing the pipe gives a graceful shutdown a short
+    window and then releases the transport unconditionally, because a writer
+    whose grandchild holds the read end open would otherwise wait forever.
+    The producer's ``aclose()`` gets the same window: a finalizer that suspends
+    longer than that is *cancelled*, not waited out, and one that absorbs
+    cancellation keeps working in the background. So cuprum bounds its own
+    wait rather than promising that a caller's cleanup has completed. A caller
+    therefore does not need to finalize their own generator; a caller must not
+    yield from a generator that something else is concurrently driving.
 
     A child that closes its stdin early (``head`` is the canonical example)
     is normal rather than an error: the resulting ``BrokenPipeError`` is

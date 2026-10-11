@@ -172,6 +172,21 @@ async def _close_stdin(
     gone, and the alternative is a descriptor held open by a descendant that
     may never exit. Refusing to outlive the run is not the same as releasing
     what the run still owned.
+
+    Cancellation lands here as well as expiry, and needs the same release. The
+    teardown paths reclaim the writer by cancelling its task, and that
+    cancellation can be delivered while this coroutine is suspended in the
+    bounded wait — the "one more cancellation" the paragraph above describes.
+    The close has then been started and abandoned exactly as an expired window
+    leaves it, so the abort is owed on this path too before the cancellation
+    continues outward.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the writer is cancelled while the bounded wait is pending. The
+        transport is released first, so the descriptor does not depend on the
+        cancelled task being awaited again.
     """
     try:
         stdin.close()
@@ -186,6 +201,12 @@ async def _close_stdin(
         # broken pipe. Expiring the window still has to *end* the close rather
         # than only stop waiting for it, which is what the abort releases.
         _abort_stdin_transport(process, stdin)
+    except asyncio.CancelledError:
+        # Released before re-raising, so the descriptor does not depend on the
+        # cancelled task ever being awaited again — the reclaim path gives it a
+        # bounded window and then moves on regardless.
+        _abort_stdin_transport(process, stdin)
+        raise
     except (OSError, RuntimeError) as exc:
         _emit_stdin_error(process, observation, exc, operation="close")
 
