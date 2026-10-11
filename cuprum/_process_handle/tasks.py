@@ -101,9 +101,11 @@ def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecu
         The bundle with its timeout cleared, so only the deadline a caller
         supplies to :meth:`RunningCommand.wait` is ever enforced.
     """
-    # Rebuilt rather than mutated: the bundle is a frozen dataclass, and
-    # ``wait`` derives its own copy from this one by replacing the timeout
-    # again, so the standing value has to be absent from the base it copies.
+    # Rebuilt rather than mutated, because the bundle is a frozen dataclass.
+    # The cleared value is not lost: it travels on the record as
+    # ``default_timeout``, and the deadline a caller supplies to ``wait`` is
+    # applied by the settlement around that caller's own await of the shared
+    # task — no bundle carrying a timeout is ever spawned from.
     return dc.replace(execution, timeout=None)
 
 

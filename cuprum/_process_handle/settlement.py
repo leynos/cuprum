@@ -137,7 +137,14 @@ class _Settlement:
         -------
         CommandResult
             The command's outcome, also stored for :attr:`result`.
-        """
+
+        Raises
+        ------
+        BaseException
+            Whatever ended the run early: the failure the wait itself hit, or a
+            caller's `after` hook refusing the outcome, once the run's framing
+            has been closed behind it.
+        """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the run or a hook raised
         run = self._handle
         # The bundle the child was spawned from, with no deadline in it: the
         # task is driven by no clock, so nothing here can expire on its own.
@@ -154,6 +161,23 @@ class _Settlement:
             raise
         deadline = self._deadline
         if deadline is None:
+            # The after hooks pair with the before hooks `_prepare_owned_command`
+            # already ran, and they run before the run is finalized so a failing
+            # hook settles the run as the error it was rather than being
+            # swallowed by a success. A deadline-ended run takes the other
+            # branch: the streamed path does not run its hooks on a timeout
+            # either, because the caller is owed an error rather than a record.
+            try:
+                for hook in run.tracking.execution_hooks.after_hooks:
+                    hook(execution.cmd, result)
+            except BaseException as hook_error:
+                await _finalize_command_run_failure(
+                    execution,
+                    run.tracking,
+                    result,
+                    hook_error,
+                )
+                raise
             await _finalize_command_run_success(execution, run.tracking, result)
         else:
             # A caller's deadline is what stopped the child, so the run settles

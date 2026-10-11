@@ -53,7 +53,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.lines import LineEvent
     from cuprum.program import Program
-    from cuprum.sh import SafeCmd
+    from cuprum.sh import CommandResult, SafeCmd
 
 #: How long a deadline is given to expire. Long enough that a scheduler under
 #: load cannot expire the wait before the case has set it running, short enough
@@ -288,6 +288,48 @@ def test_an_expired_run_settles_as_a_timeout() -> None:
         )
 
     asyncio.run(run_case())
+
+
+def test_a_settled_handle_runs_the_callers_after_hooks() -> None:
+    """The handle pairs its ``before`` hooks with the caller's ``after`` hooks.
+
+    ``_prepare_owned_command`` runs ``before`` hooks on the way in, so a caller
+    that registers both for auditing gets one half of the pair unless the
+    settlement runs the other. The hook receives the same ``CommandResult`` the
+    caller's own ``wait`` returns, because it is the run's outcome rather than a
+    summary of it.
+    """
+    seen: list[tuple[SafeCmd, CommandResult]] = []
+    catalogue, python_program = python_catalogue()
+    builder = sh.make(python_program, catalogue=catalogue)
+    command = builder("-c", "print('hooked', flush=True)")
+
+    async def run_case() -> CommandResult:
+        """Start a child, let it exit, and settle the handle."""
+        with scoped(
+            ScopeConfig(
+                allowlist=frozenset([python_program]),
+                after_hooks=(lambda cmd, result: seen.append((cmd, result)),),
+            ),
+        ):
+            handle = await command.start()
+            return await handle.wait()
+
+    result = asyncio.run(run_case())
+
+    assert len(seen) == 1, (
+        f"a settled handle must run the caller's after hook exactly once, got "
+        f"{len(seen)} calls"
+    )
+    hooked_cmd, hooked_result = seen[0]
+    assert hooked_cmd is command, (
+        "the hook must receive the command the handle was started from, got "
+        f"{hooked_cmd!r}"
+    )
+    assert hooked_result is result, (
+        "the hook must receive the settled outcome rather than a copy of it, "
+        f"got {hooked_result!r}"
+    )
 
 
 def test_line_stamps_are_measured_from_the_spawn() -> None:
