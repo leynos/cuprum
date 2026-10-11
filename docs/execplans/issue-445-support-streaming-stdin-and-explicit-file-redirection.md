@@ -218,6 +218,19 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) Gap C closed in `409a8395`, the last open assessment gap.
+  `docs/users-guide.md`, `docs/cuprum-design.md`, and
+  `docs/developers-guide.md` now document the `stdio_error` event, all six
+  `StdioFailureCategory` values, the `cuprum_stdio_errors_total` counter and its
+  `error_category` label, and the four module boundaries that had grown
+  without a roster entry. Two ordering claims in the first draft were falsified
+  by probe runs and replaced with the measured behaviour; see
+  `Surprises & discoveries` for both. Gates at the committed shape:
+  `make check-fmt` (including the new `ruff check --select I` leaf and
+  mdtablefix), `make markdownlint`, `make nixie`, and the 113-test
+  documentation-contract selection all pass. `mdtablefix` reflowed every
+  paragraph twice, so the applied order was edit → reflow → re-read; a claim
+  checked before the reflow is not checked after it.
 - [x] (2026-10-02) Fourth rebase, onto `origin/main` at `c65d843c` (seven new
   commits: `71aaf3eb`, `81efc928`, `ecf0ed9e`, `d869c478`, `2cc83208`,
   `b6bb9a99`, `c65d843c`). The boundary was the plain merge base `7b86b904`,
@@ -1674,9 +1687,19 @@ likelihood, and mitigation.
   test that runs the pinned Ruff against a formatted-but-unsorted fixture and
   requires `I001`. Both halves of that test are proven non-vacuous.
 
-- [ ] **Gap C — document `stdio_error`, `StdioFailureCategory`, and
-  `cuprum_stdio_errors_total`.** No maintained doc file names any of them; only
-  this plan does. In progress.
+- [x] **Gap C — document `stdio_error`, `StdioFailureCategory`, and
+  `cuprum_stdio_errors_total`.** Closed in `409a8395`. No maintained doc file
+  named any of them, and the search that established that was a concept sweep
+  rather than a name sweep: `stdio_error`, `error_category`,
+  `StdioFailureCategory`, `cuprum_stdio_errors_total`, `stdio_events`, and
+  `_stdio_diagnostics` were each counted across `docs/*.md`, and every count
+  came back zero or plan-only. `docs/users-guide.md` now documents the event,
+  the six label values, and the counter; `docs/cuprum-design.md` carries the
+  event, phase, metric, and tracing inventories; `docs/developers-guide.md`
+  carries the tracing rosters and the module-boundary roster. The boundary
+  roster also gained the four modules that had grown without an entry —
+  `_stdio_diagnostics`, `_stdio_binding_guards`, `_subprocess_stdin_reclaim`
+  (the other open item from an earlier round), and `_subprocess_stdin_write`.
 
 ## Surprises & discoveries
 
@@ -2508,6 +2531,29 @@ likelihood, and mitigation.
   from one line, and `ANN401` closed the obvious escape (`Any`). Impact:
   helpers that forward to a wide signature should name the keywords they
   actually pass. Date/Author: 2026-09-27, implementation agent.
+- Observation (Gap C, doc accuracy): the first draft of the `stdio_error`
+  entry said the diagnostic "may be the last thing a consumer sees". Five probe
+  runs — producer failure, owned-path open failure, borrowed-flush failure,
+  invalid chunk, and external cancellation mid-produce — each recorded the
+  emitted phase sequence, and every one ended `... → stdio_error → settled`.
+  The claim was false as written. What is true is narrower: no `exit` event
+  follows these boundaries, `settled` does, and `_safe_emit` makes the emission
+  best-effort so a raising observe hook cannot replace the caller's exception.
+  Impact: the sentence now states what was measured. The general point is that
+  a plausible-sounding operational claim about *ordering* is cheap to test and
+  expensive to get wrong in prose, because nothing else in the gate set can
+  falsify it. The same round corrected a second draft sentence that implied a
+  child closing its stdin early is counted by `cuprum_stdio_errors_total`; it
+  is not, because that path is `stdin_error` and a different phase.
+  Date/Author: 2026-10-11, implementation agent.
+- Observation (verification hygiene): the probe that measured the
+  raising-hook case reported `HAS_STDIO_ERROR: False` while the event list
+  printed directly beneath it plainly contained a `stdio_error` event. The
+  probe's own check was `"stdio_error" in events`, comparing a string against
+  `ExecEvent` objects. That faulty predicate was caught only by reading the
+  printed evidence, which is why the probe prints the raw sequence rather than
+  just a boolean. Impact: a probe's summary assertion is not evidence; its raw
+  capture is. Date/Author: 2026-10-11, implementation agent.
 - Deviation (recorded, not silently absorbed): the plan's `Tolerances` bound
   this work at 24 tracked files or 1400 net lines, and the delivered change is
   materially larger — 44 tracked files and 5436 net added lines at `aca77867`,
