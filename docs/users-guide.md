@@ -772,23 +772,29 @@ nothing was bound.
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
 
+The second argument is either a path or a resolver. A path may be a `str` or
+any `os.PathLike`, so a `Path`, a `PurePosixPath`, or a `PureWindowsPath` all
+bind the same way and are stored normalized. A resolver is a zero-argument
+callable returning the executable string; it is stored unchanged and called
+once per execution, at spawn time. Any other value — an `int` where a path was
+meant, say — is rejected with `TypeError` naming the type supplied, rather than
+being stored as a resolver that only fails much later, at spawn time, against
+a resolver the caller never supplied.
+
 A resolver must return a `str`. Returning anything else is rejected, because
 `None` is reserved to mean "no binding"; a resolver returning it silently runs
 the catalogued name instead of the executable the caller selected.
 
-Which exception reports that rejection depends on the boundary, and the two are
-worth telling apart. Calling `resolve_binding()` directly raises `TypeError`
-naming the type the resolver returned. Reaching the same resolver through an
-execution — `CommandResult.resolved_path`, or any command that runs — raises
+Which exception reports that rejection depends on the boundary. Calling
+`resolve_binding()` directly raises `TypeError` naming the type the resolver
+returned. Running a command or pipeline that reaches the same resolver raises
 `ExecutableResolutionError` instead, with that `TypeError` chained as
-`__cause__`, because the execution boundary reports every resolver failure the
-same way. The rule is therefore uniform rather than split: whatever a resolver
-raises or returns wrongly, an execution reports as `ExecutableResolutionError`,
-which names the logical program and chains the resolver's own exception as its
-`__cause__`. It subclasses `RuntimeError`, so `except FileNotFoundError` around
-the call no longer catches a resolver that failed to find its virtual
-environment, and `except TypeError` does not catch a resolver that returned the
-wrong type.
+`__cause__`. At the execution boundary, whatever a resolver raises or returns
+wrongly is reported as `ExecutableResolutionError`, which names the logical
+program and chains the resolver's own exception as its `__cause__`. It
+subclasses `RuntimeError`, so `except FileNotFoundError` around the call no
+longer catches a resolver that failed to find its virtual environment, and
+`except TypeError` does not catch a resolver that returned the wrong type.
 
 <!-- tested-example: executable-bindings -->
 

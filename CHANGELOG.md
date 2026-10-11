@@ -101,18 +101,26 @@
   resolution helper, `InvalidExecutableBindingError` the rejection, and
   `merge_executable_bindings` the overlay-only composition rule.
   `CuprumContext.resolve_executable()` inspects the effective binding without
-  running anything. A resolver must return a `str`: any other result raises
-  `TypeError`, so a resolver returning `None` cannot be mistaken for "no
-  binding" and silently run the catalogued name instead, and a resolver that
-  raises is reported as `ExecutableResolutionError`, naming the logical program
-  and chaining the original exception. `ExecEvent` and `CommandResult` gain
+  running anything. The path argument accepts any `os.PathLike`, not only
+  `pathlib.Path`, so a `PurePosixPath` binds the way `executable_path()`
+  already accepted it; a value that is neither path-like nor callable is
+  rejected with `TypeError` instead of being stored as a resolver that fails at
+  spawn time. A resolver must return a `str`, so a resolver returning
+  `None` cannot be mistaken for "no binding" and silently run the catalogued
+  name instead. `resolve_binding()` raises `TypeError` for any other result;
+  every execution instead reports a wrong return type, or a resolver that
+  raises, as `ExecutableResolutionError`, naming the logical program and
+  chaining the original exception. `ExecEvent` and `CommandResult` gain
   `resolved_path`, carrying the executed executable or `None` when nothing was
   bound; the logging adapter projects it as `cuprum_resolved_path` and the
   tracing adapter as `cuprum.resolved_path`, and it is deliberately absent from
-  the metrics labels, which stay low-cardinality. Path validation is advisory:
-  construction rejects an empty path, a relative path unless
-  `allow_relative=True`, and NUL or `..` segments, but it cannot close the
-  window between the check and the `exec`, so filesystem ownership,
+  the metrics labels, which stay low-cardinality. `ExecEvent.cwd` keeps the
+  caller's own spelling for a relative `ExecutionContext.cwd`; only a relative
+  *binding* is anchored at the execution's directory, and that anchoring is not
+  reflected back onto the event. Path validation is advisory: construction
+  rejects an empty path, a relative path unless `allow_relative=True`, and NUL
+  or `..` segments, but it cannot close the window between the check and the
+  `exec`, so filesystem ownership,
   permissions, and read-only deployment remain the operator's responsibility
   ([#440](https://github.com/leynos/cuprum/issues/440)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child

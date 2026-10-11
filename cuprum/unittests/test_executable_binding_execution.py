@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import stat
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -43,8 +44,6 @@ from cuprum.sh import ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, Pipeline, PipelineResult, SafeCmd
 
@@ -629,6 +628,78 @@ def test_a_relative_execution_cwd_anchors_a_relative_binding_once(
         f"a relative execution cwd must report the path it ran, got "
         f"{result.resolved_path!r}"
     )
+
+
+def test_a_relative_execution_cwd_reaches_events_unanchored(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Events report the caller's ``cwd`` spelling, not the anchored form.
+
+    Resolving a relative binding needs the anchored directory — that is the
+    whole reason ``_execution_cwd`` exists — but the *event* does not. Its
+    ``cwd`` is the caller's configuration, and the spawn receives that same
+    spelling through ``_cwd_arg``, so an event carrying the anchored form
+    makes the audit surface disagree with both. The regression scope is wider
+    than bindings: it changed ``ExecEvent.cwd`` for every relative-directory
+    run, bound or not, so the second phase below runs an *unbound* command and
+    still requires the caller's spelling.
+
+    The assertion is ``==`` against ``Path(_RELATIVE_CWD)`` rather than a
+    truthiness check or a containment test, because those pass for both
+    spellings and pin nothing. Equality against a ``Path`` is also what keeps
+    the *type* honest: ``"srv/work" == Path("srv/work")`` is ``False``, so
+    emitting the string the caller typed fails here rather than passing on a
+    coincidence of the value.
+    """
+    monkeypatch.chdir(tmp_path)
+    workdir = tmp_path / _RELATIVE_CWD
+    workdir.mkdir(parents=True)
+    script = _write_script(workdir / "tool.py", _APPROVED)
+    catalogue, (tool,) = _catalogue_for("relative-cwd-event-tool")
+    events: list[ExecEvent] = []
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([tool]))),
+        bind_executable(tool, f"./{script.name}", allow_relative=True),
+        sh.observe(events.append),
+    ):
+        bound = _run_capturing(
+            sh.make(tool, catalogue=catalogue)(),
+            cwd=_RELATIVE_CWD,
+        )
+
+    assert bound.resolved_path == str(script), (
+        f"resolution still needs the anchored directory, got {bound.resolved_path!r}"
+    )
+    assert events, "a bound run must still emit its observation events"
+    for event in events:
+        assert event.cwd == Path(_RELATIVE_CWD), (
+            f"the {event.phase} event must report the caller's cwd spelling, "
+            f"got {event.cwd!r}"
+        )
+
+    # Unbound, in the same relative directory: the anchoring was never about
+    # bindings, so the caller's spelling must reach an unbound event too. The
+    # catalogue's own executable is used because no binding is in play to say
+    # which file should run, and this phase has to spawn *something*.
+    unbound_catalogue, python = python_catalogue()
+    unobserved: list[ExecEvent] = []
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python]))),
+        sh.observe(unobserved.append),
+    ):
+        _run_capturing(
+            sh.make(python, catalogue=unbound_catalogue)("-c", "pass"),
+            cwd=_RELATIVE_CWD,
+        )
+
+    assert unobserved, "the unbound phase must emit its observation events"
+    for event in unobserved:
+        assert event.cwd == Path(_RELATIVE_CWD), (
+            f"an unbound run's {event.phase} event must report the caller's "
+            f"cwd spelling too, got {event.cwd!r}"
+        )
 
 
 def test_a_pipeline_anchors_a_relative_cwd_once_for_every_stage(

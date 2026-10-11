@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -302,6 +303,28 @@ def test_executable_binding_does_not_probe_the_filesystem() -> None:
     """Construction is pure: an absent absolute path is still bindable."""
     binding = executable_binding(PROGRAM, "/definitely/absent/tool")
     assert binding.path == "/definitely/absent/tool"
+
+
+def test_executable_binding_accepts_any_path_like_not_only_path() -> None:
+    """The union admits every path-like value ``executable_path`` admits.
+
+    Discriminating on :class:`~pathlib.Path` instead sends a bare
+    ``PurePosixPath`` — a path-like that is deliberately not a ``Path`` — down
+    the resolver branch, which stores it as a *resolver*. That failure is
+    deferred rather than immediate: construction succeeds, and the mistake
+    surfaces much later as a spawn-time error naming a resolver the caller
+    never supplied. The sibling assertion keeps the union honest in the other
+    direction, so an unvalidatable path-like cannot pass silently either, and
+    the message must name the type rather than render the value.
+    """
+    binding = executable_binding(PROGRAM, PurePosixPath("/opt/tools/tool"))
+    assert binding.path == "/opt/tools/tool"
+    assert binding.resolver is None
+
+    with pytest.raises(TypeError, match=r"got int$"):
+        # Deliberately wrong-typed: ``int`` is convenient to write and is
+        # exactly the mistake a caller makes by supplying the wrong variable.
+        executable_binding(PROGRAM, typ.cast("typ.Any", 42))
 
 
 # --------------------------------------------------------------------------

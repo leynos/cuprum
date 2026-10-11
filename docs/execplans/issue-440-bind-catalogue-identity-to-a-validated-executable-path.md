@@ -1785,6 +1785,53 @@ escalation, not a workaround.
   `events.py` is present for the unrelated `resolved_path` work while the
   `TYPE_CHECKING` block that causes this defect is byte-identical to base. Both
   are recorded rather than repaired.
+- [x] (2026-10-11 09:10Z) Six findings arrived in one review of `504666bd`,
+  and all six are dispositioned: two repaired in production code, three in
+  documentation, one refuted with a probe. The four repaired or refuted ones
+  are summarized here; the reply text and the refutation are in the ledger.
+
+  **F2, `ExecEvent.cwd` for a relative execution directory.** Both observation
+  builders had begun storing the *anchored* `_execution_cwd(...)` in
+  `_StageObservation.cwd`, so `ExecEvent.cwd`, the logging adapter's
+  `cuprum_cwd`, and the tracing adapter's `cuprum.cwd` all changed from the
+  caller's spelling to an absolute path for every relative-directory run —
+  bound or not, since the anchoring never had anything to do with bindings.
+  Repair: `cwd` is the caller's spelling again, and only *resolution* receives
+  the anchored form. `_command_internals.py` and `_pipeline_observation.py`
+  both needed `from pathlib import Path` promoted from their `TYPE_CHECKING`
+  blocks, because the repaired expressions are evaluated at runtime — the same
+  trap this plan already recorded for `cabc` and `Program`.
+
+  **F4, `executable_binding` stored non-callables as resolvers.** The guard
+  discriminated on `(str, Path)`, so a `PurePosixPath` — a path-like that
+  `executable_path` already accepts — fell to the resolver branch,
+  constructing successfully and failing only at spawn time, reported against a
+  resolver the caller never supplied. The narrow predicate also let a
+  non-callable of any type through, `42` included. Repair: discriminate on
+  `(str, os.PathLike)` to match what `coerce_path_string` accepts, and reject a
+  value that is neither path-like nor callable with `TypeError`. The rejected
+  value's *type* is named, never its value, so refusing to trust a value never
+  calls the caller's `__repr__` on it.
+
+  **Verification, both repairs.** Each has a regression test proven
+  non-vacuously by reverting the fix in place and observing the intended
+  failure: F2's test reports
+  `PosixPath('/tmp/pytest-…/srv/work')` where `PosixPath('srv/work')` is
+  required, and F4's reports
+  `ExecBinding(path=None, resolver=PurePosixPath('/opt/tools/tool'))` where a
+  path was required. F2's test runs a second, *unbound* phase, which is what
+  separates "the binding changed the event" from "relative directories always
+  did this". 199 tests pass across the eight binding and observation modules.
+
+  Three findings were documentation-only and are corrected above: the resolver
+  contract is split by boundary (`resolve_binding` raises `TypeError`, the
+  execution boundary reports `ExecutableResolutionError`), `allow_relative`
+  records what an execution with no directory does, and the CHANGELOG
+  distinguishes the two boundaries. The sixth cited
+  `_failed_before_ownership`, which does not exist anywhere in `cuprum/`; the
+  real seam is `_finalize_prepared_command_failure` →
+  `tracking.sink_bracket.close`, and a probe confirms the sink is closed
+  (`['open_session', 'close(ERROR)', "raised ExecutableResolutionError: …"]`).
 
 ## Surprises & discoveries
 

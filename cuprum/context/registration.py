@@ -252,8 +252,11 @@ def bind_executable(
         The executable path, or a zero-argument callable returning one. A
         resolver is evaluated once per execution, at spawn time.
     allow_relative:
-        When True, a relative path is permitted and anchored at the
-        execution's working directory. Ignored for a resolver.
+        When True, a relative path is permitted. It is anchored at the
+        execution's working directory when the execution supplies one; an
+        execution that names no directory leaves the platform to resolve it —
+        against ``PATH`` for a bare name, and otherwise relative to the
+        process's own working directory. Ignored for a resolver.
 
     Returns
     -------

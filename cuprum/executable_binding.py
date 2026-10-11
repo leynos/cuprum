@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import os
 from pathlib import Path
 
 from cuprum.executable_paths import (
@@ -160,17 +161,39 @@ class ExecutableBinding:
         return self.resolver is not None
 
 
+def _refuse_non_path_non_resolver(value: object) -> None:
+    """Reject a value that is neither a path-like nor a callable resolver.
+
+    Reading the *type* name rather than the value is deliberate: this is the
+    branch that also rejects a genuine resolver that merely failed to be
+    callable, and presenting it in a message would call the caller's own
+    ``__repr__`` on a value this function has just refused to trust.
+
+    Raises
+    ------
+    TypeError
+        Always: the value is neither a string, a path-like object, nor a
+        zero-argument callable.
+    """
+    msg = (
+        "executable_binding expects a str, a path-like object, or a "
+        f"zero-argument callable; got {type(value).__name__}"
+    )
+    raise TypeError(msg)
+
+
 def executable_binding(
     program: Program,
-    path_or_resolver: str | Path | ExecutableResolver,
+    path_or_resolver: str | os.PathLike[str] | ExecutableResolver,
     *,
     allow_relative: bool = False,
 ) -> ExecutableBinding:
     """Bind a logical *program* to an executable path or resolver.
 
-    A callable is stored as a resolver and used verbatim; a string or path is
-    validated through :func:`~cuprum.executable_paths.executable_path` and
-    stored as a normalized path.
+    A callable is stored as a resolver and used verbatim; a string or any
+    other path-like value is validated through
+    :func:`~cuprum.executable_paths.executable_path` and stored as a normalized
+    path.
 
     Parameters
     ----------
@@ -178,8 +201,10 @@ def executable_binding(
         The logical identity the binding is for. It is used only for error
         reporting; the binding does not itself restrict which program may use
         it.
-    path_or_resolver : str | Path | ExecutableResolver
-        The executable path, or a zero-argument callable returning one.
+    path_or_resolver : str | os.PathLike[str] | ExecutableResolver
+        The executable path, or a zero-argument callable returning one. A
+        path is validated and stored as a ``str``; a callable is stored
+        unchanged and evaluated at spawn time.
     allow_relative : bool, optional
         When True, a relative path is permitted. Ignored for a resolver, whose
         result Cuprum does not inspect. Defaults to False.
@@ -203,10 +228,15 @@ def executable_binding(
     >>> binding.is_lazy
     False
     """
-    # Discriminate on the path types rather than on ``callable``: the negative
-    # branch of a callable test leaves the union un-narrowed, and the intended
-    # reading is "a resolver is anything that is not a path".
-    if not isinstance(path_or_resolver, (str, Path)):
+    # Discriminate on ``os.PathLike`` rather than on ``Path`` so the union
+    # matches what ``coerce_path_string`` accepts: a bare ``PurePosixPath`` is
+    # a path to this function by the same right it is one to
+    # ``executable_path``, and sending it to the resolver branch stored a
+    # non-callable that only failed at spawn time, reported against a resolver
+    # the caller never supplied.
+    if not isinstance(path_or_resolver, (str, os.PathLike)):
+        if not callable(path_or_resolver):
+            _refuse_non_path_non_resolver(path_or_resolver)
         return ExecutableBinding(resolver=path_or_resolver)
     raw_value = coerce_path_string(path_or_resolver)
     rejection = classify_executable_path(raw_value, allow_relative=allow_relative)

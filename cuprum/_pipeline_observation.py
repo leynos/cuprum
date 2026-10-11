@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import time
 import typing as typ
+from pathlib import Path
 
 from cuprum._context_policy import _collect_hooks, _enforce_allowlist
 from cuprum._observability import (
@@ -48,12 +49,16 @@ def _build_pipeline_observations(
         _enforce_allowlist(cmd)
     ctx = current_context()
     hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
-    # Anchored once, here, for the reason documented on ``_execution_cwd``.
-    cwd = _execution_cwd(config.ctx.cwd)
+    # The event carries the caller's own spelling; only resolution needs the
+    # anchored form, for the reason documented on ``_execution_cwd``.
+    cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
     env_overlay, env_mode = _resolve_env_overlay(config.ctx.env, config.ctx.env_mode)
     # Every stage is enforced above before any is resolved, so a pipeline that
     # is refused at stage three never runs a resolver for stages one and two.
-    resolved_paths = tuple(_resolve_executable_for(cmd, cwd=cwd) for cmd in parts)
+    resolution_cwd = _execution_cwd(config.ctx.cwd)
+    resolved_paths = tuple(
+        _resolve_executable_for(cmd, cwd=resolution_cwd) for cmd in parts
+    )
     return tuple(
         _StageObservation(
             cmd=cmd,
