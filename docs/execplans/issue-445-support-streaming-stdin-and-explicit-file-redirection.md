@@ -1642,40 +1642,91 @@ likelihood, and mitigation.
   absence is itself a finding. The corollary for a long-lived branch is that a
   conflict is a CI outage, not merely a merge inconvenience.
 - Observation: the gate leaves that run *before* the failing one are never
-  observed, so a single early abort hides every later tool. Evidence: `make
-  lint` aborts in `python-lint`, and when the `ruff` leaf was cleared the next
-  leaf (`Skylos`) failed on a genuine finding, followed by `ambrleaks` — none of
-  which had ever executed in any prior run of this branch. Skylos reported an
-  unused `_COMMAND_FINALIZATION_ERROR` in `cuprum/_command_internals.py`, a
-  duplicate the `9b4832b6` split into `_command_finalization` had left behind
-  (the live definition is at `cuprum/_command_finalization.py:49`); the
-  duplicate carried a comment byte-identical to the live one, so nothing about
-  reading the file suggested it was dead. Impact: "green" written before a leaf
-  is reached is a statement only about the leaves that ran.
+  observed, so a single early abort hides every later tool. Evidence:
+  `make lint` aborts in `python-lint`, and when the `ruff` leaf was cleared the
+  next leaf (`Skylos`) failed on a genuine finding, followed by `ambrleaks` —
+  none of which had ever executed in any prior run of this branch. Skylos
+  reported an unused `_COMMAND_FINALIZATION_ERROR` in
+  `cuprum/_command_internals.py`, a duplicate the `9b4832b6` split into
+  `_command_finalization` had left behind (the live definition is at
+  `cuprum/_command_finalization.py:49`); the duplicate carried a comment
+  byte-identical to the live one, so nothing about reading the file suggested
+  it was dead. Impact: "green" written before a leaf is reached is a statement
+  only about the leaves that ran.
 - Observation: extracting a loop over a helper that returns *every* field —
   rather than only the populated ones — silently changes the emitted key set.
   Evidence: `_support._rendered_enum_fields` returns all four enum fields with
   `None` standing in for an absent one, and the extracted loop yielded each
-  unconditionally, where the inlined original had guarded each with `if event.X
-  is not None`. Every adapter projection gained four null-valued keys
-  (`resource_usage_mode`, `env_mode`, `error_category`, `terminal_outcome`) on
-  phases that carry none of them, breaking the omit-when-`None` contract shared
-  by the tracing, logging, and metrics adapters. 15 snapshot and property tests
-  caught it. Impact: when hoisting a loop body into a helper, the helper's
-  *return shape* is part of the refactor — a tuple of `(key, value)` pairs is
-  not equivalent to a tuple of the pairs worth emitting. The original guard has
-  to travel with the data, not be assumed by the caller.
+  unconditionally, where the inlined original had guarded each with
+  `if event.X is not None`. Every adapter projection gained four null-valued
+  keys (`resource_usage_mode`, `env_mode`, `error_category`,
+  `terminal_outcome`) on phases that carry none of them, breaking the
+  omit-when-`None` contract shared by the tracing, logging, and metrics
+  adapters. 15 snapshot and property tests caught it. Impact: when hoisting a
+  loop body into a helper, the helper's *return shape* is part of the refactor
+  — a tuple of `(key, value)` pairs is not equivalent to a tuple of the pairs
+  worth emitting. The original guard has to travel with the data, not be
+  assumed by the caller.
 - Observation: a test double that fails a real descriptor's method must account
   for the other methods that call it. Evidence: `_FailingFlushFile` subclasses
   `io.FileIO` and raises from `flush`; `io.FileIO.close` also flushes, so the
   test's own `finally: borrowed.close()` re-raised the injected sentinel and
   masked the assertions the test had just made — the failure reported the
-  sentinel message, not a projection or diagnostic defect. Impact: subclassing a
-  real type to satisfy a boundary check is the right call (a mock with a
+  sentinel message, not a projection or diagnostic defect. Impact: subclassing
+  a real type to satisfy a boundary check is the right call (a mock with a
   `fileno` attribute would exercise a path no caller can reach), but the double
   then inherits that type's call graph: `close` → `flush` here. Arming the
   failure until `close` keeps the injected fault scoped to the window under
   test.
+- Observation: a hosted CodeScene delta can flag code that was already fixed in
+  an unpushed local commit, and it is the *committed* head it measures.
+  Evidence: `cs delta origin/main HEAD` reports "No uncommitted changed are
+  included" and still reported `_support.py::_event_common_fields` after the
+  local fix, because the fix was uncommitted; the working-tree form is the
+  one-argument `cs delta origin/main`, which then reported "No issues found in
+  checked changes" for that file. Impact: when checking a fix against the
+  hosted gate, either commit first or use the one-argument form. The
+  two-argument form is the right tool for reproducing a *hosted* finding, which
+  is what it was used for here; the two must not be confused mid-fix.
+- Observation: the CodeScene local CLI reproduces the hosted delta exactly, so
+  a failing required check can be diagnosed and cleared without a push cycle.
+  Evidence: `cs delta origin/main HEAD --error-on-warnings` named the same four
+  functions with the same biomarkers and the same figures the hosted check
+  reported (`_support.py` 10.00 → 9.84, `test_adapter_projection_properties.py`
+  10.00 → 9.84, `test_stdin_stream_cancellation.py` 9.68, and
+  `_subprocess_stream_run.py` 9.59 → 10.00 as an improvement). Impact: the
+  delta can be iterated locally at seconds per run instead of minutes per CI
+  cycle, which is what made a three-file extraction affordable.
+- Observation: clearing a check can *move* a finding rather than remove it, so
+  a fix must be re-measured on the full delta and not only on the file it
+  touched. Evidence: `2e8afd0e` fixed `_stdio_diagnostics.py`'s Excess Number
+  of Function Arguments (by grouping the five parameters into `_StdioFailure`)
+  while introducing a Bumpy Road in `_support.py`, so the check stayed red with
+  a different complaint. Impact: a green per-file check is not a green gate;
+  re-run the whole delta after each extraction.
+- Observation: a suite-wide first-batch abort hides every later batch, so a
+  long-masked defect can survive a run that reports only the known flake.
+  Evidence: `tests/behaviour/__snapshots__/test_structured_events.ambr` was
+  stale by one field — it records 29 of `ExecEvent`'s 30 declared fields, and
+  `error_category` (added by this branch) was missing from all four lifecycle
+  phases. `make test` runs the batches in sequence and aborts on the first
+  failing one, so every run that tripped the environmental doctest timeout in
+  batch 1 stopped before the behaviour batches ever executed; the failure only
+  surfaced once a run happened to clear batch 1. Impact: "the only failure is
+  the known flake" is not the same statement as "everything else passes" — it
+  can mean "everything else never ran". Check that the batches after the
+  failing one executed before drawing any conclusion about the rest of the
+  suite.
+- Observation: a snapshot that enumerates a dataclass's fields is a second
+  declaration site for that dataclass, and it is not covered by any gate that
+  checks for drift. Evidence: adding `error_category` to `ExecEvent` updated
+  the adapters, their contract tests, and the `.ambr` projection snapshot under
+  `cuprum/unittests/`, all of which passed; only the behaviour snapshot in
+  `tests/behaviour/` went unregenerated, because nothing links the two. A grep
+  for `.ambr` files carrying `exec_id` found the stale one immediately, so the
+  audit is cheap even though no gate performs it. Impact: after adding a field
+  to an event type, enumerate the snapshots that iterate its fields rather than
+  trusting the subset the unit tests exercise.
 
 ## Decision log
 
@@ -2093,9 +2144,9 @@ likelihood, and mitigation.
 - Decision: **correct** the first disposition reply (comment `4239944763`),
   which claimed the fix "was already fixed before this review". Rationale: the
   claim was false and in the direction that flatters the branch — `453c4ae0` is
-  dated 2026-10-02 and `5b8cba42` 2026-10-11, so the fix postdates the review by
-  nine days and the reviewer was right when it said the fix was incomplete. The
-  correction (comment `4239959855`) states the true order and credits the
+  dated 2026-10-02 and `5b8cba42` 2026-10-11, so the fix postdates the review
+  by nine days and the reviewer was right when it said the fix was incomplete.
+  The correction (comment `4239959855`) states the true order and credits the
   reviewer for holding the finding open, which is what surfaced the `__aiter__`
   gap. Impact: a reply that says "already fixed" when the fix came *after* the
   assessment misrepresents the review record; check the reviewer's comment
@@ -2103,14 +2154,46 @@ likelihood, and mitigation.
   the branch's own commit dates are the only thing that settles it.
   Date/Author: 2026-10-11, lifecycle agent.
 - Decision: treat the three open `CHANGES_REQUESTED` reviews (all
-  `coderabbitai[bot]`, all submitted 2026-10-01 against `a3083984`,
-  `e3384618`, `61de2373`) as **stale but blocking**, and clear them by obtaining
-  a review at the current head rather than by asking for dismissal. Rationale:
-  GitHub reports one aggregate `reviewDecision`, so three nine-day-old reviews
-  against long-superseded commits keep the PR blocked regardless of the current
-  tree's health; each was valid when written. A new review at the current head
-  is the only honest way to retire them. Date/Author: 2026-10-11, lifecycle
-  agent.
+  `coderabbitai[bot]`, all submitted 2026-10-01 against `a3083984`, `e3384618`,
+  `61de2373`) as **stale but blocking**, and clear them by obtaining a review
+  at the current head rather than by asking for dismissal. Rationale: GitHub
+  reports one aggregate `reviewDecision`, so three nine-day-old reviews against
+  long-superseded commits keep the PR blocked regardless of the current tree's
+  health; each was valid when written. A new review at the current head is the
+  only honest way to retire them. Date/Author: 2026-10-11, lifecycle agent.
+- Decision: clear the three CodeScene delta findings by **extraction along the
+  seam each function already had**, not by suppression: `_support.py`'s two
+  optional-field loops become one `_optional_common_fields` that owns the
+  omit-when-`None` policy once, `test_adapter_projection_properties.py`'s two
+  identical "mirror the field when present" guards become one
+  `_assert_extra_mirrors_field`, and `test_stdin_stream_cancellation.py`'s
+  `producer`/`ready` pair becomes `_StreamingStance`, a record of the one
+  decision they jointly express. Rationale: each finding named a real
+  duplication or a parameter list that had outgrown its call site, and the
+  repository's standing rule is to fix the underlying issue rather than silence
+  the check — the same rule recorded in the R9104 note, where the plugin's own
+  remedy was also to remove the indirection. Options considered: (a) a
+  `# codescene: disable` suppression, rejected as metric gaming and contrary to
+  the standing rule; (b) trimming docstrings or moving code to unmeasured
+  paths, rejected for the same reason; (c) wrapping the arguments in a
+  throwaway tuple purely to shrink the count, rejected because the stance
+  record has to mean something to a reader. Two of the three were regressions
+  this branch introduced at `2e8afd0e`, so fixing them is correcting this
+  branch's own work rather than paying down inherited debt. Date/Author:
+  2026-10-11, lifecycle agent.
+- Decision: record the hosted doctest timeout as **environmental and
+  pre-existing**, to be cleared by a bounded `gh run rerun --failed` if it
+  recurs on the pushed head, rather than by widening the test's timeout or
+  touching a file this branch does not own. Rationale: the test file is
+  byte-identical to `origin/main`, the branch touches neither `Makefile`,
+  `.github/`, nor it, and a focused run passes in 15.11 s against a suite-wide
+  `timeout = 30`; the same failure has been observed across many unrelated
+  branches on this host while the compile-admission pool is saturated. Options
+  considered: (a) raising `timeout` for this test, rejected as weakening a
+  contract for an environmental cause; (b) removing the scratch
+  `CARGO_TARGET_DIR`, rejected as changing a test this branch did not author
+  and whose cold-compile behaviour is the point of the check. Date/Author:
+  2026-10-11, lifecycle agent.
 
 ## Outcomes & retrospective
 

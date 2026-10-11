@@ -38,60 +38,94 @@ def _event_common_fields(
     """Yield the canonical common projection of *event* as key/value pairs."""
     yield name("program"), str(event.program)
     yield name("argv"), argv(event.argv)
-    if event.pid is not None:
-        yield name("pid"), event.pid
-    if event.cwd is not None:
+    yield from _optional_common_fields(event, name)
+
+
+def _optional_common_fields(
+    event: ExecEvent,
+    name: cabc.Callable[[str], str],
+) -> cabc.Iterator[tuple[str, object]]:
+    """Yield *event*'s optional common fields, omitting the absent ones.
+
+    The omit-when-``None`` policy is applied once, here, to every optional
+    field; the fields differ only in how each value is transported, which is
+    what the two groups below separate. Concatenating them preserves the
+    projection's field order: the process identity, then the rendered
+    ``StrEnum`` modes, then the verbatim measurements.
+
+    Yields
+    ------
+    tuple[str, str]
+        Each present field's backend-specific name, paired with its value.
+        Absent fields yield nothing at all rather than a ``None``.
+    """
+    optional = (
+        ("pid", event.pid),
         # A ``Path``, rendered rather than passed through.
-        yield name("cwd"), str(event.cwd)
-    yield from _rendered_enum_fields(event, name)
-    if event.terminal_outcome is not None:
-        yield name("terminal_outcome"), str(event.terminal_outcome)
-    for field, value in _verbatim_fields(event):
+        ("cwd", None if event.cwd is None else str(event.cwd)),
+        # Terminal figures carry an outcome rather than a mode, so they sit
+        # outside the enum group despite being rendered on the same rule.
+        ("terminal_outcome", _rendered_value(event.terminal_outcome)),
+        # Both groups below return bare names, which this loop names once, so
+        # each field's key is built in exactly one place.
+        *_rendered_enum_fields(event),
+        *_verbatim_fields(event),
+    )
+    for field, value in optional:
         if value is not None:
             yield name(field), value
 
 
-def _rendered_enum_fields(
-    event: ExecEvent,
-    name: cabc.Callable[[str], str],
-) -> cabc.Iterator[tuple[str, object]]:
-    """Yield each mode the projection renders rather than passing through.
+def _rendered_enum_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
+    """Return each enum-valued field of the projection, rendered or ``None``.
 
-    Each is a ``StrEnum``, so ``str`` yields the member's value: every
+    Every one is a ``StrEnum``, so ``str`` yields the member's value: each
     transport this projection feeds — the log extras, the span attributes, and
     the metric label — must carry the plain string operators key on, not the
-    member's ``repr``. All three describe the run rather than one measurement,
-    so each is carried on every phase and omitted only when unset.
+    member's ``repr``.
 
-    Yields
-    ------
-    tuple[str, object]
-        One named, rendered pair per mode the event records.
+    The three modes describe the run rather than one measurement, so each is
+    carried on every phase. ``error_category`` is the exception and is listed
+    last for that reason: it describes a single boundary failure, so it is set
+    on ``stdio_error`` alone — the adapters that emit it keep their own
+    narrower field set beside this projection.
+
+    Returned rather than yielded so the caller's single omit-when-``None``
+    loop stays the one place that policy lives; names are returned bare so the
+    caller is likewise the only place a key is built.
+
+    Returns
+    -------
+    tuple[tuple[str, object], ...]
+        Each field's bare name paired with its rendered value, or with
+        ``None`` when the event records no such field.
     """
-    modes = (
+    return (
         # How the terminal figures were obtained, when they were.
-        ("resource_usage_mode", event.resource_usage_mode),
+        _rendered("resource_usage_mode", event.resource_usage_mode),
         # The environment policy, which a replacement boundary makes
         # load-bearing: without it a child that failed to resolve a bare
         # program name is indistinguishable from an ordinary overlay run.
-        ("env_mode", event.env_mode),
+        _rendered("env_mode", event.env_mode),
         # The mode the run reports its captures in, which is what keeps a
         # byte-exact run distinguishable from a text one in every counter and
         # span attribute.
-        ("capture_mode", event.capture_mode),
+        _rendered("capture_mode", event.capture_mode),
+        # The field that separates two standard-stream boundaries raising the
+        # same exception class, so a consumer must read the value rather than
+        # the member's ``repr``.
+        _rendered("error_category", event.error_category),
     )
-    for field, mode in modes:
-        if mode is not None:
-            yield name(field), str(mode)
-    if event.error_category is not None:
-        # Rendered for the same reason as the modes above, but yielded apart
-        # rather than added to *modes*: this one describes a single boundary
-        # failure rather than the run, so it is set on ``stdio_error`` alone
-        # and is ``None`` on every phase the projection otherwise carries.
-        # It is the field that separates two standard-stream boundaries
-        # raising the same exception class, so a consumer must read the value
-        # rather than the member's ``repr``.
-        yield name("error_category"), str(event.error_category)
+
+
+def _rendered_value(value: object) -> object:
+    """Render *value*, or return ``None`` when the event records none."""
+    return None if value is None else str(value)
+
+
+def _rendered(field: str, value: object) -> tuple[str, object]:
+    """Pair *field* with *value* rendered, or with ``None`` when unset."""
+    return field, _rendered_value(value)
 
 
 def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
