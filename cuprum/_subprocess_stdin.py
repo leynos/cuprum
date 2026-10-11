@@ -140,7 +140,7 @@ async def _close_stdin(
     stdin: asyncio.StreamWriter,
     observation: _StageObservation,
 ) -> None:
-    """Close the child's stdin pipe, reporting any failure to close it.
+    """Close the child's stdin pipe, releasing the transport if that stalls.
 
     The wait is bounded, and deliberately so. ``wait_closed`` does not merely
     flush what cuprum wrote: it waits for the transport's ``connection_lost``,
@@ -154,14 +154,24 @@ async def _close_stdin(
     one more cancellation, so ``close()`` still runs and the ``await`` still
     blocks. A caller could therefore cancel the writer and still wait forever
     for it, which is what turned a stalled run's deadline into an endless one.
-    The descriptors themselves are released when the loop tears the transport
-    down, so refusing to outlive the run costs no resource the run still owns.
 
     The close is still given a bounded grace, because a transport whose reader
     is still draining should get the chance to flush what it can. What is
     removed is the *unbounded* wait, not the flush. A timeout here is expected
     rather than exceptional: it is the signal that the reader end is still
-    open, so it is logged at debug and not reported as a pipe failure.
+    open, so the expiry is logged at debug and never reported as a pipe
+    failure.
+
+    Expiring the window therefore has to *end* the close rather than merely
+    stop waiting for it. A graceful ``close()`` only flushes buffered bytes and
+    asks the transport to shut down once they are gone; when the reader never
+    drains, that request never completes and the pipe stays open. ``abort()``
+    is the transport's own unconditional release — it discards buffered data
+    and closes the descriptor — which is the right trade at this point,
+    because the run is over, the child that would have read those bytes is
+    gone, and the alternative is a descriptor held open by a descendant that
+    may never exit. Refusing to outlive the run is not the same as releasing
+    what the run still owned.
     """
     try:
         stdin.close()
@@ -169,14 +179,50 @@ async def _close_stdin(
             await stdin.wait_closed()
     except TimeoutError:
         # Expected when the reader end is still open, and not a pipe failure:
-        # ``TimeoutError`` is an ``OSError``, so this arm has to come first or
-        # the bound below is reported as a broken pipe.
-        _LOGGER.debug(
-            "stdin_writer_close_pending pid=%s reason=reader_still_open",
-            process.pid,
-        )
+        # cuprum wrote everything it was given, and the pipe's reader
+        # outliving the child is a fact about the child's own descendants
+        # rather than a fault in this pipe. ``TimeoutError`` is an ``OSError``,
+        # so this arm has to come first or the bound below is reported as a
+        # broken pipe. Expiring the window still has to *end* the close rather
+        # than only stop waiting for it, which is what the abort releases.
+        _abort_stdin_transport(process, stdin)
     except (OSError, RuntimeError) as exc:
         _emit_stdin_error(process, observation, exc, operation="close")
+
+
+def _abort_stdin_transport(
+    process: asyncio.subprocess.Process,
+    stdin: asyncio.StreamWriter,
+) -> None:
+    """Release a stdin transport whose graceful close did not finish.
+
+    Split out because the abort is itself best-effort: a transport already gone
+    raises from ``abort()``, and a close path for an already-finished run must
+    not turn that into a new failure. Whatever the transport does here, the
+    run's own outcome is already decided.
+
+    Parameters
+    ----------
+    process : asyncio.subprocess.Process
+        The child the pipe was bound to, named in the diagnostic.
+    stdin : asyncio.StreamWriter
+        The transport to release unconditionally.
+    """
+    try:
+        stdin.transport.abort()
+    except (OSError, RuntimeError, AttributeError) as exc:
+        # AttributeError covers a writer whose transport exposes no ``abort``;
+        # an alternative implementation is not a reason to fail the close.
+        _LOGGER.debug(
+            "stdin_writer_close_abort_failed pid=%s error=%s",
+            process.pid,
+            type(exc).__name__,
+        )
+    else:
+        _LOGGER.debug(
+            "stdin_writer_close_aborted pid=%s reason=reader_still_open",
+            process.pid,
+        )
 
 
 async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
@@ -323,6 +369,7 @@ def _spawn_stdin_writer(
 
 
 __all__ = [
+    "_abort_stdin_transport",
     "_cancel_stdin_writer",
     "_close_stdin",
     "_emit_stdin_error",
