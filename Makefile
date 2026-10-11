@@ -398,6 +398,7 @@ fmt: ruff ## Format sources
 
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
+	$(RUFF) check --select I
 	cd $(RUST_DIR) && $(RUSTFMT_CARGO) fmt --all -- --check
 	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
 

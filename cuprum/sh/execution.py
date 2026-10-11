@@ -252,9 +252,11 @@ def _resolve_stdin_source(
     """Resolve a caller's ``stdin=`` argument into what the spawn path needs.
 
     A payload resolves here, exactly as it always has, so the encoding error
-    surfaces synchronously from ``run()`` rather than from inside the writer
-    task. A stream stays unresolved: pulling it is the writer's job, and
-    pulling it earlier would defeat the bound.
+    surfaces when the coroutine executes — before the spawn, and in the
+    caller's own frame rather than from inside the writer task. It is not
+    raised by the *call* to ``run()``, which only builds the coroutine. A
+    stream stays unresolved: pulling it is the writer's job, and pulling it
+    earlier would defeat the bound.
 
     Parameters
     ----------
