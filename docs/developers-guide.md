@@ -2524,12 +2524,13 @@ synchronization of its own.
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
 single `match`, and each phase falls into exactly four categories: span
 lifecycle (`start` opens a span, `exit` records child details, and `settled`
-closes the span), span event (`stdout`, `stderr`, `stdin_error`, `timeout`,
-`teardown_error`, and `capture_eof_grace_expired`, and `pipeline_fail_fast`
-record a `cuprum.<phase>` event on the already-open span), deliberately ignored
-(`plan` and `stdin` carry no tracing semantics), or unhandled (the `case _`
-logs via `_log_unhandled_phase` instead of failing silently or raising). A new
-phase should be slotted into this policy rather than given an ad-hoc side path.
+closes the span), span event (`stdout`, `stderr`, `stdin_error`, `stdio_error`,
+`timeout`, `teardown_error`, and `capture_eof_grace_expired`, and
+`pipeline_fail_fast` record a `cuprum.<phase>` event on the already-open span),
+deliberately ignored (`plan` and `stdin` carry no tracing semantics), or
+unhandled (the `case _` logs via `_log_unhandled_phase` instead of failing
+silently or raising). A new phase should be slotted into this policy rather
+than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an
@@ -2542,26 +2543,30 @@ internal `threading.Lock`:
   the lock, so an arbitrary `Span` that blocks on I/O in `set_status()`/`end()`
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
-- **stdout/stderr/stdin_error/timeout/teardown_error/capture_eof_grace_expired**
+- **output and ancillary stream phases:** `stdout`, `stderr`, `stdin_error`,
+  `stdio_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
   all route through the single `_record_span_event` helper: it looks up the
   span for the event's `exec_id` under the lock, then, outside the lock, copies
   whichever of the `line`, `operation`, `error_type`, `note`, `timeout_s`,
-  `timeout_mode`, `eof_grace_s`, and `pending_readers` fields are set on the
-  event onto a `cuprum.<phase>` span event (for example `cuprum.stdout`,
-  `cuprum.timeout`, or `cuprum.teardown_error`). The grace-expiry event carries
-  only `eof_grace_s` and `pending_readers` in addition to the common
-  correlation fields. New event-recording phases should extend this shared
-  field set rather than add a bespoke per-phase method. The helper never sets
-  the span status or ends the span — only `settled` does that — so
-  `stdin_error` (the child process may legitimately ignore its stdin),
-  `timeout`, `teardown_error`, and `capture_eof_grace_expired` are all recorded
-  as diagnostics without failing or closing the execution span.
-  `stdout`/`stderr` recording is gated by the hook's `record_output` flag;
-  ancillary diagnostics are recorded unconditionally, so a stdin-write failure,
-  a timeout, a teardown failure, or an EOF-grace expiry stays diagnosable even
-  when line-by-line output recording is switched off. The grace-expiry event
-  carries no captured stdout or stderr payload. Ancillary diagnostics leave the
-  span open until terminal settlement.
+  `timeout_mode`, `eof_grace_s`, `pending_readers`, and `error_category` fields
+  are set on the event onto a `cuprum.<phase>` span event (for example
+  `cuprum.stdout`, `cuprum.timeout`, or `cuprum.teardown_error`). The
+  grace-expiry event carries only `eof_grace_s` and `pending_readers` in
+  addition to the common correlation fields. `error_category` is the one field
+  whose value is an enum member rather than a plain string, so a backend
+  receives its value rather than the member's `repr`; it is what lets a
+  `stdio_error` distinguish two boundaries that raise the same exception class.
+  New event-recording phases should extend this shared field set rather than
+  add a bespoke per-phase method. The helper never sets the span status or ends
+  the span — only `settled` does that — so `stdin_error` (the child process may
+  legitimately ignore its stdin), `stdio_error`, `timeout`, `teardown_error`,
+  and `capture_eof_grace_expired` are all recorded as diagnostics without
+  failing or closing the execution span. `stdout`/`stderr` recording is gated
+  by the hook's `record_output` flag; ancillary diagnostics are recorded
+  unconditionally, so a stdin-write failure, a timeout, a teardown failure, or
+  an EOF-grace expiry stays diagnosable even when line-by-line output recording
+  is switched off. The grace-expiry event carries no captured stdout or stderr
+  payload. Ancillary diagnostics leave the span open until terminal settlement.
 - **exit** looks up the span for the event's `exec_id` and records known child
   exit attributes while leaving the span open.
 - **settled** removes (pops) the span for the event's `exec_id` under the lock,
@@ -2585,9 +2590,10 @@ sequences.
 **Legacy or manual events.** An event whose `exec_id` is `None` (a legacy or
 hand-constructed event) cannot be correlated, so it is ignored rather than
 guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
-`stderr`/`stdin_error`/`timeout`/`teardown_error`/ `capture_eof_grace_expired`/
-`pipeline_fail_fast`/`exit` without one are dropped. Every event Cuprum itself
-emits carries an `exec_id`, so this only affects hand-built event streams.
+`stderr`/`stdin_error`/`stdio_error`/`timeout`/`teardown_error`/
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
+dropped. Every event Cuprum itself emits carries an `exec_id`, so this only
+affects hand-built event streams.
 
 ## Rust-pump executor-hop span boundary
 
@@ -7015,8 +7021,10 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_stream_run.py`, `cuprum/_subprocess_streams.py`,
 `cuprum/_stdio_plan.py`, `cuprum/_subprocess_stdin.py`,
 `cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_stdin_errors.py`,
-`cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_deadline.py`,
-`cuprum/_subprocess_rendezvous.py`,
+`cuprum/_subprocess_stdin_reclaim.py`, `cuprum/_subprocess_stdin_write.py`,
+`cuprum/_stdio_binding_guards.py`, `cuprum/_stdio_diagnostics.py`,
+`cuprum/stdio_events.py`, `cuprum/_subprocess_timeout.py`,
+`cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
 `cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`, and
 `cuprum/_command_finalization.py`. Pipeline startup has its own boundary in
 `cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
@@ -7031,11 +7039,21 @@ rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
-incremental encoder, and deciding which failures are the producer's — belongs
-in `_subprocess_stdin_stream`, whose dispatcher stays the
+incremental encoder, and deciding which failures are the producer's — belongs in
+`_subprocess_stdin_stream`, whose dispatcher stays the
 `_subprocess_stdin._spawn_stdin_writer` entry point; building the public
 `StdinSourceError` a classified failure raises belongs in
 `_subprocess_stdin_errors`, which stays a leaf so no importer gains a cycle;
+reclaiming a stdin writer that is still running — the bounded window and both
+operations that bound it — belongs in `_subprocess_stdin_reclaim`, whose seam
+is the policy's own split between *what* cuprum writes and *how a running
+writer is taken back*; naming which standard-stream boundary failed belongs in
+`cuprum/stdio_events.py`, a leaf holding the closed `StdioFailureCategory` set;
+emitting the bounded `stdio_error` diagnostic for a failing boundary belongs in
+`_stdio_diagnostics`; refusing a stream binding the child cannot actually be
+given (a platform without POSIX descriptors, or a negative descriptor that
+`subprocess` reads as a sentinel) belongs in `_stdio_binding_guards`, whose
+responsibility is the legality of a resolved binding rather than its selection;
 timeout or exit-event policy belongs in `_subprocess_timeout`; the child-exit
 half of *ending* a run — the wait and the deadline that bounds it, the process
 termination a deadline expiry reaches, and the remainder that bounds what

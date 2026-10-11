@@ -1060,6 +1060,9 @@ Internally, command execution can be described in terms of events:
 - `stdin` – bytes written to the child's standard input, with a byte count;
 - `stdin_error` – a standard-input write or close failed, with the failing
   operation and the raised error's type;
+- `stdio_error` – a standard-stream boundary outside the stdin writer's own
+  pipe operations failed, with the failing operation, the raised error's type,
+  and a bounded boundary category;
 - `timeout` – a run exceeded its deadline;
 - `teardown_error` – a stream consumer drained with an unexpected error
   during cleanup;
@@ -1637,13 +1640,17 @@ implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
   `stdin_error`, `exit`, `settled`, `timeout`, `teardown_error`,
-  `capture_eof_grace_expired`, and `pipeline_fail_fast` phases for both single
-  commands and pipeline stages — the declared `ExecPhase` values. `timeout`,
-  `teardown_error`, and `capture_eof_grace_expired` are ancillary diagnostics
-  rather than lifecycle phases. `capture_eof_grace_expired` is emitted only
-  when a capturing drain exhausts its fixed `_CAPTURE_EOF_GRACE_S` budget with
-  one or more readers still pending. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `capture_eof_grace_expired`, `pipeline_fail_fast`, and `stdio_error` phases
+  for both single commands and pipeline stages — the declared `ExecPhase`
+  values. `timeout`, `teardown_error`, `capture_eof_grace_expired`, and
+  `stdio_error` are ancillary diagnostics rather than lifecycle phases.
+  `capture_eof_grace_expired` is emitted only when a capturing drain exhausts
+  its fixed `_CAPTURE_EOF_GRACE_S` budget with one or more readers still
+  pending. `stdio_error` reports a standard-stream boundary that failed outside
+  the stdin writer's pipe operations, and its `error_category` is what
+  separates boundaries that raise the same exception class, letting an operator
+  tell a failure in the caller's own producer from one in cuprum's write path.
+  Pipeline stage events are tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline emits one `pipeline_fail_fast` event when
   a non-final stage is the first to fail and at least one other stage remains
   running. It is published before every other still-running stage — upstream
@@ -2511,19 +2518,22 @@ design decisions guide these adapters:
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
-  `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`,
-  `cuprum_group_teardowns_total`, `cuprum_resource_usage_measurements_total`)
-  are incremented on the corresponding event phases. The EOF-grace counter has
-  only the low-cardinality `program` and `project` labels; duration and
-  pending-reader count remain event fields, not labels. The group-teardown
-  counter adds the closed `GroupTeardownOutcome` category as an `outcome` label
-  — bounded by construction, so a teardown left holding a process is countable
-  without the pid, which would shatter the series. It and the
-  `cuprum_group_settle_seconds` histogram are built by
-  `_group_teardown_operations` rather than the unit-counter path, so the metric
-  name keeps one definition. The resource-measurement counter belongs to the
-  resource series and therefore carries `resource_usage_mode` alongside
-  `program` and `project`.
+  `cuprum_stdio_errors_total`, `cuprum_pipeline_fail_fast_total`,
+  `cuprum_capture_eof_grace_expired_total`, `cuprum_group_teardowns_total`,
+  `cuprum_resource_usage_measurements_total`) are incremented on the
+  corresponding event phases. The EOF-grace counter has only the low-cardinality
+  `program` and `project` labels; duration and pending-reader count remain
+  event fields, not labels. The group-teardown counter adds the closed
+  `GroupTeardownOutcome` category as an `outcome` label — bounded by
+  construction, so a teardown left holding a process is countable without the
+  pid, which would shatter the series. It and the `cuprum_group_settle_seconds`
+  histogram are built by `_group_teardown_operations` rather than the
+  unit-counter path, so the metric name keeps one definition. The
+  standard-stream-error counter carries the bounded `error_category` label,
+  because the boundary that failed — not the exception class, which several
+  boundaries share — is what an operator filters on. The resource-measurement
+  counter belongs to the resource series and therefore carries
+  `resource_usage_mode` alongside `program` and `project`.
 - The `cuprum_duration_seconds` histogram and terminal-category/failure
   counters are emitted on `settled` events. Resource metrics remain on `exit`
   events: the three `cuprum_child_*` histograms are observed only where the
@@ -2549,16 +2559,18 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`stdin_error`/`timeout`/`teardown_error`/
+  `stderr`/`stdin_error`/`stdio_error`/`timeout`/`teardown_error`/
   `capture_eof_grace_expired` /`pipeline_fail_fast`/`exit` events are dropped
   rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
-  `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
-  are also recorded as span events, unconditionally, without ending the span.
-  `capture_eof_grace_expired` is recorded as a
+  `record_output` parameter). `stdin_error`, `stdio_error`, `timeout`, and
+  `teardown_error` are also recorded as span events, unconditionally, without
+  ending the span. `capture_eof_grace_expired` is recorded as a
   `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
   its `eof_grace_s` and `pending_readers` fields. The grace-expiry event itself
-  carries no captured stream payload.
+  carries no captured stream payload. `stdio_error` carries `error_category`,
+  the one ancillary field whose value is an enum member rather than a plain
+  string; a backend receives its value rather than the member's `repr`.
 - Span status is successful only for `exit_zero`; all other bounded terminal
   outcomes set an error status.
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.
