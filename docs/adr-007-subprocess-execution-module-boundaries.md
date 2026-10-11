@@ -544,3 +544,27 @@ platform-specific `_probe` defined once per arm stays legal, while two
 definitions in one arm — or two methods in one class body — are reported. The
 rule is deliberately structural and said so in its own docstring, so a future
 reader can tell which redefinitions it refuses and which it permits.
+
+## Addendum (2026-10-12): `Pipeline` moves to its own module
+
+The 2026-10-11 addendum closed with "`SafeCmd` and `Pipeline` remain in
+`cuprum/sh/safe_cmd.py`"; that entry was accurate when it landed and is
+historical for the `Pipeline` half. The byte-exact work split the two execution
+primitives into one module each, so `Pipeline` now lives in
+`cuprum/sh/pipeline.py`.
+
+That brings the addendum's own rule to `Pipeline`: `cuprum/sh/safe_cmd.py` holds
+`SafeCmd` and `cuprum/sh/pipeline.py` holds `Pipeline`, so each execution
+primitive owns a module rather than sharing one. Each module imports the other
+— a command composes into a pipeline through `SafeCmd.__or__`, which returns
+`Pipeline.concat`, and a pipeline is built from commands — so each defers the
+import it needs to the foot of its own file, after the class it defines exists:
+`cuprum/sh/safe_cmd.py` reaches for `Pipeline` there, and
+`cuprum/sh/pipeline.py` reaches for `SafeCmd`. The annotations are quoted
+strings, but `typing.get_type_hints` resolves them from module globals, so the
+deferred name is a genuine runtime import rather than a `TYPE_CHECKING` one.
+The 2026-10-11 addendum's `SafeCmdBuilder` half still stands.
+
+`cuprum/sh/__init__.py` continues to re-export both classes unchanged, so
+`cuprum.sh.Pipeline` is the same object as `cuprum.sh.pipeline.Pipeline` and
+importers of the facade see no difference.

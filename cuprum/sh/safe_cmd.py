@@ -195,6 +195,8 @@ class SafeCmd:
             If the command is not allowed by the active scope.
         TimeoutError
             If execution exceeds the effective timeout.
+        UnicodeEncodeError
+            If text stdin cannot be encoded by the execution context.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
         out = _bytes_output(output)
@@ -255,6 +257,8 @@ class SafeCmd:
             If the command is not allowed by the active scope.
         TimeoutError
             If execution exceeds the effective timeout.
+        UnicodeEncodeError
+            If text stdin cannot be encoded by the execution context.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
         return asyncio.run(

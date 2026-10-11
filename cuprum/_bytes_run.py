@@ -15,9 +15,10 @@ about the options they were handed, and that decision lives here:
 - :func:`_bytes_output` normalizes the optional options object a caller may
   omit.
 
-The two result-bearing helpers serve the same split on the way out:
+The result-bearing helpers serve the same split on the way out.
 :func:`_require_command_result` and :func:`_require_pipeline_result` re-take the
 narrower class a text-mode entry point promised, and
+:func:`_require_bytes_command_result` and
 :func:`_require_bytes_pipeline_result` the byte-exact one. A shared runner
 returns either class, and the narrowing keeps the mismatch out of the caller
 rather than asserting it away.
@@ -34,9 +35,10 @@ from __future__ import annotations
 
 import typing as typ
 
-# Sourced from ``cuprum.sh.output`` rather than ``cuprum.sh``: the package
-# facade imports the mixin module, which imports this one, so reaching back
-# through the facade would close a cycle at import time.
+# Sourced from ``cuprum.sh.output`` rather than ``cuprum.sh``: the facade
+# imports ``cuprum.sh.safe_cmd`` and ``cuprum.sh.pipeline``, both of which
+# import this module, so reaching back through the facade would close a cycle
+# at import time.
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import (
     BytesCommandResult,
