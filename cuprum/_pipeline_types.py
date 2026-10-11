@@ -11,6 +11,7 @@ them for backwards compatibility.
 from __future__ import annotations
 
 import dataclasses as dc
+import time
 import types
 import typing as typ
 
@@ -117,6 +118,16 @@ class _StageObservation:
     env_overlay: EnvOverlay | None
     pending_tasks: list[asyncio.Task[None]]
     wall_clock: cabc.Callable[[], float]
+    # The monotonic counterpart of ``wall_clock``, and the seam a run's own
+    # deadline is measured through: the start reference and the remaining-time
+    # query both read it, so a timeout can be driven by an injected clock
+    # rather than by the machine's. Both production builders resolve it at
+    # their construction site rather than relying on this default, which binds
+    # when the class is created and would ignore a patched ``time``. A
+    # construction that supplies no clock still gets a usable one.
+    # Line stamps keep their own seam in ``cuprum.lines``, which the two paths
+    # already share.
+    monotonic_clock: cabc.Callable[[], float] = time.perf_counter
     # Minted once per stage observation so every lifecycle event this object
     # emits shares one correlation token, distinguishing this execution from
     # any other that happens to reuse the same PID.

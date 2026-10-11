@@ -76,7 +76,11 @@ def _build_pipeline_observations(
             cwd=cwd,
             env_overlay=env_overlay,
             pending_tasks=pending_tasks,
+            # Resolved at the construction site, like ``wall_clock``, so the
+            # seam is patchable from this module rather than frozen into a
+            # class-creation-time default.
             wall_clock=time.time,
+            monotonic_clock=time.perf_counter,
             env_mode=env_mode,
         )
         for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))

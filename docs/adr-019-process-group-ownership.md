@@ -246,8 +246,8 @@ moves the implementation towards it rather than away: what the option promises
 is now what teardown performs. The bounds already recorded still bound it — a
 descendant that leaves the group with `setsid()` or `setpgid()` remains out of
 reach, as do ancestors and siblings. Teardown of a child that never had a pid
-falls back to the direct route, matching where `_signal_child` would signal, so
-there is no group name to probe and nothing to probe it with.
+falls back to the direct route, matching where `signal_target_or_report` would
+signal, so there is no group name to probe and nothing to probe it with.
 
 ## Addendum (2026-10-11): settlement is decided in `_settlement_of`
 
@@ -270,10 +270,11 @@ the kernel argument is why it can be stated once. The question "is this
 teardown target settled?" has one answer per run, and the answer turns on the
 same fact wherever it is asked — a group stays addressable for as long as it
 holds a member, so a name that still answers cannot have been recycled onto an
-unrelated group. The probe is asked only where `_signal_child` would signal the
-group: a child with no pid has no group name to ask about, and settlement for
-that child is the same question the inherited route asks. A child with a pid
-that the run does not own keeps the `is_done()` short-circuit byte for byte.
+unrelated group. The probe is asked only where `signal_target_or_report` would
+signal the group: a child with no pid has no group name to ask about, and
+settlement for that child is the same question the inherited route asks. A
+child with a pid that the run does not own keeps the `is_done()` short-circuit
+byte for byte.
 
 Every teardown route reaches this one helper. The pipeline cleanup path goes
 through `_terminate_all_shielded` and `_terminate_process` to

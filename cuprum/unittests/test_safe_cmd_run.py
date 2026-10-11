@@ -260,11 +260,10 @@ def test_records_start_times_before_subprocess_spawn(
         await asyncio.sleep(0)
         return 0, 13.0
 
-    monkeypatch.setattr(_subprocess_execution.time, "perf_counter", monotonic_clock)
-    # The observation builder installs ``time.time`` as the stage's
-    # ``wall_clock`` callable, so the injected wall clock must be patched where
-    # that attribute is read from — not in ``sh``, which no longer imports
-    # ``time`` now that observation construction lives in ``_command_internals``.
+    # Both start clocks are resolved at the observation's construction site, so
+    # patching this module's ``time`` is what injects them; the field default
+    # binds at class-creation time and would ignore the patch.
+    monkeypatch.setattr(_command_internals.time, "perf_counter", monotonic_clock)
     monkeypatch.setattr(_command_internals.time, "time", wall_clock)
     monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
     monkeypatch.setattr(

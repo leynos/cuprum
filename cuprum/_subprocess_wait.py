@@ -185,14 +185,20 @@ def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
 
     The awaits this bounds are reached only once the exit wait has returned, so
     a run whose deadline was already consumed has no budget left for them. It is
-    a remainder from the same ``perf_counter`` reference the exit wait was
-    scheduled against, and it is measured where it is used rather than earlier
-    on purpose: a duration computed before the awaits it bounds would let them
-    spend part of the budget and still hand the whole of it to what follows. The
-    caller passes this straight to one ``asyncio.timeout`` covering all three
-    awaits a streamed run has left after its child exited. Returning ``None``
-    for an unconfigured timeout keeps a run without a deadline unbounded here,
-    exactly as it is everywhere else.
+    a remainder from the same reference the exit wait was scheduled against, and
+    it is measured where it is used rather than earlier on purpose: a duration
+    computed before the awaits it bounds would let them spend part of the budget
+    and still hand the whole of it to what follows. The caller passes this
+    straight to one ``asyncio.timeout`` covering all three awaits a streamed run
+    has left after its child exited. Returning ``None`` for an unconfigured
+    timeout keeps a run without a deadline unbounded here, exactly as it is
+    everywhere else.
+
+    The clock is the execution's own ``monotonic_clock`` rather than a direct
+    read, so a test can hold the deadline still and assert the remainder the
+    boundary is actually given instead of racing a real one. It is the same
+    callable the run's ``started_at`` was sampled from, which is what makes the
+    subtraction a duration rather than a difference between two clocks.
 
     It lives here, beside the exit wait, because the remainder is only
     meaningful against the reference that wait was scheduled from — splitting
@@ -207,7 +213,7 @@ def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
     """
     if execution.timeout is None:
         return None
-    elapsed = time.perf_counter() - execution.started_at
+    elapsed = execution.observation.monotonic_clock() - execution.started_at
     return execution.timeout - elapsed
 
 

@@ -118,7 +118,9 @@ def _prepare_execution_observation(
         env_overlay=env_overlay,
         tags=tags,
         pending_tasks=tracking.pending_tasks,
+        # Resolved here, not at the class-creation field default a patch misses.
         wall_clock=time.time,
+        monotonic_clock=time.perf_counter,
         env_mode=env_mode,
     )
 

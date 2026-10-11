@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import time
 import typing as typ
 
 from cuprum import _wait4_process
@@ -163,7 +162,8 @@ def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
     """Take the pre-spawn readings, in the order the timing tests pin."""
     return _DirectRunStart(
         rusage_before=_wait4_process.capture_resource_before_spawn(),
-        monotonic_started_at=time.perf_counter(),
+        # The deadline is a remainder from this clock, so both come from it.
+        monotonic_started_at=observation.monotonic_clock(),
         wall_clock_started_at=observation.wall_clock(),
     )
 

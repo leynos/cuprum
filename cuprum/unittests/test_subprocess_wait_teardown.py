@@ -17,11 +17,13 @@ import typing as typ
 import pytest
 
 from cuprum._subprocess_wait import (
+    _deadline_for_collection,
     _wait_for_exit_code,
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
 from cuprum.unittests._timeout_test_helpers import (
+    _ClockObservation,
     _DeadlineExecution,
     _ExitedProcess,
     _TimeoutWaitProcess,
@@ -227,3 +229,76 @@ def test_cancellation_during_grace_still_escalates_to_kill() -> None:
         )
 
     asyncio.run(run_case())
+
+
+def test_the_collection_deadline_is_the_budget_the_exit_wait_left() -> None:
+    """The post-exit remainder is the timeout minus the elapsed monotonic time.
+
+    The awaits after the child exits share one deadline, and it is a remainder
+    rather than the configured timeout: a run whose exit wait consumed most of
+    its budget must not hand the whole of it to what follows. The clock is
+    injected so the figure is asserted rather than raced.
+    """
+    observation = _ClockObservation(reading=2.5)
+    execution = _DeadlineExecution(
+        ctx=ExecutionContext(),
+        timeout=10.0,
+        observation=observation,
+        started_at=0.5,
+    )
+
+    deadline = _deadline_for_collection(typ.cast("_SubprocessExecution", execution))
+
+    assert deadline == pytest.approx(8.0), (
+        "the deadline must be the timeout less the 2.0 seconds already spent"
+    )
+    assert observation.reads == 1, (
+        f"the remainder must be measured once, at the point of use; got "
+        f"{observation.reads} reads"
+    )
+
+
+def test_an_elapsed_deadline_leaves_a_negative_remainder() -> None:
+    """An overrun exit wait is reported as overspent, not silently clamped.
+
+    Clamping to zero would present an exhausted budget as an expiring one and
+    lose the fact that the exit wait itself overran, which is the distinction
+    an operator reading a post-exit timeout needs.
+    """
+    execution = _DeadlineExecution(
+        ctx=ExecutionContext(),
+        timeout=3.0,
+        observation=_ClockObservation(reading=5.0),
+        started_at=0.0,
+    )
+
+    deadline = _deadline_for_collection(typ.cast("_SubprocessExecution", execution))
+
+    assert deadline == pytest.approx(-2.0), (
+        f"an overrun must stay negative, got {deadline!r}"
+    )
+
+
+def test_an_unconfigured_timeout_leaves_the_collection_unbounded() -> None:
+    """A run with no deadline consults no clock and reports no remainder.
+
+    ``None`` is what keeps the post-exit boundary unbounded here, exactly as an
+    absent timeout leaves the exit wait unbounded. Reading the clock first
+    would make a run that has no deadline depend on one anyway.
+    """
+    observation = _ClockObservation(reading=99.0)
+    execution = _DeadlineExecution(
+        ctx=ExecutionContext(),
+        timeout=None,
+        observation=observation,
+    )
+
+    deadline = _deadline_for_collection(typ.cast("_SubprocessExecution", execution))
+
+    assert deadline is None, (
+        f"an unconfigured timeout must stay unbounded, got {deadline!r}"
+    )
+    assert observation.reads == 0, (
+        "a run with no deadline has no remainder to measure, so the clock "
+        f"must not be consulted; got {observation.reads} reads"
+    )

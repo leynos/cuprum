@@ -1524,7 +1524,8 @@ Table 1: process-group ownership modules and their responsibilities
 | Module                   | Owns                                                                |
 | ------------------------ | ------------------------------------------------------------------- |
 | `_process_group.py`      | The liveness probe, the backoff poll, and the capped wait           |
-| `_process_signal.py`     | Signal delivery and the settlement decision                         |
+| `_process_signal.py`     | The signal target and the settlement decision                       |
+| `_group_teardown.py`     | Signal delivery refusal and the unsettled-teardown reports          |
 | `_teardown_policy.py`    | The grace period and the per-process ownership record               |
 | `_process_lifecycle.py`  | The two-phase escalation and the fail-fast stage selection          |
 | `_subprocess_context.py` | The policy-to-spawn-argument conversion (`_ownership_spawn_kwargs`) |
@@ -6573,8 +6574,9 @@ side, starting stages — and cleaning up whatever a failed startup left running
 — belongs in `_pipeline_spawn`, while terminating stages that are already
 running belongs in `_process_lifecycle` alongside `_shielded_cleanup`. Deciding
 *when* to signal — the two-phase grace and its escalation — is
-`_process_lifecycle`'s; deciding *what* the signal reaches (`_signal_child`),
-and what a completed teardown waits for (`_settlement`,
+`_process_lifecycle`'s; deciding *what* the signal reaches
+(`signal_target_or_report`, which lives in `_group_teardown` and is called from
+`_process_signal`), and what a completed teardown waits for (`_settlement`,
 `_terminate_process_with_wait`, `_settle_after_escalation`), belongs in
 `_process_signal`. The idle heartbeat's timing belongs in `_idle_heartbeat` and
 its rendering and write-failure policy in `_idle_diagnostic`.
