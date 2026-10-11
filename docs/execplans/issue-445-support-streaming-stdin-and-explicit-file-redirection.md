@@ -218,6 +218,27 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) All six deterministic gates are certified green at
+  `8547b209` on a tree that stayed clean throughout, and the leaf that had
+  never been observed finally ran. Every earlier `make lint` this round aborted
+  at `spelling` (`Makefile:485`), so `github-actions-lint` was unobserved at
+  every head until now; this run passed `spelling` and reached its terminal
+  prerequisite, where `yamllint --strict` and `actionlint` both ran with no
+  findings. `make lint`'s thirteen leaves all passed: both pylint engines at
+  10.00/10, ruff, interrogate at 100%, the DF14 rule set, ambrleaks, the
+  blocking Skylos dead-code scan, `cargo doc`/`clippy` under `-D warnings`,
+  whitaker, and spelling. The logs are the evidence, not a summary of them:
+  each carries `HEAD_AT_START`/`HEAD_AT_END` = `8547b209` and
+  `GIT_STATUS_AT_END=0`, and no log contains a `make: ***` abort. CodeRabbit's
+  four validation gaps map to the repairs as follows. Gap 1 (cooperative
+  cleanup under both capture settings) and gap 4 (outcome retrieval after the
+  helper returns) were closed before this round and are present in the tree.
+  Gaps 2 and 3 are closed by `7c216634` and `8547b209`, each with probes
+  recorded in the Progress entries below. One correction to a claim made
+  mid-round: a note asserted that `lint`, `markdownlint`, and `nixie` had
+  already been run when only `check-fmt` and `typecheck` had. They were run
+  afterwards and passed, so the conclusion held, but the claim was wrong when
+  written and the causal story it implied could have misattributed a failure.
 - [x] (2026-10-11) The backend axis now asserts traversal for the *normal*
   ownership cases, not only the failure suites, and two defects found while
   doing it are fixed. `spawn_backend` wraps both routes in both arms — the
@@ -227,13 +248,27 @@ likelihood, and mitigation.
   return value to assert on. Three probes, each failing for the intended
   reason: removing the availability patch fails 22 asyncio cases, bypassing the
   wait4 skip fails the wait4 arm, and clearing the record at teardown fails
-  both arms. Two things this run corrected: the asyncio arm's comment claimed
-  the wait4 entry was trapped when no such patch existed, and the reverse hole
-  — the asyncio arm silently running wait4 — passed with an *empty* record,
-  which nothing looked at. A spelling-gate abort at `7c216634` was also
-  repaired: one non-Oxford spelling in a docstring, and three hyphenated words
-  the typos gate splits at the hyphen and flags on their first fragment. The
-  abort is why the earlier run certified nothing past that leaf.
+  both arms. Re-measured at `8547b209` the figures are larger and the probes
+  are four, not three. Removing the asyncio arm's availability patch fails 24
+  cases and errors 24 more, every `asyncio` combination in the redirect and
+  borrowed-file suites, each naming the mismatch between the selected route and
+  the one reached. Forcing the wait4 arm onto the transport while leaving the
+  wait4 entry patched fails 24 and errors 24 with the *trap* message, and six
+  of the failing names are ordinary ownership cases rather than failure-outcome
+  ones, which is the property that makes the axis an axis. Clearing the record
+  after the yield errors all 48 cases, 12 in each of the four parameter
+  combinations, so both arms fail rather than one. The probe worth recording as
+  a *non*-result: removing only the wait4 arm's platform skip passes, because
+  `wait4_resource_measurement_available()` is true here and the arm already
+  selected wait4, leaving the trap unreachable. That run exercised nothing. It
+  was the first version tried, and it looked like a passing probe. Two things
+  an earlier run corrected: the asyncio arm's comment claimed the wait4 entry
+  was trapped when no such patch existed, and the reverse hole — the asyncio
+  arm silently running wait4 — passed with an *empty* record, which nothing
+  looked at. A spelling-gate abort at `7c216634` was also repaired: one
+  non-Oxford spelling in a docstring, and three hyphenated words the typos gate
+  splits at the hyphen and flags on their first fragment. The abort is why the
+  earlier run certified nothing past that leaf.
 - [x] (2026-10-11) The CodeScene findings on `test_safe_cmd_redirect.py` are
   cleared at the source, and the entry below claiming the `R0917` repair had
   cleared them is corrected. That repair was not wrong about pylint — it moved
@@ -1943,6 +1978,25 @@ likelihood, and mitigation.
 
 ## Surprises & discoveries
 
+- Observation: **a gate log that records its head at the start is not enough
+  when the tree can move mid-run.** A `make test` run at `8547b209` began with
+  `GIT_STATUS_AT_START=0` and was invalidated while it executed, because a
+  probe session edited `cuprum/unittests/_stdio_redirect_support.py` in place
+  (three variants, each restored) inside its window, and ran pytest
+  concurrently with it. The closing `GIT_STATUS_AT_END` caught the mutation,
+  but only because the run happened to end after the last edit; a run whose
+  edits began and were reverted wholly within its window would have closed
+  clean and been indistinguishable from an untouched one. Evidence: the invalid
+  run's window is 14:33:22 to its close, my edits fall at 14:34:28-14:35:17,
+  and the re-run was started at 14:38:27 with the same head and the same clean
+  tree. The fix that made the second run trustworthy was pinning the *content*
+  rather than the commit — `SUPPORT_BLOB_AT_START` and `SUPPORT_BLOB_AT_END`
+  both `d2fe3969`, the blob id of the committed file — because a hash of the
+  watched file is evidence a commit id is not. The wider lesson is about
+  ordering, not tooling: probe mutations belong *after* the gate run that
+  certifies the tree, never interleaved with it, even when each probe is
+  individually restored. Restoring is not the same as never having changed it.
+
 - Observation: **a guard is subject to the same failure it was written to
   catch, one level up.** A test that proves a gate is not lying is itself
   unproven until something collects it. Evidence: the Gap E contract test
@@ -2712,6 +2766,19 @@ likelihood, and mitigation.
   alternative unreachable or report that it was reached.
 
 ## Decision log
+
+- Decision: the backend axis asserts traversal in the **fixture's teardown**,
+  not by threading a parameter into each case. Rationale: the property being
+  guarded — "this case spawned through the route it names" — belongs to the
+  axis rather than to any one subject, and teardown is the only placement that
+  reaches every case uniformly. Converting `usefixtures` to a named parameter
+  would have tripped `R0917` (`max-positional-arguments = 4`) on tests already
+  at that ceiling, needed `R0913` care on the fixture itself, and churned
+  twelve call sites to restate what the axis already owns. The cost of the
+  teardown placement is that a case cannot see the traversal mid-body; nothing
+  needs it to, because the failure suite keeps its own direct assertion
+  (`assert_only_the_selected_route_ran`) for the stronger "was the *only*
+  route" claim.
 
 - Decision: the four remaining `r6` validation gaps are closed **before** the
   commit-gate run, not after it, and the repairs are committed in one change
