@@ -174,9 +174,13 @@ async def _drain_source_into_pipe(
     other failure is the encoder or the pipe, and is reported as itself.
 
     The producer's whole lifecycle lives inside this guarded region — building
-    its iterator, pulling from it, and finalizing it — so a failure to *start*
-    the producer is reported the same way as a failure to advance it, and the
-    producer is finalized on every exit path.
+    its iterator, pulling from it, and finalizing it. Building the iterator
+    runs the producer's own ``__aiter__``, which is where that promise would
+    otherwise break: a producer whose machinery is itself a pipe raises the
+    same ``BrokenPipeError`` the write side does, so
+    :func:`_start_producer` marks it as the producer's failure before the
+    shared handler can read it as the child having closed its end. The
+    producer is finalized on every exit path either way.
 
     Keeping the policy here rather than in the caller leaves the caller with
     setup and teardown alone, and keeps each handler's ``raise`` visible to
@@ -194,7 +198,7 @@ async def _drain_source_into_pipe(
     """
     source: cabc.AsyncIterator[str | bytes] | None = None
     try:
-        source = aiter(stream.chunks)
+        source = _start_producer(stream.chunks)
         await _pump_chunks(source, sink)
         await _write._flush_encoder(sink)
     except asyncio.CancelledError:
@@ -228,6 +232,41 @@ async def _drain_source_into_pipe(
         await _finalize_stdin_source(source)
 
 
+def _start_producer(
+    chunks: cabc.AsyncIterable[str | bytes] | cabc.AsyncIterator[str | bytes],
+) -> cabc.AsyncIterator[str | bytes]:
+    """Build the producer's iterator, marking it as a producer failure if it fails.
+
+    ``StdinStream`` accepts any async iterable and is advanced with ``aiter()``,
+    so building the iterator runs the producer's own ``__aiter__``. A producer
+    whose machinery is a pipe — a socket, a subprocess's output, another
+    reader — can therefore raise the very ``BrokenPipeError`` that the
+    shared handler reads as the *child* closing its end, and the failure is
+    then swallowed: the run proceeds to the child's exit code, which for a
+    child still waiting on input is a timeout rather than the producer's error.
+
+    Marking it here is what keeps that failure on the producer's side of the
+    classification. It is the same treatment :func:`_pump_chunks` gives
+    ``__anext__``, and for the same reason: a call into the producer's own code
+    cannot have been the child closing cuprum's write end.
+
+    Raises
+    ------
+    _ProducerFailureError
+        If the producer cannot be started. The original exception is carried as
+        ``cause``.
+    asyncio.CancelledError
+        If the producer's ``__aiter__`` is cancelled. Cancellation is control
+        flow rather than a producer failure, so it propagates unchanged.
+    """
+    try:
+        return aiter(chunks)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise _ProducerFailureError(exc) from exc
+
+
 def _write_boundary_category(
     sink: _write._StreamSink,
 ) -> StdioFailureCategory:
@@ -246,14 +285,14 @@ def _write_boundary_category(
 
 
 class _ProducerFailureError(Exception):
-    """Marks a failure that came from advancing the producer.
+    """Marks a failure that came from the producer's own code.
 
-    It carries no behaviour, only provenance. Advancing the producer and
-    writing to the child both raise ``OSError`` in the pipe family, so once
-    control reaches the shared handler the exception type alone cannot say
-    which side failed; the marker is what preserves that. The original
-    exception travels as :attr:`cause` so the handler can chain it to the
-    public error it builds.
+    It carries no behaviour, only provenance. Running the producer — both its
+    ``__aiter__`` and its ``__anext__`` — and writing to the child raise
+    ``OSError`` in the pipe family, so once control reaches the shared handler
+    the exception type alone cannot say which side failed; the marker is what
+    preserves that. The original exception travels as :attr:`cause` so the
+    handler can chain it to the public error it builds.
     """
 
     def __init__(self, cause: Exception) -> None:
