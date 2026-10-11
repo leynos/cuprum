@@ -140,7 +140,7 @@ def test_repeated_cancellation_settles_one_command_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Repeated cancellation during cleanup still settles the observed command."""
-    from cuprum import _subprocess_wait
+    from cuprum import _subprocess_drain
 
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -148,7 +148,7 @@ def test_repeated_cancellation_settles_one_command_once(
     gate = _CommandCleanupGate()
     started = asyncio.Event()
     events: list[ExecEvent] = []
-    real_drain = _subprocess_wait._drain_stream_consumers
+    real_drain = _subprocess_drain._drain_stream_consumers
 
     def observe(event: ExecEvent) -> None:
         """Record lifecycle events and signal the spawned child."""
@@ -158,14 +158,14 @@ def test_repeated_cancellation_settles_one_command_once(
 
     async def gated_drain(
         consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-        context: _subprocess_wait._DrainContext,
+        context: _subprocess_drain._DrainContext,
     ) -> tuple[str | None, str | None]:
         """Hold reconciliation open while repeated cancellation arrives."""
         gate.entered.set()
         await gate.release.wait()
         return await real_drain(consumers, context)
 
-    monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
+    monkeypatch.setattr(_subprocess_drain, "_drain_stream_consumers", gated_drain)
 
     async def run_case() -> None:
         """Cancel after start, then interrupt the gated cleanup repeatedly."""
