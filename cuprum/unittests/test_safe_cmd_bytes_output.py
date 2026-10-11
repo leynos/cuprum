@@ -303,8 +303,8 @@ def test_observe_hooks_do_not_break_byte_exact_capture(
     The observer half is asserted against an independently derived oracle
     rather than by truthiness, which would pass against a hook handed the
     wrong stream or an undecoded payload. The payload carries invalid UTF-8,
-    so the lines also prove the observer renders a replacement view — the
-    capture's policy governs the capture alone.
+    so the lines also prove the observer renders a replacement view — in a
+    byte run the capture's policy governs the capture alone.
     """
     observed: list[tuple[str, str]] = []
 
@@ -340,10 +340,11 @@ def test_observe_hooks_cannot_end_a_strict_byte_run(
     Reading the caller's error policy in the observer's decoder would let a
     hook the caller never asked for end the run: under ``errors="strict"`` the
     invalid tail raises :class:`UnicodeDecodeError` from the drain's read loop
-    before the captured bytes are returned. The capture is the only place the
-    policy governs, so the byte run must survive an ambient observer and still
-    hand back the child's own bytes. Both entry points are exercised, since the
-    defect lived in the shared drain rather than in either wrapper.
+    before the captured bytes are returned. In a byte run the capture is the
+    only place the policy governs, so the byte run must survive an ambient
+    observer and still hand back the child's own bytes. Both entry points are
+    exercised, since the defect lived in the shared drain rather than in either
+    wrapper.
     """
     observed: list[tuple[str, str]] = []
 
