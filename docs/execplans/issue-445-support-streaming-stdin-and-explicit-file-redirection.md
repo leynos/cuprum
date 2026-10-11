@@ -1352,6 +1352,19 @@ likelihood, and mitigation.
       about the leaves behind it in the sequence, and `make`'s first-failure
       abort means a green local partial run is compatible with a red hosted
       one.
+- [x] (2026-10-11 05:45Z) Hosted `lint-test` is green at `380e6d65` (run
+      38108417467, job 114378724902, attempt 1). Step 32 `Check formatting`
+      now passes, having been the failure at `96c16aed`. More importantly,
+      steps 33-37 all report `success` for the first time on any head of this
+      branch: `Lint Markdown`, `Run lint, including Skylos dead-code
+      detection`, `Verify Rust MSRV`, `Install the Windows target standard
+      library`, and `Lint the Windows cfg branches`. Those four gates were
+      `skipped` at `96c16aed` and had never been observed. Their passing is
+      new evidence, not a re-confirmation: the Skylos production dead-code
+      scan, the MSRV check, and the Windows `cfg` lint are all first-time
+      results for this series. The other previously-open jobs —
+      `Native contracts` on Ubuntu, macOS, and Windows, and all five
+      `build-native-wheels` legs — also completed successfully.
 
 ## Surprises & discoveries
 
