@@ -781,6 +781,17 @@ meant, say — is rejected with `TypeError` naming the type supplied, rather tha
 being stored as a resolver that only fails much later, at spawn time, against
 a resolver the caller never supplied.
 
+A relative binding needs a directory to be meaningful, and which directory it
+gets depends on the execution. When `ExecutionContext.cwd` is set, the binding
+is anchored there and `resolved_path` reports the anchored file. When no
+directory is supplied, the binding is passed through unchanged and the platform
+resolves it: a bare name is looked up on `PATH`, and a relative path with a
+separator is taken as relative to the process's own directory. The bound
+directory is also the one the event reports, so `ExecEvent.cwd` (and its
+`cuprum_cwd` and `cuprum.cwd` projections) carries whatever spelling the caller
+configured, not an anchored form. Prefer an absolute binding when the same file
+must run regardless of where the execution starts.
+
 A resolver must return a `str`. Returning anything else is rejected, because
 `None` is reserved to mean "no binding"; a resolver returning it silently runs
 the catalogued name instead of the executable the caller selected.
