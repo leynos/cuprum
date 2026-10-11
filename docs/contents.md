@@ -85,6 +85,9 @@ open each document.
 - [ADR-018: Typed environment policies][adr-018] - accepted decision to make
   environment inheritance, replacement, and deletion explicit at execution
   boundaries.
+- [ADR-020: Typed argument contract for sh.make builders][adr-020] - accepted
+  decision to replace the `Callable[..., SafeCmd]` annotation with a
+  `SafeCmdBuilder` protocol over a published `ArgValue` alias.
 
 ## Requests for comments
 
@@ -138,6 +141,7 @@ open each document.
 [adr-016]: adr-016-stable-abi-native-wheels.md
 [adr-017]: adr-017-release-pipeline.md
 [adr-018]: adr-018-typed-environment-policies.md
+[adr-020]: adr-020-typed-argument-contract-for-sh-make.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

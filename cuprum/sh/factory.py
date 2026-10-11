@@ -20,9 +20,10 @@ import dataclasses as dc
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProgramCatalogue
 from cuprum.context import current_context
 from cuprum.program import Program
-from cuprum.sh.argv import _ArgValue, build_argv
+from cuprum.sh.argv import ArgValue, build_argv
+from cuprum.sh.builder import SafeCmdBuilder
 from cuprum.sh.execution import ExecutionContext
-from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
+from cuprum.sh.safe_cmd import SafeCmd
 
 __all__ = ["make"]
 
@@ -50,7 +51,7 @@ def _reserved_option_message(name: str) -> str:
     )
 
 
-def _reject_reserved_options(kwargs: dict[str, _ArgValue]) -> None:
+def _reject_reserved_options(kwargs: dict[str, ArgValue]) -> None:
     """Reject the first keyword naming an execution option, in insertion order."""
     for name in kwargs:
         if name in _RESERVED_OPTIONS:
@@ -106,7 +107,9 @@ def make(
     Returns
     -------
     SafeCmdBuilder
-        A callable that builds ``SafeCmd`` instances for ``program``.
+        A callable that builds ``SafeCmd`` instances for ``program``. It
+        accepts the same positional and keyword values the runtime validates:
+        ``str``, ``int``, ``float``, ``bool``, or :class:`pathlib.Path`.
 
     Raises
     ------
@@ -115,7 +118,7 @@ def make(
     """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from catalogue.lookup
     entry = _resolve_catalogue(catalogue).lookup(program)
 
-    def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
+    def builder(*args: ArgValue, **kwargs: ArgValue) -> SafeCmd:
         """Coerce ``args``/``kwargs`` into a ``SafeCmd`` for the program.
 
         Returns
