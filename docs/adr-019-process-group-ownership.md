@@ -559,3 +559,12 @@ earlier addenda asserted — no event and no metric on two routes, rather than n
 event and no metric at all — and it follows from the reporting channel rather
 than from a decision against a metric, which is the part those addenda got
 wrong.
+
+## Addendum (2026-10-11): the reporting helper is renamed
+
+The addendum above names `_report_settlement` as the companion that reports
+what the settlement probe found. The helper is now `_report_teardown`; it is
+`cuprum/_process_signal.py::_report_teardown`, and it delegates to
+`report_group_teardown` in `cuprum/_group_teardown.py`. The earlier text is
+left in place because accepted ADR text is append-only, and the behaviour it
+describes is unchanged.

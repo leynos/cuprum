@@ -24,10 +24,9 @@ if typ.TYPE_CHECKING:
 # pipeline coordinator took about a stage: its non-zero exit was the first
 # failure and every other still-running stage — upstream producer and downstream
 # consumer alike — is about to be torn down. The stage's own ``exit`` event
-# still follows. ``group_teardown`` is different again: it reports that an
-# owning run's teardown ended with members of the child's process group still
-# alive, which is a fact about a run that has already finished rather than a
-# phase of it.
+# still follows. ``group_teardown`` is different again: it reports that the
+# teardown could not establish settlement, on either route, which is a fact
+# about a run that has already finished rather than a phase of it.
 type ExecPhase = typ.Literal[
     "plan",
     "start",
@@ -46,11 +45,14 @@ type ExecPhase = typ.Literal[
 
 
 class GroupTeardownOutcome(enum.StrEnum):
-    """Why an owning teardown ended with members of the group still running.
+    """Why a teardown could not establish settlement.
 
     A closed vocabulary because these values label a metric: an operator
     filters on the set of reasons a group was left behind, so every member is a
     stable, low-cardinality string that no runtime value can reach.
+
+    ``SIGNAL_REFUSED`` is the one outcome emitted on both routes: it reports a
+    signal the kernel refused rather than a count of surviving members.
 
     ``UNSIGNALABLE`` and ``SETTLEMENT_TIMEOUT`` both leave members running, and
     what separates them is what can still be done about it. An unsignalable

@@ -144,11 +144,9 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
         # Drawn independently of the phase, like every other optional field, so
-        # the teardown branch is exercised both with and without each one. That
-        # independence is what lets the oracle below catch a projection that
-        # emits a settle duration on an outcome which measured none: a
-        # generator that only ever produced coherent tuples would agree with
-        # the projection by construction and could not fail.
+        # the teardown branch is exercised both with and without each one. The
+        # oracle checks faithful carriage only; outcome/duration coherence is a
+        # producer claim pinned in ``test_group_teardown_metrics.py``.
         owns_group=draw(st.none() | st.booleans()),
         group_outcome=draw(st.none() | st.sampled_from(GroupTeardownOutcome)),
         settle_s=draw(st.none() | st.floats(min_value=0.0, max_value=30.0)),

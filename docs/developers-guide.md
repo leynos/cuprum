@@ -1568,7 +1568,8 @@ recycle an identifier.
 members exist that this process may not signal: neither the grace period nor
 the escalation could reach them, so waiting longer cannot settle the group and
 the probe reports it as having no reachable members. Those two answers are not
-the same, and only the permission case leaves a member running past teardown.
+the same, and only the permission case leaves a member running past teardown;
+the probe reports that case as `UNSIGNALABLE`.
 `_probe_group` is a query and keeps them apart without judging them: it returns
 `EMPTY` or `UNSIGNALABLE` and leaves both the decision and the diagnostic to
 its caller. The teardown command is where the two are separated — an
@@ -1633,7 +1634,7 @@ wrapper is shared and the default policy is the one that inherits. Both are
 reported through `_group_teardown.py`, which owns the report, the log record,
 and the `group_teardown` observe event together.
 
-The last of those is the subtle one, and the reason `_signal_child_or_report`
+The last of those is the subtle one, and the reason `signal_target_or_report`
 exists as a wrapper rather than the two signal sites each growing their own
 handler. Both ways a signal can fail to arrive reach the caller as the same
 `False` — "nothing left to do here" — so the value itself conflates a teardown
@@ -1670,8 +1671,8 @@ through `_terminate_pipeline_remaining_stages` and
 the entry point holds no settlement condition of its own to audit.
 
 The answer is the probe's three-way `_GroupProbe` rather than a boolean, and
-`_report_settlement` is the companion that reports it. Splitting observation
-from reporting is what keeps the query free of side-effects: a query that logs
+`_report_teardown` is the companion that reports it. Splitting observation
+from reporting is what keeps the query free of side effects: a query that logs
 cannot be asserted on independently of a log capture, and it makes an
 environmental permission failure look like an answer about the group. The
 command boundary calls the two in sequence — query, report, then act on the

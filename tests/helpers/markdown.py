@@ -63,6 +63,13 @@ def _fenced_line_indexes(markdown: str) -> set[int]:
     An opening backtick fence whose info string contains a backtick is not a
     fence either, per the same rule; such a line is ordinary content.
 
+    Indentation is accepted at any width rather than only up to three spaces.
+    Repository documentation nests fenced examples under list items, where
+    CommonMark measures indentation against the item's content indent, so a
+    four-space marker there really is a fence. A top-level four-space marker is
+    indented code to CommonMark, but no document under contract contains one, so
+    narrowing the rule would cost the list-nested case it is parsed for.
+
     Parameters
     ----------
     markdown : str

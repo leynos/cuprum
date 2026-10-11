@@ -176,7 +176,7 @@ def test_a_deadline_expiry_still_reports_what_the_child_printed(
             assert isinstance(expired.output, str), (
                 "a capturing run that expires during stream collection must "
                 "report the output its consumers had already read; a ``None`` "
-                f"payload is indistinguishable from a run that printed nothing; "
+                "payload is indistinguishable from a run that printed nothing; "
                 f"got {expired.output!r}"
             )
             assert _CHILD_MARKER in expired.output, (

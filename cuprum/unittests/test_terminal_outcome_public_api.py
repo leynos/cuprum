@@ -23,23 +23,37 @@ def test_terminal_outcome_is_shared_by_event_and_sink_channels() -> None:
     ]
 
 
+# The slot ``terminal_outcome`` occupied when it was published, and therefore
+# the slot every released caller's positional argument still binds to. A field
+# appended after it leaves this unchanged, which is why new fields may be
+# added freely; an insertion ahead of it moves the index and breaks callers.
+_TERMINAL_OUTCOME_INDEX = 28
+
+
 def test_terminal_outcome_keeps_its_positional_slot() -> None:
     """The category's slot survives the fields appended after it.
 
     ``terminal_outcome`` was appended when it was added, and the assertion here
     used to say "last". "Last" was never the property that mattered: the
     declaration is a public, non-``kw_only`` dataclass, so what a positional
-    caller needs is that the field stays where it was put and that everything
-    added later goes *after* it. Pinning the trailing position instead made
-    every subsequent addition look like a regression here, which is a false
-    signal rather than a caught defect.
+    caller needs is that the field stays at the index it was published at and
+    that everything added later goes *after* it. Pinning the trailing position
+    instead made every subsequent addition look like a regression here, which
+    is a false signal rather than a caught defect.
+
+    The index is pinned exactly rather than as "after ``exec_id``". An ordering
+    between two fields is satisfied by any distance between them, so a field
+    inserted between ``exec_id`` and ``terminal_outcome`` would shift every
+    later positional argument by one and still pass an ordering assertion.
+    ``_TERMINAL_OUTCOME_INDEX`` is what a released caller actually binds to.
     """
     fields = [field.name for field in dc.fields(c.ExecEvent)]
 
     assert "terminal_outcome" in fields, (
         f"the settled category must remain a declared field; got {fields}"
     )
-    assert fields.index("terminal_outcome") > fields.index("exec_id"), (
-        "terminal_outcome must stay after exec_id, or an existing positional "
-        f"caller would bind the category to the correlation token; got {fields}"
+    assert fields.index("terminal_outcome") == _TERMINAL_OUTCOME_INDEX, (
+        "terminal_outcome must keep the slot its positional callers bind to; "
+        f"expected index {_TERMINAL_OUTCOME_INDEX}, got "
+        f"{fields.index('terminal_outcome')} of {len(fields)} fields: {fields}"
     )

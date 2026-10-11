@@ -1187,8 +1187,8 @@ not the default.
 #### Cleanup diagnostics
 
 A teardown reports the outcomes it cannot resolve, so a run that left something
-behind is visible rather than silent. Which records you can receive depends on
-the policy: `cuprum.teardown_signal_failed` is raised under either policy,
+behind is visible rather than silent. The available records depend on the
+policy: `cuprum.teardown_signal_failed` is raised under either policy,
 because a direct child can refuse a signal too, while the two `process_group`
 records can only come from a run that owns its group. Each record goes to the
 `cuprum._group_teardown` logger at `WARNING`:
@@ -1473,8 +1473,9 @@ The hook collects:
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
-- `cuprum_group_teardowns_total`: Counter of owning teardowns that ended with
-  members of the child's group still alive, labelled by `outcome`
+- `cuprum_group_teardowns_total`: Counter incremented for each
+  `group_teardown` event, labelled by `outcome`, including direct-child signal
+  refusals and owning group teardowns
 - `cuprum_group_settle_seconds`: Histogram of how long the capped
   post-`SIGKILL` group wait had run when it expired, observed only on the
   `settlement_timeout` outcome

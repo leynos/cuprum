@@ -60,10 +60,11 @@ class LogLevels:
         otherwise fall through to the unhandled-phase default of DEBUG and be
         invisible in a normal configuration.
     group_teardown_level:
-        Log level for ``group_teardown`` events (an owning teardown ended with
-        the group still holding members). Default WARNING for the same reason
-        as ``fail_fast_level``: every outcome the phase reports left a process
-        running after its run had ended, so each is abnormal by definition.
+        Log level for ``group_teardown`` events (a teardown could not establish
+        settlement). Default WARNING for the same reason as ``fail_fast_level``:
+        unlike the other phases this reports an abnormal outcome, and it would
+        otherwise fall through to the unhandled-phase default of DEBUG and be
+        invisible in a normal configuration.
 
     """
 
