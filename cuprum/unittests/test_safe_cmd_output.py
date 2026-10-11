@@ -310,45 +310,44 @@ def test_allows_disabling_capture(
     assert_capture_disabled(result)
 
 
-def test_strict_decoding_does_not_reach_a_view_with_capture_disabled(
+def test_strict_decoding_still_reaches_a_text_mode_view(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
-    """A strict policy governs the capture, so an uncaptured view cannot raise.
+    """A strict text run still raises from the line reader, base behaviour kept.
 
-    ``errors="strict"`` used to govern every decode, so this run raised
-    ``UnicodeDecodeError`` from the line reader even though it captured
-    nothing. Line observation renders a view of the child's bytes rather than
-    reporting them, so the policy now stops at the capture: the run completes,
-    and the callback receives the replacement character the view renders.
+    ``errors="strict"`` governed every decode before byte mode existed, so this
+    text run raised ``UnicodeDecodeError`` from the line reader even though it
+    captured nothing. The byte-exact mode scopes its replacement policy to
+    byte-mode views alone, so the text-mode behaviour the original contract
+    promised is what this test pins: line observation under a strict policy
+    raises at the first undecodable byte.
 
-    Both halves are asserted. The line is compared against a decoded oracle
-    rather than merely counted, so a callback fed the wrong text — or an empty
-    view — fails, and the run's own completion is what proves no exception
-    escaped the read loop.
+    The payload leads with a complete, valid line, so the callback's emptiness
+    is load-bearing rather than trivial: a strict view must decode a chunk
+    before splitting it, which is what stops a run from publishing text it
+    would then refuse to vouch for.
     """
     _, execute = execution_strategy
-    payload = b"before \xff after"
+    payload = b"complete line\nbefore \xff after"
     command = python_builder(
         "-c",
-        f"import sys; sys.stdout.buffer.write({payload!r})",
+        f"import sys; sys.stdout.buffer.write({payload!r}); sys.stdout.flush()",
     )
     observed: list[LineEvent] = []
 
-    result = execute(
-        command,
-        {
-            "output": RunOutputOptions(capture=False, on_line=observed.append),
-            "context": ExecutionContext(errors="strict"),
-        },
-    )
+    with pytest.raises(UnicodeDecodeError):
+        execute(
+            command,
+            {
+                "output": RunOutputOptions(capture=False, on_line=observed.append),
+                "context": ExecutionContext(errors="strict"),
+            },
+        )
 
-    assert_capture_disabled(result)
-    assert [event.text for event in observed] == payload.decode(
-        "utf-8", errors="replace"
-    ).splitlines(), (
-        "the observer must render the child's decoded view under a strict "
-        f"capture policy, got {observed!r}"
+    assert not observed, (
+        "a strict view must raise at the undecodable byte without publishing "
+        f"any line, got {observed!r}"
     )
 
 

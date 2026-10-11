@@ -70,6 +70,7 @@ def _config(
     *,
     capture: bool = True,
     echo: bool = False,
+    errors: str = "replace",
     read_size: int = _READ_SIZE,
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
@@ -78,7 +79,7 @@ def _config(
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
-        errors="replace",
+        errors=errors,
         read_size=read_size,
     )
 
@@ -553,6 +554,33 @@ def test_byte_exact_echo_survives_a_strict_capture_policy() -> None:
     assert sink.getvalue() == "first\nsecond�\nthird", (
         "the mirror must render the replacement view rather than raise, got "
         f"{sink.getvalue()!r}"
+    )
+
+
+def test_text_mode_echo_still_raises_under_a_strict_capture_policy() -> None:
+    """A strict text run's echo keeps the caller's policy, base behaviour kept.
+
+    The byte-exact replacement view above is scoped to byte mode. A text run
+    that asked to reject undecodable bytes keeps rejecting them, and the echo
+    decoder is one of the decodes that promise covers: the drain raises from
+    the read loop at the invalid chunk rather than mirroring a replacement the
+    caller's policy never sanctioned. The valid prefix arrives first, so the
+    sink's contents also prove the strict view echoed what it could vouch for
+    and then stopped.
+    """
+    sink = io.StringIO()
+
+    with pytest.raises(UnicodeDecodeError):
+        asyncio.run(
+            _consume_stream(
+                _reader((b"first line\n", b"second \xff line\n")),
+                _config(sink, echo=True, errors="strict"),
+            )
+        )
+
+    assert sink.getvalue() == "first line\n", (
+        "the strict mirror must stop at the undecodable chunk, having written "
+        f"only the text it could vouch for, got {sink.getvalue()!r}"
     )
 
 
