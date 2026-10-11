@@ -4175,7 +4175,14 @@ The handle is a package rather than a single module, split by responsibility
 the way the subprocess execution path is split by lifecycle concern:
 
 - `cuprum/_process_handle/state.py` owns `RunningCommand` itself: the owned
-  record, the single settlement, and the public control operations.
+  record and the public control operations, each of which delegates the
+  question of how the run ends rather than answering it locally.
+- `cuprum/_process_handle/settlement.py` owns the single settlement: the one
+  task that drives a run to its end, the record it produced, and the rule
+  deciding which caller hears about a deadline. It is held by the handle rather
+  than derived from it, because the state that matters — which task is driving
+  the run, what it produced, and whether it has run at all — is exactly the
+  state that must not be duplicated.
 - `cuprum/_process_handle/tasks.py` owns the spawn seam: `_HandleRun`, the
   deadline-stripping `_build_handle_execution`, and `_start_handle_run`, which
   spawns the child, emits its `start` event, and reclaims the child if that
