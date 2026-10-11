@@ -1579,27 +1579,41 @@ the answer is the one that owns the reporting.
 
 ### Observability of group teardown
 
-Process-group cleanup is observable through diagnostic log records, not through
-observe events or metrics. That is the deliberate application of the convention
-stated above — private helpers emit diagnostic logs rather than installing a
-global metrics or tracing backend — and it is recorded here because the nearest
-analogous teardown bound *does* have a counter (`capture_eof_grace_expired`
-maps to `cuprum_capture_eof_grace_expired_total`), so an omission without a
-stated reason would read as an oversight.
+Process-group cleanup is observable through diagnostic log records, a
+`group_teardown` execution event, and two metric series. The log record is what
+a developer reads while debugging one run; the event is what an adapter
+consumes, so a teardown that left a process behind becomes a countable series
+rather than a line in a log nobody is tailing. The series are what the metrics
+adapter builds from that event:
 
-The reason is attribution, but it is narrower than "no observation exists". The
-helpers themselves have no `_StageObservation` to emit through, and the routes
-that reach them divide in two. The pipeline fail-fast path *does* carry one —
+- `cuprum_group_teardowns_total`, labelled by the closed `GroupTeardownOutcome`
+  category. The category is what keeps the series bounded — a pid would not be,
+  and is deliberately not a label.
+- `cuprum_group_settle_seconds`, observed only on the `settlement_timeout`
+  outcome. A refusal and an unsignalable group never reached a wait, so a zero
+  recorded for them would drag every percentile toward a figure that was never
+  taken.
+
+The counter is deliberately absent from `_PHASE_COUNTERS` and resolves through
+`_group_teardown_operations` instead, so its name keeps exactly one definition.
+
+What the routes do *not* all have is an observation to report against, and that
+is the attribution limit the event and the metric both inherit. The pipeline
+fail-fast path *does* carry a `_StageObservation` —
 `_terminate_pipeline_remaining_stages` is given a stage index and its caller
-holds the observation it emits `cuprum_terminated_stage_count` through, so a
-per-stage group metric is constructible there. The other routes reach
-`_terminate_all_shielded` from callers that have already abandoned the run, and
-what they would have to hand down is a group signal that belongs to the run
-rather than to any one stage. Since the remaining routes can only report at run
-level while the fail-fast path could report per stage, one metric would mean
-two attributions for one signal, and the three records below already carry what
-an operator needs — whether a group was left holding members this run could not
-reach, and why.
+holds the observation it emits `cuprum_terminated_stage_count` through. The
+spawn-failure and abandoned-run routes reach `_terminate_all_shielded` from
+callers that have already abandoned the run, and what they would have to hand
+down is a group signal that belongs to the run rather than to any one stage.
+They therefore keep the log record alone rather than inventing an attribution;
+`_group_teardown.py` skips the event when no observation is available, and the
+metric is derived from the event, so those two routes reach no counter either.
+
+That omission is per route, not blanket: the log record covers every route, the
+event and the metric cover the routes that can name an execution. The event
+carries the closed `GroupTeardownOutcome` category rather than the record's
+prose, so no pid, error string, or path can reach a metric label, and `settle_s`
+rides along only on the outcome that measured one.
 
 The records, all at WARNING because each one reports an abnormal outcome:
 

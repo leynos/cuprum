@@ -1216,9 +1216,15 @@ The records propagate to the root logger, so an application that configures
 logging receives them with no further setup; with no handler configured,
 Python's last-resort handler still prints them to standard error.
 
-These are diagnostic rather than structured execution telemetry, so they have
-no observe event and no metric alongside them; see the developers' guide for
-why a single attribution across all the routes would not be meaningful.
+Each record is also published as a `group_teardown` observe event when the run
+has an observation to report against, so an adapter can count a failed teardown
+rather than leave it in a log. The event carries a bounded outcome category,
+not the record's prose — the metrics adapter turns that into
+`cuprum_group_teardowns_total{outcome=…}`, plus a `cuprum_group_settle_seconds`
+observation on the settlement timeout alone, which is the only outcome that
+measured a wait. A run that reaches teardown with no execution to report
+against — a spawn failure, or a run already abandoned — keeps the log record
+alone; see the developers' guide for why.
 
 #### Timeout diagnostics
 
@@ -1467,6 +1473,11 @@ The hook collects:
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
+- `cuprum_group_teardowns_total`: Counter of owning teardowns that ended with
+  members of the child's group still alive, labelled by `outcome`
+- `cuprum_group_settle_seconds`: Histogram of how long the capped
+  post-`SIGKILL` group wait had run when it expired, observed only on the
+  `settlement_timeout` outcome
 - `cuprum_resource_usage_measurements_total`: Counter incremented once per
   terminal `exit` event that recorded a `resource_usage_mode`, including
   `unavailable`

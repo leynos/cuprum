@@ -111,7 +111,13 @@
   signal, or a name already handed on — is reported as
   `cuprum.teardown_signal_failed`, naming the signal, so a failed teardown is
   not read as an orderly one; a target that had already gone stays silent, as
-  that race is expected. See [ADR-019](docs/adr-019-process-group-ownership.md)
+  that race is expected. The refusals, an unsignalable group, and a capped
+  post-`SIGKILL` settlement are each published as a `group_teardown` execution
+  event besides the record, carrying a bounded outcome category. The metrics
+  adapter projects that event to `cuprum_group_teardowns_total{outcome}` and,
+  on the settlement timeout alone, a `cuprum_group_settle_seconds` histogram,
+  so a teardown that left a process alive is a countable series. See
+  [ADR-019](docs/adr-019-process-group-ownership.md)
   ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state

@@ -524,3 +524,38 @@ metric is therefore constructible; it is unbuilt, not impossible. The decline
 stands on the narrower ground that the three records already carry the signal
 an operator needs, and that cardinality is a property of a metric's labels
 rather than of how many targets a run reaches.
+
+## Addendum (2026-10-11): group teardown is reported through events and metrics as well as records
+
+Both addenda above are left in place, because accepted ADR text is append-only.
+They are wrong twice over, and both errors are corrected here rather than
+edited: group teardown *is* published as an observe event, and it *is*
+published as a metric. The nearer addendum's closing claim — that a group
+metric is constructible but "unbuilt, not impossible" — is the one this
+addendum most directly reverses, because it is built.
+
+Two series were added in the same change as the event:
+
+- ``cuprum_group_teardowns_total``, labelled by the closed
+  ``GroupTeardownOutcome`` category. That category is what bounds the series;
+  a pid would not be a bounded label and is deliberately not one. The labels
+  are ``program``, ``project``, and ``outcome``.
+- ``cuprum_group_settle_seconds``, a histogram observed only on the
+  ``settlement_timeout`` outcome, which is the one that measured a wait. A
+  refusal and an unsignalable group never reached a wait, so a zero recorded
+  for them would pull every percentile toward a figure that was never taken.
+
+The counter is deliberately absent from the ``_PHASE_COUNTERS`` unit-counter
+mapping and resolves through its own helper, so the metric name keeps exactly
+one definition.
+
+What survives of the attribution argument is a fact about the event, and the
+code implements it: the fail-fast route carries a ``_StageObservation``, and
+the spawn-failure and abandoned-run routes do not, so those two keep the log
+record alone rather than inventing an attribution for a signal that belongs to
+the run rather than to any one stage. The metric is derived from the event, so
+those two routes reach no counter either. That is a narrower omission than the
+earlier addenda asserted — no event and no metric on two routes, rather than no
+event and no metric at all — and it follows from the reporting channel rather
+than from a decision against a metric, which is the part those addenda got
+wrong.
