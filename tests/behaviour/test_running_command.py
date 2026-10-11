@@ -158,9 +158,17 @@ def then_start_reports_failure(observation: HandleObservation) -> None:
 
 @then("the failed start leaves no orphaned child")
 def then_failed_start_leaves_no_child(observation: HandleObservation) -> None:
-    """Assert a start that could not spawn reported no child to own."""
-    assert observation.handle_pid is None, (
-        "a start that never spawned must not report a child's PID"
+    """Assert the failed start left no process behind to own.
+
+    The handle reports no PID for a start that failed, so its own fields cannot
+    witness a leak: a PID field that is structurally ``None`` passes whatever
+    the library does. What the step reads instead is the test process's own
+    children, compared across the attempt — a spawn that leaked would appear
+    there, and a start that never reached its spawn would not.
+    """
+    assert not observation.spawned_children, (
+        "a start that failed before its child existed must leave no process "
+        f"behind, got child PIDs {sorted(observation.spawned_children)}"
     )
 
 

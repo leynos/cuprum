@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import os
+import pathlib
+import sys
 import typing as typ
 
 from cuprum import sh
@@ -50,6 +53,7 @@ __all__ = [
     "_ready_child",
     "_reaped",
     "_sleep_command",
+    "live_child_pids",
 ]
 
 #: Marker the delayed writer emits, so its scenario can assert the settlement
@@ -112,6 +116,12 @@ class HandleObservation:
         Whether the child had gone by the time the scenario finished. Checked
         rather than assumed, so a leaked child fails its scenario instead of
         being left behind.
+    spawned_children : frozenset[int]
+        The child PIDs that appeared during the scenario, derived by comparing
+        the test process's children before and after it. A scenario whose
+        spawn must not happen asserts this is empty; a handle that reports no
+        PID for a start that failed gives its own fields no way to witness a
+        leak, so this reads the system instead.
     """
 
     result: CommandResult | None = None
@@ -121,6 +131,7 @@ class HandleObservation:
     exec_id: ExecId | None = None
     child_was_live: bool = False
     child_reaped: bool = False
+    spawned_children: frozenset[int] = frozenset()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -289,3 +300,71 @@ async def _reaped(pid: int | None, timeout: float = _READY_TIMEOUT) -> bool:
     if pid is None:
         return False
     return await _poll_until(lambda: not process_is_running(pid), timeout)
+
+
+def live_child_pids() -> frozenset[int]:
+    """Return the PIDs this process currently has as direct children.
+
+    A start that fails before a child exists reports no PID, so the handle's
+    own fields cannot witness whether one leaked. This is the fact that can:
+    the children of this test process, read from procfs, before and after the
+    attempt. A run that spawned and abandoned a child differs between the two
+    readings; a run that never spawned one does not.
+
+    Returns
+    -------
+    frozenset[int]
+        The direct child PIDs, empty on a host without procfs — where the
+        comparison is then vacuous and the behaviour tests are already
+        Linux-scoped.
+    """
+    if sys.platform != "linux":
+        return frozenset()
+    own_pid = os.getpid()
+    children: set[int] = set()
+    try:
+        entries = tuple(pathlib.Path("/proc").iterdir())
+    except OSError:
+        return frozenset()
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8")
+        except OSError:
+            # The process exited between the listing and this read; it was
+            # never reported, because it is no longer running to report.
+            continue
+        parent_pid = _parent_pid_from_stat(stat)
+        if parent_pid == own_pid:
+            children.add(pid)
+    return frozenset(children)
+
+
+def _parent_pid_from_stat(stat: str) -> int | None:
+    """Return the parent PID recorded in a procfs ``stat`` line, if it has one.
+
+    The parent PID follows the ``comm`` field, which is parenthesised and may
+    itself contain spaces and parentheses — a process may name itself
+    ``foo) bar``. The parse therefore starts after the *final* ``)`` rather
+    than counting fields from the start, where a name containing a delimiter
+    would put the reading on the wrong field.
+
+    Returns
+    -------
+    int | None
+        The parent PID, or ``None`` when the line is too short to carry one.
+    """
+    closing = stat.rfind(")")
+    if closing < 0:
+        return None
+    try:
+        # After the name, the first field is the state and the second is the
+        # parent PID; unpacking rejects a line too short to carry them.
+        _state, parent_pid_field = stat[closing + 1 :].split()[:2]
+    except ValueError:
+        return None
+    if not parent_pid_field.isdigit():
+        return None
+    return int(parent_pid_field)

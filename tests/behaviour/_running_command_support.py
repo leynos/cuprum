@@ -30,6 +30,7 @@ from tests.behaviour._running_command_children import (
     ReadyChild,
     _reaped,
     _wait_for_ready,
+    live_child_pids,
 )
 
 if typ.TYPE_CHECKING:
@@ -109,18 +110,35 @@ def _observe_output_wait(command: SafeCmd) -> HandleObservation:
 
 
 def _observe_failed_start(command: SafeCmd) -> HandleObservation:
-    """Start a program that is not on disk and carry out the failure."""
+    """Start a program that is not on disk and carry out the failure.
+
+    A failed start reports no PID — there is no child to report — so the PID
+    field carries no evidence about orphans. What does carry evidence is the
+    set of processes this test process has as children: it is sampled before
+    the attempt and again after, and a spawn that leaked would leave the before
+    set a strict subset of the after set.
+
+    Returns
+    -------
+    HandleObservation
+        The failure the spawn raised, and the child PIDs that appeared while
+        the attempt ran.
+    """
 
     async def orchestrate() -> HandleObservation:
         """Carry out whatever failure the absent executable's spawn raises."""
+        before = live_child_pids()
         try:
             await _start_owned(command)
         except (FileNotFoundError, OSError) as failure:
             # Carried out rather than handled: which failure reaches the caller
             # is the scenario's subject, so it must not be absorbed here. The
             # set is the spawn failures a missing executable can produce.
-            return HandleObservation(error=failure)
-        return HandleObservation()
+            return HandleObservation(
+                error=failure,
+                spawned_children=live_child_pids() - before,
+            )
+        return HandleObservation(spawned_children=live_child_pids() - before)
 
     return asyncio.run(orchestrate())
 
