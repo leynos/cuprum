@@ -27,14 +27,17 @@ if typ.TYPE_CHECKING:
 class _ShModule(typ.Protocol):
     """Structural view of the ``cuprum.sh`` members reached lazily.
 
-    Only the two constructors below are accessed through :func:`_sh_module`
-    (``CommandResult`` in ``cuprum._subprocess_execution`` and
-    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``), so naming them
-    keeps the lazy-import shim typed without reintroducing the import cycle.
+    Only the three names below are accessed through :func:`_sh_module`
+    (``CommandResult`` in ``cuprum._subprocess_execution``,
+    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``, and
+    ``StdinSourceError`` in ``cuprum._subprocess_stdin_errors``), so naming
+    them keeps the lazy-import shim typed without reintroducing the import
+    cycle.
     """
 
     CommandResult: type[CommandResult]
     TimeoutExpired: type[TimeoutExpired]
+    StdinSourceError: type[Exception]
 
 
 def _sh_module() -> _ShModule:

@@ -24,6 +24,7 @@ from cuprum import Program, TimeoutExpired, sh
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
+    _ConsumerPair,
     _drain_stream_consumers,
     _DrainContext,
 )
@@ -152,9 +153,7 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
         grace_started = asyncio.Event()
         grace_release = asyncio.Event()
 
-        async def wait_at_grace(
-            _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-        ) -> None:
+        async def wait_at_grace(_consumers: _ConsumerPair) -> None:
             """Expose the exact grace boundary without relying on elapsed time."""
             grace_started.set()
             await grace_release.wait()

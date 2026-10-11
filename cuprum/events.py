@@ -13,6 +13,8 @@ import enum
 import typing as typ
 import uuid
 
+from cuprum.stdio_events import StdioFailureCategory
+
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
@@ -34,6 +36,7 @@ type ExecPhase = typ.Literal[
     "settled",
     "stdin",
     "stdin_error",
+    "stdio_error",
     "timeout",
     "teardown_error",
     "capture_eof_grace_expired",
@@ -155,6 +158,20 @@ class ExecEvent:
         exception propagates unchanged: no ``exit`` event follows and no
         ``TimeoutExpired`` is raised, so an ancillary diagnostic may be the
         last event a consumer sees for that execution.
+
+        ``stdio_error`` is the best-effort counterpart to ``stdin_error`` for
+        the standard-stream boundaries that fail *outside* the stdin writer's
+        own pipe operations: the caller's producer, an invalid chunk, the
+        encoder, opening a cuprum-owned target file, and flushing a caller's
+        borrowed file object. It is emitted where the failing boundary is
+        known, and never in place of the caller-visible exception — a producer
+        failure still raises ``StdinSourceError`` with the producer's own
+        exception chained, and a failed owned-path open still raises the
+        ``OSError`` :func:`~cuprum._stdio_plan._open_owned_path` builds. It
+        carries ``error_category`` rather than an exception message, because
+        several of these boundaries raise the same exception type and the
+        category is what separates them.
+
     program:
         The allowlisted program that is executing.
     argv:
@@ -286,6 +303,15 @@ class ExecEvent:
         failure and cannot tell it apart from an overlay run. ``None`` only on
         legacy or manually constructed events; the execution paths always
         resolve a mode.
+    error_category:
+        Bounded category naming which failure boundary produced a diagnostic
+        event. See :class:`~cuprum.stdio_events.StdioFailureCategory`, also
+        re-exported here. Carried on ``stdio_error``; ``None`` for every other
+        phase, including the pre-existing ``stdin_error`` events, whose
+        ``operation`` already names its boundary. It is a typed field rather
+        than part of ``note`` because ``error_type`` cannot carry it, and the
+        value is low-cardinality, so it is the one failure attribute safe to
+        attach to a metric series.
 
     New optional fields are appended to the end of the declaration to preserve
     existing positional argument slots. In particular, inserting one ahead of
@@ -327,6 +353,7 @@ class ExecEvent:
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
     terminal_outcome: TerminalOutcome | None = None
+    error_category: StdioFailureCategory | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
@@ -338,6 +365,7 @@ __all__ = [
     "ExecId",
     "ExecPhase",
     "ResourceUsageMode",
+    "StdioFailureCategory",
     "TerminalOutcome",
     "TimeoutMode",
     "new_exec_id",

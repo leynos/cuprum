@@ -19,6 +19,7 @@ from cuprum.events import (
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
     TimeoutMode,
     new_exec_id,
@@ -97,6 +98,10 @@ class _EventDetails:
     user_cpu_seconds: float | None = None
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
+    # Appended after ``resource_usage_mode`` for the reason ``ExecEvent``
+    # documents: a positional construction would otherwise rebind the field
+    # ahead of it. Only the ``stdio_error`` diagnostics set this.
+    error_category: StdioFailureCategory | None = None
 
 
 @dc.dataclass(slots=True)
@@ -176,6 +181,7 @@ class _StageObservation:
             system_cpu_seconds=details.system_cpu_seconds,
             resource_usage_mode=details.resource_usage_mode,
             env_mode=self.env_mode,
+            error_category=details.error_category,
         )
         self._emit_event(event)
 
@@ -236,6 +242,9 @@ class _StageObservation:
             # needs it: whether the failing stage ran under a replacement
             # boundary is the first thing that explains a missing ``PATH``.
             env_mode=self.env_mode,
+            # A decision about a teardown has no failing stdio boundary of its
+            # own; the stage's ``exit`` event that follows carries the fault.
+            error_category=None,
         )
         self._emit_event(event)
 

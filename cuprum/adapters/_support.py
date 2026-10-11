@@ -43,23 +43,58 @@ def _event_common_fields(
     if event.cwd is not None:
         # A ``Path``, rendered rather than passed through.
         yield name("cwd"), str(event.cwd)
-    if event.resource_usage_mode is not None:
-        # A ``StrEnum``, rendered for the same reason: ``str`` yields the
-        # member's value, and every transport this projection feeds — the log
-        # extras, the span attributes, and the metric label — must carry the
-        # plain string operators key on, not the member's ``repr``.
-        yield name("resource_usage_mode"), str(event.resource_usage_mode)
-    if event.env_mode is not None:
-        # Also a ``StrEnum``, and rendered for the same reason. The mode names
-        # the policy, never the environment: a replacement run whose child
-        # failed to resolve a bare program name is indistinguishable from an
-        # overlay one without it, and its values are a fixed set of three.
-        yield name("env_mode"), str(event.env_mode)
-    if event.terminal_outcome is not None:
-        yield name("terminal_outcome"), str(event.terminal_outcome)
+    for field, value in _rendered_enum_fields(event):
+        if value is not None:
+            yield name(field), value
     for field, value in _verbatim_fields(event):
         if value is not None:
             yield name(field), value
+
+
+def _rendered_enum_fields(
+    event: ExecEvent,
+) -> tuple[tuple[str, object], ...]:
+    """Return every ``StrEnum`` field of the common projection, rendered.
+
+    Grouped rather than inlined because they share one reason to be here.
+    ``str`` on these yields the member's value, and every transport this
+    projection feeds — the log extras, the span attributes, and the metric
+    label — must carry the plain string operators key on rather than the
+    member's ``repr``. Their values are closed sets chosen by cuprum, never
+    caller strings, which is what makes them safe to use as labels.
+
+    Returns
+    -------
+    tuple[tuple[str, object], ...]
+        Each field's name, paired with its rendered value or ``None`` when
+        the event carries no such field. The caller applies the shared
+        omit-when-``None`` policy.
+    """
+    # Each present only when the event records one. The resource mode names
+    # where a figure was measured; the env mode names the policy, never the
+    # environment, because a replacement run whose child failed to resolve a
+    # bare program name is indistinguishable from an overlay one without it;
+    # the error category separates two standard-stream boundaries that raise
+    # the same exception class, so a consumer must read the value rather than
+    # the ``repr`` — it is ``None`` on every phase but ``stdio_error``, and
+    # the adapters that emit it keep their own narrower field set.
+    return (
+        (
+            "resource_usage_mode",
+            None
+            if event.resource_usage_mode is None
+            else str(event.resource_usage_mode),
+        ),
+        ("env_mode", None if event.env_mode is None else str(event.env_mode)),
+        (
+            "error_category",
+            None if event.error_category is None else str(event.error_category),
+        ),
+        (
+            "terminal_outcome",
+            None if event.terminal_outcome is None else str(event.terminal_outcome),
+        ),
+    )
 
 
 def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:

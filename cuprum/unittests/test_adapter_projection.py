@@ -26,6 +26,7 @@ from cuprum.events import (
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
     new_exec_id,
 )
@@ -41,6 +42,7 @@ _PHASES = typ.get_args(ExecPhase.__value__)
 # attributes.
 _ANCILLARY_PHASES = {
     "stdin_error": "write",
+    "stdio_error": "produce",
     "timeout": "wait",
     "teardown_error": "drain",
     "capture_eof_grace_expired": "drain",
@@ -72,6 +74,7 @@ class TestAdapterProjection:
         is_output = phase in {"stdout", "stderr"}
         is_timeout = phase == "timeout"
         is_grace_expiry = phase == "capture_eof_grace_expired"
+        is_stdio_error = phase == "stdio_error"
         is_fail_fast = phase == "pipeline_fail_fast"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
@@ -95,6 +98,7 @@ class TestAdapterProjection:
             error_type="TimeoutError"
             if is_timeout
             else ("ValueError" if ancillary and not is_grace_expiry else None),
+            error_category=(StdioFailureCategory.PRODUCER if is_stdio_error else None),
             note="consumer drain failed: ValueError"
             if phase == "teardown_error"
             else None,
@@ -220,6 +224,25 @@ class TestAdapterProjection:
             )
             assert tracing_attributes.get("cuprum.terminal_outcome") == "exit_zero", (
                 "settled tracing snapshots must expose the terminal category"
+            )
+        if phase == "stdio_error":
+            # The boundary category is the whole point of the phase, so it is
+            # asserted semantically as well as snapshotted: a regression that
+            # dropped it would leave the record naming "a write failed" without
+            # saying which of the boundaries sharing an exception class did.
+            assert logging_extra.get("cuprum_error_category") == "producer", (
+                "stdio-failure records must name the failing boundary"
+            )
+            span_event = projections["tracing_span_event"]
+            assert span_event is not None, (
+                "a stdio_error must reach the tracer as a span event, not as "
+                "a suppressed attribute on an unrelated surface"
+            )
+            assert span_event.get("error_category") == "producer", (
+                "span events must name the failing boundary"
+            )
+            assert set(projections["metrics_labels"]) == {"program", "project"}, (
+                "the boundary category must not become a common metric label"
             )
         assert projections == snapshot, (
             "per-phase adapter projections must match the redacted wire-contract "

@@ -65,6 +65,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "stdout": "cuprum_stdout_lines_total",
     "stderr": "cuprum_stderr_lines_total",
     "stdin_error": "cuprum_stdin_errors_total",
+    "stdio_error": "cuprum_stdio_errors_total",
     "timeout": "cuprum_timeouts_total",
     "teardown_error": "cuprum_teardown_errors_total",
     "capture_eof_grace_expired": "cuprum_capture_eof_grace_expired_total",
@@ -208,11 +209,39 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
         case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
             # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
             # than repeated as a literal alternation, so the metric names have
-            # exactly one definition.
-            labels = _env_mode_label(event) if phase in _ENV_MODE_PHASES else {}
-            return (_CounterOp(counter_name, 1.0, labels),)
+            # exactly one definition. ``stdio_error`` is one of them, and what
+            # distinguishes it is its label rather than its name, so it is the
+            # label that is decided per phase.
+            return (_CounterOp(counter_name, 1.0, _phase_labels(event)),)
         case _:
             raise _UnhandledMetricsPhaseError(phase)
+
+
+def _phase_labels(event: ExecEvent) -> cabc.Mapping[str, str]:
+    """Return the extra labels this phase's counter carries, if any.
+
+    Two phases carry one and the rest carry none, for the same reason: a
+    label multiplies every series its counter produces, so it is worth adding
+    only when an operator needs to filter on it. The environment mode
+    describes the execution as a whole, and the event's phase is the only
+    place it is known; the boundary category is the whole reason a
+    ``stdio_error`` is counted separately, and it is a bounded set chosen by
+    cuprum rather than anything a caller supplies.
+
+    Returns
+    -------
+    collections.abc.Mapping[str, str]
+        The label mapping, empty for a phase that carries none and for an
+        event that records no value for the one its phase would carry, so a
+        hand-built event never fabricates a label.
+    """
+    if event.phase == "stdio_error":
+        if event.error_category is None:
+            return {}
+        return {"error_category": str(event.error_category)}
+    if event.phase in _ENV_MODE_PHASES:
+        return _env_mode_label(event)
+    return {}
 
 
 __all__ = [

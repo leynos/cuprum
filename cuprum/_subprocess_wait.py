@@ -2,13 +2,19 @@
 
 Split from ``cuprum._subprocess_execution`` so the runner module is about
 orchestration — spawning, wiring streams, assembling the result — while the
-rules for *ending* a run live here: how a deadline is applied, when the
-process is terminated, and how the stream consumers are drained exactly once.
+rules for *ending* a run live here: how the stream consumers are drained
+exactly once, how a stdin writer's failure is raced against the exit wait, and
+how the stdin writer is cancelled alongside them.
 
-Termination goes through ``_terminate_all_shielded`` rather than
-``_terminate_process`` directly, so a caller cancelling during the grace
-period cannot skip the ``SIGKILL`` escalation and strand a child. The task
-reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
+The other halves of ending a run — how long to wait for the child, what a
+deadline expiry does to it, and which exception a cancelled wait raises — are
+``cuprum._subprocess_deadline``'s; and the race that ends a run on a stdin
+failure rather than on the child's exit is ``cuprum._subprocess_rendezvous``'s.
+This module imports the helpers it needs from both and re-exports them, so the
+split stays an internal arrangement: ``cuprum._subprocess_wait`` remains the
+one import path for every caller and for the test suite's monkeypatch seams.
+
+The task reconciliation a run ends with is owned by ``_reconcile_run_tasks``
 so its callers can run it under ``_shielded_cleanup`` as one unit.
 """
 
@@ -19,26 +25,24 @@ import collections.abc as cabc
 import contextlib
 import dataclasses as dc
 import logging
-import time
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._process_exit import _await_process_exit
-from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._subprocess_deadline import (
+    _wait_for_exit_code,
+    _wait_for_exit_code_within_timeout,
+)
+from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
 from cuprum._subprocess_stdin import _cancel_stdin_writer
-from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
     _report_capture_eof_grace_expiry,
     _report_teardown_drain_failure,
-    _report_timeout_expiry,
 )
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._streams import _RelayDiagnostics
-    from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum.sh import ExecutionContext
 
 
 # A capturing drain gives readers a short bounded chance to observe the EOF
@@ -47,10 +51,7 @@ if typ.TYPE_CHECKING:
 _CAPTURE_EOF_GRACE_S = 0.25
 _DRAIN_LOGGER = logging.getLogger(__name__)
 
-type _EofGraceWaiter = cabc.Callable[
-    [tuple[asyncio.Task[str | None], asyncio.Task[str | None]]],
-    cabc.Awaitable[object],
-]
+type _EofGraceWaiter = cabc.Callable[[_ConsumerPair], cabc.Awaitable[object]]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -75,81 +76,69 @@ class _RunTaskOwnership:
     """
 
     stdin_task: asyncio.Task[None] | None
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+    consumers: _ConsumerPair
     discard_on_cancel: asyncio.Event
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
     idle: _IdleMonitor | None = None
 
 
-async def _await_eof_grace(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-) -> None:
+# A run's two consumers, in stdout-then-stderr order. A ``None`` slot is a
+# stream cuprum holds no pipe for — a redirected one — and carries no task,
+# because attaching a reader to a descriptor the library does not own is the
+# one thing the spawn layer must never do.
+type _Consumer = asyncio.Task[str | None] | None
+type _ConsumerPair = tuple[_Consumer, _Consumer]
+
+
+def _consumer_awaitable(
+    task: _Consumer,
+) -> asyncio.Task[str | None] | asyncio.Future[str | None]:
+    """Return a settled stand-in for a stream that has no consumer task.
+
+    :func:`_settle_consumers` gathers its inputs positionally — index ``0`` is
+    stdout's result, index ``1`` is stderr's — so a stream cuprum holds no pipe
+    for must still contribute a slot rather than being filtered out, which
+    would shift the stderr result into stdout's place. A future resolved to
+    ``None`` is indistinguishable from a consumer that captured nothing, which
+    is what such a stream reports anyway: :func:`_decode_consumer_result` maps
+    ``None`` to the empty string for a capturing run and to ``None`` for a
+    drain that discards output.
+
+    Returns
+    -------
+    asyncio.Task[str | None] | asyncio.Future[str | None]
+        The task itself when there is one, otherwise a future already settled
+        to ``None`` so the gather still sees a slot for this stream.
+    """
+    if task is not None:
+        return task
+    future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+    future.set_result(None)
+    return future
+
+
+async def _await_eof_grace(consumers: _ConsumerPair) -> None:
     """Give readers the production-bounded opportunity to observe EOF."""
-    await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+    await asyncio.wait(
+        [task for task in consumers if task is not None],
+        timeout=_CAPTURE_EOF_GRACE_S,
+    )
 
 
 def _cancel_pending_consumers(
-    consumers: tuple[asyncio.Task[str | None], ...],
+    consumers: tuple[_Consumer, ...],
 ) -> None:
     """Cancel each consumer task that has not already completed."""
     # Finished readers keep their captured output; only tasks still blocked
     # after process termination (or on cancellation) are cancelled, so cleanup
     # cannot hang on a reader wedged on a pipe that never reached EOF.
     for task in consumers:
-        if not task.done():
+        if task is not None and not task.done():
             task.cancel()
 
 
-async def _wait_for_exit_code(
-    process: asyncio.subprocess.Process,
-    ctx: ExecutionContext,
-) -> tuple[int, float]:
-    """Wait for a subprocess exit code, terminating it on expiry or cancel.
-
-    Waiting for the exit code is this helper's sole responsibility. Any stream
-    consumers belong to the caller, which drains them exactly once when the wait
-    fails (see :func:`_run_subprocess_with_streams`); terminating the process
-    here lets those consumers reach EOF during that drain.
-
-    Callers also own the deadline: wrap the call in ``async with
-    asyncio.timeout(...)`` to bound the wait. A deadline expiry cancels this
-    task, so it arrives here as :class:`asyncio.CancelledError` and is torn
-    down identically to an externally requested cancellation. The enclosing
-    ``asyncio.timeout`` block re-raises expiry as :class:`TimeoutError` once the
-    teardown re-raises, while a genuine external cancellation propagates
-    unchanged.
-
-    Returns
-    -------
-    tuple[int, float]
-        The process exit code and the ``perf_counter`` timestamp of exit.
-
-    Raises
-    ------
-    asyncio.CancelledError
-        If the wait is cancelled, whether by a caller's deadline expiring or
-        by an external cancellation. The process is terminated first.
-    """
-    try:
-        exit_code = await _await_process_exit(process)
-    except asyncio.CancelledError:
-        # A deadline expiry (via asyncio.timeout) and an external cancellation
-        # both surface here as CancelledError and need the same teardown:
-        # terminate the process so the caller's drain can reach EOF, then
-        # re-raise so the cancellation can propagate.
-        #
-        # Shielded, because this teardown is itself interruptible. A deadline
-        # expiry has already consumed one cancellation, so the caller's next
-        # ``cancel()`` lands on the grace-period wait here and would skip the
-        # ``SIGKILL`` escalation, leaving a ``SIGTERM``-immune child running.
-        await _terminate_all_shielded((process,), ctx.cancel_grace)
-        raise
-    exited_at = time.perf_counter()
-    return exit_code, exited_at
-
-
 async def _drain_stream_consumers(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    consumers: _ConsumerPair,
     context: _DrainContext,
 ) -> tuple[str | None, str | None]:
     """Cancel pending consumers, drain them once, and decode their output.
@@ -186,7 +175,7 @@ async def _drain_stream_consumers(
 
 
 async def _await_capture_eof_grace(
-    consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+    consumers: _ConsumerPair,
     context: _DrainContext,
 ) -> None:
     """Give capturing consumers their bounded opportunity to reach EOF."""
@@ -198,7 +187,7 @@ async def _await_capture_eof_grace(
                 consumers, discard_on_cancel=context.discard_on_cancel
             )
         raise
-    pending_count = sum(not task.done() for task in consumers)
+    pending_count = sum(task is not None and not task.done() for task in consumers)
     if pending_count:
         _DRAIN_LOGGER.debug(
             "capture_eof_grace_expired pending_readers=%s",
@@ -260,81 +249,28 @@ def _decode_consumer_result(
 
 
 async def _settle_consumers(
-    consumers: tuple[asyncio.Task[str | None], ...],
+    consumers: tuple[_Consumer, ...],
     *,
     discard_on_cancel: asyncio.Event | None = None,
 ) -> list[str | BaseException | None]:
-    """Cancel unfinished consumers and drain every result once."""
-    if discard_on_cancel is not None:
-        discard_on_cancel.set()
-    _cancel_pending_consumers(consumers)
-    return await asyncio.gather(*consumers, return_exceptions=True)
+    """Cancel unfinished consumers and drain every result once.
 
-
-async def _wait_for_exit_code_within_timeout(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> tuple[int, float]:
-    """Await the exit code under ``execution.timeout``, or unbounded when ``None``.
-
-    A non-positive timeout denotes an already-elapsed deadline. ``asyncio.timeout``
-    would only schedule its cancellation for the next event-loop iteration, so a
-    fast, already-exited process whose ``wait()`` never suspends would race past
-    it and return successfully. To keep ``run(timeout=0)`` deterministic — and to
-    preserve the behaviour of the ``asyncio.wait_for`` implementation this
-    replaced — a non-positive deadline expires immediately: the deadline wait
-    is skipped, so the process is never given the chance to exit on its own,
-    but terminating it still awaits its actual exit before
-    :class:`TimeoutError` is raised.
-
-    Stream consumers belong to the caller, which drains them exactly once via
-    :func:`_drain_stream_consumers`; terminating the process here lets those
-    consumers reach EOF during that drain.
-
-    Both expiry routes emit a structured ``cuprum.timeout`` log record and a
-    best-effort ``timeout`` observe event tagged with the timeout mode
-    (``"non_positive_immediate"`` versus ``"elapsed_deadline"``) before the
-    :class:`TimeoutError` propagates; both are best-effort and cannot mask the
-    timeout.
+    A stream cuprum holds no pipe for contributes a settled ``None`` rather
+    than being skipped, which keeps each result in its own stream's position.
 
     Returns
     -------
-    tuple[int, float]
-        The process exit code and the ``perf_counter`` timestamp of exit,
-        as produced by :func:`_wait_for_exit_code`.
-
-    Raises
-    ------
-    TimeoutError
-        If ``execution.timeout`` is non-positive, denoting an
-        already-elapsed deadline; the process is terminated first.
+    list[str | BaseException | None]
+        One settled entry per input, in input order: the captured text, the
+        exception a consumer raised, or ``None`` for a stream with no consumer.
     """
-    timeout = execution.timeout
-    if timeout is not None and timeout <= 0:
-        # Shielded for the same reason as the cancellation branch above: a
-        # caller cancelling here would otherwise skip the reap.
-        await _terminate_all_shielded((process,), execution.ctx.cancel_grace)
-        _report_timeout_expiry(
-            execution.observation,
-            pid=process.pid,
-            configured_timeout=timeout,
-            mode="non_positive_immediate",
-        )
-        raise TimeoutError
-    try:
-        async with asyncio.timeout(timeout):
-            return await _wait_for_exit_code(process, execution.ctx)
-    except TimeoutError as exc:
-        # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
-        # _wait_for_exit_code has already terminated the process, and the caller
-        # drains the stream consumers exactly once.
-        _report_timeout_expiry(
-            execution.observation,
-            pid=process.pid,
-            configured_timeout=_require_timeout(timeout, exc),
-            mode="elapsed_deadline",
-        )
-        raise
+    if discard_on_cancel is not None:
+        discard_on_cancel.set()
+    _cancel_pending_consumers(consumers)
+    return await asyncio.gather(
+        *(_consumer_awaitable(task) for task in consumers),
+        return_exceptions=True,
+    )
 
 
 async def _reconcile_run_tasks(
@@ -381,12 +317,20 @@ __all__ = [
     "_RunTaskOwnership",
     "_await_capture_eof_grace",
     "_await_eof_grace",
+    # Re-exported from ``cuprum._subprocess_rendezvous``, which owns the race
+    # that ends a run on a stdin failure. Kept in this module's namespace so
+    # the single-command run, the line-stream coordinator, and the timeout test
+    # modules keep one import path. Sorted into place, not grouped, because the
+    # repository's linter requires this list to stay isort-ordered.
+    "_await_exit_or_writer_failure",
     "_cancel_pending_consumers",
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
     "_report_drain_failures",
     "_settle_consumers",
+    # Re-exported from ``cuprum._subprocess_deadline``, which owns the child's
+    # exit wait, for the same one-import-path reason as the name above.
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

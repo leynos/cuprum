@@ -15,9 +15,12 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin import _settle_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
+    _consumer_awaitable,
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
@@ -35,11 +38,24 @@ async def _wait_for_streamed_process_exit(
     tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
+    """Wait for the exit or a stdin failure, reconciling when that wait fails.
+
+    The stdin writer runs alongside the exit wait, so a producer that fails
+    ends the run there rather than after the child's own exit — see
+    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
+    Whatever that race raises — a deadline expiry, a producer failure, a
+    cancellation — lands in the handlers below, which already reconcile every
+    stream task before the error propagates.
+
+    Returns
+    -------
+    tuple[int, float]
+        The exit code and exit timestamp, as produced by the race.
+    """
     try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        return await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            tasks.stdin_task,
         )
     except TimeoutError as exc:
         # The process has been terminated; cancel the stdin writer and drain the
@@ -99,7 +115,7 @@ async def _await_stdin_writer_and_reconcile_consumers(
     if tasks.stdin_task is None:
         return
     try:
-        await tasks.stdin_task
+        await _settle_stdin_writer(tasks.stdin_task)
     except BaseException:
         await _shielded_cleanup(
             _drain_stream_consumers(
@@ -161,7 +177,10 @@ async def _run_subprocess_with_streams(
     )
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
+            process,
+            execution.stdio.stdin,
+            _stdin_codec(execution.ctx),
+            execution.observation,
         ),
         consumers=_spawn_stream_consumers(
             process,
@@ -183,16 +202,37 @@ async def _run_subprocess_with_streams(
     # long after its parent is gone.
     await _stop_idle_monitor(execution.idle)
     await _await_stdin_writer_and_reconcile_consumers(tasks, execution, pid)
+    stdout_text, stderr_text = await _gather_consumer_output(tasks, execution, pid)
+    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
+
+
+async def _gather_consumer_output(
+    tasks: _RunTaskOwnership,
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> tuple[str | None, str | None]:
+    """Join the consumers' output, reconciling them if the join fails.
+
+    ``gather`` re-raises the first failure and leaves its sibling running, so a
+    reader wedged on a pipe would outlive the run it belonged to. The drain on
+    that path absorbs what it finds and cancels the survivor, which is right
+    while another error is propagating — and here the consumer failure *is*
+    that error.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        The captured stdout and stderr text, in that order. Either is ``None``
+        when that stream was not captured or had no consumer, which is what
+        ``gather`` yields for it.
+    """
     try:
-        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+        stdout_text, stderr_text = await asyncio.gather(
+            *(_consumer_awaitable(task) for task in tasks.consumers)
+        )
         for diagnostics in tasks.relay_diagnostics:
             diagnostics.settle()
     except BaseException:
-        # `gather` re-raises the first failure and leaves its sibling running,
-        # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
-        # drain absorbs what it finds, which is right while another error is
-        # propagating — and here the consumer failure *is* that error.
         await _shielded_cleanup(
             _drain_stream_consumers(
                 tasks.consumers,
@@ -205,7 +245,7 @@ async def _run_subprocess_with_streams(
             )
         )
         raise
-    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
+    return stdout_text, stderr_text
 
 
 __all__ = [
