@@ -3,15 +3,17 @@
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
 run — applying the deadline and terminating the process — live in
-``cuprum._subprocess_wait``, which shares the second half of that job with
-``cuprum._subprocess_drain``: draining the stream consumers exactly once. The
-streamed run loop that waits for exit and reconciles the consumer tasks lives
-in ``cuprum._subprocess_stream_run``, and the consumer construction those two
-drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
-importers of this module keep working unchanged. Timing and child resource
-usage are measured here, with ``cuprum._wait4_process`` owning the direct
-child's ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps
-the three pre-spawn readings together so their shared ordering cannot drift.
+``cuprum._subprocess_wait``. What happens to the tasks a run leaves behind —
+draining the stream consumers exactly once and reconciling every task the run
+still owns — lives in ``cuprum._subprocess_drain``, whose
+``_reconcile_run_tasks`` is the single unit both halves run inside. The
+streamed run loop that invokes those helpers, and the consumer construction it
+drives, live in ``cuprum._subprocess_stream_run`` and
+``cuprum._subprocess_streams``; both are re-exported here so importers of this
+module keep working unchanged. Timing and child resource usage are measured
+here, with ``cuprum._wait4_process`` owning the direct child's ``wait4`` reap
+and the aggregate fallback; ``_DirectRunStart`` keeps the three pre-spawn
+readings together so their shared ordering cannot drift.
 """
 
 from __future__ import annotations
