@@ -224,14 +224,16 @@ likelihood, and mitigation.
   existed; they are now in
   `cuprum/unittests/test_stdio_descriptor_sentinels.py` (13 tests, both guards,
   each paired with a genuine-descriptor control) and both guards were proved
-  non-vacuous by mutation. Separately, `make lint` taken to completion at the
-  new shape reported two `R0917` findings in `test_safe_cmd_redirect.py` that
-  no scoped or aborted run had reached; both are fixed with keyword-only
-  parameters, verified against a `--collect-only` baseline captured before the
-  edit so the six affected node IDs are byte-identical. Commits `b61641f0` and
-  `0c91a664`; `make check-fmt` and `make lint` both exit 0 at `0c91a664`.
-  Hosted gates and a fresh scrutineer sweep at the new head are pending, as is
-  the follow-up assessment comment.
+  non-vacuous by mutation. Separately, two `R0917` findings in
+  `test_safe_cmd_redirect.py` are fixed with keyword-only parameters, verified
+  against a `--collect-only` baseline captured before the edit so the six
+  affected node IDs are byte-identical. Both were also reported by the hosted
+  `lint-test` job at `f84e8f92`, which had reached the pylint stage while the
+  local sweep was still running; the local run re-derived them two and a half
+  minutes later. Commits `b61641f0`, `0c91a664`, and `145afa23`;
+  `make check-fmt`, `make lint`, and `make markdownlint` all exit 0 at the new
+  shape. Hosted gates and a fresh scrutineer sweep at the new head are pending,
+  as is the follow-up assessment comment.
 - [x] (2026-10-11) Gap C closed in `409a8395`, the last open assessment gap.
   `docs/users-guide.md`, `docs/cuprum-design.md`, and
   `docs/developers-guide.md` now document the `stdio_error` event, all six
@@ -2342,20 +2344,29 @@ likelihood, and mitigation.
   resolution guard to `if True: return` failed exactly four, with the
   genuine-descriptor controls still passing in both cases.
 - Observation: two `R0917` findings had been sitting in new test files since
-  the commits that introduced them, and no gate run on this branch could see
-  them. Evidence: `test_safe_cmd_redirect.py` takes five positional parameters
-  at `test_path_target_does_not_leak_the_descriptor` (added by `ed06abd3`) and
-  at `test_path_target_closed_after_a_spawn_failure` (added by `3adc9b00`);
-  `make lint` reported both only on the first run taken to *completion* after
-  they landed, because every intervening run had either aborted at an earlier
-  leaf or been scoped to the files a given repair touched. Impact: this is the
-  third distinct instance on this branch of the same failure mode — an aborted
-  or narrowed gate reports nothing about the leaves it never reached, and the
-  absence is indistinguishable from a pass. The operational rule that follows
-  is that a "run to completion" is a property of the run, not of the branch: a
-  repair validated by a scoped run leaves the unscoped leaves unobserved, so
-  the full sweep must be re-run at the frozen head rather than assumed
-  inherited.
+  the commits that introduced them, and the *hosted* run had already reported
+  them before the local sweep re-derived them. Evidence:
+  `test_safe_cmd_redirect.py` takes five positional parameters at
+  `test_path_target_does_not_leak_the_descriptor` (added by `ed06abd3`) and at
+  `test_path_target_closed_after_a_spawn_failure` (added by `3adc9b00`).
+  Earlier hosted runs had aborted at earlier leaves — `96c16aed` at
+  `check-fmt`, `fcce831b` at `python-lint` — so neither reached the pylint
+  stage. The run at `f84e8f92` did: its `lint-test` job hit `pylint-classic`
+  at 10:21:59 local and printed both findings verbatim before failing, and the
+  local sweep that was running concurrently re-found them at 10:24:26, having
+  reached the same leaf about two and a half minutes later. Impact: the first
+  version of this entry claimed "no gate run on this branch could see them",
+  which the hosted log disproves; it is corrected here rather than left as
+  written. Two lessons follow, and they are different lessons. The first
+  stands from the earlier entries: an aborted gate reports nothing about the
+  leaves it never reached, which is why the failure moved one leaf later each
+  time a repair cleared the previous one. The second is new and is about
+  observation rather than gating — a hosted failure that has already been
+  reported is not made more true by re-deriving it locally, and the local
+  sweep consumed time that the hosted log had already spent. Under the
+  lifecycle contract the hosted check set is observed through the scrutineer,
+  so the correct response to a red `lint-test` is to read its log, not to
+  re-run the gate on the host in parallel with it.
 
 ## Decision log
 
