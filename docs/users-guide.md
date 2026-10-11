@@ -772,14 +772,14 @@ nothing was bound.
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
 
-The second argument is either a path or a resolver. A path may be a `str` or
-any `os.PathLike`, so a `Path`, a `PurePosixPath`, or a `PureWindowsPath` all
-bind the same way and are stored normalized. A resolver is a zero-argument
-callable returning the executable string; it is stored unchanged and called
-once per execution, at spawn time. Any other value — an `int` where a path was
-meant, say — is rejected with `TypeError` naming the type supplied, rather than
-being stored as a resolver that only fails much later, at spawn time, against
-a resolver the caller never supplied.
+The second argument is either a path or a resolver. A path may be a `str` or any
+`os.PathLike`, so a `Path`, a `PurePosixPath`, or a `PureWindowsPath` all bind
+the same way and are stored normalized. A resolver is a zero-argument callable
+returning the executable string; it is stored unchanged and called once per
+execution, at spawn time. Any other value — an `int` where a path was meant,
+say — is rejected with `TypeError` naming the type supplied, rather than being
+stored as a resolver that only fails much later, at spawn time, against a
+resolver the caller never supplied.
 
 A relative binding needs a directory to be meaningful, and which directory it
 gets depends on the execution. When `ExecutionContext.cwd` is set, the binding

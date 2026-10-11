@@ -1804,34 +1804,119 @@ escalation, not a workaround.
 
   **F4, `executable_binding` stored non-callables as resolvers.** The guard
   discriminated on `(str, Path)`, so a `PurePosixPath` — a path-like that
-  `executable_path` already accepts — fell to the resolver branch,
-  constructing successfully and failing only at spawn time, reported against a
-  resolver the caller never supplied. The narrow predicate also let a
-  non-callable of any type through, `42` included. Repair: discriminate on
-  `(str, os.PathLike)` to match what `coerce_path_string` accepts, and reject a
-  value that is neither path-like nor callable with `TypeError`. The rejected
-  value's *type* is named, never its value, so refusing to trust a value never
-  calls the caller's `__repr__` on it.
+  `executable_path` already accepts — fell to the resolver branch, constructing
+  successfully and failing only at spawn time, reported against a resolver the
+  caller never supplied. The narrow predicate also let a non-callable of any
+  type through, `42` included. Repair: discriminate on `(str, os.PathLike)` to
+  match what `coerce_path_string` accepts, and reject a value that is neither
+  path-like nor callable with `TypeError`. The rejected value's *type* is
+  named, never its value, so refusing to trust a value never calls the caller's
+  `__repr__` on it.
 
   **Verification, both repairs.** Each has a regression test proven
   non-vacuously by reverting the fix in place and observing the intended
-  failure: F2's test reports
-  `PosixPath('/tmp/pytest-…/srv/work')` where `PosixPath('srv/work')` is
-  required, and F4's reports
+  failure: F2's test reports `PosixPath('/tmp/pytest-…/srv/work')` where
+  `PosixPath('srv/work')` is required, and F4's reports
   `ExecBinding(path=None, resolver=PurePosixPath('/opt/tools/tool'))` where a
   path was required. F2's test runs a second, *unbound* phase, which is what
   separates "the binding changed the event" from "relative directories always
-  did this". 199 tests pass across the eight binding and observation modules.
+  did this". The scope is now measured rather than hand-summed: the eight
+  `test_executable_*` modules pass 179 tests, and the union with the four
+  modules that import the two repaired production modules
+  (`test_stage_observation_builder.py`,
+  `test_pipeline_fail_fast_tag_shadowing.py`,
+  `test_pipeline_process_lifecycle.py`, `test_safe_cmd_run.py`) passes 209. An
+  earlier revision of this entry said "199 tests pass across the eight binding
+  and observation modules"; that figure was a hand-sum whose module set was
+  never recorded, and no plausible reading of "binding and observation"
+  reproduces it — the eight `test_executable_*` modules give 179, a
+  binding-plus-observability glob gives 240. It is withdrawn rather than
+  restated.
 
   Three findings were documentation-only and are corrected above: the resolver
   contract is split by boundary (`resolve_binding` raises `TypeError`, the
   execution boundary reports `ExecutableResolutionError`), `allow_relative`
   records what an execution with no directory does, and the CHANGELOG
-  distinguishes the two boundaries. The sixth cited
-  `_failed_before_ownership`, which does not exist anywhere in `cuprum/`; the
-  real seam is `_finalize_prepared_command_failure` →
-  `tracking.sink_bracket.close`, and a probe confirms the sink is closed
+  distinguishes the two boundaries. The sixth cited `_failed_before_ownership`,
+  which does not exist anywhere in `cuprum/`; the real seam is
+  `_finalize_prepared_command_failure` → `tracking.sink_bracket.close`, and a
+  probe confirms the sink is closed
   (`['open_session', 'close(ERROR)', "raised ExecutableResolutionError: …"]`).
+- [x] (2026-10-11 14:30Z) CodeScene's hosted check regressed one commit after
+      the F2/F4 repairs, and the cause was the repair itself.
+      `cuprum/unittests/test_executable_binding_execution.py` is a *new* file in
+      this PR, so it is judged by the file-level "Lines of Code in a Single
+      File" rule at a 600-line budget, not only by the 70-line Large Method
+      threshold. The F2 regression test had taken it past that budget: check
+      `5481949647` at `2b304a85` and `5481951998` at `85d37737` both reported
+      "New code is healthy (1 new file with code health below 10.00)" naming
+      that module at **624** lines, where `5481912078` at `778930e1` had been
+      APPROVED. Repair: a cohesive split, not a suppression. The five
+      relative-path anchoring examples — which share a single subject, the
+      composition of a relative binding with a relative execution directory —
+      moved to the new `cuprum/unittests/test_executable_binding_relative_paths.py`,
+      leaving the donor at 573 lines. The two modules now report `10.00` and
+      `10.00` under the local `cs check`, and the donor's docstring records
+      where the fixtures live and why.
+      **Two things had to be proved, not assumed.** First, that the split moved
+      tests rather than losing them: the donor held 17 test functions before
+      the split and the two modules hold 12 and 5 afterwards, and an AST
+      comparison of the function-name sets reports no name present on one side
+      only. (Collected node IDs necessarily differ, since each carries its
+      module path; the invariant is the name set and the total.) Second,
+      that the moved F2 test still fails for the intended reason: reverting the
+      F2 fix in place made
+      `test_a_relative_execution_cwd_anchors_a_relative_binding_once` fail with
+      `AssertionError: the plan event must report the caller's cwd spelling, got
+      PosixPath('/tmp/pytest-…/srv/work')`, and restoring the fix left
+      `git diff --stat` empty. The new module was built by AST-slicing the
+      donor's own bytes rather than retyping them, because a handwritten split
+      header has shipped import defects on this branch before.
+      **The methodological lesson is the important part.** I first tried to
+      predict the 624 figure from the source: a non-blank-minus-comment-only
+      count gave 678 at this head and 618 at the approved head, so the formula
+      was simply wrong, not merely imprecise. What settled it was calibrating
+      the local `cs` CLI against the two heads whose hosted verdicts were
+      already known — it reproduced 10.00 and 9.38 with the same named rule —
+      after which the CLI, not my arithmetic, was the oracle. Do not derive a
+      hosted CodeScene metric from a source-text heuristic; anchor the CLI to a
+      known-verdict revision and measure.
+- [x] (2026-10-11 15:10Z) CI was already **red** at `85d37737`, and the F2/F4
+  repair commit `2b304a85` caused three of the four failing jobs. This was
+  found while chasing the CodeScene regression, not by the gate run that
+  preceded the commit — which is the point worth recording. Hosted run
+  `38112908283` fails `lint-test` (Check formatting) and three typecheck jobs.
+  Two independent root causes, both mine:
+
+  **Formatting.** `mdtablefix --check` rejects `CHANGELOG.md`,
+  `docs/users-guide.md`, and this plan. `origin/main`'s copies of the first two
+  pass, so the drift is branch-introduced, and bisecting the branch confirms it:
+  `c1988033` passes, `2b304a85` fails. The prose added there was hand-wrapped;
+  the local `mdtablefix` is 0.6.1, identical to CI's `MDTABLEFIX_VERSION`, so
+  this was reproducible locally all along and was simply not looked for. Applied
+  `mdtablefix --in-place`; the diff is pure reflow with every code span intact.
+
+  **Typing.** `ty` rejects `cuprum/executable_binding.py:241`:
+  `coerce_path_string` was annotated `str | Path` while the F4 repair had
+  widened the guard feeding it to `(str, os.PathLike)`. The runtime was never
+  wrong — `coerce_path_string` already delegated to `os.fspath` — so the
+  annotation was the only defect, and the users' guide *already* documented
+  that any `os.PathLike` binds. Widened `coerce_path_string` and
+  `executable_path` to `str | os.PathLike[str]`.
+
+  **The third failure, which the gate run could not have shown.** `make lint`
+  reports `cuprum/_command_internals.py: 405/400` — `too-many-lines`. The
+  module sat exactly *on* the cap before the repair (`504666bd` and `778930e1`
+  are both exactly 400 lines; `origin/main` is 392), so the F2 repair's five
+  added lines put it over. `check-fmt` runs before `pylint-classic` inside
+  `make lint`, so the formatting failure was masking it: fixing formatting only
+  revealed the next failure. Repair: extracted `_event_cwd` into
+  `cuprum/_subprocess_context.py`, beside `_cwd_arg` and `_execution_cwd`,
+  since that module already owns this conversion vocabulary; both observation
+  builders call it rather than repeating the `None if … else Path(…)` idiom.
+  `_command_internals.py` is back to 397 lines, and the
+  caller-spelling-versus-anchoring distinction is stated once, where a reader
+  comparing the two helpers will find it.
 
 ## Surprises & discoveries
 
@@ -2390,16 +2475,16 @@ escalation, not a workaround.
   (`"C:/tools/../evil.exe"`) keep passing, because `PurePosixPath` already
   splits that spelling on `/` and the `..` was always visible. Those two rows
   are genuine coverage of a different sub-case, not witnesses for this defect.
-  Their identifier was `mixed-separators`, which described the substring
-  `C:/` and not the input: both rows contain no backslash, so the two
+  Their identifier was `mixed-separators`, which described the substring `C:/`
+  and not the input: both rows contain no backslash, so the two
   `"mixed-separators"` ids were renamed to `"forward-slashes"`. The count was
   derived twice, independently: once by running the six rows against a scratch
   copy of the module whose parse line was reverted to `PurePath`, and once by
   importing the genuine pre-fix module from `605ba3d7^` and running the same
   rows through it. Both give four, and both agree row for row, not merely in
-  total. Evidence: each run reports the three backslash classifier rows and
-  the backslash constructor row detecting, and the two forward-slash rows
-  passing through.
+  total. Evidence: each run reports the three backslash classifier rows and the
+  backslash constructor row detecting, and the two forward-slash rows passing
+  through.
 - Observation: **the plan already required the property its own stage check
   then recorded as satisfied by its absence.** The runtime-resolution
   observation above states that `ExecutableBinding`'s annotations must remain
@@ -2843,6 +2928,7 @@ issue-440 (scope lifetime + isolation) -> EP-M2 -> tests::context::executable_bi
                                                     test_token_registration_stateful.py]
 issue-440 (exact execution + telemetry)-> EP-M3 -> tests::execution::resolved_path
                                                    [test_executable_binding_execution.py,
+                                                    test_executable_binding_relative_paths.py,
                                                     test_structured_events.py]
 issue-440 (acceptance + docs)          -> EP-M4 -> tests::behaviour::catalogue,
                                                    docs::cuprum-design §5.1.2
@@ -2881,24 +2967,23 @@ O1 — Classification totality and first-match order.
   records the enumeration.
 - Non-vacuity: the generator's alphabet includes NUL, both path separators, and
   the parent-segment dot, and dedicated properties pin `EMPTY`, `NUL`,
-  `PARENT_SEGMENT`, and `NOT_ABSOLUTE` individually. The two
-  drive-letter rows added by the F1 repair are the one exception, and the limit
-  is stated rather than glossed: `_FUZZ_TEXT`'s alphabet contains no colon, so
-  on POSIX the generated domain cannot reach the `PureWindowsPath` branch at
-  all. The existing generated totality checks therefore supply no sampled
-  evidence for that branch; the named Windows-path examples carry it alone. Nor
-  do those examples independently pin the check order *inside* the branch: they
-  assert that a drive-letter traversal is rejected as `PARENT_SEGMENT`, not that
-  the empty, NUL, and parent-segment checks still precede one another for a
+  `PARENT_SEGMENT`, and `NOT_ABSOLUTE` individually. The two drive-letter rows
+  added by the F1 repair are the one exception, and the limit is stated rather
+  than glossed: `_FUZZ_TEXT`'s alphabet contains no colon, so on POSIX the
+  generated domain cannot reach the `PureWindowsPath` branch at all. The
+  existing generated totality checks therefore supply no sampled evidence for
+  that branch; the named Windows-path examples carry it alone. Nor do those
+  examples independently pin the check order *inside* the branch: they assert
+  that a drive-letter traversal is rejected as `PARENT_SEGMENT`, not that the
+  empty, NUL, and parent-segment checks still precede one another for a
   drive-letter input. That ordering is source-inspected and mirrors the
   pre-existing POSIX path, which keeps its own generated and table evidence;
   the distinction between ordering that is inspected and ordering that is
-  tested is recorded rather than flattened. The
-  two
-  filesystem-dependent members are pinned by a witness table in
-  `test_executable_binding.py` that asserts coverage of the *entire* enum, so a
-  newly added member fails that guard until it is given a witness. A mutation
-  that reordered the NUL check after the absolute check would be caught by
+  tested is recorded rather than flattened. The two filesystem-dependent
+  members are pinned by a witness table in `test_executable_binding.py` that
+  asserts coverage of the *entire* enum, so a newly added member fails that
+  guard until it is given a witness. A mutation that reordered the NUL check
+  after the absolute check would be caught by
   `test_nul_check_precedes_the_parent_segment_check` and by
   `test_nul_pins_the_nul_category`.
 - Scope of the generated domain: `_FUZZ_TEXT` draws from a fixed 9-character
@@ -3100,7 +3185,9 @@ O5 — Resolver invocation count and relative-path resolution.
   domains, so a property states it once and covers the cross product; the
   invocation count needs one real spawn.
 - Artefact: `cuprum/unittests/test_executable_binding_property_based.py`,
-  `cuprum/unittests/test_executable_binding_execution.py`.
+  `cuprum/unittests/test_executable_binding_relative_paths.py` (the five
+  relative-path anchoring examples, among them
+  `test_a_relative_execution_cwd_anchors_a_relative_binding_once`).
 - Evidence: `make test-python` passes; the end-to-end case asserts the child's
   own `sys.argv[0]` report and the recorded `resolved_path` are equal, via
   `test_a_relative_execution_cwd_anchors_a_relative_binding_once` and the
@@ -3186,10 +3273,10 @@ The exact commands are in `Concrete steps`.
 
 EP-M1, `cuprum/executable_binding.py`. A pure module importing only
 `collections.abc`, `dataclasses`, `enum`, `os`, `typing`, `pathlib`, its
-companion path module `cuprum.executable_paths`, and `cuprum.program` (the
-last a deliberate runtime dependency, because the public `Program`
-annotations must resolve through `typing.get_type_hints`). It must not
-import `cuprum.context` at runtime. Define:
+companion path module `cuprum.executable_paths`, and `cuprum.program` (the last
+a deliberate runtime dependency, because the public `Program` annotations must
+resolve through `typing.get_type_hints`). It must not import `cuprum.context`
+at runtime. Define:
 
 - `ExecutablePath = typ.NewType("ExecutablePath", str)`.
 - `type ExecutableResolver = cabc.Callable[[], str]`.

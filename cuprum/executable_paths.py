@@ -154,13 +154,14 @@ def classify_executable_path(
 
 
 def executable_path(
-    value: str | Path,
+    value: str | os.PathLike[str],
     *,
     allow_relative: bool = False,
 ) -> ExecutablePath:
     """Validate and normalize a string into an :data:`ExecutablePath`.
 
-    Accepts a :class:`~pathlib.Path` for symmetry with
+    Accepts any :class:`os.PathLike` — a :class:`~pathlib.Path` or a bare
+    :class:`~pathlib.PurePosixPath` alike — for symmetry with
     :func:`cuprum.builders.args.safe_path`, but unlike ``safe_path`` it does not
     require an absolute path unless ``allow_relative`` is left at its default.
     Validation is purely syntactic; the filesystem is not consulted, so a path
@@ -168,7 +169,7 @@ def executable_path(
 
     Parameters
     ----------
-    value : str | Path
+    value : str | os.PathLike[str]
         The path to validate.
     allow_relative : bool, optional
         When True, relative paths are permitted. Defaults to False, which
@@ -201,13 +202,16 @@ def executable_path(
     return ExecutablePath(PurePath(raw_value).as_posix())
 
 
-def coerce_path_string(value: str | Path) -> str:
+def coerce_path_string(value: str | os.PathLike[str]) -> str:
     """Coerce a string or path-like value into the string to validate.
 
     Parameters
     ----------
-    value : str | Path
-        The value to coerce.
+    value : str | os.PathLike[str]
+        The value to coerce. Any :class:`os.PathLike` is accepted, not only
+        :class:`~pathlib.Path`: the coercion is a single ``os.fspath`` call, so
+        the narrower spelling would reject path-likes the implementation
+        already handles, such as a bare :class:`~pathlib.PurePosixPath`.
 
     Returns
     -------
@@ -217,11 +221,14 @@ def coerce_path_string(value: str | Path) -> str:
     Raises
     ------
     TypeError
-        The value is not a string or path-like object.
+        The value is not a string or path-like object, or its
+        ``__fspath__`` returned bytes.
 
     Examples
     --------
     >>> coerce_path_string("/opt/tools/tool")
+    '/opt/tools/tool'
+    >>> coerce_path_string(PurePath("/opt/tools/tool"))
     '/opt/tools/tool'
     """
     if isinstance(value, str):

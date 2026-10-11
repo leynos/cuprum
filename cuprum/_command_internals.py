@@ -17,7 +17,6 @@ import dataclasses as dc
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
 from cuprum._context_policy import _collect_hooks
 from cuprum._execution_tracking import _ExecutionTracking
@@ -43,7 +42,7 @@ from cuprum._sink_lifecycle import (
     _outcome_for_result,
     _SinkBracket,
 )
-from cuprum._subprocess_context import _execution_cwd
+from cuprum._subprocess_context import _event_cwd, _execution_cwd
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
@@ -101,17 +100,10 @@ def _prepare_execution_observation(
     output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
-    # The event carries the caller's own spelling, as it did before binding
-    # existed: ``cwd`` is what the caller configured, and the spawn receives
-    # that same spelling through ``_cwd_arg``. Anchoring it here would make the
-    # event disagree with both for every relative directory.
-    cwd = Path(context.cwd) if context.cwd is not None else None
+    cwd = _event_cwd(context.cwd)
     env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
     # Resolved here, after the caller's allowlist check, so the resolver runs
-    # once for a command that is actually going to run. Only *resolution*
-    # needs the anchored form: a relative binding composed onto a relative
-    # directory would be re-anchored by the child, which is the reason
-    # ``_execution_cwd`` exists.
+    # once for a command that is actually going to run.
     resolved_path = _resolve_executable_for(cmd, cwd=_execution_cwd(context.cwd))
     tags = _merge_tags(
         _base_stage_tags(

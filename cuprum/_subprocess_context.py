@@ -58,6 +58,28 @@ def _cwd_arg(cwd: str | Path | None) -> str | None:
     return str(cwd) if cwd is not None else None
 
 
+def _event_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the working directory an *event* reports: the caller's spelling.
+
+    Both observation builders record the run's directory on ``ExecEvent.cwd``
+    (and, through the adapters, as ``cuprum_cwd`` / ``cuprum.cwd``). That field
+    is a report of what the caller configured, not a resolution input, so it
+    keeps the caller's own spelling and is never anchored. Anchoring it here
+    would make the event disagree with both the caller and the spawn — the
+    spawn receives the same spelling through :func:`_cwd_arg`.
+
+    Only *resolution* needs the absolute form, which is what
+    :func:`_execution_cwd` exists for. Keeping the two side by side states the
+    distinction once, where a reader comparing them will find it.
+
+    Returns
+    -------
+    Path | None
+        The caller's directory as configured, or ``None`` when they named none.
+    """
+    return None if cwd is None else Path(cwd)
+
+
 def _execution_cwd(cwd: str | Path | None) -> Path | None:
     """Return the directory a *relative* binding may be anchored at, absolutely.
 
