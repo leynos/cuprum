@@ -105,7 +105,7 @@ class _ShModule(typ.Protocol):
     ``CommandResult`` and ``BytesCommandResult`` in
     ``cuprum._subprocess_execution``, where the run's mode picks between them,
     ``TimeoutExpired`` in ``cuprum._subprocess_timeout``, and
-    ``StdinSourceError`` in ``cuprum._subprocess_stdin_stream``, so naming
+    ``StdinSourceError`` in ``cuprum._subprocess_stdin_errors``, so naming
     them keeps the lazy-import shim typed without reintroducing the import
     cycle.
     """

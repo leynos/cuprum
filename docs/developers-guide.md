@@ -7014,8 +7014,9 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`,
 `cuprum/_subprocess_stream_run.py`, `cuprum/_subprocess_streams.py`,
 `cuprum/_stdio_plan.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_timeout.py`,
-`cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
+`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_stdin_errors.py`,
+`cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_deadline.py`,
+`cuprum/_subprocess_rendezvous.py`,
 `cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`, and
 `cuprum/_command_finalization.py`. Pipeline startup has its own boundary in
 `cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
@@ -7023,24 +7024,25 @@ spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
 `_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
 decisions teardown makes about a single process — what a signal is delivered
 to, and what a completed teardown waits for. The two idle-heartbeat modules,
-`cuprum/_idle_heartbeat.py` and
-`cuprum/_idle_diagnostic.py`, are private to the same seam. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
-incremental encoder, and the `StdinSourceError` build — belongs in
-`_subprocess_stdin_stream`, whose dispatcher stays the
-`_subprocess_stdin._spawn_stdin_writer` entry point; timeout or exit-event
-policy belongs in `_subprocess_timeout`; the child-exit half of *ending* a run
-— the wait and the deadline that bounds it, the process termination a deadline
-expiry reaches, and the remainder that bounds what follows — belongs in
-`_subprocess_deadline`; the reconciliation that cancels the stdin writer
-alongside the consumers belongs in `_subprocess_wait`, while draining those
-consumers exactly once belongs in `_stream_drain`; the race that ends a run on
-a stdin failure rather than on the child's exit belongs in
+incremental encoder, and deciding which failures are the producer's — belongs
+in `_subprocess_stdin_stream`, whose dispatcher stays the
+`_subprocess_stdin._spawn_stdin_writer` entry point; building the public
+`StdinSourceError` a classified failure raises belongs in
+`_subprocess_stdin_errors`, which stays a leaf so no importer gains a cycle;
+timeout or exit-event policy belongs in `_subprocess_timeout`; the child-exit
+half of *ending* a run — the wait and the deadline that bounds it, the process
+termination a deadline expiry reaches, and the remainder that bounds what
+follows — belongs in `_subprocess_deadline`; the reconciliation that cancels
+the stdin writer alongside the consumers belongs in `_subprocess_wait`, while
+draining those consumers exactly once belongs in `_stream_drain`; the race that
+ends a run on a stdin failure rather than on the child's exit belongs in
 `_subprocess_rendezvous`; resolving a run's stdio targets into the plan and
 bindings the spawn layer consumes belongs in `_stdio_plan`, whose
 `_resolve_stdio_binding` records an owned *path* rather than opening it; the
