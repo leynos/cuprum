@@ -24,7 +24,6 @@ import codecs
 import logging
 import typing as typ
 
-from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._echo_truncation import _split_echo_segments
 from cuprum.echo_events import (
     BrokenPipePolicy,
