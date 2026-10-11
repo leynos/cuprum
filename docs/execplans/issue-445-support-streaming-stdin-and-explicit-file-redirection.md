@@ -1758,7 +1758,61 @@ likelihood, and mitigation.
   `_stdio_diagnostics`, `_stdio_binding_guards`, `_subprocess_stdin_reclaim`
   (the other open item from an earlier round), and `_subprocess_stdin_write`.
 
+- [x] (2026-10-11 11:2xZ) **The Gap E contract test was collected by
+  nothing.** `d07642b4` added
+  `scripts/tests/test_check_fmt_import_order_contract.py` to hold the new
+  `ruff check --select I` leaf of `check-fmt` in place, and that same commit
+  edited only the `check-fmt` recipe. `PYTEST_TARGETS` is a list of glob
+  patterns rather than a directory sweep, and no `scripts/tests` pattern in it
+  matched this filename, so `make test` and the hosted `typecheck-test` jobs
+  never collected the module. The guard for a lying gate was itself never run.
+
+  Naming it directly in `PYTEST_TARGETS` closes the hole, mirroring its sibling
+  `scripts/tests/test_rust_lint_baseline_contract.py`, which guards the lint
+  gate the same way. The module-population contract in
+  `tests/test_ci_test_selection_contract.py` passes unchanged both before and
+  after: it scopes to root-level `tests/` modules, so it neither caught the
+  omission nor objects to the fix — a guard scoped to one directory cannot see
+  an omission in another, which is the same shape as the Gap E defect itself.
+
+  This is a regression in *execution*, not in *gating*. The `coverage` job runs
+  a bare `pytest` from the repository root through an out-of-repo composite
+  action, so it collects the whole tree and the module does gate the merge. The
+  loss is the fast local loop and the default pull-request lane.
+
+  Evidence: the module's two tests pass (0.10 s); a mutation probe that deletes
+  the `$(RUFF) check --select I` line from `check-fmt` makes
+  `test_check_fmt_verifies_import_order` fail with the intended assertion
+  (`assert 'check --select I' in '$(RUFF) format --check\n...'`); the mutation
+  was restored and `git diff --stat Makefile` shows only the one-line addition;
+  and 98 selector/wiring contract tests across
+  `test_ci_test_selection_contract`, `test_ci_suite_wiring_contract`,
+  `test_ci_selection_guard_controls`, `test_ci_recipe_flow_contract`, and
+  `test_ci_act_harness_contract` pass. Commit `bb9cda75`.
+
 ## Surprises & discoveries
+
+- Observation: **a guard is subject to the same failure it was written to
+  catch, one level up.** A test that proves a gate is not lying is itself
+  unproven until something collects it. Evidence: the Gap E contract test
+  existed, passed when run by hand, and was named by no selector, so the suite
+  that was supposed to run it did not — see the `Progress` entry for
+  `bb9cda75`. The general form: "does this test pass?" and "does anything run
+  this test?" are separate questions, and only the second one was here
+  unanswered. The same question applies to every suite this plan added; the
+  `cuprum/unittests/test_*.py` families are swept by a wildcard and are safe,
+  while the `scripts/tests` families are named individually and each new one
+  needs its own line.
+
+- Observation: **the guard that should have caught it was scoped to one
+  directory.** `tests/test_ci_test_selection_contract.py` enforces exactly this
+  rule — every module is named by a selector or listed as an exemption — but it
+  reads `root_modules()`, which walks the root-level `tests/` package. A
+  `scripts/tests` omission is outside its sweep, so it reported the tree as
+  fully covered while a module was absent. Evidence: the suite passes unchanged
+  before and after the fix. A coverage rule is only as wide as the population
+  it enumerates, and "the guard is green" therefore says nothing about modules
+  outside that population.
 
 - Observation: a lint repair that satisfies one tool can leave the *hosted*
   diagnostic standing, because the two tools measure different things under the
