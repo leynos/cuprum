@@ -512,7 +512,10 @@
   stream-wiring names so existing importers are unaffected. `_spawn_subprocess`
   is deliberately *not* re-exported: the name is resolved from its own module's
   globals, so a patch applied to a copy would leave the real spawn running.
-  Code that refuses a spawn patches `cuprum._subprocess_spawn`. See the
+  Code that refuses a spawn patches the module whose globals resolve the seam
+  for the path it is intercepting: `cuprum._subprocess_spawn` for `run()` and
+  `cuprum._line_stream.coordinator` for `lines()`, while `SafeCmd.start()`
+  resolves it through `cuprum._process_handle.tasks`. See the
   [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-10-11.
 

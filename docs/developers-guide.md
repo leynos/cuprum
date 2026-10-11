@@ -6379,12 +6379,11 @@ shaped one was withdrawn.
 
 `cuprum/_subprocess_spawn.py` owns the one step that creates a child. It holds
 `_SubprocessExecution` — the bundle that decides how a child is wired —
-`_spawn_subprocess`, which is the spawn seam `SafeCmd.run()` and the
-line-stream coordinator both resolve through, and `_start_owned_process`, the
-only place a spawned child is announced. The two live together because the
-spawn is what the bundle describes: a caller that has to refuse a spawn patches
-the seam, and a caller that patches the seam would otherwise be reaching for a
-name on the result-assembly path.
+`_spawn_subprocess`, the spawn seam every entry point resolves through, and
+`_start_owned_process`, the only place a spawned child is announced. The two
+live together because the spawn is what the bundle describes: a caller that has
+to refuse a spawn patches the seam, and a caller that patches the seam would
+otherwise be reaching for a name on the result-assembly path.
 
 `_start_owned_process` takes the already-sampled `started_at` as an argument
 rather than reading a clock, because *when* that reading is taken is what its
@@ -6403,8 +6402,11 @@ re-export `_spawn_subprocess`. `_start_owned_process` resolves that name from
 `_subprocess_spawn`'s own globals, so a patch applied to a re-export rebinds a
 name nothing calls and silently no-ops — the test keeps passing while the real
 spawn runs. A spawn seam a test can refuse has to be patched where its caller
-looks it up, which is why the two spawn-refusing tests now patch
-`cuprum._subprocess_spawn`. This is the same rule by which
+looks it up, which is why the spawn-refusing tests patch a different module per
+entry point: `cuprum._subprocess_spawn` for `SafeCmd.run()`,
+`cuprum._line_stream.coordinator` for `SafeCmd.lines()`, and
+`cuprum._process_handle.tasks` for `SafeCmd.start()`, each of which binds
+`_spawn_subprocess` into its own globals. This is the same rule by which
 `cuprum._line_stream.coordinator` resolves its collaborators from its own
 globals, and is why its tests patch that module rather than the module that
 defines them.

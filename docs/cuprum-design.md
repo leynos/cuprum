@@ -3993,25 +3993,35 @@ same task and gets the same outcome — whether that is a result or the error th
 first caller never saw. Nothing can deadlock a stop behind a wait with no
 deadline. `result` publishes what `wait` returned and never waits itself.
 
-A deadline is the one route that produces both an outcome and an error, and the
-handle keeps both. The wait that expires stops the child exactly as a cancelled
-`run()` does, so by the time `TimeoutExpired` reaches its caller the child has
-been reaped and has a real exit code; that outcome is recorded before the error
-is raised. The settlement task itself therefore *completes* on a deadline,
-carrying the error in its record rather than throwing it out, and the error is
-raised only to a caller that both supplied a deadline and was still waiting on
-the live settlement. Every later `wait`, `terminate`, `kill`, or teardown on
-the same handle reads the recorded outcome, so a stop after a deadline reports
-the child it stopped rather than re-raising an expiry about a child that is
-already gone. `wait(timeout=...)` bounds one caller's wait, not the handle's.
+The settlement task carries no deadline at all. It waits for the child, and the
+child only ends early because some caller stopped it, so what `wait` applies is
+a deadline on *its own* await of the shared task: `wait(timeout=...)` bounds one
+caller's wait, not the handle's. A caller whose deadline elapses stops the child
+through the same `SIGTERM`, cancel-grace, `SIGKILL` path a cancelled `run()`
+takes, and the shared task — unblocked by that stop — records the outcome it
+produced. No other caller is affected: one that named a longer deadline, or
+none, keeps waiting for the child it was always waiting for.
+
+The deadline is recorded on the settlement before the child is stopped, so the
+one settlement can tell that a clock rather than the child ended the run: the
+terminal outcome it publishes is `TIMEOUT`, matching the streamed path, while
+the exit code the recorded result carries is the real one the signal produced.
+The deadline-ran-out caller is then owed its own `TimeoutExpired`, built from
+its own deadline and the outcome the settlement drained, so the error reports
+the command, the deadline, and the output the child had written before it was
+stopped. It reaches the caller whose clock produced it and no other: every
+later `wait`, `terminate`, `kill`, or teardown reads the recorded outcome, and a
+caller arriving after the child is gone has nothing left for a fresh deadline
+to interrupt.
 
 Unlike the streamed `run()` path, no deadline is enforced while the handle is
 merely held: the clock a timeout is measured against starts at the `wait` that
 asks for one. `start(timeout=...)` is therefore the default deadline for every
-`wait()` on the handle rather than a limit on how long the child may live. The
-timeout translation still happens on the one wait path, so the output captured
-before the deadline is drained exactly once and carried onto the raised
-`TimeoutExpired`, exactly as the streamed path does.
+`wait()` on the handle rather than a limit on how long the child may live.
+Because the deadline is applied by the wait rather than carried into the
+settlement, it is translated on the one path that drains the run: the output
+captured before the deadline is drained exactly once and carried onto the
+raised `TimeoutExpired`, exactly as the streamed path does.
 
 #### 13.10.3 Control operations
 

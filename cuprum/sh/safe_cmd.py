@@ -242,8 +242,8 @@ class SafeCmd:
         block settles the run on exit — a child still running is stopped down
         the same ``SIGTERM``, cancel-grace, ``SIGKILL`` path a cancelled
         ``run()`` takes — so a caller cannot leave a child behind by forgetting
-        about it. Output is captured unless *output* says otherwise, so a
-        handle that is not iterated still reports what the command wrote.
+        about it. Output capture is always on, whatever *output* says, so a
+        stopped child still reports what the command wrote.
 
         Unlike ``run()``, no deadline is enforced while the handle is merely
         held: the clock a timeout is measured against starts at the ``wait``
