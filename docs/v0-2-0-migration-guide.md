@@ -72,6 +72,42 @@ assert command.argv == ("-c", "print('two words')", argument)
 [build arguments deliberately](users-guide.md#build-arguments-deliberately) in
 the users' guide for the platform differences.
 
+## `sh.make` arguments are a typed contract
+
+`sh.make()` builders and the `build_argv` helper now accept exactly
+`str | int | float | bool | pathlib.Path | os.PathLike[str]`, published as the
+`ArgValue` alias. `sh.make` returns a `SafeCmdBuilder` whose signature states
+that domain, so a call passing anything else is rejected by a static checker as
+well as at run time.
+
+Previously the builder stringified any object with `str()`. A list, a dict, or
+an arbitrary object therefore reached the command line as its `repr` — a
+silently wrong argument rather than an error. Values outside `ArgValue` now
+raise `TypeError` naming the offending type; `None` keeps its own message.
+
+Migrate a call that was relying on that stringification by passing text (or a
+path) yourself:
+
+<!-- tested-example: migration-typed-arguments -->
+
+```python
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs("echo", name="typed-arguments")
+builder = sh.make(Program("echo"), catalogue=catalogue)
+
+# A list used to become "['a', 'b']"; join it into the text you meant.
+tags = ["a", "b"]
+command = builder("--tags", ",".join(tags))
+assert command.argv == ("--tags", "a,b")
+```
+
+Custom path-like objects are accepted: a class defining `__fspath__` that
+returns text is converted with `os.fspath()`, so it behaves exactly as a
+`pathlib.Path` does. Only a `__fspath__` returning `bytes` is rejected. See
+[build arguments deliberately](users-guide.md#build-arguments-deliberately) for
+the full contract.
+
 ## Catalogue-backed scoped contexts
 
 When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue
@@ -394,6 +430,41 @@ assert result.ok and result.stdout == "hello\n"
 GitHub Actions, which is when `GITHUB_ACTIONS` holds the runner's value `true`.
 For local reproduction of CI framing, or on a non-standard runner that does not
 export the variable, pass `force=True` to activate the sink deliberately.
+
+## Aggregate stream telemetry in profiling reports
+
+This section concerns the profiling harness in `benchmarks/` rather than the
+`cuprum` library. Applications that only use `cuprum` need no change, and no
+stream read behaviour changes.
+
+The tee hot-path profiling harness gained two keys, and both are additive: the
+keys that were already present are unchanged, and the artefacts remain plain
+JSON.
+
+- `stream_telemetry` in each scenario's `worker-result.json`, covering that
+  worker run, including every repeat in its repeat loop.
+- `stream_telemetry_summary` in a sweep's `read-size-sweep.json`, combining the
+  telemetry of every completed sample in the sweep.
+
+Both keys are written unconditionally, so every worker run and every sweep now
+carries them. A report consumer that ignores unknown keys needs no change, and
+a consumer that validates these artefacts strictly must accept the new keys.
+
+Both keys use the same shape: a `groups` mapping keyed first by the closed
+operation (`stream_drain` or `pipeline_transfer`) and then by the closed outcome
+(`eof`, `cancelled`, `failed`, `downstream_closed`, or
+`post_close_drain_timeout`), plus a `totals` group summed over every group
+present. Each group carries four aggregate fields, and nothing else. The three
+counters `bytes_consumed`, `read_operations`, and `operation_count` are
+integers, and `duration_seconds` is a float summing monotonic operation
+durations.
+
+The telemetry observes only the pure-Python drain and pipeline-transfer paths,
+so a `pipeline_transfer` group may be absent when the Rust backend handles a
+hop; an absent group is not a failure. No per-read or per-chunk telemetry is
+emitted. The aggregate shape mirrors
+[aggregate Python stream-operation observation](#aggregate-python-stream-operation-observation),
+the opt-in production channel described above.
 
 ## Benchmark ratchet measurement protocol
 

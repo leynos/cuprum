@@ -4,7 +4,8 @@
 ``SafeCmd`` stages piped stdout-to-stdin. They reference each other at
 runtime (``SafeCmd.__or__`` builds a ``Pipeline``), so they stay in one module
 to avoid a runtime import cycle. The ``cuprum.sh`` package re-exports
-both.
+both. ``SafeCmdBuilder`` lives in ``cuprum/sh/builder.py``, which imports
+``SafeCmd`` from here; the reverse import would close that cycle.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -13,7 +14,6 @@ both.
 # references to ``SafeCmd`` and ``Pipeline`` inside their own class bodies are
 # quoted.
 import asyncio
-import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
 
@@ -45,12 +45,9 @@ from cuprum.sh.output import (
 )
 from cuprum.sh.results import CommandResult, PipelineResult
 
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-
 __all__ = [
     "Pipeline",
     "SafeCmd",
-    "SafeCmdBuilder",
 ]
 
 

@@ -88,6 +88,9 @@ open each document.
 - [ADR-019: Opt-in process-group ownership][adr-019] - accepted decision to
   give callers opt-in ownership of a child's process group, with POSIX group
   teardown and an explicit Windows refusal.
+- [ADR-020: Typed argument contract for sh.make builders][adr-020] - accepted
+  decision to replace the `Callable[..., SafeCmd]` annotation with a
+  `SafeCmdBuilder` protocol over a published `ArgValue` alias.
 
 ## Requests for comments
 
@@ -142,6 +145,7 @@ open each document.
 [adr-017]: adr-017-release-pipeline.md
 [adr-018]: adr-018-typed-environment-policies.md
 [adr-019]: adr-019-process-group-ownership.md
+[adr-020]: adr-020-typed-argument-contract-for-sh-make.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

@@ -1136,11 +1136,32 @@ The serializer contract itself:
   as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- accepted values are `str`, `int`, `float`, `bool`, and `Path`;
+- accepted values are `str`, `int`, `float`, `bool`, and path-like values:
+  `Path` and any other `os.PathLike[str]` implementation. A path-like is
+  converted with `os.fspath()` rather than `str()`, which is the conversion the
+  standard library uses for command arguments and the one the protocol
+  documents;
 - `None` raises `TypeError` in positional and keyword positions;
 - `bytes` raises `TypeError` in positional and keyword positions, with the
   offending value in the message, because `str()` would otherwise pass the
-  value's Python `repr` to the child process.
+  value's Python `repr` to the child process. A path-like whose `__fspath__`
+  returns `bytes` is rejected the same way, and named `bytes` rather than by
+  its own class, because the payload is what would have reached argv;
+- any other value outside `ArgValue`
+  (`str | int | float | bool | Path | os.PathLike[str]`) raises `TypeError`
+  naming the real type, in either position. The accepted-type tuple is derived
+  at runtime from `ArgValue` with `typing.get_args(ArgValue.__value__)`, so the
+  validation and the published annotation cannot drift. `ArgValue` is a PEP 695
+  alias, so the union is reached through `__value__` rather than by calling
+  `typing.get_args` on the alias object directly. Each member is reduced to a
+  runtime-checkable class with `typing.get_origin(member) or member`, because
+  `os.PathLike[str]` is a parameterized generic that `issubclass` rejects;
+- the domain test uses `issubclass` over the value's real type, not
+  `isinstance`. A proxy that overrides `__class__` satisfies `isinstance`
+  against a supported type while remaining a different object, and `str()` on
+  it would put that object's `repr` on the command line. The real type is not
+  spoofable, and `issubclass` still admits genuine subclasses of `str` and
+  `Path`.
 
 The boundary, and why a warning or a per-builder opt-out was rejected instead,
 is recorded in [Cuprum design](cuprum-design.md) §6.2.6.
@@ -1163,6 +1184,20 @@ Property coverage for this contract lives in
 reserved run-option names to `SafeCmd.run_sync` lives in
 `cuprum/unittests/test_sh.py`. Update those properties whenever argv
 construction semantics change.
+
+The positive half of the static-check contract is the checked-in fixture
+`cuprum/unittests/typing_fixtures/sh_make_valid.py`, which the repository-wide
+`make typecheck` run walks as ordinary source. The negative half is
+`cuprum/unittests/test_sh_typing_contract.py`, which writes each rejected call
+to a temporary directory and requires the pinned `ty` to report
+`invalid-argument-type` with a non-zero exit. Those negative cases stay outside
+the repository-wide check scope deliberately: a file the checker is meant to
+reject cannot be checked in without failing the gate.
+
+The protocol lives in `cuprum/sh/builder.py` and is deliberately not
+`typing.runtime_checkable`. `safe_cmd` must not import it back, because the
+protocol imports `SafeCmd` from `safe_cmd` and the reverse import would close a
+cycle.
 
 ## Program catalogue duplicate diagnostics
 
@@ -3502,6 +3537,71 @@ totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 *Table: Selector observability metrics reported in each
 `TeeProfileWorkerResult`, with field name, type, and what each value records.*
 
+### Stream telemetry (`benchmarks/_tee_profile_stream_telemetry.py`)
+
+`TeeProfileWorkerResult` also includes a `stream_telemetry` field: bounded
+aggregate measurements of completed pure-Python stream operations, grouped by
+closed operation and outcome. It reuses the existing opt-in observer channel,
+`cuprum.stream_observation.observe_stream_operation`; no per-read or per-chunk
+production telemetry is added, and stream read behaviour, including read-size
+and line-ending handling, is unchanged. The worker registers one observer
+around the complete `repeat_count` loop, so the reported groups accumulate
+across every repeat of the run.
+
+Each group carries four aggregate fields:
+
+| Field              | Type    | Description                                                     |
+| ------------------ | ------- | --------------------------------------------------------------- |
+| `bytes_consumed`   | `int`   | Total bytes consumed by completed operations in the group.      |
+| `read_operations`  | `int`   | Total completed reader calls, including EOF reads.              |
+| `operation_count`  | `int`   | Number of completed operations in the group.                    |
+| `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, in the group. |
+
+*Table: Aggregate fields of one `stream_telemetry` group.*
+
+`benchmarks/_tee_profile_stream_telemetry.py` owns the aggregation contract.
+Its public pieces divide the work as follows:
+
+| Piece                         | Responsibility                                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `StreamTelemetryGroup`        | One closed `(operation, outcome)` group, with `as_dict` for serialization and `merged_with` for summation.                      |
+| `StreamTelemetryAccumulator`  | The callable observer hook; adds one completion event to its group, offers `reset`, `add_snapshot`, and `snapshot`.             |
+| `StreamTelemetrySnapshot`     | Immutable frozen view keyed by the closed enums, with `as_dict` for the payload and `from_dict` for parsing one worker payload. |
+| `StreamTelemetryPayload`      | The `TypedDict` JSON shape written into the profiling artefacts.                                                                |
+| `StreamTelemetryGroupPayload` | The `TypedDict` for one group's four aggregate fields.                                                                          |
+
+*Table: Public pieces of the stream telemetry module.*
+
+The vocabulary is closed. An operation is a member of
+`cuprum.stream_events.StreamOperation` (`stream_drain` or `pipeline_transfer`)
+and an outcome is a member of `StreamOperationOutcome` (`eof`, `cancelled`,
+`failed`, `downstream_closed`, or `post_close_drain_timeout`). Accumulated
+events whose operation or outcome is not a member of those enums are ignored,
+so a caller cannot widen the label domain.
+
+`StreamTelemetrySnapshot.from_dict` treats a worker payload as untrusted.
+Unknown operation or outcome labels are ignored, and non-mapping payloads,
+non-mapping group mappings, and invalid group values are discarded. Counters
+must be non-negative integers excluding booleans; durations must be finite and
+non-negative, and a duration whose integer magnitude exceeds the binary64 range
+discards that group rather than letting the `OverflowError` escape into
+sweep-report assembly. Integer counters are not narrowed to a float range and
+are preserved exactly. Totals are always recalculated from the accepted groups,
+so a `totals` value in an input payload is ignored and cannot manufacture an
+aggregate.
+
+The observer sees only the pure-Python drain and pipeline-transfer paths, so a
+`pipeline_transfer` group may be absent when the Rust backend handles a
+pipeline hop. An absent group means the pure-Python path did not run, and must
+not be read as a failure.
+
+Sweep aggregation lives in
+`benchmarks/tee_profile_execution.py::_stream_telemetry_summary`, which merges
+the per-sample snapshots after all samples complete. `read-size-sweep.json`
+gains the resulting payload as an additive `stream_telemetry_summary` key,
+leaving the existing `randomize_order`, `read_sizes`, `rounds`, and `samples`
+keys unchanged.
+
 ## Scenario driver (`benchmarks/profile_tee_hotpath.py`)
 
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
@@ -3550,6 +3650,12 @@ The profiling sweep controls are `--read-sizes`, a comma-separated list of
 positive byte counts, and `--rounds`, the number of complete matrix passes.
 `--randomize-order` shuffles the configured read-size order within each round;
 the emitted plan and sweep artefact retain every requested size and round.
+
+A read-size sweep also writes `read-size-sweep.json` under the scenario
+directory, with an additive `stream_telemetry_summary` key that combines the
+`stream_telemetry` of every completed sample. The existing `randomize_order`,
+`read_sizes`, `rounds`, and `samples` keys are preserved; the aggregation
+itself is documented under the worker section above.
 
 Profiler modes are selected through `TeeProfileDriverConfig.profiler`. `none`
 runs the worker directly and writes a note that profiler artefacts were not

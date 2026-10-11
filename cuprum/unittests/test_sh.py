@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import inspect
+import os
 import typing as typ
 
 import pytest
@@ -30,7 +31,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum.sh import SafeCmdBuilder
+    from cuprum.sh import ArgValue, SafeCmdBuilder
 
 
 def test_make_rejects_unknown_program() -> None:
@@ -140,6 +141,158 @@ def test_make_rejects_bytes_argument(
     )
 
 
+class _FakePath(os.PathLike[str]):
+    """A text ``os.PathLike`` that is deliberately not a ``pathlib.Path``."""
+
+    def __init__(self, path: str) -> None:
+        """Wrap ``path`` behind the ``os.PathLike`` protocol."""
+        self._path = path
+
+    def __fspath__(self) -> str:
+        """Return the wrapped path string."""
+        return self._path
+
+
+class _BytesPath(os.PathLike[bytes]):
+    """A path-like whose ``__fspath__`` returns bytes rather than text."""
+
+    def __fspath__(self) -> bytes:
+        """Return a raw byte path, which argv must never carry."""
+        return b"raw/path"
+
+
+class _SpoofedInt:
+    """A value whose ``__class__`` claims membership of the domain.
+
+    ``isinstance`` consults ``__class__``, so this object satisfies
+    ``isinstance(value, int)`` while remaining its own unsupported type. It
+    stands in for ``unittest.mock.Mock(spec=int)`` and any other proxy that
+    overrides ``__class__``.
+    """
+
+    @property
+    def __class__(self) -> type:
+        """Report ``int`` regardless of the real type."""
+        return int
+
+    def __str__(self) -> str:
+        """Render a repr-like text, which is what reaches argv."""
+        return "<spoofed int>"
+
+
+_UNSUPPORTED_VALUES = [
+    pytest.param(object(), "object", id="object"),
+    pytest.param(b"raw", "bytes", id="bytes"),
+    pytest.param(["a", "b"], "list", id="list"),
+    pytest.param(_BytesPath(), "bytes", id="bytes-path-like"),
+    pytest.param(_SpoofedInt(), "_SpoofedInt", id="class-spoofing-proxy"),
+]
+
+
+@pytest.mark.parametrize(("value", "named"), _UNSUPPORTED_VALUES)
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        pytest.param(lambda builder, value: builder(value), id="positional"),
+        pytest.param(lambda builder, value: builder(flag=value), id="keyword"),
+    ],
+)
+def test_unsupported_argument_types_are_rejected(
+    invoke: cabc.Callable[[SafeCmdBuilder, ArgValue], object],
+    value: object,
+    named: str,
+) -> None:
+    """Unsupported types raise TypeError instead of being stringified."""
+    builder = sh.make(ECHO)
+    # Deliberately defeat static typing: the property under test is the
+    # runtime rejection of the value, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", value)
+
+    with pytest.raises(TypeError) as excinfo:
+        invoke(builder, poisoned)
+
+    assert named in str(excinfo.value), (
+        "The error must name the offending type, or bytes when the offending "
+        "value is a byte path"
+    )
+    assert "sh.make" in str(excinfo.value), "The error must name sh.make"
+
+
+def test_none_argument_error_message_is_exact() -> None:
+    """``None`` keeps its dedicated message rather than the generic one."""
+    builder = sh.make(ECHO)
+    # Deliberately defeat static typing: the contract under test is the
+    # runtime rejection of None, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", None)
+
+    with pytest.raises(TypeError) as excinfo:
+        builder(poisoned)
+
+    assert str(excinfo.value) == "None is not a valid argv element for sh.make", (
+        "The historical None message must not drift"
+    )
+
+
+def test_custom_path_like_arguments_convert_through_fspath() -> None:
+    """A text path-like other than ``Path`` converts through ``os.fspath()``."""
+    builder = sh.make(ECHO)
+    path_like = _FakePath("example/status")
+
+    cmd = builder(path_like, destination=path_like)
+
+    assert cmd.argv == (
+        "example/status",
+        "--destination=example/status",
+    ), "A custom os.PathLike[str] must serialize to its __fspath__ text"
+
+
+def test_path_arguments_serialize_to_their_as_posix_form(tmp_path: Path) -> None:
+    """``Path`` values serialize through ``os.fspath()`` in both positions."""
+    builder = sh.make(ECHO)
+    target = tmp_path / "nested" / "file.txt"
+
+    cmd = builder(target, destination=target)
+
+    assert cmd.argv == (
+        target.as_posix(),
+        f"--destination={target.as_posix()}",
+    ), "Path values must serialize to their string form"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(True, "--porcelain=True", id="true"),
+        pytest.param(False, "--porcelain=False", id="false"),
+    ],
+)
+def test_keyword_booleans_serialize_as_values_not_switches(
+    value: bool,
+    expected: str,
+) -> None:
+    """Booleans become ``--flag=<bool>`` rather than presence switches."""
+    builder = sh.make(ECHO)
+
+    cmd = builder(porcelain=value)
+
+    assert cmd.argv == (expected,), "A boolean flag must carry its value explicitly"
+
+
+def test_mixed_call_preserves_positional_then_keyword_order() -> None:
+    """Positionals keep their order ahead of generated keyword flags."""
+    builder = sh.make(ECHO)
+
+    cmd = builder("first", 2, 3.5, porcelain=True, destination="out")
+
+    assert cmd.argv == (
+        "first",
+        "2",
+        "3.5",
+        "--porcelain=True",
+        "--destination=out",
+    ), "Mixed calls must serialize positionals first, then flags in order"
+
+
 def test_make_supports_custom_catalogue() -> None:
     """Injected catalogues drive metadata visible to downstream services."""
     program = Program("tool")
@@ -226,9 +379,13 @@ def test_make_rejects_the_first_reserved_keyword_in_insertion_order(
     message matches the parameter the caller can pass straight to ``run_sync``.
     """
     builder = sh.make(ECHO)
+    # Deliberately defeat static typing: a real caller reaching for ``env=``
+    # is exactly the mistake this guard exists for, and the annotations
+    # already forbid it, so the runtime rejection is the property under test.
+    poisoned = typ.cast("ArgValue", {"A": "1"})
 
     with pytest.raises(TypeError) as excinfo:
-        builder("x", cwd=tmp_path, env={"A": "1"}, timeout=5)
+        builder("x", cwd=tmp_path, env=poisoned, timeout=5)
 
     assert str(excinfo.value) == (
         "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"

@@ -465,7 +465,7 @@ The `sh` facade provides the main entry point for safe usage.
 
 The primary constructor is
 `sh.make(program: Program, *, catalogue: ProgramCatalogue | None = None) ->
-Callable[…, SafeCmd[str]]`:
+SafeCmdBuilder`:
 
 ```python
 from cuprum import RunOutputOptions, scoped, sh, Program
@@ -514,16 +514,27 @@ flowchart TD
     G -->|Found| I[Return builder with catalogue bound]
 ```
 
-`sh.make` returns a callable that accepts positional/keyword arguments to be
-converted into argv strings according to internal rules (e.g. str() with basic
-quoting, or more elaborate conversions later). For more control, projects are
+`sh.make` returns a `SafeCmdBuilder`: a callable that accepts positional and
+keyword arguments, each of which must be a `str`, `int`, `float`, `bool`, or
+path-like value — `Path` or any other `os.PathLike[str]` (the public `ArgValue`
+alias) — and returns a `SafeCmd`. Values are converted into argv strings
+according to internal rules, with path-like values going through `os.fspath()`
+and everything else through `str()`. The parameter types are part of the
+published contract, so a static checker rejects an unsupported argument at the
+call site rather than letting `str()` render its `repr` onto a command line,
+and the runtime raises `TypeError` for the same values. Because `os.PathLike`
+is a structural protocol, the runtime re-checks the `os.fspath()` result and
+rejects a `__fspath__` that returns `bytes`; the domain check tests the value's
+real type rather than `isinstance`, so an object that spoofs `__class__` cannot
+smuggle its `repr` onto the command line. For more control, projects are
 expected to wrap `sh.make` with **builders** (see below).
 
 `sh.build_argv(*args, **kwargs)` exposes those argv-construction rules as a
 pure helper for tests and wrapper code that need to inspect normalization
 without performing a catalogue lookup. It intentionally shares the same
 coercion path as `sh.make`, so positional ordering, keyword flag formatting,
-underscore-to-hyphen normalization, and rejection of `None` and `bytes` stay in
+underscore-to-hyphen normalization, and rejection of `None` and unsupported
+argument types (including `bytes`, whose message quotes the value) stay in
 lockstep with builders.
 
 `build_argv` stays generic; the *builder* reserves the names that describe how
@@ -636,14 +647,19 @@ classDiagram
     }
 
     class SafeCmdBuilder {
-        <<callable>>
-        +__call__(*args: object, **kwargs: object) SafeCmd
+        <<protocol>>
+        +__call__(*args: ArgValue, **kwargs: ArgValue) SafeCmd
+    }
+
+    class ArgValue {
+        <<alias>>
+        str | int | float | bool | Path | os.PathLike[str]
     }
 
     class sh_module {
-        +_stringify_arg(value: object) str
-        +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
-        +build_argv(*args: object, **kwargs: object) tuple~str,...~
+        +_stringify_arg(value: ArgValue) str
+        +_serialize_kwargs(kwargs: dict~str,ArgValue~) tuple~str,...~
+        +build_argv(*args: ArgValue, **kwargs: ArgValue) tuple~str,...~
         +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
     }
 
@@ -655,6 +671,7 @@ classDiagram
     SafeCmd --> ProjectSettings : uses
 
     SafeCmdBuilder --> SafeCmd : builds
+    SafeCmdBuilder --> ArgValue : accepts
 
     sh_module --> ProgramCatalogue : uses
     sh_module --> SafeCmdBuilder : returns

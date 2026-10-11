@@ -133,13 +133,31 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts text (`str`), `int`, `float`,
-`bool`, and `Path` values as positional and keyword arguments. Keyword
-arguments become `--name=value`; underscores in names become hyphens. This
-suits tools that actually accept that form. For flags such as `--check`, pass a
-positional argument: `check=True` would produce `--check=True`. `bytes` values
-raise `TypeError`, as `None` does, so decode bytes before passing them to the
-builder. An argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts
+`str | int | float | bool | Path | os.PathLike[str]` in positional and keyword
+positions alike. Keyword arguments become `--name=value`; underscores in names
+become hyphens. This suits tools that actually accept that form. For flags such
+as `--check`, pass a positional argument: `check=True` would produce
+`--check=True`. Booleans are values, not presence switches: `porcelain=True`
+produces `--porcelain=True`, and `porcelain=False` produces `--porcelain=False`.
+`None` raises `TypeError` in either position, so decide whether to omit or
+substitute an optional flag before building. An argument containing spaces
+remains one argument.
+
+Any other type raises `TypeError` naming the real type, not rendering it with
+`str()`: `bytes`, `list`, and a bare `object()` all fail. A path-like value is
+converted with `os.fspath()`, so a `pathlib.Path` and any other object
+implementing `__fspath__` both serialize to the same text; this matches the
+convention the standard library follows for command arguments. `ArgValue` names
+`os.PathLike[str]` rather than the unparameterized `os.PathLike` because only a
+`__fspath__` returning text is accepted: one returning `bytes` is rejected with
+the offending value quoted, as are `bytes` arguments generally, so decode bytes
+before passing them to the builder. Rejection tests the value's real type, so a
+proxy that reports a supported `__class__` while remaining a different type is
+still refused. That domain is the `ArgValue` alias, importable from both
+`cuprum` and `cuprum.sh`; the builder `sh.make()` returns is a
+`SafeCmdBuilder`, and this is the contract a static type checker enforces at
+the call site.
 
 `os.fsdecode()` converts caller-held filesystem bytes to text using the
 configured filesystem encoding and error handler. On POSIX, the default
@@ -1585,6 +1603,41 @@ The same check runs from a shell:
 python -c "import cuprum; print(cuprum.is_rust_available())"
 ```
 
+### Stream telemetry in profiling reports
+
+The tee hot-path profiling harness writes bounded aggregate stream telemetry
+into its JSON artefacts, so a report can be read without instrumenting a
+production run. Two keys carry it:
+
+- `stream_telemetry` in each scenario's `worker-result.json`, covering that
+  worker run, including every repeat in its repeat loop;
+- `stream_telemetry_summary` in a read-size sweep's `read-size-sweep.json`,
+  combining the telemetry of every completed sample in the sweep.
+
+Both use the same shape: a `groups` mapping keyed first by the closed operation
+(`stream_drain` or `pipeline_transfer`) and then by the closed outcome (`eof`,
+`cancelled`, `failed`, `downstream_closed`, or `post_close_drain_timeout`),
+plus a `totals` group summed over every group present. Each group carries four
+aggregate fields, and nothing else:
+
+| Field              | Type    | Meaning                                                          |
+| ------------------ | ------- | ---------------------------------------------------------------- |
+| `bytes_consumed`   | `int`   | Bytes returned by completed readers in the group.                |
+| `read_operations`  | `int`   | Completed reader calls, including the read that returns EOF.     |
+| `operation_count`  | `int`   | Completed operations in the group.                               |
+| `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, for the group. |
+
+_Table 2: Aggregate fields of each `stream_telemetry` group._
+
+The telemetry observes only the pure-Python drain and pipeline-transfer paths. A
+`pipeline_transfer` group may therefore be absent when the Rust backend
+handles a pipeline hop: the pure-Python path did not run, so an absent group is
+not a failure. No per-read or per-chunk telemetry is emitted, and the telemetry
+does not change stream read behaviour or read-size and line-ending handling.
+These artefacts are profiling output rather than production telemetry; the
+opt-in production channel is
+[aggregate Python stream-operation events](#aggregate-python-stream-operation-events).
+
 ### Rust-pump executor-hop spans
 
 Rust-backed pipelines can expose the executor hop that moves bytes between
@@ -1632,7 +1685,7 @@ values:
 | `duplicate_fds_unavailable` | a transport descriptor closed before the worker's copy of it could be made                     |
 | `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use      |
 
-_Table 2: Reasons an inter-stage hop declines the Rust pump._
+_Table 3: Reasons an inter-stage hop declines the Rust pump._
 
 These records sit at `DEBUG` rather than `WARNING` because a fall-back is a
 routing decision, not a fault; on platforms where the fast path does not apply,
@@ -1805,7 +1858,7 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
 
-_Table 3: Metrics emitted by `PumpMetricsHook`._
+_Table 4: Metrics emitted by `PumpMetricsHook`._
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -1825,8 +1878,8 @@ only label on this counter. Descriptor numbers, Windows handle values, errno
 values, exception types, exception messages, and tracebacks never become metric
 labels.
 
-The `reason` label takes exactly the values in Table 2, plus `unknown`, and
-nothing else. Table 2's values are published as the `RustPumpDeclineReason`
+The `reason` label takes exactly the values in Table 3, plus `unknown`, and
+nothing else. Table 3's values are published as the `RustPumpDeclineReason`
 enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
 a dashboard can enumerate the series it will see:
 

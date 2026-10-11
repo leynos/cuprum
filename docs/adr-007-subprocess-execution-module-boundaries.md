@@ -469,3 +469,18 @@ discards output, and cancellation during capture grace still settles the
 consumers before propagating. Reconciliation remains one shielded unit.
 
 No public API changes, and the module-size suppression is still unnecessary.
+## Addendum (2026-10-11): typed `sh.make` argument contract
+
+The 2026-09-25 addendum's inventory is historical for two entries.
+`cuprum/sh/argv.py` no longer owns the private `_ArgValue`; it owns `ArgValue`,
+the public alias naming the domain a builder accepts
+(`str | int | float | bool | pathlib.Path | os.PathLike[str]`).
+`SafeCmdBuilder` has moved out of `cuprum/sh/safe_cmd.py` into
+`cuprum/sh/builder.py`, where it is a `typing.Protocol` describing the callable
+`sh.make` returns. `SafeCmd` and `Pipeline` remain in `cuprum/sh/safe_cmd.py`,
+and the rest of that addendum still stands.
+
+Publishing the alias is what lets callers annotate their own wrappers with the
+same domain the builders enforce, without repeating the union or reaching for
+`object`. The contract itself, including which values are rejected at run time,
+is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
