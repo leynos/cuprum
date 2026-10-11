@@ -25,9 +25,11 @@ path can reach a metric label. The measured settle duration rides along only on
 the outcome that took one, for the same reason a histogram observes only where
 a figure was actually measured.
 
-Reporting is best-effort. A teardown outlives the run that asked for it, so an
-observe hook that raises must not displace the ``CancelledError`` or
-``TimeoutError`` already propagating, nor abort the teardown itself.
+Event dispatch is best-effort. A teardown outlives the run that asked for it,
+so an observe hook that raises must not displace the ``CancelledError`` or
+``TimeoutError`` already propagating, nor abort the teardown itself. The log
+record carries no such guard, because a handler the application installed
+raising out of ``warning`` is that application's decision to make.
 """
 
 from __future__ import annotations
@@ -272,9 +274,14 @@ def report_group_teardown(
     record nobody sees, or a metric with no diagnostic beside it.
 
     *error* is the kernel's refusal, carried only by the outcome that has one.
-    Nothing raises from here: every caller is already unwinding a run that has
-    ended, and an observability failure must not displace the error that ended
-    it.
+
+    Only the event half is protected. Every caller is already unwinding a run
+    that has ended, so the hook that consumes the event is called under a
+    suppression and cannot displace the error that ended it; the log record is
+    not, for the reason :func:`signal_target_or_report` gives — a handler the
+    application installed can raise out of the ``warning`` call, and this does
+    not add a second guard that would hide it. Claiming the whole call is
+    non-raising would have been the stronger promise and the false one.
     """
     _LOGGER.warning(_MESSAGES[report.outcome], *_log_args(report, error))
     _emit_event(observation, report)
