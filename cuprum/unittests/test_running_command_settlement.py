@@ -232,14 +232,16 @@ def test_an_expiry_carries_the_output_the_child_had_written() -> None:
                 await handle.wait(timeout=_DEADLINE)
 
         expiry = raised.value
-        assert expiry.output is not None, (
-            "the expiry must carry the output captured before the deadline"
+        assert isinstance(expiry.output, str), (
+            "the expiry must carry the output captured before the deadline, "
+            f"decoded rather than raw, got {expiry.output!r}"
         )
         assert CHILD_STDOUT in expiry.output, (
             f"the child's stdout marker must survive the stop, got {expiry.output!r}"
         )
-        assert expiry.stderr is not None, (
-            "the expiry must carry the child's error output too"
+        assert isinstance(expiry.stderr, str), (
+            "the expiry must carry the child's error output too, decoded "
+            f"rather than raw, got {expiry.stderr!r}"
         )
         assert CHILD_STDERR in expiry.stderr, (
             f"the child's stderr marker must survive the stop, got {expiry.stderr!r}"
