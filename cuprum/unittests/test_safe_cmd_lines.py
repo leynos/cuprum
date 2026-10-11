@@ -80,9 +80,18 @@ def _assert_exec_event_order(
 # blocks far longer than any test timeout. A child that is still running can
 # therefore only have been left running, never merely not-yet-exited, which is
 # what makes the teardown assertions below meaningful rather than timed.
+#
+# The pid is published by renaming a fully written temporary file onto the
+# final path, so the file's existence proves its contents are complete. Writing
+# the final path directly would create it before the digits landed, and a
+# caller that polled only for existence could read an empty file and fail to
+# parse it.
 _BLOCKING_CHILD = "\n".join((
     "import os, pathlib, time",
-    "pathlib.Path(os.environ['PID']).write_text(str(os.getpid()))",
+    "pid_file = pathlib.Path(os.environ['PID'])",
+    "pid_tmp = pid_file.with_name(pid_file.name + '.tmp')",
+    "pid_tmp.write_text(str(os.getpid()))",
+    "pid_tmp.replace(pid_file)",
     "print('ready', flush=True)",
     "time.sleep(300)",
 ))
@@ -98,8 +107,9 @@ def _blocking_command(
     -------
     tuple[SafeCmd, Path]
         The command, and the file its child writes its pid to. The pid is
-        written before the child's first line, so a caller that has received a
-        line can read the file without polling.
+        published atomically before the child's first line, so a caller that
+        has received a line — or that has merely seen the file appear — reads
+        a complete pid without polling for the write to land.
     """
     script = tmp_path / "child.py"
     script.write_text(_BLOCKING_CHILD, encoding="utf-8")
