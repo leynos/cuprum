@@ -1,8 +1,11 @@
 """Structured result types returned by ``cuprum.sh`` execution.
 
 ``CommandResult`` and ``PipelineResult`` describe the outcome of running a
-single command or a pipeline of commands, respectively. The ``cuprum.sh``
-package re-exports both.
+single command or a pipeline of commands whose streams are decoded as text.
+``BytesCommandResult`` and ``BytesPipelineResult`` are their byte-exact
+counterparts, returned by the ``run_bytes()`` entry points so that captured
+output survives a round trip through values that are not valid UTF-8. The
+``cuprum.sh`` package re-exports all four.
 """
 
 # No ``from __future__ import annotations`` here: the result fields are public
@@ -14,6 +17,8 @@ from cuprum.echo_events import RelayFallback
 from cuprum.program import Program
 
 __all__ = [
+    "BytesCommandResult",
+    "BytesPipelineResult",
     "CommandResult",
     "PipelineResult",
 ]
@@ -166,6 +171,149 @@ class PipelineResult:
         -------
         str | None
             The final stage's captured standard output, or ``None`` when
+            capture was disabled.
+        """
+        return self.final.stdout
+
+
+@dc.dataclass(frozen=True, slots=True)
+class BytesCommandResult:
+    """Byte-exact result returned by the binary-output command entry points.
+
+    The fields, defaults, and helpers mirror :class:`CommandResult`; only the
+    captured-output fields differ, so a caller that switches entry point
+    switches the static type of what it reads rather than the shape of the
+    record. Bytes reach a caller untouched — no decoding, no surrogate escape —
+    which is what lets every byte value survive the round trip.
+
+    Attributes
+    ----------
+    program:
+        Program that was executed.
+    argv:
+        Argument vector (excluding the program name) passed to the process.
+    exit_code:
+        Exit status reported by the process.
+    pid:
+        Process identifier; ``-1`` when unavailable.
+    stdout:
+        Captured standard output bytes, or ``None`` when capture was disabled.
+        A stream that was consumed but produced nothing is ``b""``, which is
+        distinguishable from the ``None`` of a run that never captured.
+    stderr:
+        Captured standard error bytes, with the same ``None``/``b""``
+        distinction as ``stdout``.
+    started_at:
+        Wall-clock timestamp at which process execution started.
+    duration:
+        Monotonic process duration in seconds.
+    max_rss_bytes:
+        Peak resident set size of the executed child in bytes, under the same
+        platform rules as :class:`CommandResult`.
+    user_cpu_seconds:
+        User CPU time consumed by the executed child in seconds, under the
+        same platform rules as :class:`CommandResult`.
+    system_cpu_seconds:
+        System CPU time consumed by the executed child in seconds, under the
+        same platform rules as :class:`CommandResult`.
+    relay_fallbacks:
+        Handled echo-disablement records from this command's own streams, in
+        the order and with the meaning :class:`CommandResult` documents.
+
+    """
+
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    stdout: bytes | None
+    stderr: bytes | None
+    # Kept in step with ``CommandResult``: ``kw_only`` holds the seventh
+    # positional slot for ``relay_fallbacks`` so a seven-argument call cannot
+    # bind a measurements default into the relay tuple.
+    started_at: float = dc.field(default=0.0, kw_only=True)
+    duration: float = dc.field(default=0.0, kw_only=True)
+    max_rss_bytes: int | None = dc.field(default=None, kw_only=True)
+    user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
+    system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
+    relay_fallbacks: tuple[RelayFallback, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        """Whether the command exited successfully.
+
+        Returns
+        -------
+        bool
+            ``True`` exactly when ``exit_code`` is zero.
+        """
+        return self.exit_code == 0
+
+
+@dc.dataclass(frozen=True, slots=True)
+class BytesPipelineResult:
+    """Byte-exact result returned by the binary-output pipeline entry points.
+
+    Attributes
+    ----------
+    stages:
+        Per-stage results in execution order. Stages whose stdout is streamed
+        into the next stage carry ``stdout`` of ``None``; the final stage
+        carries captured stdout bytes when capture is enabled.
+    failure_index:
+        Index of the stage that triggered fail-fast termination, or ``None``
+        when all stages completed successfully.
+
+    """
+
+    stages: tuple[BytesCommandResult, ...]
+    failure_index: int | None = None
+
+    @property
+    def final(self) -> BytesCommandResult:
+        """The result from the final pipeline stage.
+
+        Returns
+        -------
+        BytesCommandResult
+            The last stage's result in execution order.
+        """
+        return self.stages[-1]
+
+    @property
+    def failure(self) -> BytesCommandResult | None:
+        """The stage that triggered fail-fast termination, if any.
+
+        Returns
+        -------
+        BytesCommandResult | None
+            The failing stage result, or ``None`` when no stage triggered
+            fail-fast termination.
+        """
+        if self.failure_index is None:
+            return None
+        return self.stages[self.failure_index]
+
+    @property
+    def ok(self) -> bool:
+        """Whether every pipeline stage exited successfully.
+
+        Returns
+        -------
+        bool
+            ``True`` when every stage result is successful; otherwise
+            ``False``.
+        """
+        return all(stage.ok for stage in self.stages)
+
+    @property
+    def stdout(self) -> bytes | None:
+        """Captured output from the final pipeline stage.
+
+        Returns
+        -------
+        bytes | None
+            The final stage's captured standard output bytes, or ``None`` when
             capture was disabled.
         """
         return self.final.stdout

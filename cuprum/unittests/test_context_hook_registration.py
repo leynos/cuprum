@@ -39,7 +39,8 @@ from cuprum.context import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum._result_types import _AnyCommandResult
+    from cuprum.sh import SafeCmd
 
 
 class _HookRegistrationCase(typ.NamedTuple):
@@ -90,7 +91,7 @@ def _recorder(
 
         return before_hook
 
-    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+    def after_hook(cmd: SafeCmd, result: _AnyCommandResult) -> None:
         """Record this after hook's registration ordinal."""
         _, _ = cmd, result  # Unused: only the ordinal matters here.
         call_order.append(ordinal)

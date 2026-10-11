@@ -2618,7 +2618,10 @@ core functions affected are:
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental decoding configured by `config.encoding` and `config.errors`.
+  incremental decoding configured by `config.encoding` and the mode-scoped view
+  policy: byte-exact runs replace undecodable bytes so an observer view cannot
+  end the run, text runs keep `config.errors` (see `OBSERVER_ERROR_POLICY`
+  below).
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
@@ -2632,11 +2635,22 @@ echoed text to a configured sink, and accumulating captured bytes. The
 line-emitting consume variant layers one incremental decoder per invocation on
 top of this loop by passing an `on_chunk` delivery hook; the hook itself does
 not own shared state. Fixes to read, echo, and capture behaviour belong in
-`_drain()`, so the capture-only and line-emitting paths cannot diverge. The
-line-emitting variant configures its incremental decoder from `config.encoding`
-and `config.errors`, and `_drain()` applies the same error policy when decoding
-captured bytes. New consume variants should reuse `_drain()` unless they
-deliberately replace the whole stream-consumption contract.
+`_drain()`, so the capture-only and line-emitting paths cannot diverge.
+
+Observation and echo both render a *view* of the child's bytes rather than the
+run's capture. In a byte-exact run the view must not end the run it observes:
+reading `config.errors` in the view decoder would let a registered
+`sh.observe()` hook, or the line feeder the idle partition attaches, raise
+`UnicodeDecodeError` from the read loop and kill a byte-exact run that would
+otherwise have returned the child's bytes intact. So byte-mode views decode
+under `cuprum._constants.OBSERVER_ERROR_POLICY` and replace undecodable input.
+A text run is untouched — its views and its capture both decode under
+`config.errors`, so a strict text run raises from the read loop exactly as it
+did before byte mode existed. `cuprum._streams._StreamConfig.view_errors`
+derives that choice once for both view decoders; `_drain()` remains the one
+place `config.errors` governs the capture decode. New consume variants should
+reuse `_drain()` unless they deliberately replace the whole stream-consumption
+contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw

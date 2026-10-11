@@ -52,8 +52,8 @@ from cuprum.context import EnvMode, current_context
 from cuprum.events import TerminalOutcome
 
 if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import (
-        CommandResult,
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,
@@ -90,6 +90,11 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
+    # Whether the captured streams are reported as bytes rather than decoded
+    # text. Defaulted rather than required because the text-mode entry point
+    # is the one the whole codebase calls; the binary entry points are the
+    # only callers that set it.
+    capture_bytes: bool = False
 
 
 def _prepare_execution_observation(
@@ -164,6 +169,7 @@ def _build_subprocess_execution(
         observation=observation,
         stdin_data=state.stdin_data,
         on_line=state.output.on_line,
+        capture_bytes=state.capture_bytes,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes
         # the spawn is the parent's work, and must not read as the child's
@@ -191,7 +197,7 @@ async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run the subprocess and hooks, then settle after all observers finish.
 
     Cleanup aggregates observer failures with the active error; success-path
@@ -199,10 +205,11 @@ async def _execute_with_hooks(
 
     Returns
     -------
-    CommandResult
-        The completed command's result after every observe-hook task drains.
+    CommandResult | BytesCommandResult
+        The completed command's result after every observe-hook task drains,
+        in whichever mode the run asked for.
     """
-    result: CommandResult | None = None
+    result: _AnyCommandResult | None = None
     try:
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
@@ -223,7 +230,7 @@ async def _execute_with_hooks(
 async def _finalize_command_run_failure(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-    result: CommandResult | None,
+    result: _AnyCommandResult | None,
     run_error: BaseException,
 ) -> None:
     """Settle and drain an observed command after execution or hook failure."""
@@ -251,7 +258,7 @@ async def _finalize_command_run_failure(
 def _failed_command_details(
     started_pid: int | None,
     outcome: TerminalOutcome,
-    result: CommandResult | None,
+    result: _AnyCommandResult | None,
 ) -> _EventDetails:
     """Retain only child details that remain valid after command failure."""
     duration_s = None if result is None else result.duration
@@ -267,7 +274,7 @@ def _failed_command_details(
 async def _finalize_command_run_success(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-    result: CommandResult,
+    result: _AnyCommandResult,
 ) -> None:
     """Settle a completed command, then drain every observe-hook task."""
     outcome = _outcome_for_result(result)
@@ -329,7 +336,7 @@ async def _finalize_prepared_command_failure(
 async def _run_prepared_command(
     cmd: SafeCmd,
     state: _ExecutionState,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run one validated command after its public inputs are resolved.
 
     ``SafeCmd.run`` remains the public entry point and keeps its signature; it
@@ -349,8 +356,9 @@ async def _run_prepared_command(
 
     Returns
     -------
-    CommandResult
-        The completed command's result.
+    CommandResult | BytesCommandResult
+        The completed command's result, byte-exact when the run asked for
+        bytes.
     """
     output = state.output
     # The bracket owns the session for the whole run: a plan observer, a

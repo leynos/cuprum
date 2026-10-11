@@ -1,22 +1,32 @@
-"""``SafeCmd`` and ``Pipeline`` execution primitives for ``cuprum.sh``.
+"""The single-command execution primitive.
 
-``SafeCmd`` is the typed, immutable curated command; ``Pipeline`` composes
-``SafeCmd`` stages piped stdout-to-stdin. They reference each other at
-runtime (``SafeCmd.__or__`` builds a ``Pipeline``), so they stay in one module
-to avoid a runtime import cycle. The ``cuprum.sh`` package re-exports
-both.
+Split out of the former ``cuprum/sh/safe_cmd.py`` module so each of the two
+execution primitives owns a module: their byte-exact entry points are ordinary
+methods of the class they extend, and keeping the class next to those methods
+is what lets the methods annotate ``self`` implicitly rather than naming the
+class in a string that only ``TYPE_CHECKING`` could resolve. The modules still
+import each other — a command composes into a pipeline and a pipeline is built
+from commands — so the cycle between them is broken the same way ``cuprum.sh``
+breaks its own: each side defers the import it needs to the point of use.
+
+``cuprum/sh/__init__.py`` re-exports both classes unchanged, so importers of
+``cuprum.sh`` see the same objects they always did.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
 # introspected with ``typing.get_type_hints``, so annotations are evaluated
 # eagerly and every name they use is a genuine runtime import. Only the forward
-# references to ``SafeCmd`` and ``Pipeline`` inside their own class bodies are
-# quoted.
+# references to ``SafeCmd`` and ``Pipeline`` inside the class bodies are quoted.
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
-import typing as typ
 
+from cuprum._bytes_run import (
+    _bytes_output,
+    _require_bytes_command_result,
+    _require_command_result,
+    _validate_bytes_output,
+)
 from cuprum._command_internals import (
     _build_subprocess_execution,
     _ExecutionState,
@@ -25,25 +35,18 @@ from cuprum._command_internals import (
 )
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
-from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
-    _MIN_PIPELINE_STAGES,
     _collect_hooks,
     _enforce_allowlist,
-    _run_pipeline,
 )
-from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
 from cuprum.context import current_context
 from cuprum.program import Program
 from cuprum.sh.execution import ExecutionContext, StdinInput
-from cuprum.sh.output import (
-    RunOutputOptions,
-    _DeprecatedOutputFlags,
-    _resolve_pipeline_output,
-)
-from cuprum.sh.results import CommandResult, PipelineResult
+from cuprum.sh.output import RunOutputOptions
+from cuprum.sh.results import BytesCommandResult, CommandResult
 
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 
@@ -130,13 +133,136 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return await _run_prepared_command(
-            self,
-            _ExecutionState(
-                context=ctx,
-                output=out,
-                stdin_data=stdin_data,
-                timeout=effective_timeout,
+        return _require_command_result(
+            await _run_prepared_command(
+                self,
+                _ExecutionState(
+                    context=ctx,
+                    output=out,
+                    stdin_data=stdin_data,
+                    timeout=effective_timeout,
+                ),
+            )
+        )
+
+    async def run_bytes(
+        self,
+        *,
+        output: RunOutputOptions | None = None,
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> BytesCommandResult:
+        """Execute the command, capturing its output as bytes.
+
+        The run itself is the one ``run()`` performs; only what happens to the
+        captured streams differs. Bytes are returned exactly as the child wrote
+        them — no decoding, no replacement characters — so values that are not
+        valid text survive the round trip.
+
+        Echoing, sink presentation, and idle reporting all behave as they do
+        in text mode. A sink exposing a ``buffer`` receives the child's own
+        bytes; a text-only sink decodes them for display only, and a mirror it
+        cannot render is disabled without disturbing what was captured.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. ``on_line`` is rejected: bytes mode
+            returns the child's own bytes, so a callback carrying decoded text
+            would be a second, contradictory contract for the same stream. Use
+            the text-mode entry point when lines are wanted.
+        timeout : float | None, default=None
+            Maximum execution time in seconds. An explicit value overrides the
+            timeout in ``context``.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
+
+        Returns
+        -------
+        BytesCommandResult
+            The command outcome, carrying ``bytes`` for each captured stream
+            when ``output.capture`` is true and ``None`` for each stream that
+            was not captured.
+
+        Raises
+        ------
+        ValueError
+            If ``output.on_line`` is set.
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+
+        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
+        out = _bytes_output(output)
+        _validate_bytes_output(out)
+        ctx = context or ExecutionContext()
+        _enforce_allowlist(self)
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        return _require_bytes_command_result(
+            await _run_prepared_command(
+                self,
+                _ExecutionState(
+                    context=ctx,
+                    output=out,
+                    stdin_data=stdin_data,
+                    timeout=effective_timeout,
+                    capture_bytes=True,
+                ),
+            )
+        )
+
+    def run_bytes_sync(
+        self,
+        *,
+        output: RunOutputOptions | None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> BytesCommandResult:
+        """Execute the command synchronously, capturing its output as bytes.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. ``on_line`` is rejected: bytes mode
+            returns the child's own bytes, so a callback carrying decoded text
+            would be a second, contradictory contract for the same stream. Use
+            the text-mode entry point when lines are wanted.
+        timeout : float | None, default=None
+            Maximum execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
+
+        Returns
+        -------
+        BytesCommandResult
+            The command outcome, carrying ``bytes`` for each captured stream
+            when capture is enabled and ``None`` for each stream that was not
+            captured.
+
+        Raises
+        ------
+        ValueError
+            If ``output.on_line`` is set.
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+
+        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
+        return asyncio.run(
+            self.run_bytes(
+                output=output,
+                timeout=timeout,
+                context=context,
+                stdin=stdin,
             ),
         )
 
@@ -257,142 +383,11 @@ class SafeCmd:
         )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class Pipeline:
-    """A sequence of SafeCmd stages connected via stdout/stdin piping."""
-
-    parts: tuple[SafeCmd, ...]
-
-    def __post_init__(self) -> None:
-        """Validate stage count invariants."""
-        if len(self.parts) < _MIN_PIPELINE_STAGES:
-            msg = "Pipeline must contain at least two stages"
-            raise ValueError(msg)
-
-    def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
-        """Compose pipelines, appending stages in left-to-right order."""
-        return Pipeline.concat(self, other)
-
-    @classmethod
-    def concat(
-        cls,
-        left: "SafeCmd | Pipeline",
-        right: "SafeCmd | Pipeline",
-    ) -> "Pipeline":
-        """Compose a pipeline from two stage operands.
-
-        Parameters
-        ----------
-        left : SafeCmd | Pipeline
-            A command or pipeline whose stages come first.
-        right : SafeCmd | Pipeline
-            A command or pipeline whose stages follow ``left``'s.
-
-        Returns
-        -------
-        Pipeline
-            A pipeline whose stages are *left*'s followed by *right*'s.
-        """
-        left_parts = left.parts if isinstance(left, Pipeline) else (left,)
-        right_parts = right.parts if isinstance(right, Pipeline) else (right,)
-        return cls((*left_parts, *right_parts))
-
-    async def run(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
-        context: ExecutionContext | None = None,
-        **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
-    ) -> PipelineResult:
-        """Execute the pipeline asynchronously with streaming and backpressure.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings for every observed pipeline stream. The
-            default bounds each echoed line to 64 KiB; ``None`` for
-            ``max_echo_line_bytes`` restores unbounded mirroring without
-            changing capture.
-        timeout : float | None, default=None
-            Maximum pipeline execution time in seconds.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        **deprecated_flags : bool
-            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
-            combine them with ``output``.
-
-        Returns
-        -------
-        PipelineResult
-            The outcome for every stage and complete captured streams when
-            capture is enabled.
-
-        Raises
-        ------
-        ValueError
-            If ``output`` is combined with deprecated flags.
-        PermissionError
-            If a pipeline command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through pipeline helpers
-        out = _resolve_pipeline_output(output, deprecated_flags)
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        config = _prepare_pipeline_config(
-            output=out,
-            timeout=effective_timeout,
-            context=context,
-        )
-        # The bracket opened with the config; this guard is the last word on
-        # every path out of the pipeline, including one the runner itself
-        # raises on the way to its first stage.
-        try:
-            return await _run_pipeline(self.parts, config)
-        except BaseException as run_error:
-            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
-            raise
-
-    def run_sync(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,
-        context: ExecutionContext | None = None,
-        **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
-    ) -> PipelineResult:
-        """Execute the pipeline synchronously via ``asyncio.run``.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings. The 64 KiB default bounds mirrored lines;
-            ``max_echo_line_bytes=None`` restores unbounded echoing while
-            leaving captured output complete.
-        timeout : float | None, default=None
-            Maximum pipeline execution time in seconds.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        **deprecated_flags : bool
-            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
-            combine them with ``output``.
-
-        Returns
-        -------
-        PipelineResult
-            The outcome for every stage and complete captured streams when
-            capture is enabled.
-
-        Raises
-        ------
-        ValueError
-            If ``output`` is combined with deprecated flags.
-        PermissionError
-            If a pipeline command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
-        out = _resolve_pipeline_output(output, deprecated_flags)
-        return asyncio.run(
-            self.run(output=out, timeout=timeout, context=context),
-        )
+# Imported at the foot of the module, after both classes exist, to break the
+# mutual dependency with ``cuprum.sh.pipeline``: that module imports this one
+# for its ``SafeCmd`` annotation, so importing it at the head would leave it
+# reading a half-built module. ``__or__`` needs the real class rather than a
+# postponed name, because ``Pipeline.concat`` is called on it.
+from cuprum.sh.pipeline import (  # ruff: ignore[module-import-not-at-top-of-file]  # deferred to break the cuprum.sh.pipeline dependency cycle
+    Pipeline,
+)

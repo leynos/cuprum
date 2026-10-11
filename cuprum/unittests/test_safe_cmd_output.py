@@ -22,6 +22,7 @@ from tests.helpers.execution import ExecuteFn, _RunKwargs, assert_capture_disabl
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.lines import LineEvent
     from cuprum.sh import SafeCmd
 
 
@@ -307,6 +308,47 @@ def test_allows_disabling_capture(
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
     assert_capture_disabled(result)
+
+
+def test_strict_decoding_still_reaches_a_text_mode_view(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A strict text run still raises from the line reader, base behaviour kept.
+
+    ``errors="strict"`` governed every decode before byte mode existed, so this
+    text run raised ``UnicodeDecodeError`` from the line reader even though it
+    captured nothing. The byte-exact mode scopes its replacement policy to
+    byte-mode views alone, so the text-mode behaviour the original contract
+    promised is what this test pins: line observation under a strict policy
+    raises at the first undecodable byte.
+
+    The payload leads with a complete, valid line, so the callback's emptiness
+    is load-bearing rather than trivial: a strict view must decode a chunk
+    before splitting it, which is what stops a run from publishing text it
+    would then refuse to vouch for.
+    """
+    _, execute = execution_strategy
+    payload = b"complete line\nbefore \xff after"
+    command = python_builder(
+        "-c",
+        f"import sys; sys.stdout.buffer.write({payload!r}); sys.stdout.flush()",
+    )
+    observed: list[LineEvent] = []
+
+    with pytest.raises(UnicodeDecodeError):
+        execute(
+            command,
+            {
+                "output": RunOutputOptions(capture=False, on_line=observed.append),
+                "context": ExecutionContext(errors="strict"),
+            },
+        )
+
+    assert not observed, (
+        "a strict view must raise at the undecodable byte without publishing "
+        f"any line, got {observed!r}"
+    )
 
 
 class TestEchoOnly:

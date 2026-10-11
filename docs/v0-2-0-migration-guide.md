@@ -179,6 +179,55 @@ Consumers that serialize or display these optional fields should preserve
 `None` as unavailable and should treat `user_cpu_seconds` and
 `system_cpu_seconds` as approximate when the aggregate fallback is in use.
 
+## Byte-exact capture is now a typed result mode
+
+Cuprum 0.2.0 adds `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with
+`run_bytes_sync()` counterparts, for callers who need the child's output
+undecoded. These entry points are additive: `run()` and `run_sync()` keep
+decoding by default and keep returning `CommandResult` and `PipelineResult`.
+
+A byte run is the same run in a different result mode. It accepts the same
+`output`, `timeout`, and `context` arguments (plus `stdin` for a single
+command) and returns `BytesCommandResult` or `BytesPipelineResult`, whose
+output fields are `bytes | None` rather than `str | None`. Each stage of a
+`BytesPipelineResult` is a `BytesCommandResult`. All measurement fields — `pid`,
+`started_at`, `duration`, `max_rss_bytes`, `user_cpu_seconds`,
+`system_cpu_seconds`, and `relay_fallbacks` — are unchanged, so nothing is lost
+by capturing exactly.
+
+Two behaviours are worth noting before migrating:
+
+- `RunOutputOptions.on_line` is rejected with `ValueError` before the child is
+  spawned. The capture is byte-exact, so a callback carrying decoded text would
+  contradict it. Structured observation registered with `sh.observe()` is
+  unaffected and still receives decoded lines.
+- A timeout still raises `TimeoutExpired` and still carries the partial output
+  read so far, in the same field, as bytes rather than text. An external
+  cancellation still re-raises `asyncio.CancelledError` rather than being
+  converted into a timeout.
+
+### Byte-mode views replace undecodable input; text mode is unchanged
+
+A byte-exact run's line observation and echo render a *view* of the child's
+bytes rather than reporting them. Undecodable input is replaced in those views
+rather than left to raise, so an ambient `sh.observe()` hook cannot end a
+`run_bytes()` from the read loop and cost it the bytes it had already captured.
+This is the one place `ExecutionContext.errors` does not reach, and it is
+scoped to the byte-exact mode.
+
+Text mode keeps the policy it always had. `run()`, `run_sync()`, and
+`SafeCmd.lines()` under `errors="strict"` still raise `UnicodeDecodeError` on
+undecodable output — from the line reader when a view meets those bytes, and
+from the capture decode otherwise — exactly as they did before 0.2.0. A caller
+who used strict decoding as stream validation keeps that guarantee. For a
+byte-exact run, validation is the caller's to perform on the returned bytes,
+which is what `run_bytes()` exists to make possible.
+
+Callers who previously worked around decoding by round-tripping through a
+surrogate encoding can now drop it and request the byte mode directly. See the
+[binary output section in the users' guide](users-guide.md#binary-output) for
+the full contract, echo and sink behaviour, and a worked example.
+
 ## Aggregate Python stream-operation observation
 
 Cuprum 0.2.0 adds an opt-in observation channel for completed operations in the

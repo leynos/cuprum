@@ -13,7 +13,7 @@ from hypothesis import strategies as st
 
 from cuprum import Program
 from cuprum._pipeline_sink import _pipeline_result_outcome
-from cuprum.sh import CommandResult
+from cuprum.sh import BytesCommandResult, CommandResult
 from cuprum.sinks import TerminalOutcome
 
 _STAGE_RESULTS = st.builds(
@@ -30,7 +30,7 @@ _STAGE_RESULTS = st.builds(
 @given(stages=st.lists(_STAGE_RESULTS, max_size=8))
 def test_pipeline_result_outcome_reports_the_first_failing_stage(
     *,
-    stages: list[CommandResult],
+    stages: list[CommandResult | BytesCommandResult],
 ) -> None:
     """The outcome is zero exactly when no stage failed.
 

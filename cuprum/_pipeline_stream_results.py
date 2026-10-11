@@ -11,12 +11,16 @@ operate purely on the resulting :class:`asyncio.Task` objects.
 from __future__ import annotations
 
 import asyncio
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
 
 
 def _flatten_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-) -> list[asyncio.Task[str | None]]:
+    stderr_tasks: list[_StreamConsumerTask | None],
+    stdout_task: _StreamConsumerTask | None,
+) -> list[_StreamConsumerTask]:
     """Collect all running stream consumer tasks for cancellation cleanup."""
     tasks = [task for task in stderr_tasks if task is not None]
     if stdout_task is not None:
@@ -25,8 +29,8 @@ def _flatten_stream_tasks(
 
 
 async def _cancel_stream_tasks(
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
+    stderr_tasks: list[_StreamConsumerTask | None],
+    stdout_task: _StreamConsumerTask | None,
 ) -> None:
     """Cancel stream consumer tasks and await their completion."""
     tasks = _flatten_stream_tasks(stderr_tasks, stdout_task)
@@ -36,9 +40,19 @@ async def _cancel_stream_tasks(
 
 
 async def _gather_optional_text_tasks(
-    tasks: list[asyncio.Task[str | None] | None],
-) -> tuple[str | None, ...]:
-    """Await optional capture tasks, returning a tuple aligned with inputs."""
+    tasks: list[_StreamConsumerTask | None],
+) -> tuple[str | bytes | None, ...]:
+    """Await optional capture tasks, returning a tuple aligned with inputs.
+
+    A task carries whatever its stream config captured, so each slot is text in
+    the ordinary mode and the child's bytes untouched in the byte-exact one.
+
+    Returns
+    -------
+    tuple[str | bytes | None, ...]
+        One slot per input task, in the same order, holding that task's
+        captured payload or ``None`` where no task was supplied.
+    """
     return tuple(
         await asyncio.gather(
             *(

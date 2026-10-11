@@ -35,6 +35,7 @@ from cuprum._subprocess_context import _cwd_arg
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.sh import SafeCmd
 
 __all__ = ["_spawn_pipeline_processes"]
@@ -62,8 +63,8 @@ class _SpawnedPipelineStages:
     """Resources accumulated while spawning pipeline stages."""
 
     processes: list[asyncio.subprocess.Process] = dc.field(default_factory=list)
-    stderr_tasks: list[asyncio.Task[str | None] | None] = dc.field(default_factory=list)
-    stdout_task: asyncio.Task[str | None] | None = None
+    stderr_tasks: list[_StreamConsumerTask | None] = dc.field(default_factory=list)
+    stdout_task: _StreamConsumerTask | None = None
     started_at: list[float] = dc.field(default_factory=list)
     wall_clock_started_at: list[float] = dc.field(default_factory=list)
     relay_diagnostics_by_stage: list[
@@ -129,8 +130,8 @@ async def _spawn_pipeline_stages(
 
 async def _cleanup_spawned_processes(
     processes: list[asyncio.subprocess.Process],
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
+    stderr_tasks: list[_StreamConsumerTask | None],
+    stdout_task: _StreamConsumerTask | None,
     cancel_grace: float,
 ) -> None:
     """Terminate processes and cancel tasks after a spawn failure.
@@ -140,7 +141,7 @@ async def _cleanup_spawned_processes(
     """
     await _terminate_all_shielded(processes, cancel_grace)
 
-    tasks: list[asyncio.Task[str | None]] = [
+    tasks: list[_StreamConsumerTask] = [
         task for task in stderr_tasks if task is not None
     ]
     if stdout_task is not None:
@@ -158,8 +159,8 @@ async def _spawn_pipeline_processes(
     observations: tuple[_StageObservation, ...] | None = None,
 ) -> tuple[
     list[asyncio.subprocess.Process],
-    list[asyncio.Task[str | None] | None],
-    asyncio.Task[str | None] | None,
+    list[_StreamConsumerTask | None],
+    _StreamConsumerTask | None,
     list[float],
     list[float],
     list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]],

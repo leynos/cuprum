@@ -22,6 +22,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 @pytest.fixture
@@ -97,7 +98,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     class _InjectedStdinError(Exception):
         """Sentinel error injected by the fake stdin writer."""
 
-    recorded: list[asyncio.Task[str | None]] = []
+    recorded: list[ConsumerTask] = []
 
     async def _raise_stdin(
         process: asyncio.subprocess.Process,
@@ -115,7 +116,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
         process: object,
         execution: object,
         spawn_context: object,
-    ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+    ) -> tuple[ConsumerTask, ConsumerTask]:
         """Return two never-completing consumer tasks and record them."""
         _ = (process, execution, spawn_context)
 

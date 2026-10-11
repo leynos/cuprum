@@ -9,15 +9,22 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _pipeline_internals, scoped, sh
+from cuprum import ScopeConfig, _pipeline_finalize, scoped, sh
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from cuprum._subprocess_wait_types import (
+        _StreamConsumerTask,
+        _StreamPayloadPair,
+    )
     from cuprum.program import Program
 
-_REAL_CANCEL_STREAM_TASKS = _pipeline_internals._cancel_stream_tasks
+# The pipeline's cleanup reads this name from the finalization module, which is
+# where the run-failure reconciliation moved when it was split out of
+# ``_pipeline_internals``; patching the old home would leave the real one in use.
+_REAL_CANCEL_STREAM_TASKS = _pipeline_finalize._cancel_stream_tasks
 
 
 class _CommandCleanupGate:
@@ -51,8 +58,8 @@ class _PipelineCancellationScenario:
 
     async def cancel_stream_tasks(
         self,
-        stderr_tasks: list[asyncio.Task[str | None] | None],
-        stdout_task: asyncio.Task[str | None] | None,
+        stderr_tasks: list[_StreamConsumerTask | None],
+        stdout_task: _StreamConsumerTask | None,
     ) -> None:
         """Hold outer cleanup open while additional cancellations arrive."""
         self.cleanup_entered.set()
@@ -72,7 +79,7 @@ def cancellation_scenario(
     )
     scenario = _PipelineCancellationScenario(pipeline, python_program)
     monkeypatch.setattr(
-        _pipeline_internals, "_cancel_stream_tasks", scenario.cancel_stream_tasks
+        _pipeline_finalize, "_cancel_stream_tasks", scenario.cancel_stream_tasks
     )
     return scenario
 
@@ -157,9 +164,9 @@ def test_repeated_cancellation_settles_one_command_once(
             started.set()
 
     async def gated_drain(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
         context: _subprocess_wait._DrainContext,
-    ) -> tuple[str | None, str | None]:
+    ) -> _StreamPayloadPair:
         """Hold reconciliation open while repeated cancellation arrives."""
         gate.entered.set()
         await gate.release.wait()
