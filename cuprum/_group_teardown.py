@@ -123,8 +123,10 @@ class GroupTeardownReport:
     ) -> GroupTeardownReport:
         """Describe a capped wait that expired with members outstanding.
 
-        The bound is passed in rather than read here, so the figure the record
-        carries is the one the wait actually applied.
+        *settle_s* is the duration the wait ran, measured by the caller that
+        waited rather than read from the bound that capped it. The two are
+        equal only when the wait runs its bound out to the last instant, so
+        the record describes what happened instead of what was configured.
 
         Returns
         -------

@@ -188,7 +188,9 @@ async def _await_group_settlement(pgid: int) -> _GroupProbe:
     grace period forever. ``MEMBERS`` is returned when the bound expires with
     the group still populated, which is the one outcome an uncapped
     :func:`_await_group_exit` cannot produce, so a caller can distinguish an
-    expired bound from a refused probe without consulting a clock.
+    expired bound from a refused probe without consulting a clock. How long the
+    wait ran is a separate question this function does not answer; a caller
+    that wants that duration measures the await itself.
 
     Returns
     -------

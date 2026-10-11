@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import signal
+import time
 import typing as typ
 
 from cuprum._group_teardown import (
@@ -55,7 +56,6 @@ from cuprum._group_teardown import (
     unsignalable_report,
 )
 from cuprum._process_group import (
-    _POST_KILL_SETTLEMENT_S,
     _await_group_settlement,
     _await_group_teardown,
     _GroupProbe,
@@ -343,9 +343,9 @@ async def _settle_after_escalation(
     recorded only when something outside this run reaps it. Waiting for that
     without a bound is what would let a teardown run past its grace period
     forever, so the group wait is capped and outstanding members are reported
-    rather than waited on — with the bound that was applied, from the constant
-    that applied it, so the figure in the record cannot drift from the one the
-    wait actually used.
+    rather than waited on — with the time the wait actually took, measured
+    here, so the figure in the record is the duration the wait ran rather than
+    the bound it ran under.
 
     The child is reaped before the group is probed, which also keeps the probe
     sound: a zombie still counts as a member of its group, so probing first
@@ -356,18 +356,23 @@ async def _settle_after_escalation(
     cannot reap; the probe being refused leaves members this run may not
     signal. Neither is settlement, so neither may be passed over in silence.
     ``_await_group_settlement`` reports the first as ``MEMBERS``, which is what
-    tells the two apart here without a clock of this module's own.
+    tells the two apart; the wait itself is measured around that call, because
+    a group that settles just inside its bound and one that runs the bound out
+    to its last instant are the same fact to the probe and different ones to
+    an operator.
     """
     await target.wait_for_exit()
     if not owns_group or process.pid is None:
         return
+    started = time.monotonic()
     outcome = await _await_group_settlement(process.pid)
+    settle_s = time.monotonic() - started
     if outcome is _GroupProbe.MEMBERS:
         _report_teardown(
             observation,
             GroupTeardownReport.settlement_timeout(
                 process.pid,
-                settle_s=_POST_KILL_SETTLEMENT_S,
+                settle_s=settle_s,
             ),
         )
     else:
