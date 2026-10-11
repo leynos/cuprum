@@ -2752,6 +2752,25 @@ default on the development host; the fallback `create_subprocess_exec` path is
 covered by the same parameterized tests, selected by monkeypatching
 `wait4_resource_measurement_available()` to return `False`.
 
+**Proof assessment: not applicable.** Recorded rather than requested, because
+this repository holds two verifier families and neither is affected. The Kani
+family is four proof files under `rust/*/src/*kani_proofs.rs`, and this branch
+changes **zero** Rust files. The CrossHair family is three files under
+`cuprum/unittests/*crosshair*`, and all three are unchanged at this head;
+further, the production modules they import — `_subprocess_timeout.py`,
+`_process_lifecycle.py`, and `_pipeline_wait*.py` — are also unchanged, so the
+obligations those harnesses discharge are untouched by construction rather than
+by re-running them. Verus is present as vendored tooling only
+(`tools/verus/{SHA256SUMS,VERSION}`) with no proof authored, so no `verus`
+obligation exists to scrutinise. This determination was re-derived at the
+current head rather than inherited from the earlier one: the previous basis
+(zero Rust files changed) covered only Kani, whereas for a Python branch
+CrossHair is the family that could actually have been affected, so it was
+checked separately. One near-miss was investigated and dismissed:
+`cuprum/unittests/test_subprocess_timeout_observe.py` appears in a name-based
+search but carries no verifier markers and its diff is an ordinary adaptation,
+not a proof change.
+
 No formal proof, model check, or bounded model check is planned. The change
 introduces no arithmetic invariant, no concurrency protocol with an unbounded
 state space, and no `unsafe` boundary; its obligations are finite enumerations
