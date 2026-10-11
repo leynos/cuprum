@@ -43,9 +43,8 @@ from cuprum.unittests._post_exit_teardown_support import (
     TeardownWatch,
     assert_reclaimed,
     await_within,
-    builder,
     held_by,
-    owned_scope,
+    owned_builder,
     reach_gate_and_cancel,
     reap_descendant,
     settle,
@@ -60,11 +59,11 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
     from cuprum.sh import SafeCmd
 
-# The two fixtures are imported rather than defined here because both modules
-# that drive this boundary need them, and the support module is where their one
-# definition lives. Declaring them also records that the imports are names
-# pytest resolves at collection time, not unused ones to prune.
-__all__ = ["builder", "owned_scope"]
+# The fixture is imported rather than defined here because every module that
+# drives this boundary needs it, and the support module is where its one
+# definition lives. Declaring it also records that the import is a name pytest
+# resolves at collection time, not an unused one to prune.
+__all__ = ["owned_builder"]
 
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
@@ -83,8 +82,7 @@ _LEAKED_ON_CANCEL = (
 
 
 def test_a_cancel_at_the_heartbeat_stop_still_settles_the_group(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -123,7 +121,7 @@ def test_a_cancel_at_the_heartbeat_stop_still_settles_the_group(
         """Cancel at the heartbeat stop with a stdin writer still outstanding."""
         descendant_pid: int | None = None
         run_task = start_owned_run(
-            builder,
+            owned_builder,
             pid_file,
             stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
         )
@@ -158,8 +156,7 @@ def test_a_cancel_at_the_heartbeat_stop_still_settles_the_group(
 
 
 def test_a_cancel_at_the_writer_await_still_settles_the_group(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -205,7 +202,7 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
         """Cancel the run while the parked stdin writer is being awaited."""
         descendant_pid: int | None = None
         run_task = start_owned_run(
-            builder,
+            owned_builder,
             pid_file,
             stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
         )
@@ -235,8 +232,7 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
 
 
 def test_a_second_cancel_during_teardown_still_reconciles_the_consumers(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -262,7 +258,7 @@ def test_a_second_cancel_during_teardown_still_reconciles_the_consumers(
     async def run_case() -> None:
         """Cancel twice: once to enter cleanup, once during its first half."""
         descendant_pid: int | None = None
-        run_task = start_owned_run(builder, pid_file)
+        run_task = start_owned_run(owned_builder, pid_file)
         try:
             descendant_pid = await asyncio.to_thread(
                 wait_for_pid_file,

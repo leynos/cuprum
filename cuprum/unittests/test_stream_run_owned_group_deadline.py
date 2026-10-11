@@ -33,27 +33,19 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 import typing as typ
 
 import pytest
 
-from cuprum.sh import (
-    ExecutionContext,
-    ProcessGroupPolicy,
-    RunOutputOptions,
-    StdinInput,
-    TimeoutExpired,
-)
+from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions, StdinInput
 from cuprum.unittests._post_exit_teardown_support import (
     PARKING_STDIN_BYTES,
-    RUN_BUDGET_S,
     SpawnedWriter,
     assert_reclaimed,
-    builder,
-    owned_scope,
+    owned_builder,
     reap_descendant,
-    recorded_descendant,
+    recorded_descendant_or_fail,
+    run_to_its_own_deadline,
 )
 from tests.helpers.timeouts import descendant_then_exit_argv
 
@@ -63,10 +55,10 @@ if typ.TYPE_CHECKING:
 
     from cuprum.sh import SafeCmd
 
-# The two fixtures are imported rather than defined here; declaring them
-# records that pytest resolves these names at collection time rather than
-# leaving them to be pruned as unused imports.
-__all__ = ["builder", "owned_scope"]
+# The fixture is imported rather than defined here; declaring it records that
+# pytest resolves the name at collection time rather than leaving it to be
+# pruned as an unused import.
+__all__ = ["owned_builder"]
 
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
@@ -82,8 +74,7 @@ _DEADLINE_S = 1.0
 
 
 def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
 ) -> None:
     """A configured timeout covers the stream collection, not just the exit wait.
@@ -104,34 +95,22 @@ def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
     policy exists to prevent.
     """
     pid_file = tmp_path / "post-exit-deadline.pid"
-    command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+    command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
 
     async def run_case() -> None:
         """Run with a deadline the child meets but the collection cannot."""
         descendant_pid: int | None = None
-        started = time.monotonic()
         try:
-            with pytest.raises(TimeoutExpired):
-                await asyncio.wait_for(
-                    command.run(
-                        output=RunOutputOptions(capture=True, echo=False),
-                        timeout=_DEADLINE_S,
-                        context=ExecutionContext(
-                            process_group=ProcessGroupPolicy.OWN_GROUP,
-                        ),
+            await run_to_its_own_deadline(
+                command.run(
+                    output=RunOutputOptions(capture=True, echo=False),
+                    timeout=_DEADLINE_S,
+                    context=ExecutionContext(
+                        process_group=ProcessGroupPolicy.OWN_GROUP,
                     ),
-                    RUN_BUDGET_S,
-                )
-            elapsed = time.monotonic() - started
-            assert elapsed < RUN_BUDGET_S, (
-                "the run reached this assertion too late to have been bounded "
-                "by its own deadline"
+                ),
             )
-            descendant_pid = recorded_descendant(pid_file)
-            assert descendant_pid is not None, (
-                "the child never recorded the descendant it left behind, so "
-                "this run did not reach the state under test"
-            )
+            descendant_pid = recorded_descendant_or_fail(pid_file)
             await assert_reclaimed(
                 descendant_pid,
                 "a deadline expiring during stream collection must settle the "
@@ -150,8 +129,7 @@ def test_a_descendant_holding_the_pipes_does_not_outlive_the_deadline(
     ids=["own-group", "inherit"],
 )
 def test_a_descendant_that_never_reads_stdin_does_not_outlive_the_deadline(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     *,
     monkeypatch: pytest.MonkeyPatch,
@@ -181,56 +159,33 @@ def test_a_descendant_that_never_reads_stdin_does_not_outlive_the_deadline(
     an assertion on the writer's settlement passes either way. Under
     ``INHERIT`` nothing closes the pipe: the writer stays parked unless
     reconciliation cancels it, and a cleanup that does not reach the writer
-    hangs the run past the deadline it was given. The ``INHERIT`` arm is
-    therefore the one that pins the reconciliation, and it is run alongside
-    the owned one because the owned arm is what a caller reaching for this
-    feature would write first.
+    hangs the run past the deadline it was given.
 
-    The writer-settled assertion is read against that same asymmetry. It is
-    only the ``INHERIT`` arm that can fail it: with the cancellation removed
-    from reconciliation, ``[inherit]`` reports the writer still running when
-    the run returns while ``[own-group]`` still passes, because the group
-    signal released it. That mutation is what the assertion was checked
-    against, so it is known to discriminate rather than merely to be true.
+    The writer-settled assertion is read against that same asymmetry: only the
+    ``INHERIT`` arm can fail it. With the cancellation removed from
+    reconciliation, ``[inherit]`` reports the writer still running when the run
+    returns while ``[own-group]`` still passes, because the group signal
+    released it. That mutation is what the assertion was checked against, so it
+    is known to discriminate rather than merely to be true.
     """
     pid_file = tmp_path / f"post-exit-stdin-deadline-{policy.name}.pid"
-    command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+    command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
     watch = SpawnedWriter(monkeypatch)
 
     async def run_case() -> None:
         """Run with a deadline the parked stdin writer cannot meet."""
         descendant_pid: int | None = None
-        started = time.monotonic()
         try:
-            with pytest.raises(TimeoutExpired):
-                await asyncio.wait_for(
-                    command.run(
-                        output=RunOutputOptions(capture=True, echo=False),
-                        timeout=_DEADLINE_S,
-                        stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
-                        context=ExecutionContext(process_group=policy),
-                    ),
-                    RUN_BUDGET_S,
-                )
-            elapsed = time.monotonic() - started
-            assert elapsed < RUN_BUDGET_S, (
-                "the run reached this assertion too late to have been bounded "
-                "by its own deadline"
+            await run_to_its_own_deadline(
+                command.run(
+                    output=RunOutputOptions(capture=True, echo=False),
+                    timeout=_DEADLINE_S,
+                    stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
+                    context=ExecutionContext(process_group=policy),
+                ),
             )
-            assert watch.task is not None, (
-                "the run spawned no stdin writer, so the payload was never "
-                "handed to a task and the parked-writer case was not reached"
-            )
-            assert watch.task.done(), (
-                "the run returned with its stdin writer still running, so the "
-                "expiry's cleanup stopped waiting on the writer without ever "
-                "settling it"
-            )
-            descendant_pid = recorded_descendant(pid_file)
-            assert descendant_pid is not None, (
-                "the child never recorded the descendant it left behind, so "
-                "this run did not reach the state under test"
-            )
+            watch.assert_settled_after_run()
+            descendant_pid = recorded_descendant_or_fail(pid_file)
             if policy is ProcessGroupPolicy.OWN_GROUP:
                 # The group signal is what makes this reachable, so it is
                 # asserted; under INHERIT the descendant is deliberately left

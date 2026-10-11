@@ -9,7 +9,7 @@ a rendezvous that puts a cancellation exactly on an await, bounded waits that
 report a hung run as the defect it is rather than as an infrastructure timeout,
 and helpers that assert the descendant its child left behind is gone.
 
-They live here, rather than in either test module, so both can use one
+They live here, rather than in each test module, so all three can use one
 definition. Nothing here decides *what* happens after a cancellation: the
 boundary, the group settlement, and the consumer drain are all production code
 the tests exercise unpatched. What these helpers replace is only the arrival
@@ -23,13 +23,20 @@ import asyncio
 import contextlib
 import os
 import signal
+import time
 import typing as typ
 
 import pytest
 
 from cuprum import ScopeConfig, _subprocess_drain, _subprocess_stream_run, scoped
-from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions, StdinInput
-from tests.helpers.catalogue import python_builder, python_catalogue
+from cuprum.sh import (
+    ExecutionContext,
+    ProcessGroupPolicy,
+    RunOutputOptions,
+    StdinInput,
+    TimeoutExpired,
+)
+from tests.helpers.catalogue import build_python_catalogue_env
 from tests.helpers.timeouts import (
     descendant_then_exit_argv,
     process_is_running,
@@ -216,6 +223,25 @@ class SpawnedWriter:
         self.task = self._spawn(process, stdin_data, observation)
         return self.task
 
+    def assert_settled_after_run(self) -> None:
+        """Assert a writer was spawned, and that the run settled it before returning.
+
+        Read this only where no group signal can stand in for the settlement:
+        settling a group closes the pipes a parked writer waits on, which
+        releases it whether or not reconciliation ever reached it. Under
+        ``OWN_GROUP`` that makes both halves of this pass on a run whose cleanup
+        never touched the writer at all.
+        """
+        assert self.task is not None, (
+            "the run spawned no stdin writer, so the payload was never handed "
+            "to a task and the parked-writer case was not reached"
+        )
+        assert self.task.done(), (
+            "the run returned with its stdin writer still running, so the "
+            "expiry's cleanup stopped waiting on the writer without ever "
+            "settling it"
+        )
+
 
 def recorded_descendant(pid_file: Path) -> int | None:
     """Read the descendant pid the child recorded, if it recorded one.
@@ -273,6 +299,38 @@ async def assert_reclaimed(descendant_pid: int, message: str) -> None:
     assert not process_is_running(descendant_pid), message
 
 
+async def run_to_its_own_deadline(
+    run: cabc.Coroutine[object, object, object],
+) -> None:
+    """Await *run*, requiring it to end on its own deadline and in time.
+
+    The run is given the deadline under test *and* an outer bound, and the two
+    are different claims: the outer bound reports a run that never ended at all
+    as the defect it is rather than as an infrastructure timeout, and the bound
+    on the elapsed time is what shows the run ended because of *its* deadline
+    rather than because the outer one gave up on it. Both are asserted here so
+    a test cannot accidentally check one and read it as the other.
+    """
+    started = time.monotonic()
+    with pytest.raises(TimeoutExpired):
+        await asyncio.wait_for(run, RUN_BUDGET_S)
+    elapsed = time.monotonic() - started
+    assert elapsed < RUN_BUDGET_S, (
+        "the run reached this assertion too late to have been bounded by its "
+        "own deadline rather than by the test's outer bound"
+    )
+
+
+def recorded_descendant_or_fail(pid_file: Path) -> int:
+    """Return the descendant's pid, failing the test when none was recorded."""
+    descendant_pid = recorded_descendant(pid_file)
+    assert descendant_pid is not None, (
+        "the child never recorded the descendant it left behind, so this run "
+        "did not reach the state under test"
+    )
+    return descendant_pid
+
+
 def start_owned_run(
     builder: cabc.Callable[..., SafeCmd],
     pid_file: Path,
@@ -310,25 +368,26 @@ async def reach_gate_and_cancel(
 
 
 @pytest.fixture
-def builder() -> cabc.Callable[..., SafeCmd]:
-    """Provide a ``SafeCmd`` builder for the current interpreter."""
-    return python_builder()
+def owned_builder() -> cabc.Iterator[cabc.Callable[..., SafeCmd]]:
+    """Allowlist the interpreter and yield a builder for it, for one test.
 
+    The allowlist and the builder are one thing here rather than two fixtures
+    because they have to agree: a builder bound to a catalogue the open scope
+    does not cover produces a run that is refused before it spawns, and every
+    test in these modules needs exactly one of each. Asking for them separately
+    left the agreement to the caller's discipline and made it the largest part
+    of each signature.
 
-@pytest.fixture
-def owned_scope() -> cabc.Iterator[None]:
-    """Allowlist the interpreter for the whole life of a test.
+    The scope is entered around the whole test, not around the part that
+    happens to spawn, because a run is only permitted to spawn inside it and
+    these runs outlive the statement that starts them.
 
-    The scope has to outlive the run, since a run is only permitted to spawn
-    inside it, so it is held open for the test rather than entered around the
-    part of the test that happens to spawn.
-
-    The allowlisted program is built here rather than requested as its own
-    fixture. Two ``python_catalogue()`` calls return equal ``Program`` values
-    for the same interpreter, so this agrees with the ``builder`` fixture
-    without depending on it — and a self-contained fixture cannot be broken by
-    a test module importing one name but not the other.
+    Yields
+    ------
+    collections.abc.Callable[..., SafeCmd]
+        A builder for the current interpreter, usable for as long as the test
+        is running because the scope that permits it stays open that long.
     """
-    _catalogue, program = python_catalogue()
-    with scoped(ScopeConfig(allowlist=frozenset({program}))):
-        yield
+    env = build_python_catalogue_env()
+    with scoped(ScopeConfig(allowlist=frozenset({env.program}))):
+        yield env.builder

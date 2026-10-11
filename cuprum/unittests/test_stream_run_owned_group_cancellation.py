@@ -18,8 +18,8 @@ run can see.
 
 The sibling module covers a cancellation that lands *between* the child's exit
 and the gather, at each of the three awaits that precede it. The tools both
-modules need — the interpreter fixtures, the descendant bookkeeping, and the
-bounded waits — live in ``_post_exit_teardown_support``.
+modules need — the allowlisted interpreter builder, the descendant bookkeeping,
+and the bounded waits — live in ``_post_exit_teardown_support``.
 """
 
 from __future__ import annotations
@@ -32,8 +32,7 @@ import pytest
 
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
 from cuprum.unittests._post_exit_teardown_support import (
-    builder,
-    owned_scope,
+    owned_builder,
     reap_descendant,
     settle,
 )
@@ -50,10 +49,10 @@ if typ.TYPE_CHECKING:
 
     from cuprum.sh import SafeCmd
 
-# The fixtures are imported rather than defined here; declaring them records
-# that pytest resolves these names at collection time rather than leaving them
-# to be pruned as unused imports.
-__all__ = ["builder", "owned_scope"]
+# The fixture is imported rather than defined here; declaring it records that
+# pytest resolves the name at collection time rather than leaving it to be
+# pruned as an unused import.
+__all__ = ["owned_builder"]
 
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
@@ -64,8 +63,7 @@ pytestmark = _posix_only
 
 
 def test_cancelled_owned_run_reclaims_the_descendant_holding_its_pipes(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
 ) -> None:
     """Cancelling an owned run after its child exits still settles the group.
@@ -82,7 +80,7 @@ def test_cancelled_owned_run_reclaims_the_descendant_holding_its_pipes(
     as the defect it is, not as an infrastructure timeout.
     """
     pid_file = tmp_path / "owned-stream-grandchild.pid"
-    command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+    command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
 
     async def run_case() -> None:
         """Start the run, wait for its descendant, then cancel it."""
@@ -124,8 +122,7 @@ def test_cancelled_owned_run_reclaims_the_descendant_holding_its_pipes(
 
 
 def test_cancelled_inherited_run_leaves_its_descendant_alone(
-    builder: cabc.Callable[..., SafeCmd],
-    owned_scope: None,
+    owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
 ) -> None:
     """The same cancellation under ``INHERIT`` must not reach the descendant.
@@ -143,7 +140,7 @@ def test_cancelled_inherited_run_leaves_its_descendant_alone(
     group unconditionally would pass the owned test and take the runner with it.
     """
     pid_file = tmp_path / "inherited-stream-grandchild.pid"
-    command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+    command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
 
     async def run_case() -> None:
         """Cancel an inherited run and assert its descendant is untouched."""
