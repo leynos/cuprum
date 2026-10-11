@@ -1,0 +1,7 @@
+# serializer version: 1
+# name: test_the_diagnostic_renders_a_host_starvation_report
+  "AUTO native pipeline hand-off stalled without observable progress (attempt=3, backend=unknown, fd_delta=1, thread_delta=2, task=None, verdict=HOST_STARVATION, reason='no observable progress', quiet_for_s=0.750, deadline_remaining_s=12.500, children=[pid=4244,stage=2,state='R',wchan=None,exited=False,available=True,stdin_parent_writers=(),stdout_parent=none,pipes=[0:pipe:[44]:None]], pending_tasks=())"
+# ---
+# name: test_the_diagnostic_renders_a_hung_hand_off_report
+  "AUTO native pipeline hand-off stalled without observable progress (attempt=3, backend=unknown, fd_delta=1, thread_delta=2, task=None, verdict=HUNG_HANDOFF, reason='no observable progress', quiet_for_s=0.750, deadline_remaining_s=12.500, children=[pid=4242,stage=0,state=None,wchan=None,exited=True,available=True,stdin_parent_writers=(),stdout_parent=9:pipe:[43]:5,pipes=[1:pipe:[43]:5]; pid=4243,stage=1,state='S',wchan='pipe_read',exited=False,available=True,stdin_parent_writers=(10,),stdout_parent=none,pipes=[0:pipe:[42]:None]], pending_tasks=('native-pipeline-hand-off:pipeline_wait',))"
+# ---

@@ -5013,6 +5013,18 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
+A `# pylint: disable=` pragma cannot silence a df12 message, and reaching for
+one costs a cycle rather than saving one. The classic PyPy-backed pass runs
+without the plugin, so it cannot resolve the message id and reports
+`W0012: unknown-option-value` at each site; the leaf then aborts with
+`Error 20` before the df12 pass the pragma was meant to satisfy ever runs. For
+`R9104` (`trivial-attribute-wrapper`) the plugin's own message names the
+repair: expose a property, or otherwise move the forwarding out of the
+function. Reusing a shape the rule tolerates is usually cheaper than the
+suppression would have been, because a double whose body does real work, or a
+clock shared from an existing helper, is clearer as well as unremarkable to the
+rule.
+
 ### Markdown linting
 
 The `markdownlint` target lints `.md`, `.markdown`, and `.mdx` files with
@@ -6674,3 +6686,97 @@ paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Native hand-off stall diagnostics
+
+`test_auto_backend_repeated_native_pipeline_hand_off` repeats a real two-stage
+native pipeline on Linux to catch an intermittent hand-off defect, so it cannot
+bound an attempt on elapsed time: a slow host and a stalled hand-off look
+identical to a wall-clock deadline. It bounds each attempt on *observed
+progress* instead, classifying a stall from evidence captured before the
+pipeline is cancelled.
+
+`tests/behaviour/_native_pipeline_liveness.py` holds the clock arithmetic, and
+`tests/behaviour/_native_pipeline_hand_off.py` the runner that applies it: an
+observe hook refreshes a progress clock on every `start`, `stdout`, `stderr`,
+and `exit` event, and a stall is captured once none arrives for
+`NO_PROGRESS_INTERVAL_S` (0.5 s). The 30 s
+`_REPEATED_NATIVE_PIPELINE_TIMEOUT_S` is a suite-safety backstop for the whole
+16-attempt loop, not a per-attempt bound: `expired` tests the quiet period
+first, so only a run still progressing when it is spent reaches it. A run that
+reaches it before an attempt starts skips unclassified through
+`pre_attempt_backstop_reached` — a plain deadline comparison, with no progress
+clock yet to tie-break on and no child state yet to classify.
+
+`_classify_stall` in `tests/behaviour/_native_pipeline_stall.py` tests every
+`HUNG_HANDOFF` rule before the starvation fallback, so starvation is reported
+only when no positive evidence of a missed close was captured. `HUNG_HANDOFF`
+fails the attempt; `HOST_STARVATION` skips it.
+
+Table 1: stall verdicts and the evidence that selects them
+
+| Evidence at the stall                                                             | Verdict           |
+| --------------------------------------------------------------------------------- | ----------------- |
+| A parent-held write end feeds a `pipe_read` child whose upstream stage has exited | `HUNG_HANDOFF`    |
+| Every tracked child has exited, but a parent read end still holds unread bytes    | `HUNG_HANDOFF`    |
+| Pending tasks outlive every child that is not `R` or `D`                          | `HUNG_HANDOFF`    |
+| A child is present and none of the above applies                                  | `HOST_STARVATION` |
+
+Two details are load-bearing. Rules compare stages by the
+`pipeline_stage_index` tag, which Cuprum attaches to every pipeline event; the
+typed `ExecEvent.stage_index` field is set only on `pipeline_fail_fast`, so
+reading that field would find nothing. And they read the upstream stage's
+*process* state rather than its `exit` event, because a pipeline emits `exit`
+for every stage in one batch once the whole run settles
+(`cuprum/_pipeline_results.py`), so a stalled run never emits one.
+
+`tests/helpers/process_state.py` holds the procfs and pipe probes the snapshot
+is built from: `process_state`, `child_pipes`, `parent_write_fds`,
+`parent_read_fds`, and `read_end_pending_bytes`. Every query degrades rather
+than raising, so one procfs race cannot hide the stall that triggered the
+diagnostic. A child's own descriptors leave `/proc/<pid>/fd` as soon as it
+exits, so bytes it never handed over are observable only on the *parent's* read
+end, which is why the snapshot pairs each child's stdout pipe target with the
+read descriptor this process still holds. The pipe target is therefore recorded
+when the child's `start` event arrives, not at stall time: read any later and
+the child is already gone, which is exactly how that check would fail to fire
+in the situation it exists for. The access mode is masked out of `F_GETFL`
+rather than read from `os.O_ACCMODE`, absent on some runtimes, where naming it
+would escape the helper's `OSError` guard as a traceback.
+
+The liveness policy is clock arithmetic, so it is exercised by moving a clock
+rather than by waiting on wall time: `quiet_for_s` and `LivenessBound` in
+`tests/behaviour/_native_pipeline_liveness.py`, and `_ProgressTracker` in
+`tests/behaviour/_native_pipeline_hand_off.py`, each accept an injectable clock
+defaulting to `time.monotonic`, so a test advances that clock instead of
+sleeping or measuring real elapsed time.
+`tests/helpers/native_pipeline_doubles.py` holds the doubles both liveness
+modules drive, and reuses `ControllableMonotonicClock` from
+`cuprum/unittests/_rust_pump_test_helpers.py` rather than carrying a second
+copy of it; each double is handed the clock to move, so a shared module-level
+clock does not couple the two modules. The clock is placed at an instant
+(`advance_to`) rather than nudged by a delta, so a fixture that resets one
+between tests and an attempt that moves one repeatedly both land on the value
+they named instead of accumulating.
+`tests/test_native_pipeline_liveness_runner.py` drives `_run_liveness_bounded`
+and `_NativePipelineHandOff.run_attempt` through a controllable pipeline double
+to both bounds: the quiet observation stream and the spent suite-safety
+backstop. `tests/test_native_pipeline_stall_diagnostic.py` pins the rendered
+`_format_stall` report with Syrupy snapshots, asserting it names the attempt,
+the process and pipe evidence, and the pending tasks.
+`tests/test_native_pipeline_stall_properties.py` generates snapshots for
+`_classify_stall` with Hypothesis, asserting that a positive verdict survives
+unrelated children and does not depend on the order evidence was captured in.
+
+The Makefile's `PYTEST_TARGETS` names
+`tests/test_native_pipeline_hand_off_support.py`,
+`tests/test_native_pipeline_liveness.py`,
+`tests/test_native_pipeline_liveness_runner.py`,
+`tests/test_native_pipeline_stall_diagnostic.py`,
+`tests/test_native_pipeline_stall_properties.py`,
+`tests/test_native_pipeline_stdout_capture.py`, and
+`tests/test_process_state_helper.py`, so `make test-python` runs them; the
+coverage job invokes pytest with no path targets and collects the repository
+root. The full reasoning, including the load evidence against host starvation,
+is in
+`docs/debugging/debugging-plan-2026-09-21-native-pipeline-handoff-stabilize.md`.
