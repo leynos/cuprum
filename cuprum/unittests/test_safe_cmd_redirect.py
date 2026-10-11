@@ -566,6 +566,44 @@ def test_path_target_closed_after_a_timeout(
 
 
 @_posix_only
+def test_path_target_closed_after_a_spawn_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+    target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spawn that raised still closes the descriptor cuprum opened for it.
+
+    The owned row's four outcomes are not interchangeable, and this is the one
+    the others cannot stand in for. The opens happen *before* the ``try`` whose
+    ``finally`` does the closing, so a spawn failure is the only failure that
+    reaches that ``finally`` with an owned descriptor already recorded:
+    a second-open failure unwinds past it entirely, and the exit-code and
+    timeout cases both get there through a child that actually started.
+    """
+    _, execute = execution_strategy
+    log = tmp_path / "out.log"
+    command = python_builder("-c", _WRITE_STDOUT)
+    descriptors = target_descriptor_log(log)
+
+    def refuse_to_spawn(*_: object, **__: object) -> typ.NoReturn:
+        """Fail the spawn the way a missing executable does."""
+        message = "missing"
+        raise FileNotFoundError(message)
+
+    # Patched at the backend's spawn entry point, which is the last statement
+    # inside the ``try``. Replacing the executor's ``_spawn_subprocess`` would
+    # swap out the whole body, including the ``finally`` under test.
+    monkeypatch.setattr(_wait4_process, "spawn_direct_process", refuse_to_spawn)
+
+    with pytest.raises(FileNotFoundError):
+        execute(command, {"output": _redirect_options(stdout=StdioTarget.path(log))})
+
+    _assert_no_descriptor_leak(descriptors)
+
+
+@_posix_only
 def test_both_streams_can_be_redirected_at_once(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -676,12 +714,17 @@ def test_descriptorless_file_object_is_refused_with_the_stream_named(
 
 
 # The INV-5 matrix is {owned path, borrowed fd, borrowed file} crossed with
-# {exit 0, non-zero exit, timeout, spawn failure}. The owned row covers all
-# four outcomes above; the borrowed rows covered only exit 0, and the borrowed
-# half is the safety-critical half — "cuprum closed a descriptor it did not
-# open" is invisible in the child's exit code and shows up only when the caller
-# next touches their own resource. Each case below therefore *uses* the
-# borrowed resource after the failing run, which is the assertion.
+# {exit 0, non-zero exit, timeout, spawn failure}. The owned row is covered by
+# the tests above, which name their outcome: exit 0 in
+# ``test_path_target_receives_the_children_bytes``, a non-zero exit in
+# ``test_path_target_closed_after_a_failing_run``, a timeout in
+# ``test_path_target_closed_after_a_timeout``, and a spawn failure in
+# ``test_path_target_closed_after_a_spawn_failure``. The borrowed rows covered
+# only exit 0, and the borrowed half is the safety-critical half — "cuprum
+# closed a descriptor it did not open" is invisible in the child's exit code
+# and shows up only when the caller next touches their own resource. Each case
+# below therefore *uses* the borrowed resource after the failing run, which is
+# the assertion.
 
 
 @_posix_only
