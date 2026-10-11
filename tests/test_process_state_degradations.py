@@ -62,6 +62,7 @@ def _fail_path_method(
     original = getattr(pathlib.Path, method_name)
 
     def failing(self: pathlib.Path, *args: object, **kwargs: object) -> object:
+        """Raise for ``target`` and delegate every other path to ``original``."""
         if str(self) == target:
             raise error
         return original(self, *args, **kwargs)
@@ -74,6 +75,7 @@ def _fail_ioctl(monkeypatch: pytest.MonkeyPatch, error: OSError) -> None:
     import fcntl
 
     def failing(*args: object, **kwargs: object) -> bytes:
+        """Refuse every ioctl, as a descriptor without ``FIONREAD`` does."""
         raise error
 
     monkeypatch.setattr(fcntl, "ioctl", failing)
@@ -273,6 +275,7 @@ def test_descriptors_that_cannot_be_opened_report_no_byte_count(
     """
 
     def refuse_open(*args: object, **kwargs: object) -> int:
+        """Refuse every open, as a descriptor this process may not reopen does."""
         raise OSError(13, "Permission denied")
 
     monkeypatch.setattr(os, "open", refuse_open)
