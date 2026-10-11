@@ -218,6 +218,37 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) The CodeScene findings on `test_safe_cmd_redirect.py` are
+  cleared at the source, and the entry below claiming the `R0917` repair had
+  cleared them is corrected. That repair was not wrong about pylint — it moved
+  the second-listed parameter of the two offending tests to keyword-only, which
+  satisfies `max-positional-arguments = 4` — but it did not clear the hosted
+  diagnostic, because **CodeScene counts keyword-only parameters when it counts
+  arguments**. Its report still read five for both functions, and the file
+  carried a second finding the repair never addressed:
+  `Lines of Code in a Single File`, 631 against a cap of 600. Two experiments
+  settled the shape of the real fix. Reducing the argument counts alone left
+  the LoC finding standing (score 9.38), and shrinking the file alone would
+  have left both argument findings, so both had to move. The module is split on
+  its own seam into `cuprum/unittests/test_safe_cmd_redirect.py` and a new
+  `cuprum/unittests/_stdio_redirect_support.py` holding the execution and spawn
+  axes, the borrowed-versus-owned fixtures, and the child programs — the
+  established `_*_support.py` pattern, and the same extraction
+  `_pump_stream_dispatch_support` already made from an oversized sibling. As a
+  side effect the extraction collapses both five-argument signatures honestly:
+  `spawn_backend` is now requested with `@pytest.mark.usefixtures`, which is
+  what a fixture requested *only* for its side effect should always have been —
+  nothing in this module ever read the route's name. Three specific invariants
+  were proved rather than assumed: the two spawn-failure tests would fail
+  outright if `refusing_spawn` did not apply; `spawn_backend`'s body really
+  runs under a marker request, proved by temporarily instrumenting it and
+  observing the marker file appear; and the collected set is 46 node IDs before
+  and after. That last comparison is *not* a byte-identical diff — moving
+  `spawn_backend` from a parameter to a marker reorders the composite
+  parametrization string from `[run()-asyncio]` to `[asyncio-run()]` — so the
+  guard was checked by parsing both sides into (test, combination) sets rather
+  than by string equality. Both files score 10.00 with no findings. Commits
+  `c72b39df` (the preceding correction) and the repair commit.
 - [x] (2026-10-11) Typecheck repaired on the new sentinel module. `0c91a664`
   was committed and pushed before `make typecheck` had run against it; that
   gate then found two `invalid-argument-type` errors, because `StdioTarget.fd`
@@ -1733,6 +1764,26 @@ likelihood, and mitigation.
 
 ## Surprises & discoveries
 
+- Observation: a lint repair that satisfies one tool can leave the *hosted*
+  diagnostic standing, because the two tools measure different things under the
+  same name. Evidence: the two `R0917` findings in `test_safe_cmd_redirect.py`
+  were repaired by moving `spawn_backend` to keyword-only, which is exactly
+  what pylint's `max-positional-arguments = 4` asks for and which pylint
+  accepted. The CodeScene report at the same head still said `Arguments = 5`
+  for both functions: **its argument count includes keyword-only parameters**,
+  so a parameter moved past the `*` is relocated for CodeScene, not removed. A
+  fix written to the pylint rule and verified against pylint cannot see this,
+  and the two findings the repair was aimed at were not the only ones — the
+  file also carried a `Lines of Code in a Single File` finding that no argument
+  change could ever clear. Impact: the repair reported success against the tool
+  it was written for and the branch stayed red on the tool that gates the PR.
+  The lesson generalizes past CodeScene: "lint is green" is a claim about the
+  linters that ran, and when a hosted service reports the same-named finding,
+  the two need to be reconciled against the same file, not assumed to agree.
+  The corollary is about naming: `cs check <file>` reproduces the hosted rule
+  set, so the local oracle was available the whole time and would have shown
+  the mismatch immediately had the repair been checked against it rather than
+  against pylint alone.
 - Observation: a test harness can be wrong in a way that leaves most of its own
   assertions green, so "the suite passes" is not evidence that the suite tests
   anything. Evidence: the first draft of the boundary-classification suite
