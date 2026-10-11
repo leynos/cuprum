@@ -16,12 +16,19 @@ what it had read would pass for any input, including an empty one. Written
 independently, the two can disagree, and disagreement is the failure this
 exists to report.
 
-Each row is checked twice, because the two checks catch different losses. The
+Each row is checked three times, because the checks catch different losses. The
 attribute check reads ``pytestmark`` off the resolved function, which catches a
 case whose backend request was removed — the loss CodeRabbit reported, and the
 one a rename cannot hide. The collection check runs the suite and reads the node
 ids back, which catches a case that stopped being collected at all: a marker
 with a typo, a decorator that now skips it, or a name that no longer exists.
+
+The third check reads the *parameter ids* of every collected row and compares
+them against the combinations that row claims, because being collected is not
+the same as being covered. A case that lost one execution strategy, or the
+backend axis, is still collected under its own name — so only the combinations
+can distinguish a cell that is evidence on both routes from one that is
+evidence about whichever route the host preferred.
 """
 
 from __future__ import annotations
@@ -55,7 +62,9 @@ _ROUTE_AXES: typ.Final[frozenset[str]] = frozenset({
 _SPAWN_BACKEND: typ.Final[str] = "spawn_backend"
 _REFUSING_BACKEND: typ.Final[str] = "refusing_backend_spawn"
 # A cell whose outcome is the shared dispatch failure has no route to select:
-# the failure lands before the choice is made, for every route alike.
+# the failure lands before the choice is made, for every route alike. It still
+# has a strategy axis — the run API is crossed with both halves either way, so
+# the cell is claimed for both — but it carries no route to be compared across.
 _NO_ROUTE_AXIS: typ.Final[str] = ""
 
 
@@ -106,15 +115,14 @@ def _borrowed_file(
 # Written from the matrix comment, not read from the modules. Every row is a
 # cell a reader of that comment would expect to find covered.
 _MATRIX: typ.Final[tuple[_MatrixRow, ...]] = (
-    # The owned path row. The first case is the success path and covers its
-    # cell through the child's own exit code; the four that follow were the
-    # five CodeRabbit named as not requesting the backend axis.
-    _owned(
-        "exit 0",
-        _REDIRECT,
-        "test_path_target_receives_the_children_bytes",
-        axis=_NO_ROUTE_AXIS,
-    ),
+    # The owned path row. The success case is the descriptor-accounting one
+    # rather than ``test_path_target_receives_the_children_bytes``: both assert
+    # the child's bytes and a clean exit, and this one asserts the descriptor
+    # accounting on top, so naming the weaker case would have claimed the cell
+    # with less evidence than the module already holds. It also requests the
+    # backend axis, which is what lets the cell be compared across routes
+    # instead of being declared route-independent.
+    _owned("exit 0", _REDIRECT, "test_path_target_does_not_leak_the_descriptor"),
     _owned("non-zero exit", _REDIRECT, "test_path_target_closed_after_a_failing_run"),
     _owned("timeout", _REDIRECT, "test_path_target_closed_after_a_timeout"),
     _owned(
@@ -386,11 +394,8 @@ _STRATEGIES: typ.Final[frozenset[str]] = frozenset({"run()", "run_sync()"})
 _ROUTES: typ.Final[frozenset[str]] = frozenset({"wait4", "asyncio"})
 
 
-def _axis_combinations(case: str) -> frozenset[str]:
-    """Return the axis combinations a case's collected ids offer.
-
-    ``case`` is the bare node name; the module is fixed, so this reads the
-    redirect suite's collection only.
+def _axis_combinations(case: str, collected: cabc.Sequence[str]) -> frozenset[str]:
+    """Return the axis combinations one case's collected ids offer.
 
     Reading combinations rather than names is the point. A case that stopped
     requesting one execution strategy, or that lost the backend axis, still
@@ -398,6 +403,16 @@ def _axis_combinations(case: str) -> frozenset[str]:
     passes while half the cell's evidence is gone. What the matrix claims is
     not "this case exists" but "this cell is covered on both strategies and
     both routes", and only the parameter ids can witness that.
+
+    Parameters
+    ----------
+    case : str
+        The bare test name, matched against the node id exactly so that a case
+        whose name is a suffix of another cannot borrow its ids.
+    collected : collections.abc.Sequence[str]
+        The node ids collected for the module that holds this case. Passed in
+        rather than collected here, so one module's ids are read once and every
+        row that lives in it is compared against the same list.
 
     Returns
     -------
@@ -407,11 +422,11 @@ def _axis_combinations(case: str) -> frozenset[str]:
         depend on the module's fixture request order. Empty when the case is
         not collected at all.
     """
-    collected = _collected_node_ids(_REDIRECT)
     found: set[str] = set()
     for node in collected:
-        name, _, params = node.partition("[")
-        if not name.endswith(case) or not params:
+        _, _, rest = node.partition("::")
+        name, _, params = rest.partition("[")
+        if name != case or not params:
             continue
         # Param order follows the fixture request order, which differs between
         # modules — ``[wait4-run()]`` in one and ``[run()-asyncio]`` in
@@ -421,17 +436,30 @@ def _axis_combinations(case: str) -> frozenset[str]:
     return frozenset(found)
 
 
-def _expected_combinations() -> frozenset[str]:
-    """Return every axis combination a backed case must be collected under."""
+def _claimed_combinations(row: _MatrixRow) -> frozenset[str]:
+    """Return the axis combinations one row claims it is collected under.
+
+    Every row claims both execution strategies. The route is claimed only where
+    the row names an axis to select it with: a cell whose outcome is the shared
+    dispatch failure has no route, and claiming one for it would demand a
+    parameter that no fixture can supply.
+
+    Returns
+    -------
+    frozenset[str]
+        The exact set of normalized combinations this row must be collected
+        under, for comparison as a set rather than as a count.
+    """
+    routes = _ROUTES if row.axis else frozenset({""})
     return frozenset(
-        "-".join(sorted((strategy, route)))
+        "-".join(sorted(part for part in (strategy, route) if part))
         for strategy in _STRATEGIES
-        for route in _ROUTES
+        for route in routes
     )
 
 
 def test_every_backed_case_is_collected_on_both_strategies_and_routes() -> None:
-    """A backed cell must be collected on every strategy and every route.
+    """Every matrix cell is collected on every combination it claims.
 
     The name check above cannot see this. ``test_borrowed_descriptor_survives_a
     _timeout`` is collected under four combinations when the backend axis is
@@ -440,46 +468,69 @@ def test_every_backed_case_is_collected_on_both_strategies_and_routes() -> None:
     evidence on both routes from one that is evidence on whichever route the
     host preferred.
 
+    Every module is compared, not just the redirect suite. The two sibling
+    modules hold cells the matrix claims, so excluding them left seven of the
+    fifteen cells checked by name alone — a case there could have lost a route
+    or an execution strategy and still passed. The comparison is per module
+    because the *expected* set is built from the rows, not from any module's
+    parametrization order, so nothing is imported across module boundaries.
+
     This is also why the check is written as an exact expected set rather than
     as a count: a case that lost one route and gained a duplicate of another
     would keep its total.
     """
-    expected = _expected_combinations()
-    compared: list[str] = []
+    collected_by_module = {
+        module: _collected_node_ids(module)
+        for module in sorted({row.module for row in _MATRIX})
+    }
+    compared: set[tuple[str, str]] = set()
     deficient: list[str] = []
     for row in _MATRIX:
-        if not row.axis or row.module != _REDIRECT:
-            # Rows whose axis is injected elsewhere are checked by name above;
-            # comparing their combinations here would import the other
-            # module's parametrization order into this guard.
-            continue
-        compared.append(row.case)
-        found = _axis_combinations(row.case)
+        compared.add((row.target, row.outcome))
+        found = _axis_combinations(row.case, collected_by_module[row.module])
+        expected = _claimed_combinations(row)
         if found != expected:
-            deficient.append(f"{row.case}: {sorted(found)}")
-    # Non-vacuity first: a guard that compared nothing would report no
-    # deficiency however the fixtures changed, so the population is asserted
-    # before its result. This is the assertion that fails if every row
-    # eventually takes the skip branch, which is how this check would rot.
-    assert compared, (
-        "no backed redirect-suite row was compared, so the exact-combination "
-        "check cannot fail and proves nothing"
+            deficient.append(
+                f"{row.label} ({row.case}): {sorted(found)} "
+                f"rather than {sorted(expected)}"
+            )
+    # The population is the loop's own record of what it compared, checked
+    # against the cells the matrix contract names rather than against the table
+    # the loop was handed. A row deleted from the table shrinks both the loop
+    # and any set derived from it, so a pin built from ``_MATRIX`` would shrink
+    # with it and report nothing; ``_TARGETS`` and ``_OUTCOMES`` are written out
+    # independently at module level, which is what makes them able to disagree.
+    # This is checked before the deficiencies so that a guard which compared too
+    # little fails on that, rather than reporting a clean run over a subset.
+    asserted = {(target, outcome) for target in _TARGETS for outcome in _OUTCOMES}
+    assert compared == asserted, (
+        "the guard must compare every matrix cell; comparing "
+        f"{sorted(compared)} would leave {sorted(asserted - compared)} uncovered"
     )
     assert not deficient, (
         "these matrix cells are not collected on every execution strategy and "
-        f"spawn route, so each is partial evidence: {deficient}"
+        f"spawn route they claim, so each is partial evidence: {deficient}"
     )
 
 
 def test_the_backend_axis_supplies_both_routes() -> None:
     """The axis the rows request is the two-route fixture, not a stub."""
     module = importlib.import_module(_REDIRECT)
-    requested = _asked_of(module.test_path_target_receives_the_children_bytes)
-    assert _SPAWN_BACKEND not in requested, (
-        "the success cell must not be part of this control; it is excluded "
-        "from the backend axis deliberately and its presence here would mean "
-        "the row table and the modules disagree"
-    )
+    for target, outcome in (("owned path", "exit 0"), ("borrowed fd", "exit 0")):
+        row = next(
+            row for row in _MATRIX if (row.target, row.outcome) == (target, outcome)
+        )
+        assert row.axis == _SPAWN_BACKEND, (
+            f"the {target} success cell must request {_SPAWN_BACKEND!r} like "
+            f"every other backed cell, or it is evidence about one route; the "
+            f"row table says {row.axis!r}"
+        )
+        requested = _asked_of(getattr(module, row.case))
+        assert _SPAWN_BACKEND in requested, (
+            f"{row.case!r} is claimed for both spawn routes, but it does not "
+            "request the fixture that offers them; the row table and the "
+            "module disagree"
+        )
     for axis in sorted(_ROUTE_AXES):
         fixture = getattr(module, axis, None) or getattr(
             importlib.import_module(_BACKENDS), axis
