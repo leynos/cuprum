@@ -1612,8 +1612,8 @@ metric is derived from the event, so those two routes reach no counter either.
 That omission is per route, not blanket: the log record covers every route, the
 event and the metric cover the routes that can name an execution. The event
 carries the closed `GroupTeardownOutcome` category rather than the record's
-prose, so no pid, error string, or path can reach a metric label, and `settle_s`
-rides along only on the outcome that measured one.
+prose, so no pid, error string, or path can reach a metric label, and
+`settle_s` rides along only on the outcome that measured one.
 
 The records, all at WARNING because each one reports an abnormal outcome:
 

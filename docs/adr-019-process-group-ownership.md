@@ -537,9 +537,9 @@ addendum most directly reverses, because it is built.
 Two series were added in the same change as the event:
 
 - ``cuprum_group_teardowns_total``, labelled by the closed
-  ``GroupTeardownOutcome`` category. That category is what bounds the series;
-  a pid would not be a bounded label and is deliberately not one. The labels
-  are ``program``, ``project``, and ``outcome``.
+  ``GroupTeardownOutcome`` category. That category is what bounds the series; a
+  pid would not be a bounded label and is deliberately not one. The labels are
+  ``program``, ``project``, and ``outcome``.
 - ``cuprum_group_settle_seconds``, a histogram observed only on the
   ``settlement_timeout`` outcome, which is the one that measured a wait. A
   refusal and an unsignalable group never reached a wait, so a zero recorded

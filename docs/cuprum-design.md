@@ -2272,18 +2272,18 @@ design decisions guide these adapters:
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
   `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`,
-  `cuprum_group_teardowns_total`,
-  `cuprum_resource_usage_measurements_total`) are incremented on the
-  corresponding event phases. The EOF-grace counter has only the low-cardinality
-  `program` and `project` labels; duration and pending-reader count remain
-  event fields, not labels. The group-teardown counter adds the closed
-  `GroupTeardownOutcome` category as an `outcome` label — bounded by
-  construction, so a teardown left holding a process is countable without the
-  pid, which would shatter the series. It and the `cuprum_group_settle_seconds`
-  histogram are built by `_group_teardown_operations` rather than the
-  unit-counter path, so the metric name keeps one definition. The
-  resource-measurement counter belongs to the resource series and therefore
-  carries `resource_usage_mode` alongside `program` and `project`.
+  `cuprum_group_teardowns_total`, `cuprum_resource_usage_measurements_total`)
+  are incremented on the corresponding event phases. The EOF-grace counter has
+  only the low-cardinality `program` and `project` labels; duration and
+  pending-reader count remain event fields, not labels. The group-teardown
+  counter adds the closed `GroupTeardownOutcome` category as an `outcome` label
+  — bounded by construction, so a teardown left holding a process is countable
+  without the pid, which would shatter the series. It and the
+  `cuprum_group_settle_seconds` histogram are built by
+  `_group_teardown_operations` rather than the unit-counter path, so the metric
+  name keeps one definition. The resource-measurement counter belongs to the
+  resource series and therefore carries `resource_usage_mode` alongside
+  `program` and `project`.
 - The `cuprum_duration_seconds` histogram and terminal-category/failure
   counters are emitted on `settled` events. Resource metrics remain on `exit`
   events: the three `cuprum_child_*` histograms are observed only where the

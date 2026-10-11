@@ -104,9 +104,9 @@ def test_an_outcome_that_measured_no_wait_observes_no_duration(
     """A zero would read as an instant wait, so an absent one stays absent."""
     operations = _group_teardown_operations(_teardown_event(outcome, settle_s))
 
-    assert not any(
-        isinstance(operation, _HistogramOp) for operation in operations
-    ), f"{outcome} measured no wait, so it must observe no duration: {operations!r}"
+    assert not any(isinstance(operation, _HistogramOp) for operation in operations), (
+        f"{outcome} measured no wait, so it must observe no duration: {operations!r}"
+    )
 
 
 def test_the_measured_settle_duration_is_observed_as_a_histogram() -> None:
