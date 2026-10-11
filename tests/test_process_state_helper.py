@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+import pathlib
 import sys
 
 import pytest
 
 from tests.helpers.process_state import (
     child_pipes,
+    parent_pid_from_stat,
     parent_read_fds,
     parent_write_fds,
     process_state,
@@ -123,4 +125,50 @@ def test_process_state_distinguishes_zombie_from_reaped_child() -> None:
     assert reaped.exited, "a reaped pid has no procfs record and must report exited"
     assert not child_pipes(pid), (
         f"a reaped pid holds no descriptors, got {child_pipes(pid)!r}"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux procfs")
+def test_parent_pid_from_stat_reads_the_current_process() -> None:
+    """The line procfs publishes for this process names its real parent."""
+    stat = pathlib.Path(f"/proc/{os.getpid()}/stat").read_text(encoding="utf-8")
+
+    parent = parent_pid_from_stat(stat)
+
+    assert parent == os.getppid(), (
+        f"the parse must report the real parent {os.getppid()}, got {parent!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("stat", "expected"),
+    [
+        pytest.param(
+            "1234 (a name with spaces) S 99 1 2",
+            99,
+            id="comm-with-spaces",
+        ),
+        pytest.param(
+            "1234 (foo) bar) S 99 1 2",
+            99,
+            id="comm-with-a-closing-paren",
+        ),
+        pytest.param("1234 (short) S", None, id="no-parent-field"),
+        pytest.param("1234 (unterminated S 99", None, id="no-delimiter"),
+    ],
+)
+def test_parent_pid_from_stat_parses_awkward_names(
+    stat: str,
+    expected: int | None,
+) -> None:
+    """The fields are counted from after the command name, not from the start.
+
+    ``comm`` is parenthesized and may contain spaces and parentheses, so a
+    name holding a delimiter would put a from-the-start field count on the
+    wrong value. A line too short to carry a parent reports nothing rather
+    than raising.
+    """
+    actual = parent_pid_from_stat(stat)
+    assert actual == expected, (
+        f"the parse must report {expected!r} for {stat!r}, got {actual!r}"
     )

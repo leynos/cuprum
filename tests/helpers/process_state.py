@@ -37,6 +37,7 @@ __all__ = [
     "ChildPipe",
     "ProcessState",
     "child_pipes",
+    "parent_pid_from_stat",
     "parent_read_fds",
     "parent_write_fds",
     "process_state",
@@ -49,6 +50,10 @@ __all__ = [
 # provides it), and an ``AttributeError`` raised here would escape the
 # ``except OSError`` guard below and replace the diagnostic with a traceback.
 _ACCESS_MODE_MASK = 0o3
+
+# Index of the parent PID among the fields that follow the command name: field
+# 0 is the scheduler state, field 1 the parent PID.
+_PARENT_PID_INDEX = 1
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -81,13 +86,49 @@ def _unavailable_process(pid: int) -> ProcessState:
     return ProcessState(pid, state=None, exited=False, wchan=None, available=False)
 
 
-def _state_from_stat(stat: str) -> str | None:
-    """Extract the process state after the final command-name delimiter."""
+def _fields_after_comm(stat: str) -> list[str] | None:
+    """Return a procfs ``stat`` line's fields after the command name.
+
+    The command name (``comm``) is parenthesized and may itself contain spaces
+    and parentheses — a process may name itself ``foo) bar`` — so the fields
+    are counted from after the *final* ``)`` rather than from the start, where
+    such a name would put every reading on the wrong field.
+
+    Returns
+    -------
+    list[str] | None
+        The fields that follow the command name, or ``None`` when the line has
+        no closing delimiter to count from.
+    """
     closing_parenthesis = stat.rfind(")")
     if closing_parenthesis < 0:
         return None
-    fields = stat[closing_parenthesis + 1 :].split()
+    return stat[closing_parenthesis + 1 :].split()
+
+
+def _state_from_stat(stat: str) -> str | None:
+    """Extract the process state after the final command-name delimiter."""
+    fields = _fields_after_comm(stat)
     return None if not fields else fields[0]
+
+
+def parent_pid_from_stat(stat: str) -> int | None:
+    """Return the parent PID recorded in a procfs ``stat`` line, if it has one.
+
+    Used to find this test process's own children: the PID of a process whose
+    parent is the reader, which is the one signal a leaked spawn leaves behind.
+
+    Returns
+    -------
+    int | None
+        The parent PID, or ``None`` when the line is too short to carry one or
+        its field is not a number.
+    """
+    fields = _fields_after_comm(stat)
+    if fields is None or len(fields) < _PARENT_PID_INDEX + 1:
+        return None
+    parent_pid = fields[_PARENT_PID_INDEX]
+    return int(parent_pid) if parent_pid.isdigit() else None
 
 
 def _read_wchan(pid: int) -> str | None:
