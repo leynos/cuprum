@@ -1841,6 +1841,81 @@ likelihood, and mitigation.
   `test_ci_selection_guard_controls`, `test_ci_recipe_flow_contract`, and
   `test_ci_act_harness_contract` pass. Commit `bb9cda75`.
 
+- [x] (2026-10-11 12:05Z) **The writer's reclaim budget now covers the cleanup
+      it
+  waits for.** Every budget was the same `0.25` s settle grace, including the
+  one that bounds cancelling a *writer* — but cancelling a writer runs that
+  task's own teardown, which is a pipe release plus a finalization, and the
+  finalization is itself a window plus a reclaim. `_subprocess_stdin_reclaim`
+  now derives the figures instead of repeating one:
+  `_STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS` (=3),
+  `_STDIN_RECLAIM_BUDGET_S = 0.25 * 3` (=0.75), and
+  `_STDIN_FINALIZER_RECLAIM_S` stays at one step. A writer gets three steps
+  because it runs cuprum's own close and then its finalization; a bare
+  finalizer task runs caller code and nothing of cuprum's, so giving it the
+  writer's figure would re-open the same nesting one level down. Commit
+  `58d3fe15`.
+
+- [x] (2026-10-11 12:19Z) **The budget is proved by behaviour, not only by
+  arithmetic.** `test_stdin_cooperative_cleanup.py` cancels `SafeCmd.run`
+  inside a live loop's settle window and asserts the producer's `aclose`
+  *completed* rather than merely that its task is gone. The distinction was
+  measured: the obvious reading — a census of pending tasks when the cancelled
+  run returns — is vacuous, because a later reconcile path sweeps the writer up
+  under either budget, so the census reads empty at `0.75` s and at a collapsed
+  `0.25` s alike. Collapsing the budget fails the test with the release read as
+  entered-but-not-completed; restoring it passes. Commit `bddd9fd6`.
+
+- [x] (2026-10-11 13:26Z) **The INV-5 ownership matrix is complete and
+      guarded.**
+  Five cases that read as evidence about the matrix while requesting only one
+  spawn route now request the backend axis, and
+  `test_safe_cmd_stdio_matrix_contract.py` writes the 3 × 5 matrix out by hand
+  a second time and checks each row against the modules that hold it — by
+  attribute, by collection, and by whether the row reaches the route axis it
+  claims. Commit `6733b2b9`.
+
+- [x] (2026-10-11 13:5xZ) **All four validation gaps from the `r6` reply are
+  closed, and three of the four needed a second repair after the first was
+  probe-tested.** The `r6` reply accepted all four production repairs as
+  source-verified and kept these open as *evidence* gaps:
+
+  - *Cooperative cleanup now runs under both capture settings.* The test is
+    parameterized `[True, False]` with ids `capture`/`direct`, because the two
+    reach the writer's teardown by different routes — with capture on the
+    child's pipes have readers, with it off the writer drains into an unread
+    pipe. A window sized for one is not evidence for the other.
+  - *Both backend arms select their route explicitly.* The `wait4` arm used to
+    patch nothing, so on a platform without `os.wait4` it ran the asyncio
+    transport while being labelled `wait4` — an ownership case reported as
+    evidence about a route it never took. It now skips with a platform reason
+    instead, and both arms record the entry point actually reached, with the
+    asyncio transport becoming a *trap* on the wait4 arm so a mis-routed case
+    fails naming the mismatch rather than passing through the wrong backend.
+  - *Collected combinations are compared, not case names.* A case that lost one
+    execution strategy or the backend axis still appears under its name, so a
+    substring check against the collected ids passes while half the cell's
+    evidence is gone. The guard now compares an exact expected set of
+    parameter-id combinations, with the population asserted before the
+    result. Parameter order follows fixture request order and differs between
+    modules (`[wait4-run()]` in one, `[run()-asyncio]` in another), so the
+    parameters are split and compared as a set.
+  - *Outcome retrieval is exercised after the helper returns.* The finalizer
+    now absorbs its cancellation, reaches its own release point, and then
+    *waits for the test* before failing, so the failure is demonstrably after
+    `_finalize_stdin_source` returned. Two probes confirm the shape: removing
+    the retrieval callback fails with `Task exception was never retrieved`,
+    and removing the hold fails with `the finalizer failed before it was
+    released`. A first attempt asserted ordering by sleep duration and was
+    replaced, because a sleep long enough to outlast the helper is evidence
+    about this machine's scheduler as much as about the code.
+
+  One probe survived and was diagnosed rather than accepted: mutating the
+  callback's *placement* to attach after the reclaim left every test passing,
+  because `add_done_callback` still fires on an already-done task, so that
+  mutation cannot distinguish the placements at all. The valid negative control
+  is *removing* the callback, which fails correctly.
+
 ## Surprises & discoveries
 
 - Observation: **a guard is subject to the same failure it was written to
@@ -2550,7 +2625,51 @@ likelihood, and mitigation.
   `make typecheck` are three separate leaves over the same file, and a change
   to an *annotated* call site is precisely the case the first two cannot see.
 
+- Observation: **a mutation that cannot distinguish the thing it mutates is not
+  a probe.** A test asserting that the outcome-retrieval callback is attached
+  *before* the first wait was probed by moving the attachment to after the
+  reclaim — and every test still passed. The mutation is invalid rather than
+  the test being weak: `Task.add_done_callback` still fires when called on an
+  already-done task, so both placements retrieve the exception and the two are
+  behaviourally identical for a task that has already finished. The valid
+  negative control is *removing* the callback, which fails with
+  `Task exception was never retrieved`. The general form: before treating a
+  surviving mutant as a gap in the suite, check that the mutation changes
+  observable behaviour at all; a mutation that is equivalent under the
+  runtime's own semantics is evidence about neither the mutation nor the test.
+
+- Observation: **a test-only label is not a record of what ran.** The
+  `spawn_backend` fixture's `wait4` arm patched nothing, on the assumption that
+  a Linux host reaches the wait4 reaper anyway. On a host without `os.wait4`
+  the arm would silently run asyncio's transport while every case reported
+  itself as wait4 evidence — one route's behaviour standing in as evidence
+  about the other, with nothing in the failure message to say so. The repair is
+  to *select* the route in each arm and to record the entry point actually
+  reached, with the non-selected route trapped so a mis-routed case fails
+  naming the mismatch. The general form: an axis parameter that only changes a
+  test's name is not an axis; every arm has to make the alternative unreachable
+  or report that it was reached.
+
 ## Decision log
+
+- Decision: the four remaining `r6` validation gaps are closed **before** the
+  commit-gate run, not after it, and the repairs are committed in one change
+  rather than four. Rationale: a commit made after a gate run invalidates the
+  run, so the sequencing is forced — plan, code, commit, then gate. The four
+  are one logical unit because they share a single subject (making each
+  existing claim backed by evidence that can fail), and splitting them would
+  produce four partial gate runs over the same modules for no evidentiary gain.
+  The ExecPlan entry is written in the same commit for the same reason.
+
+- Decision: the reported matrix guard's strength is **re-stated rather than
+  defended**. The `r6` reply asserted that the collected set "is compared as
+  `(test, combination)` pairs, not strings". That was true of the backends
+  module and false of the matrix guard, which until this change matched case
+  names by substring. The claim is corrected in the follow-up comment instead
+  of being quietly made true by the repair, because a reply that overstated the
+  evidence at the time of writing is itself a fact worth recording: the earlier
+  text stays readable on the PR, and a reader comparing the two needs to know
+  which one changed and why.
 
 - Decision: on the second rebase, resolve the `_subprocess_execution.py`
   conflict by taking this branch's deletion of `_spawn_subprocess` **and**

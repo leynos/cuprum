@@ -378,6 +378,99 @@ def test_every_matrix_row_is_collected() -> None:
     )
 
 
+# The number of execution strategies and the number of spawn routes are written
+# out here rather than counted from the fixtures. A guard that counted what the
+# fixtures happened to offer would agree with them however they changed, which
+# is the failure it exists to catch.
+_STRATEGIES: typ.Final[frozenset[str]] = frozenset({"run()", "run_sync()"})
+_ROUTES: typ.Final[frozenset[str]] = frozenset({"wait4", "asyncio"})
+
+
+def _axis_combinations(case: str) -> frozenset[str]:
+    """Return the axis combinations a case's collected ids offer.
+
+    ``case`` is the bare node name; the module is fixed, so this reads the
+    redirect suite's collection only.
+
+    Reading combinations rather than names is the point. A case that stopped
+    requesting one execution strategy, or that lost the backend axis, still
+    appears under its name — so a substring check against the collected ids
+    passes while half the cell's evidence is gone. What the matrix claims is
+    not "this case exists" but "this cell is covered on both strategies and
+    both routes", and only the parameter ids can witness that.
+
+    Returns
+    -------
+    frozenset[str]
+        One normalised combination per collected id for this case, each built
+        by sorting the ``-``-separated parameter ids so the result does not
+        depend on the module's fixture request order. Empty when the case is
+        not collected at all.
+    """
+    collected = _collected_node_ids(_REDIRECT)
+    found: set[str] = set()
+    for node in collected:
+        name, _, params = node.partition("[")
+        if not name.endswith(case) or not params:
+            continue
+        # Param order follows the fixture request order, which differs between
+        # modules — ``[wait4-run()]`` in one and ``[run()-asyncio]`` in
+        # another — so the parameters are split and matched as a set.
+        parts = {part for part in params.rstrip("]").split("-") if part}
+        found.add("-".join(sorted(parts)))
+    return frozenset(found)
+
+
+def _expected_combinations() -> frozenset[str]:
+    """Return every axis combination a backed case must be collected under."""
+    return frozenset(
+        "-".join(sorted((strategy, route)))
+        for strategy in _STRATEGIES
+        for route in _ROUTES
+    )
+
+
+def test_every_backed_case_is_collected_on_both_strategies_and_routes() -> None:
+    """A backed cell must be collected on every strategy and every route.
+
+    The name check above cannot see this. ``test_borrowed_descriptor_survives_a
+    _timeout`` is collected under four combinations when the backend axis is
+    requested and under two when it is not, and both lists contain the name —
+    so only a comparison of the combinations distinguishes a cell that is
+    evidence on both routes from one that is evidence on whichever route the
+    host preferred.
+
+    This is also why the check is written as an exact expected set rather than
+    as a count: a case that lost one route and gained a duplicate of another
+    would keep its total.
+    """
+    expected = _expected_combinations()
+    compared: list[str] = []
+    deficient: list[str] = []
+    for row in _MATRIX:
+        if not row.axis or row.module != _REDIRECT:
+            # Rows whose axis is injected elsewhere are checked by name above;
+            # comparing their combinations here would import the other
+            # module's parametrization order into this guard.
+            continue
+        compared.append(row.case)
+        found = _axis_combinations(row.case)
+        if found != expected:
+            deficient.append(f"{row.case}: {sorted(found)}")
+    # Non-vacuity first: a guard that compared nothing would report no
+    # deficiency however the fixtures changed, so the population is asserted
+    # before its result. This is the assertion that fails if every row
+    # eventually takes the skip branch, which is how this check would rot.
+    assert compared, (
+        "no backed redirect-suite row was compared, so the exact-combination "
+        "check cannot fail and proves nothing"
+    )
+    assert not deficient, (
+        "these matrix cells are not collected on every execution strategy and "
+        f"spawn route, so each is partial evidence: {deficient}"
+    )
+
+
 def test_the_backend_axis_supplies_both_routes() -> None:
     """The axis the rows request is the two-route fixture, not a stub."""
     module = importlib.import_module(_REDIRECT)

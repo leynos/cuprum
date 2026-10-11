@@ -164,6 +164,8 @@ async def _cancel_mid_settle_and_read(
     command: SafeCmd,
     probe: _CancellationProbe,
     producer: _CooperativeProducer,
+    *,
+    capture: bool,
 ) -> tuple[str, _CancelledRunEvidence]:
     """Cancel a run inside its settle, then read what it left behind.
 
@@ -171,6 +173,23 @@ async def _cancel_mid_settle_and_read(
     ``asyncio.run`` has returned: the loop is what tears down whatever is still
     pending, so a stranded task would be collected at loop close and leave no
     trace to assert against.
+
+    ``capture`` selects the orchestration path this cancels into. With capture
+    on the child's pipes are read back by consumers; with it off there are no
+    readers and the writer drains into an unread pipe. The two reach the
+    writer's teardown by different routes, so a reclaim window that covers one
+    need not cover the other.
+
+    Parameters
+    ----------
+    command : SafeCmd
+        The command whose run is cancelled.
+    probe : _CancellationProbe
+        The post-exit probe the run reports into.
+    producer : _CooperativeProducer
+        The stdin producer whose release must complete.
+    capture : bool
+        Whether the run captures output through parent-side pipes.
 
     Returns
     -------
@@ -181,7 +200,7 @@ async def _cancel_mid_settle_and_read(
     task: asyncio.Task[CommandResult] = asyncio.create_task(
         command.run(
             stdin=StdinStream(producer),
-            output=RunOutputOptions(capture=True),
+            output=RunOutputOptions(capture=capture),
             context=ExecutionContext(cancel_grace=_CANCEL_GRACE_S),
             timeout=_RUN_DEADLINE_S,
         )
@@ -210,9 +229,11 @@ async def _cancel_mid_settle_and_read(
         await _reclaim_run(task)
 
 
+@pytest.mark.parametrize("capture", [True, False], ids=["capture", "direct"])
 def test_a_cooperative_finalizer_is_settled_before_the_run_returns(
     python_builder: cabc.Callable[..., SafeCmd],
     monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
 ) -> None:
     """A cancelled run lets a prompt release finish instead of cutting it off.
 
@@ -232,13 +253,18 @@ def test_a_cooperative_finalizer_is_settled_before_the_run_returns(
     because they are not equally sensitive. The census below reads the same
     under either budget; only the release's own completion record separates
     them.
+
+    Both capture settings are exercised because they reach the teardown by
+    different routes: with capture on the child's pipes have readers, and with
+    it off the writer drains into an unread pipe and meets a different failure.
+    A window sized for one is not evidence for the other.
     """
     command = python_builder("-c", _EXITS_AND_HOLDS_STDIN)
     probe = _install_post_exit_probe(monkeypatch)
     producer = _CooperativeProducer(probe)
 
     outcome, evidence = asyncio.run(
-        _cancel_mid_settle_and_read(command, probe, producer)
+        _cancel_mid_settle_and_read(command, probe, producer, capture=capture)
     )
 
     assert outcome == "cancelled", (

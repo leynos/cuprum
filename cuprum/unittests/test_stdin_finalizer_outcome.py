@@ -159,18 +159,31 @@ def test_cancellation_from_the_finalizer_is_not_absorbed_by_the_guard() -> None:
     )
 
 
-class _AbsorbingLateFailingFinalizer:
-    """A producer whose cleanup outlasts the window, absorbs, and then fails.
+class _HeldLateFailingFinalizer:
+    """A producer held open past the helper, then released to fail.
 
-    This is the unwinding shape: the finalizer is asked to stop, keeps going,
-    and *then* raises. The failure lands after the reclaim has already
-    returned, where no statement of the calling helper runs again — so only a
-    callback attached to the task itself can retrieve it.
+    This is the unwinding shape, made deterministic. The finalizer absorbs the
+    cancellation it is given, finishes its own release, and then *waits* — not
+    for a duration, but for the caller's own signal that the helper has
+    returned. Only then does it raise.
+
+    Waiting on an event rather than on a sleep is what turns the timing
+    assertion into an ordering assertion. A sleep long enough to outlast the
+    helper is evidence about this machine's scheduler as much as about the
+    code; an event released by the test after the helper returns is evidence
+    that the failure genuinely happened *after* the helper was gone, which is
+    the case only a callback attached to the task can retrieve. The ``held``
+    event is what the test awaits to know the producer has reached that point,
+    so a producer that failed early cannot pass by accident.
     """
 
     def __init__(self) -> None:
-        """Start with no failure recorded."""
+        """Start with no failure recorded and nothing released."""
         self.failed = False
+        self.finalized = asyncio.Event()
+        self.release = asyncio.Event()
+        self.held = asyncio.Event()
+        self.ordering: list[str] = []
 
     def __aiter__(self) -> cabc.AsyncIterator[bytes]:
         """Return this object's own iterator."""
@@ -181,57 +194,82 @@ class _AbsorbingLateFailingFinalizer:
         raise StopAsyncIteration
 
     async def aclose(self) -> None:
-        """Absorb the cancellation, finish the release, then fail.
+        """Absorb the cancellation, hold for release, then fail.
 
         The suppression models a release that unwinds under its own guard —
-        the documented cooperation limit — and the raise is what a release
-        failing *after* it was asked to stop looks like. Nothing is left to
-        await it once the window has closed.
+        the documented cooperation limit — and the wait that follows is what
+        places the failure after the helper has returned. Nothing is left to
+        await this task by then, so its exception reaches the loop unless
+        something retrieved it from the task itself.
 
         Raises
         ------
         RuntimeError
-            Always fails, after absorbing the cancellation.
+            Always fails, once the test has released it.
         """
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.sleep(_WINDOW_S * 4)
+        self.ordering.append("released")
+        self.held.set()
+        await self.release.wait()
+        self.ordering.append("failed")
         self.failed = True
-        msg = "release failed after being reclaimed"
+        self.finalized.set()
+        msg = "release failed after the helper returned"
         raise RuntimeError(msg)
 
 
-def test_a_finalizer_that_fails_as_it_unwinds_leaves_no_unretrieved_error() -> None:
-    """A late finalizer failure is retrieved, not reported against the loop.
+def test_a_finalizer_that_fails_after_the_helper_returns_is_retrieved() -> None:
+    """A failure raised after the helper is gone does not reach the loop.
 
     The window bounds how long cuprum *waits*; it does not stop the finalizer.
-    A finalizer that absorbs the cancellation, finishes anyway, and then fails
-    sets its exception after the reclaim has returned — at which point the
-    helper is gone and only the task itself can still be told about it.
+    This producer absorbs the cancellation, reaches its own release point, and
+    then *waits for the test* — so the failure is demonstrably raised after
+    ``_finalize_stdin_source`` has returned, at which point only the task
+    itself can still be told about it.
 
-    Without that retrieval the loop reports an unretrieved task exception,
-    blaming a producer cuprum has already stopped using for a failure that
-    cannot reach anyone. The loop's handler is the witness, because that report
-    is exactly what the retrieval prevents.
+    The ordering is asserted rather than slept through. ``helper_returned`` is
+    appended to the producer's own record immediately after the helper
+    returns, and the producer appends ``failed`` into the same list when it
+    raises, so the list witnesses the sequence the test claims. A sleep long
+    enough to outlast the helper would show only that this machine's scheduler
+    behaved; the released event shows that the helper was already gone.
+
+    Without retrieval the loop reports an unretrieved task exception, blaming a
+    producer cuprum has already stopped using for a failure that cannot reach
+    anyone. The loop's handler is the witness, because that report is exactly
+    what the retrieval prevents.
     """
     reported: list[str] = []
 
-    async def scenario() -> bool:
-        """Finalize an absorbing late-failing producer and let the loop settle."""
+    async def scenario() -> list[str]:
+        """Hold the finalizer past the helper, then release it to fail."""
         loop = asyncio.get_running_loop()
         loop.set_exception_handler(
             lambda _loop, context: reported.append(str(context.get("message", context)))
         )
-        finalizer = _AbsorbingLateFailingFinalizer()
+        finalizer = _HeldLateFailingFinalizer()
         await _finalize_stdin_source(typ.cast("typ.Any", finalizer))
-        # The finalizer is still running here, so the failure it is about to
-        # raise has not happened yet. Waiting it out is what gives the
-        # retrieval something to retrieve and the loop a chance to complain.
-        await asyncio.sleep(_WINDOW_S * 8)
-        return finalizer.failed
+        # The helper has returned here. The producer is still suspended on its
+        # own release event, waiting for this line, so the failure it is about
+        # to raise cannot have happened yet.
+        finalizer.ordering.append("helper-returned")
+        await asyncio.wait_for(finalizer.held.wait(), timeout=_WINDOW_S * 4)
+        assert not finalizer.failed, (
+            "the finalizer failed before it was released, so this case does not "
+            "establish a failure that happened after the helper returned"
+        )
+        finalizer.release.set()
+        await asyncio.wait_for(finalizer.finalized.wait(), timeout=_WINDOW_S * 4)
+        # Let the loop observe the finished task, which is when an unretrieved
+        # exception would be reported.
+        await asyncio.sleep(0)
+        return finalizer.ordering
 
-    assert asyncio.run(scenario()), (
-        "the finalizer never reached its failure, so this test would pass "
-        "vacuously; the wait must outlast the finalizer's own release"
+    ordering = asyncio.run(scenario())
+    assert ordering[-2:] == ["helper-returned", "failed"], (
+        "the failure did not land after the helper returned, so this case "
+        f"would not exercise the retrieval it claims: {ordering}"
     )
     assert not reported, (
         "the loop reported an unretrieved finalizer outcome, which is the "
