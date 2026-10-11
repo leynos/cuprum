@@ -1626,6 +1626,52 @@ likelihood, and mitigation.
   four cleared once checked properly against `base → target` deltas. Treat that
   scan as a lead generator only, and confirm each hit against the target's real
   delta before acting on it.
+- Observation: a `CONFLICTING` pull request builds **no** merge ref, so hosted
+  CI does not run at all — it does not fail, it never starts. The PR showed no
+  red checks because there were no checks, which is indistinguishable from a
+  repository with none configured unless the check list itself is inspected.
+  Evidence: 85 commits landed after the last green run (`93071ce5`) with no
+  hosted CI and no local equivalents, because the conflict blocked the only
+  route that would have reported the defects. Clearing the conflict surfaced
+  every one of them at once. Impact: "no failing checks" is not evidence of
+  health; the required-check names must be *present* and green, and their
+  absence is itself a finding. The corollary for a long-lived branch is that a
+  conflict is a CI outage, not merely a merge inconvenience.
+- Observation: the gate leaves that run *before* the failing one are never
+  observed, so a single early abort hides every later tool. Evidence: `make
+  lint` aborts in `python-lint`, and when the `ruff` leaf was cleared the next
+  leaf (`Skylos`) failed on a genuine finding, followed by `ambrleaks` — none of
+  which had ever executed in any prior run of this branch. Skylos reported an
+  unused `_COMMAND_FINALIZATION_ERROR` in `cuprum/_command_internals.py`, a
+  duplicate the `9b4832b6` split into `_command_finalization` had left behind
+  (the live definition is at `cuprum/_command_finalization.py:49`); the
+  duplicate carried a comment byte-identical to the live one, so nothing about
+  reading the file suggested it was dead. Impact: "green" written before a leaf
+  is reached is a statement only about the leaves that ran.
+- Observation: extracting a loop over a helper that returns *every* field —
+  rather than only the populated ones — silently changes the emitted key set.
+  Evidence: `_support._rendered_enum_fields` returns all four enum fields with
+  `None` standing in for an absent one, and the extracted loop yielded each
+  unconditionally, where the inlined original had guarded each with `if event.X
+  is not None`. Every adapter projection gained four null-valued keys
+  (`resource_usage_mode`, `env_mode`, `error_category`, `terminal_outcome`) on
+  phases that carry none of them, breaking the omit-when-`None` contract shared
+  by the tracing, logging, and metrics adapters. 15 snapshot and property tests
+  caught it. Impact: when hoisting a loop body into a helper, the helper's
+  *return shape* is part of the refactor — a tuple of `(key, value)` pairs is
+  not equivalent to a tuple of the pairs worth emitting. The original guard has
+  to travel with the data, not be assumed by the caller.
+- Observation: a test double that fails a real descriptor's method must account
+  for the other methods that call it. Evidence: `_FailingFlushFile` subclasses
+  `io.FileIO` and raises from `flush`; `io.FileIO.close` also flushes, so the
+  test's own `finally: borrowed.close()` re-raised the injected sentinel and
+  masked the assertions the test had just made — the failure reported the
+  sentinel message, not a projection or diagnostic defect. Impact: subclassing a
+  real type to satisfy a boundary check is the right call (a mock with a
+  `fileno` attribute would exercise a path no caller can reach), but the double
+  then inherits that type's call graph: `close` → `flush` here. Arming the
+  failure until `close` keeps the injected fault scoped to the window under
+  test.
 
 ## Decision log
 
@@ -2022,6 +2068,45 @@ likelihood, and mitigation.
   developers-guide stdin narration, which named only the payload writer and
   omitted `_await_exit_or_writer_failure`. Date/Author: 2026-09-27,
   implementation agent.
+
+- Decision: disposition the long-standing Codex `P1` finding on
+  `cuprum/_subprocess_stdin_stream.py:238` as **resolved by `5b8cba42`**, and
+  post the disposition as a reply on the thread rather than leaving the
+  reviewer's last word standing. Rationale: the finding's own last statement on
+  the thread (comment `4169997481`, 2026-10-02T21:30Z) reads "Keep this finding
+  open. The fix is incomplete at latest commit `453c4ae0`", and the reason it
+  was incomplete is precise — `_drain_source_into_pipe` called
+  `aiter(stream.chunks)` directly, so a producer whose `__aiter__` raised
+  `BrokenPipeError` was still classified `early_close` and swallowed. That is
+  exactly what `5b8cba42` ("Classify a producer that cannot start as a source
+  failure", 2026-10-11) fixed, by extracting `_start_producer` and marking the
+  failure with `_ProducerFailureError`. Verified against the pushed head, not
+  against the working tree: `60424c18:cuprum/_subprocess_stdin_stream.py:209`
+  reads `source = _start_producer(stream.chunks)`, and the committed test
+  `test_a_producer_that_cannot_start_is_a_source_failure` covers `__aiter__`
+  with `_UnstartableProducer` across `BrokenPipeError`, `ConnectionResetError`,
+  and bare `OSError(EPIPE)`. Date/Author: 2026-10-11, lifecycle agent.
+- Decision: **correct** the first disposition reply (comment `4239944763`),
+  which claimed the fix "was already fixed before this review". Rationale: the
+  claim was false and in the direction that flatters the branch — `453c4ae0` is
+  dated 2026-10-02 and `5b8cba42` 2026-10-11, so the fix postdates the review by
+  nine days and the reviewer was right when it said the fix was incomplete. The
+  correction (comment `4239959855`) states the true order and credits the
+  reviewer for holding the finding open, which is what surfaced the `__aiter__`
+  gap. Impact: a reply that says "already fixed" when the fix came *after* the
+  assessment misrepresents the review record; check the reviewer's comment
+  timestamp against the fixing commit's date before using that phrasing, since
+  the branch's own commit dates are the only thing that settles it.
+  Date/Author: 2026-10-11, lifecycle agent.
+- Decision: treat the three open `CHANGES_REQUESTED` reviews (all
+  `coderabbitai[bot]`, all submitted 2026-10-01 against `a3083984`,
+  `e3384618`, `61de2373`) as **stale but blocking**, and clear them by obtaining
+  a review at the current head rather than by asking for dismissal. Rationale:
+  GitHub reports one aggregate `reviewDecision`, so three nine-day-old reviews
+  against long-superseded commits keep the PR blocked regardless of the current
+  tree's health; each was valid when written. A new review at the current head
+  is the only honest way to retire them. Date/Author: 2026-10-11, lifecycle
+  agent.
 
 ## Outcomes & retrospective
 
