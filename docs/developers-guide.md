@@ -1569,14 +1569,14 @@ members exist that this process may not signal: neither the grace period nor
 the escalation could reach them, so waiting longer cannot settle the group and
 the probe reports it as having no reachable members. Those two answers are not
 the same, and only the permission case leaves a member running past teardown;
-the probe reports that case as `UNSIGNALABLE`.
-`_probe_group` is a query and keeps them apart without judging them: it returns
-`EMPTY` or `UNSIGNALABLE` and leaves both the decision and the diagnostic to
-its caller. The teardown command is where the two are separated — an
-unsignalable group is logged as `cuprum.process_group_unsignalable` before
-being reported as unsettled — because moving the log into the probe would give
-a read an externally visible side-effect, and because the caller that acts on
-the answer is the one that owns the reporting.
+the probe reports that case as `UNSIGNALABLE`. `_probe_group` is a query and
+keeps them apart without judging them: it returns `EMPTY` or `UNSIGNALABLE` and
+leaves both the decision and the diagnostic to its caller. The teardown command
+is where the two are separated — an unsignalable group is logged as
+`cuprum.process_group_unsignalable` before being reported as unsettled —
+because moving the log into the probe would give a read an externally visible
+side-effect, and because the caller that acts on the answer is the one that
+owns the reporting.
 
 ### Observability of group teardown
 
@@ -1671,8 +1671,8 @@ through `_terminate_pipeline_remaining_stages` and
 the entry point holds no settlement condition of its own to audit.
 
 The answer is the probe's three-way `_GroupProbe` rather than a boolean, and
-`_report_teardown` is the companion that reports it. Splitting observation
-from reporting is what keeps the query free of side effects: a query that logs
+`_report_teardown` is the companion that reports it. Splitting observation from
+reporting is what keeps the query free of side effects: a query that logs
 cannot be asserted on independently of a log capture, and it makes an
 environmental permission failure look like an answer about the group. The
 command boundary calls the two in sequence — query, report, then act on the

@@ -1188,9 +1188,9 @@ not the default.
 
 A teardown reports the outcomes it cannot resolve, so a run that left something
 behind is visible rather than silent. The available records depend on the
-policy: `cuprum.teardown_signal_failed` is raised under either policy,
-because a direct child can refuse a signal too, while the two `process_group`
-records can only come from a run that owns its group. Each record goes to the
+policy: `cuprum.teardown_signal_failed` is raised under either policy, because
+a direct child can refuse a signal too, while the two `process_group` records
+can only come from a run that owns its group. Each record goes to the
 `cuprum._group_teardown` logger at `WARNING`:
 
 - `cuprum.teardown_signal_failed` — a signal the kernel refused for a target
