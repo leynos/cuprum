@@ -86,6 +86,19 @@ def test_profile_plan_lists_each_sweep_measurement(
     ], f"canonical plan must use the measurement artefact directories, got {matching}"
 
 
+def _successful_stream_telemetry_sample(read_size: int) -> dict[str, object]:
+    """Return a successful fake worker result carrying stream telemetry."""
+    group = {
+        "bytes_consumed": read_size,
+        "read_operations": 1,
+        "operation_count": 1,
+        "duration_seconds": float(read_size),
+    }
+    telemetry = {"groups": {"stream_drain": {"eof": group}}, "totals": group}
+    sample = {"exit_code": 0, "read_size": read_size, "status": "ok"}
+    return sample | {"stream_telemetry": telemetry}
+
+
 def test_profile_sweep_runs_every_size_in_each_round(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -103,7 +116,7 @@ def test_profile_sweep_runs_every_size_in_each_round(
         """Record the scenario's read size without running a subprocess."""
         _ = (config, scenario_dir)
         observed.append(scenario.read_size)
-        return {"exit_code": 0, "read_size": scenario.read_size, "status": "ok"}
+        return _successful_stream_telemetry_sample(scenario.read_size)
 
     monkeypatch.setattr(profile_tee_hotpath, "_run_profile_scenario", fake_run)
 
@@ -124,6 +137,24 @@ def test_profile_sweep_runs_every_size_in_each_round(
         "read_sizes": [4096, 16384],
         "rounds": 2,
         "samples": results,
+        "stream_telemetry_summary": {
+            "groups": {
+                "stream_drain": {
+                    "eof": {
+                        "bytes_consumed": 40960,
+                        "read_operations": 4,
+                        "operation_count": 4,
+                        "duration_seconds": 40960.0,
+                    }
+                }
+            },
+            "totals": {
+                "bytes_consumed": 40960,
+                "read_operations": 4,
+                "operation_count": 4,
+                "duration_seconds": 40960.0,
+            },
+        },
     }, f"sweep artefact must serialize its metadata and every sample, got {sweep}"
     assert {sample["read_size"] for sample in sweep["samples"]} == {4096, 16384}, (
         "serialized sweep samples must cover every requested read size"
