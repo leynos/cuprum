@@ -663,8 +663,8 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
 | `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
-| `extension-tests`           | 3.13   | none                           | 15 gated modules, then `make typecheck`  | **built** |
-| `extension-tests-windows`   | 3.13   | none                           | 15 gated modules                         | **built** |
+| `extension-tests`           | 3.13   | none                           | 16 gated modules, then `make typecheck`  | **built** |
+| `extension-tests-windows`   | 3.13   | none                           | 16 gated modules                         | **built** |
 
 The 3.15a leg is experimental: it may fail without failing the run, and its
 check, `Typecheck and test (Python 3.15a)`, is not a required context. On a

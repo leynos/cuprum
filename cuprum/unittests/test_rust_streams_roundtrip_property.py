@@ -7,9 +7,9 @@ the Rust entry point against an independently computed expectation:
 
 - Omitting ``buffer_size`` is equivalent to passing the explicit default, for
   both ``rust_consume_stream`` and ``rust_pump_stream``.
-- The decoded output and the transferred byte count match Python's own
-  results, so "the default applies" cannot be satisfied by two identically
-  wrong answers.
+- The decoded output, the transferred byte count, and the bytes that reach the
+  sink match Python's own results, so "the default applies" cannot be satisfied
+  by two identically wrong answers.
 
 Every property here runs the entry point over a real pipe rather than a
 throwaway descriptor, so the assertions hold on Windows as well as POSIX.
@@ -25,6 +25,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum.unittests._rust_stream_test_support import _safe_close
+from tests.helpers.stream_pipes import _read_all
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -71,18 +72,23 @@ def _pump_via_pipes(
     rust_streams: ModuleType,
     payload: bytes,
     **kwargs: object,
-) -> int:
-    """Pump ``payload`` from a source pipe to a sink pipe; return bytes written."""
+) -> tuple[int, bytes]:
+    """Pump ``payload`` between pipes; return bytes written and bytes received."""
     with contextlib.ExitStack() as stack:
         src_read, src_write = os.pipe()
         sink_read, sink_write = os.pipe()
         for fd in (src_read, src_write, sink_read, sink_write):
             stack.callback(_safe_close, fd)
         _feed_pipe(src_write, payload)
-        # Close the source writer so the pump reaches EOF; the payload is small
-        # enough to fit the sink pipe buffer without draining `sink_read`.
+        # Close the source writer so the pump reaches EOF. The payload is small
+        # enough to fit the sink pipe buffer, so the pump returns without a
+        # concurrent reader draining `sink_read`.
         _safe_close(src_write)
-        return int(rust_streams.rust_pump_stream(src_read, sink_write, **kwargs))
+        transferred = int(rust_streams.rust_pump_stream(src_read, sink_write, **kwargs))
+        # Closing the sink writer is what lets the drain below observe EOF.
+        # The ExitStack's later close of the same descriptor is a no-op.
+        _safe_close(sink_write)
+        return transferred, _read_all(sink_read)
 
 
 @_SUPPRESS_FIXTURE
@@ -111,9 +117,17 @@ def test_pump_default_buffer_matches_explicit(
     payload: bytes,
 ) -> None:
     """``rust_pump_stream`` omitting ``buffer_size`` equals the explicit default."""
-    explicit = _pump_via_pipes(rust_streams, payload, buffer_size=_DEFAULT_BUFFER_SIZE)
-    default = _pump_via_pipes(rust_streams, payload)
-    assert explicit == default, (
+    explicit_count, explicit_data = _pump_via_pipes(
+        rust_streams, payload, buffer_size=_DEFAULT_BUFFER_SIZE
+    )
+    default_count, default_data = _pump_via_pipes(rust_streams, payload)
+    assert explicit_count == default_count, (
         "omitting buffer_size must equal the explicit 65536 default"
     )
-    assert default == len(payload), "the pump must transfer every payload byte"
+    assert default_count == len(payload), "the pump must transfer every payload byte"
+    # Counting the bytes alone would pass for a pump that writes the right
+    # number of wrong bytes, so compare what actually reached the sink.
+    assert default_data == payload, "the pump must relay every payload byte intact"
+    assert explicit_data == default_data, (
+        "the explicit default must relay the same bytes as omitting buffer_size"
+    )
