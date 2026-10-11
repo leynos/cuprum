@@ -106,6 +106,42 @@ class _StreamSink:
         """Record that the producer yielded a chunk cuprum cannot write."""
         self._chunk_error = StdioFailureCategory.INVALID_CHUNK
 
+    def encode(self, text: str, *, final: bool) -> bytes:
+        """Encode *text*, attributing any failure to the encoder boundary.
+
+        The encoder is not only built lazily; it *fails* lazily too. A strict
+        codec rejects an unencodable character from inside ``encode()`` rather
+        than from inside the constructor, so marking ``ENCODER`` only where the
+        encoder is built would let a genuine ``UnicodeEncodeError`` reach the
+        classifier unmarked and be reported as ``PIPE`` — a pipe that was never
+        at fault. Marking here covers every call that can raise for an encoding
+        reason: the lazy build, the per-chunk encode, and the final flush.
+
+        The mark is cleared only on success, so an exception propagates with it
+        still set. That is what the classifier reads, and it is why this cannot
+        be a plain ``try``/``finally`` restore: the failure case *is* the one
+        that needs the mark.
+
+        Parameters
+        ----------
+        text : str
+            The chunk text, or ``""`` for the final flush.
+        final : bool
+            Whether this is the encoder's final flush, which is the only call
+            that emits a held partial sequence.
+
+        Returns
+        -------
+        bytes
+            The encoded payload, empty when the encoder is still holding a
+            partial sequence.
+        """
+        previous = self._chunk_error
+        self._chunk_error = StdioFailureCategory.ENCODER
+        payload = self.encoder().encode(text, final=final)
+        self._chunk_error = previous
+        return payload
+
 
 async def _write_chunk(
     sink: _StreamSink,
@@ -133,7 +169,7 @@ async def _write_chunk(
     """
     match chunk:
         case str():
-            payload = sink.encoder().encode(chunk, final=False)
+            payload = sink.encode(chunk, final=False)
         case bytes():
             payload = chunk
         case _:
@@ -159,7 +195,7 @@ async def _flush_encoder(sink: _StreamSink) -> None:
     A trailing partial sequence only becomes visible to the child here, so this
     runs after the producer is exhausted and before the pipe is closed.
     """
-    tail = sink.encoder().encode("", final=True)
+    tail = sink.encode("", final=True)
     if not tail:
         return
     sink.stdin.write(tail)

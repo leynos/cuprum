@@ -49,6 +49,7 @@ __all__ = [
     "_StdioBinding",
     "_StreamStdin",
     "_open_owned_path",
+    "_reject_negative_descriptor",
     "_resolve_stdin_plan",
     "_resolve_stdio",
     "_resolve_stdio_binding",
@@ -276,6 +277,7 @@ def _resolve_stdio_binding(
         return _StdioBinding(stream=stream, owned_path=target.path_value)
     borrowed = target.fd_value
     if isinstance(borrowed, int):
+        _reject_negative_descriptor(stream, borrowed, resource="int")
         return _StdioBinding(stream=stream, descriptor=borrowed)
     # The object's descriptor, not the object, is what the child is given: the
     # spawn layer wants an ``int``, and taking it here is the same call
@@ -299,7 +301,54 @@ def _resolve_stdio_binding(
             "descriptor, or open a real file instead of an in-memory object."
         )
         raise io.UnsupportedOperation(msg) from exc
+    # A file object's ``fileno()`` is caller-supplied code, so it can return a
+    # sentinel just as an ``int`` payload can. The guard applies to the value
+    # actually handed to ``subprocess``, which is this one.
+    _reject_negative_descriptor(stream, descriptor, resource=type(borrowed).__name__)
     return _StdioBinding(stream=stream, descriptor=descriptor, borrowed=borrowed)
+
+
+def _reject_negative_descriptor(
+    stream: PipeStream,
+    descriptor: int,
+    *,
+    resource: str,
+) -> None:
+    """Refuse a subprocess sentinel masquerading as a borrowed descriptor.
+
+    ``subprocess`` reads negative integers as sentinels rather than
+    descriptors: ``-1`` is ``PIPE``, ``-2`` is ``STDOUT``, and ``-3`` is
+    ``DEVNULL``. A binding that names one would be a lie — for an *output*
+    stream, ``-1`` makes ``subprocess`` create a pipe that cuprum neither owns
+    nor reads, so the child blocks on a full buffer and the run hangs. Both
+    routes into a descriptor land here: an ``int`` payload, and whatever a
+    caller's ``fileno()`` returned.
+
+    Parameters
+    ----------
+    stream : str
+        ``"stdout"`` or ``"stderr"``, named in the refusal.
+    descriptor : int
+        The value about to be handed to ``subprocess``.
+    resource : str
+        How the descriptor was obtained, for the message: ``"int"`` for a
+        literal payload, otherwise the file object's type name.
+
+    Raises
+    ------
+    ValueError
+        If the descriptor is negative.
+    """
+    if descriptor >= 0:
+        return
+    msg = (
+        f"RunOutputOptions {stream} resolved to the descriptor "
+        f"{descriptor} from {resource}; negative values are subprocess "
+        "sentinels (-1 is PIPE, -2 is STDOUT, -3 is DEVNULL), which would "
+        "have subprocess act on the stream itself rather than bind this one. "
+        "Pass a non-negative descriptor."
+    )
+    raise ValueError(msg)
 
 
 def _resolve_stdin_plan(
