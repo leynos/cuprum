@@ -560,6 +560,115 @@ def test_wait_argument_overrides_the_default_deadline() -> None:
     asyncio.run(run_case())
 
 
+def test_expired_wait_records_the_outcome_it_stopped() -> None:
+    """The child an expired deadline stopped is still reported afterwards.
+
+    A wait whose clock runs out stops the child the way a cancelled ``run()``
+    does, so by the time ``TimeoutExpired`` reaches the caller the child is
+    already reaped and has a real exit code. Discarding it would leave the
+    handle claiming ``result is None`` about a child it had just dealt with,
+    and the only way to learn what happened would be to re-read the process.
+
+    The deadline is what raises, and it does so exactly once: an implementation
+    that lets the settlement task fail instead re-raises at every later
+    operation, so each of the three assertions below is a separate witness to
+    the same defect.
+    """
+
+    async def run_case() -> None:
+        """Expire a wait, then read the outcome three ways."""
+        process = _StubProcess()
+        handle = _handle(process, default_timeout=0)
+
+        with pytest.raises(TimeoutExpired):
+            await handle.wait()
+
+        recorded = handle.result
+        assert recorded is not None, (
+            "the stopped child's outcome must be recorded, not discarded"
+        )
+        assert recorded.exit_code == _TERMINATED, (
+            f"the recorded outcome must report the stop, got {recorded.exit_code}"
+        )
+
+        repeated = await handle.wait()
+        assert repeated is recorded, (
+            "a later wait must report the recorded outcome rather than "
+            "re-raising the deadline that is already spent"
+        )
+
+        terminated = await handle.terminate()
+        assert terminated is recorded, (
+            "a stop after an expired deadline must report the recorded "
+            "outcome, as its contract promises"
+        )
+        assert process.terminate_calls == 1, (
+            f"the child must be stopped once, got {process.terminate_calls}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_expired_wait_does_not_displace_the_outcome_for_a_later_kill() -> None:
+    """A kill after an expired deadline reports the outcome, not the expiry.
+
+    ``terminate`` and ``kill`` reach the recorded outcome by different routes —
+    one stops the child first, the other compels it — so both are asserted. A
+    kill is also the case where a resurrected deadline error would be most
+    misleading: it would report a timeout in answer to a caller who asked for a
+    forced stop.
+    """
+
+    async def run_case() -> None:
+        """Expire a wait, then kill the handle."""
+        process = _StubProcess()
+        handle = _handle(process, default_timeout=0)
+
+        with pytest.raises(TimeoutExpired):
+            await handle.wait()
+
+        recorded = handle.result
+        killed = await handle.kill()
+
+        assert killed is recorded, (
+            "a kill must report the recorded outcome after an expired deadline"
+        )
+        assert killed.exit_code == _TERMINATED, (
+            f"the child was already stopped, so the recorded code stands, "
+            f"got {killed.exit_code}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_teardown_after_an_expired_wait_keeps_the_recorded_outcome() -> None:
+    """Leaving the ``async with`` block after a deadline keeps the outcome.
+
+    Teardown is the last chance to settle a handle, and the case that would
+    otherwise slip through is a block that fails while its wait had already
+    expired: the deadline error must not be the thing teardown reports, and the
+    outcome it recorded must still be readable.
+    """
+
+    async def run_case() -> None:
+        """Expire a wait inside a block that then exits normally."""
+        process = _StubProcess()
+        handle = _handle(process, default_timeout=0)
+
+        async with handle:
+            with pytest.raises(TimeoutExpired):
+                await handle.wait()
+
+        assert handle.result is not None, (
+            "teardown must leave the recorded outcome readable"
+        )
+        assert handle.result.exit_code == _TERMINATED, (
+            f"the recorded outcome must be the stop's, got {handle.result.exit_code}"
+        )
+
+    asyncio.run(run_case())
+
+
 def _raise_block_error() -> None:
     """Raise the error a block fails with.
 

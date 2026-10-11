@@ -21,6 +21,7 @@ import typing as typ
 from cuprum._command_internals import (
     _build_subprocess_execution,
     _ExecutionState,
+    _finalize_prepared_command_failure,
     _prepare_execution_observation,
     _run_prepared_command,
 )
@@ -292,11 +293,24 @@ class SafeCmd:
                 timeout=effective_timeout,
             ),
         )
-        run = await _start_handle_run(
-            _build_handle_execution(prepared.execution),
-            prepared.tracking,
-            effective_timeout,
-        )
+        # The spawn owns its own child — `_start_handle_run` terminates and
+        # reaps anything it started before letting a failure out. What it
+        # cannot own is the session its execution was prepared against, so
+        # that framing is closed here, on the one path that can fail after
+        # preparation returned.
+        try:
+            run = await _start_handle_run(
+                _build_handle_execution(prepared.execution),
+                prepared.tracking,
+                effective_timeout,
+            )
+        except BaseException as run_error:
+            await _finalize_prepared_command_failure(
+                prepared.tracking,
+                prepared.execution.observation,
+                run_error,
+            )
+            raise
         return RunningCommand(run)
 
     def run_sync(

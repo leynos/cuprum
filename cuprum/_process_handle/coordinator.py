@@ -20,6 +20,13 @@ resource usage: the wait here can begin after the child has already been
 reaped, so a figure measured then would describe a different window than the
 one it claims. Leaving it unmeasured is honest; measuring it late is not.
 
+A deadline is the one route where the caller's error and the child's outcome
+diverge, so it reports both. The wait that expires stops the child exactly as a
+cancelled ``run()`` does and the child is gone by the time the drain runs, so
+there is a real outcome to publish — but the caller whose deadline elapsed is
+still owed a ``TimeoutExpired``. :class:`_HandleSettlement` carries the pair,
+which is what lets the handle record the outcome before it raises.
+
 Reconciliation always runs shielded, and always *after* the process is gone.
 The order matters. Cancelling a stream consumer while the child is still
 writing would turn a clean shutdown into a broken pipe, and a cancellation
@@ -30,6 +37,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+from time import perf_counter
 
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
@@ -38,9 +46,10 @@ from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
-    _handle_subprocess_timeout,
-    _SubprocessTimeoutContext,
+    _get_exit_code,
+    _resolve_timeout_payload,
     _SubprocessTimeoutError,
+    _TimeoutFallback,
 )
 from cuprum._subprocess_wait import (
     _DrainContext,
@@ -50,11 +59,11 @@ from cuprum._subprocess_wait import (
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum.sh import CommandResult
+    from cuprum.sh import CommandResult, TimeoutExpired
 
 __all__ = [
     "_finalize_settled_run",
-    "_run_handle_to_result",
+    "_settle_handle_run",
 ]
 
 
@@ -101,11 +110,11 @@ async def _finalize_settled_run(
     )
 
 
-async def _run_handle_to_result(
+async def _settle_handle_run(
     run: _HandleRun,
     execution: _SubprocessExecution,
-) -> CommandResult:
-    """Wait for the child, reconcile its tasks, and assemble the result.
+) -> _HandleSettlement:
+    """Wait for the child, reconcile its tasks, and assemble the outcome.
 
     The watchdog is armed here rather than at spawn, so the time a caller
     spends holding a handle without waiting is not counted as the child's
@@ -116,24 +125,17 @@ async def _run_handle_to_result(
     child — ``-15`` for a cooperative ``SIGTERM``, ``-9`` for one that had to
     be killed — rather than whatever a stop path happened to guess.
 
-    The timeout translation happens here rather than in the caller so the
-    output captured before the deadline is drained exactly once and carried
-    onto the raised error, exactly as the streamed ``run()`` path does.
-
     Returns
     -------
-    CommandResult
-        The ended command's outcome, carrying its captured streams and the
-        code it actually exited with.
+    _HandleSettlement
+        The command's outcome, and the deadline error to raise in place of
+        offering it when a deadline is what ended the wait.
 
     Raises
     ------
-    TimeoutExpired
-        If the child did not finish within the deadline in *execution*, once
-        its output has been drained onto the raised error.
     asyncio.CancelledError
         If the caller cancelled while waiting, once the run is reconciled.
-    """  # ruff: ignore[docstring-extraneous-exception] - TimeoutExpired and CancelledError propagate from the wait and timeout helpers
+    """  # ruff: ignore[docstring-extraneous-exception] - CancelledError propagates from the wait
     _launch_idle_monitor(execution)
     try:
         exit_code, exited_at = await _wait_for_exit_code_within_timeout(
@@ -146,15 +148,23 @@ async def _run_handle_to_result(
             execution,
             capture=True,
         )
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=execution,
-                process=run.process,
-                started_at=run.started_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
+        # The child is stopped and drained by this point, so its outcome is a
+        # settled fact worth keeping. It is recorded beside the error the
+        # caller's deadline earned rather than instead of it.
+        return _HandleSettlement(
+            result=_build_handle_result(
+                run,
+                _HandleOutcome(
+                    exit_code=_get_exit_code(run.process),
+                    # The exit was never observed here, so the reading taken
+                    # now is the best available one — the same value the
+                    # streamed path uses as its fallback.
+                    exited_at=perf_counter(),
+                    stdout_text=stdout_text,
+                    stderr_text=stderr_text,
+                ),
             ),
-            exc,
+            deadline_error=_deadline_error(execution, exc),
         )
     except BaseException:
         # Cancellation, and any other failure escaping the wait, still needs
@@ -167,14 +177,77 @@ async def _run_handle_to_result(
         execution,
         capture=True,
     )
-    return _build_handle_result(
-        run,
-        _HandleOutcome(
-            exit_code=exit_code,
-            exited_at=exited_at,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
+    return _HandleSettlement(
+        result=_build_handle_result(
+            run,
+            _HandleOutcome(
+                exit_code=exit_code,
+                exited_at=exited_at,
+                stdout_text=stdout_text,
+                stderr_text=stderr_text,
+            ),
         ),
+        deadline_error=None,
+    )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _HandleSettlement:
+    """What one settlement produced: the outcome, and why a wait did not get it.
+
+    The two travel together because a deadline is the one route where both
+    exist. Every other route to the end of a run — the child exiting, a stop,
+    a kill, a teardown — has an outcome and nothing to raise, so the handle can
+    offer the result straight back. A deadline has an outcome *and* an error:
+    the child was stopped and reaped, and the caller whose clock ran out is
+    owed the error rather than the outcome.
+
+    ``deadline_error`` is deliberately built here rather than raised here, so
+    the handle can record the outcome before it raises. Raising from this
+    module would discard it, because the settlement task's own exception is
+    what every later operation would then re-raise.
+    """
+
+    result: CommandResult
+    deadline_error: TimeoutExpired | None
+
+    @property
+    def has_deadline_expired(self) -> bool:
+        """Whether the settlement ended because a wait's deadline elapsed."""
+        return self.deadline_error is not None
+
+
+def _deadline_error(
+    execution: _SubprocessExecution,
+    exc: TimeoutError | _SubprocessTimeoutError,
+) -> TimeoutExpired:
+    """Build the ``TimeoutExpired`` the streamed path would have raised.
+
+    The resolution is delegated to the same seam the streamed path uses, so a
+    timeout reports the same command, the same configured timeout, and the same
+    captured output whichever entry point hit it. Only the raising is left to
+    the handle, which needs the outcome this error would otherwise displace.
+
+    Returns
+    -------
+    TimeoutExpired
+        The report of the expiry, chained onto the internal timeout that
+        carried the captured output.
+    """
+    details = _resolve_timeout_payload(
+        exc,
+        _TimeoutFallback(
+            configured_timeout=execution.timeout,
+            stdout=None,
+            stderr=None,
+            exited_at=perf_counter(),
+        ),
+    )
+    return _sh_module().TimeoutExpired(
+        cmd=execution.cmd.argv_with_program,
+        timeout=details.timeout,
+        output=details.stdout,
+        stderr=details.stderr,
     )
 
 

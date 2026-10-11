@@ -24,6 +24,16 @@ caller who is cancelled leaves the settlement running; the next caller awaits
 the same task and gets the same outcome, whether that is a result or the error
 the first caller never saw. Nothing here can deadlock a stop behind a wait that
 has no deadline.
+
+A wait that expires is the one route that produces both an outcome and an
+error, and the handle keeps both rather than letting the task's exception
+decide for every later caller. The child is stopped and reaped by the time the
+deadline is reported, so its outcome is recorded first and the error raised
+afterwards — which is why the settlement task *completes* on a deadline, with
+the error carried in the settlement rather than thrown out of it. A later
+``wait``, ``terminate``, or ``kill`` on the same handle therefore sees the
+outcome the first caller's deadline denied them, instead of a resurrected
+exception describing a child that is already gone.
 """
 
 from __future__ import annotations
@@ -41,16 +51,17 @@ from cuprum._process_handle.control import (
     _kill_shielded,
     _terminate_shielded,
 )
-from cuprum._process_handle.coordinator import _run_handle_to_result
+from cuprum._process_handle.coordinator import _settle_handle_run
 from cuprum._process_lifecycle import _shielded_cleanup
 
 if typ.TYPE_CHECKING:
     import types
 
+    from cuprum._process_handle.coordinator import _HandleSettlement
     from cuprum._process_handle.tasks import _HandleRun
     from cuprum._subprocess_spawn import _SubprocessExecution
     from cuprum.events import ExecId
-    from cuprum.sh import CommandResult
+    from cuprum.sh import CommandResult, TimeoutExpired
 
 __all__ = ["RunningCommand"]
 
@@ -75,16 +86,23 @@ class RunningCommand:
     exited, :attr:`result` holds the same ``CommandResult`` a ``run()`` call
     would have returned, and further waits or terminations report that outcome
     rather than failing.
+
+    A deadline is the one exception, and it is raised once. The wait whose
+    clock ran out reports :class:`~cuprum.sh.TimeoutExpired` after stopping and
+    reaping the child; because that work is done, the outcome it produced is
+    recorded, and a later wait, termination, or teardown returns it instead of
+    re-raising an error about a child that is already gone.
     """
 
-    __slots__ = ("_lock", "_result", "_run", "_settling")
+    __slots__ = ("_lock", "_result", "_run", "_settled_run", "_settling")
 
     def __init__(self, run: _HandleRun) -> None:
         """Take ownership of a spawned child and its execution record."""
         self._run = run
         self._lock = asyncio.Lock()
         self._result: CommandResult | None = None
-        self._settling: asyncio.Task[CommandResult] | None = None
+        self._settled_run: _HandleSettlement | None = None
+        self._settling: asyncio.Task[_HandleSettlement] | None = None
 
     @property
     def pid(self) -> int | None:
@@ -120,7 +138,9 @@ class RunningCommand:
         CommandResult | None
             The command's result once settlement has completed, otherwise
             ``None``. The property never waits; use :meth:`wait` to block until
-            there is an outcome to read.
+            there is an outcome to read. A wait whose deadline elapsed
+            publishes the outcome here too, because the child it stopped is
+            nonetheless reaped and has one.
         """
         return self._result
 
@@ -206,7 +226,9 @@ class RunningCommand:
         ``-9``.
 
         Calling this on a command that has already exited is a no-op that
-        reports the recorded outcome.
+        reports the recorded outcome — including when a ``wait`` deadline is
+        what ended the child, since the outcome that wait produced is the one
+        this returns.
 
         Parameters
         ----------
@@ -304,49 +326,126 @@ class RunningCommand:
     async def _settled(self, deadline: float | None) -> CommandResult:
         """Return the run's outcome, settling it if nobody has yet.
 
+        The settlement task completes even when a deadline ended the run, so
+        this awaits an outcome rather than an error. A deadline is reported to
+        a caller that both asked for one and was still waiting when it elapsed;
+        everyone else — a later wait, a stop, a teardown — reads the outcome
+        the child actually has, because it has already been stopped and reaped.
+
         Returns
         -------
         CommandResult
             The outcome of the one settlement, whichever caller started it and
-            whichever route — an ordinary exit, a stop, or a deadline —
+            whichever route — an ordinary exit, a stop, a kill, or a deadline —
             produced it.
+
+        Raises
+        ------
+        TimeoutExpired
+            If this call's deadline is what ended the run. The outcome is
+            recorded all the same, and readable from :attr:`result`.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised here from the settlement this wait drove
+        settlement, was_waiting = await self._await_settlement(deadline)
+        expiry = self._expiry_for(settlement, deadline, was_waiting=was_waiting)
+        if expiry is not None:
+            raise expiry
+        return settlement.result
+
+    @staticmethod
+    def _expiry_for(
+        settlement: _HandleSettlement,
+        deadline: float | None,
+        *,
+        was_waiting: bool,
+    ) -> TimeoutExpired | None:
+        """Return the expiry this call owes its caller, if it owes one.
+
+        All three conditions have to hold. The settlement must have ended on a
+        deadline, because otherwise there is no expiry to report. The caller
+        must have supplied a deadline, because a wait with none cannot be said
+        to have run out of time. And the caller must have been waiting on the
+        live settlement rather than reading a record, because a caller who
+        arrived afterwards is looking at a child that is already gone.
+
+        Returns
+        -------
+        TimeoutExpired | None
+            The expiry to raise, or ``None`` when this call should read the
+            outcome instead.
+        """
+        if not was_waiting or deadline is None:
+            return None
+        return settlement.deadline_error
+
+    async def _await_settlement(
+        self,
+        deadline: float | None,
+    ) -> tuple[_HandleSettlement, bool]:
+        """Await the one settlement, driving it if nobody has yet.
+
+        ``was_waiting`` distinguishes the callers a deadline belongs to from
+        the ones that merely arrived afterwards. A caller that awaited the live
+        settlement was waiting on the child when the clock ran out, so the
+        expiry is its to hear about. A caller that found a recorded settlement
+        is reading history: the child is already gone, and there is nothing
+        left for a fresh deadline to interrupt.
+
+        Returns
+        -------
+        tuple[_HandleSettlement, bool]
+            The settlement's outcome, and whether this call awaited a
+            settlement that was still in progress.
         """
         async with self._lock:
+            settlement = self._settled_run
+            if settlement is not None:
+                return settlement, False
             settling = self._settling
             if settling is None:
-                if self._result is not None:
-                    return self._result
                 settling = asyncio.ensure_future(self._settle(deadline))
                 self._settling = settling
         # Shielded so a cancelled waiter does not take the settlement with it:
         # the task is the handle's, and the next waiter still gets its outcome.
-        return await asyncio.shield(settling)
+        awaited = await asyncio.shield(settling)
+        async with self._lock:
+            self._settled_run = awaited
+        return awaited, True
 
-    async def _settle(self, deadline: float | None) -> CommandResult:
-        """Drive the run to its end once, and publish the outcome.
+    async def _settle(self, deadline: float | None) -> _HandleSettlement:
+        """Drive the run to its end once, and publish what it produced.
 
-        The run's own tasks are reconciled by :func:`_run_handle_to_result`,
-        which also carries the deadline; what remains here is the command-level
+        The run's own tasks are reconciled by :func:`_settle_handle_run`, which
+        also carries the deadline; what remains here is the command-level
         framing — closing the presentation-sink session and draining the tasks
-        an observer scheduled — and recording the result every later caller
+        an observer scheduled — and recording the outcome every later caller
         reads.
+
+        A deadline does not raise from here. The outcome is recorded and the
+        task completes, so the error describing the expiry reaches only the
+        caller whose clock produced it rather than being re-raised at every
+        operation that touches the handle afterwards.
 
         Returns
         -------
-        CommandResult
-            The command's outcome, also stored for :attr:`result`.
+        _HandleSettlement
+            The command's outcome, also stored for :attr:`result`, together
+            with the deadline error when one ended the wait.
         """
         execution = self._execution(deadline)
         try:
-            result = await _run_handle_to_result(self._run, execution)
+            settlement = await _settle_handle_run(self._run, execution)
         except BaseException as run_error:
             await _finalize_command_run_failure(
                 execution,
                 self._run.tracking,
-                self._result,
+                None,
                 run_error,
             )
             raise
-        await _finalize_command_run_success(execution, self._run.tracking, result)
-        self._result = result
-        return result
+        await _finalize_command_run_success(
+            execution,
+            self._run.tracking,
+            settlement.result,
+        )
+        self._result = settlement.result
+        return settlement

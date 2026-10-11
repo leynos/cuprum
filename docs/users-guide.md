@@ -776,10 +776,15 @@ assert asyncio.run(stop_a_child()) == -15
 
 `wait(timeout=...)` bounds one call: its expiry stops the child the way a
 timed-out `run()` does and raises `TimeoutExpired` with whatever the child had
-written before it. A `timeout` passed to `start()` is instead the default
-deadline for every `wait()` on that handle, because the clock a timeout is
-measured against starts at the wait that asks for one. Capture is always on for
-a handle, so a stopped child still reports its output on the result.
+written before it. Because the child is stopped and reaped before that error
+arrives, the outcome it produced is recorded as well — the expiry reaches the
+wait whose clock ran out and no other, so a later `wait()`, `terminate()`,
+`kill()`, or teardown on the same handle reports the exit code instead of
+re-raising an error about a child that is already gone. A `timeout` passed to
+`start()` is instead the default deadline for every `wait()` on that handle,
+because the clock a timeout is measured against starts at the wait that asks
+for one. Capture is always on for a handle, so a stopped child still reports
+its output on the result.
 
 `signal()` delivers one POSIX signal without settling the run. The two refusals
 are separate errors because the remedy differs: `SignalAfterExitError` (a

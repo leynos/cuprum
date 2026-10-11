@@ -3991,10 +3991,19 @@ Because the task is a task rather than a lock held across the wait, a caller
 who is cancelled leaves the settlement running, and the next caller awaits the
 same task and gets the same outcome — whether that is a result or the error the
 first caller never saw. Nothing can deadlock a stop behind a wait with no
-deadline. `result` publishes what `wait` returned and never waits itself;
-`wait(timeout=...)` bounds one call, so a handle may reach a deadline on one
-wait and the next wait on the same handle sees the already-settled outcome
-rather than starting a second deadline.
+deadline. `result` publishes what `wait` returned and never waits itself.
+
+A deadline is the one route that produces both an outcome and an error, and the
+handle keeps both. The wait that expires stops the child exactly as a cancelled
+`run()` does, so by the time `TimeoutExpired` reaches its caller the child has
+been reaped and has a real exit code; that outcome is recorded before the error
+is raised. The settlement task itself therefore *completes* on a deadline,
+carrying the error in its record rather than throwing it out, and the error is
+raised only to a caller that both supplied a deadline and was still waiting on
+the live settlement. Every later `wait`, `terminate`, `kill`, or teardown on
+the same handle reads the recorded outcome, so a stop after a deadline reports
+the child it stopped rather than re-raising an expiry about a child that is
+already gone. `wait(timeout=...)` bounds one caller's wait, not the handle's.
 
 Unlike the streamed `run()` path, no deadline is enforced while the handle is
 merely held: the clock a timeout is measured against starts at the `wait` that

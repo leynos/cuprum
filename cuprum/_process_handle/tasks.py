@@ -49,12 +49,15 @@ from cuprum._subprocess_streams import (
 from cuprum._subprocess_wait import _RunTaskOwnership
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._execution_tracking import _ExecutionTracking
 
 __all__ = [
     "_HandleRun",
     "_attach_run_tasks",
     "_build_handle_execution",
+    "_detach_run_tasks",
     "_launch_idle_monitor",
     "_start_handle_run",
 ]
@@ -119,12 +122,13 @@ async def _start_handle_run(
 
     Everything after the spawn is emission-free until the ``start`` event, so
     the child is never running without a stamped record and an announced PID to
-    match it. A ``start`` event whose synchronous observe hook raises is the one
-    failure that can strand a spawned child, so it is owned here: the
-    termination path in ``cuprum._process_handle.control`` reclaims it before
-    the failure propagates. That reclaim is why the ``start`` event, and not
-    merely the spawn, is inside the guard: a child nobody has been told about
-    is still a child nobody would reap.
+    match it. The two steps that can fail once the child exists — emitting that
+    event, and attaching the tasks that drive its streams — are both inside the
+    guard, and the termination path in ``cuprum._process_handle.control``
+    reclaims the child before either failure propagates. A child nobody has
+    been told about is still a child nobody would reap, and a child whose
+    streams nobody attached is in the same position: this function is the only
+    place that holds both facts at once, so this is where they are owned.
 
     Parameters
     ----------
@@ -153,11 +157,18 @@ async def _start_handle_run(
     process = await _spawn_subprocess(execution)
     try:
         execution.observation.emit("start", _EventDetails(pid=process.pid))
+        ownership = await _attach_run_tasks(process, execution)
     except BaseException:
         # Imported here so this module and the control module do not import
         # each other at module scope.
         from cuprum._process_handle.control import _terminate_shielded
 
+        # Attaching is inside the guard for the same reason the emission is:
+        # a child nobody is driving — no writer started, or consumers nobody
+        # has been told about — is still a child nobody would reap. Attaching
+        # is transactional, so a partial set of tasks is never what reaches
+        # here; whatever it managed to start before failing it has already
+        # reclaimed.
         await _terminate_shielded(process, execution.ctx.cancel_grace)
         raise
     return _HandleRun(
@@ -166,7 +177,7 @@ async def _start_handle_run(
         started_at=started_at,
         wall_clock_started_at=wall_clock_started_at,
         tracking=tracking,
-        ownership=_attach_run_tasks(process, execution),
+        ownership=ownership,
         default_timeout=default_timeout,
     )
 
@@ -182,7 +193,7 @@ def _launch_idle_monitor(execution: _SubprocessExecution) -> None:
         execution.idle.launch()
 
 
-def _attach_run_tasks(
+async def _attach_run_tasks(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
 ) -> _RunTaskOwnership:
@@ -191,16 +202,29 @@ def _attach_run_tasks(
     The tasks are wired exactly as the streamed ``run()`` path wires them —
     same config, same spawn context, same stdin writer — because the handle is
     a second way to own a ``run()``, not a second implementation of one.
-    Creating a task does not run it, so the whole set is owned before the
-    first step that can fail.
+
+    Attaching is all-or-nothing. The configuration is built before anything is
+    started, because it can fail and a task started ahead of that failure would
+    have nobody holding it. Anything started once the tasks begin is reclaimed
+    by :func:`_detach_run_tasks` before the failure propagates, so a caller
+    that is told attaching failed is not also handed a writer still draining
+    into a pipe.
 
     Returns
     -------
     _RunTaskOwnership
         The writer and consumers, with the discard latch and diagnostics
         collectors their single reconciliation point needs.
-    """
+
+    Raises
+    ------
+    BaseException
+        Whatever building or starting the tasks raised, once any task already
+        started has been reclaimed.
+    """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever building the tasks raised
     discard_on_cancel = asyncio.Event()
+    # Built first: this is the step that can fail without having started
+    # anything, so failure here needs no cleanup.
     stream_config = _build_stream_config(execution, discard_on_cancel)
     relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
     spawn_context = _StreamConsumerSpawnContext(
@@ -208,14 +232,39 @@ def _attach_run_tasks(
         pid=process.pid,
         relay_diagnostics=relay_diagnostics,
     )
-    return _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
+    started: list[asyncio.Task[typ.Any]] = []
+    try:
+        stdin_task = _spawn_stdin_writer(
             process,
             execution.stdin_data,
             execution.observation,
-        ),
-        consumers=_spawn_stream_consumers(process, execution, spawn_context),
+        )
+        if stdin_task is not None:
+            started.append(stdin_task)
+        consumers = _spawn_stream_consumers(process, execution, spawn_context)
+        started.extend(consumers)
+    except BaseException:
+        await _detach_run_tasks(started)
+        raise
+    return _RunTaskOwnership(
+        stdin_task=stdin_task,
+        consumers=consumers,
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
         idle=execution.idle,
     )
+
+
+async def _detach_run_tasks(tasks: cabc.Sequence[asyncio.Task[typ.Any]]) -> None:
+    """Cancel and drain the tasks attaching had already started.
+
+    Cancellation is the right reclaim here, unlike the reconciliation a
+    settled run performs: nothing has read the child's streams yet, the run
+    has no outcome to capture, and the child itself is stopped by the caller
+    that owns it. The tasks are gathered with exceptions tolerated so one
+    cancelled reader cannot stop the others from being reclaimed.
+    """
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
