@@ -188,7 +188,7 @@ def test_terminal_outcome_keeps_its_positional_slot() -> None:
     )
 
     outcome = next(iter(TerminalOutcome))
-    prefix = [
+    event = c.ExecEvent(
         "start",  # phase
         c.ECHO,  # program
         ("echo",),  # argv
@@ -217,8 +217,8 @@ def test_terminal_outcome_keeps_its_positional_slot() -> None:
         None,  # system_cpu_seconds
         None,  # resource_usage_mode
         None,  # env_mode
-    ]
-    event = c.ExecEvent(*prefix, outcome)
+        outcome,  # terminal_outcome
+    )
     assert event.terminal_outcome is outcome, (
         "positional construction must still bind terminal_outcome, got "
         f"{event.terminal_outcome!r} with resolved_path={event.resolved_path!r}"

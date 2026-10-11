@@ -1755,7 +1755,7 @@ escalation, not a workaround.
   before this one now names a pre-rebase commit that the rewrite replaced"),
   with the `range-diff` command there as the mapping. A non-ancestor hash is
   therefore not by itself a defect; the question is whether the commit still
-  does what the sentence says it does. The generalised test applied to the many
+  does what the sentence says it does. The generalized test applied to the many
   other non-ancestor hashes in this plan is that same one.
 
   The reorder decision and its two rejected alternatives are recorded in the
