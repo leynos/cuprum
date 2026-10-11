@@ -154,6 +154,7 @@
       'pid': '<normalized>',
       'program': '<path>',
       'project': 'runtime-tests',
+      'resolved_path': None,
       'resource_usage_mode': None,
       'stage_count': None,
       'stage_index': None,

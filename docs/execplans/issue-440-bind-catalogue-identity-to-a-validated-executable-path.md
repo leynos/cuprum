@@ -1615,6 +1615,42 @@ escalation, not a workaround.
   together — which is why the pre-rebase green said nothing about the rebased
   head.
 
+  A third defect of the same class surfaced only after this entry was written,
+  when `make test` finally reached it, and is recorded below.
+- [x] (2026-10-11 00:45Z) **A third composition defect: main's `settled`
+  snapshot block never received this branch's field.** `make test` failed at
+  `c7b3d11d` with `test_normalized_lifecycle_payload_is_stable`,
+  `1 failed, 28 passed, 13 skipped`, differing by exactly one key:
+  `'resolved_path': None`.
+
+  `normalize_event` renders every `dc.fields(ExecEvent)` entry by name, so each
+  block in the snapshot carries all thirty fields. Main's `a026142e` (#575)
+  added a fourth block — the `settled` event — and this branch's `9d8dd4f1` had
+  added `resolved_path` to the three blocks that existed when it was written.
+  The rebase merged both sides cleanly and produced a file with four blocks
+  where three carry the field and one does not: `phase_keys=4`,
+  `resolved_path_keys=3`.
+
+  The recorded expectation was stale, not the code. `_StageObservation.emit`
+  passes `resolved_path=self.resolved_path` for every phase, and
+  `emit_terminal` reaches `emit` for `settled` exactly as it does for the other
+  phases, so the field is present and `None` on an unbound probe. That was
+  checked by running the probe and asserting the attribute on all four
+  lifecycle events rather than inferred from the diff. The other three blocks
+  already recorded `None` for the same reason, so one line was added to bring
+  the fourth into line. Nothing in production changed.
+
+  This is the same signature as the first two: each side correct alone, the
+  defect existing only in the combination. The difference is the medium — a
+  recorded snapshot rather than a line cap or a declaration order — which
+  suggests the class is better described by "a target that adds a *member to a
+  set this branch also extends*" than by either of the two mechanisms seen
+  first.
+
+  It was found because the sweep was allowed to run past five green gates into
+  the sixth instead of aborting at the first failure. The previous round's
+  abort is what hid it.
+
   The local gate run for this head is recorded on the pull request rather than
   here, so that the record of it cannot invalidate the run it reports.
 
