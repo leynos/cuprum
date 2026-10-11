@@ -249,6 +249,66 @@ independent. `RunOutputOptions.on_line` observes decoded lines even when
 capture and echo are off. Its callback runs synchronously and should return
 promptly; line order is guaranteed within each stream, not across streams.
 
+`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget` naming where the
+child's stream is bound. Four variants exist and they differ in _ownership_,
+which is the whole contract:
+
+- `StdioTarget.pipe()` — a library-owned pipe. This is the default for a stream
+  that capture, echo, idle reporting, or line observation needs; without one of
+  those the default is `/dev/null`.
+- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
+  This is the default for stdin. For stdout and stderr it is the explicit way
+  to let an unobserved stream through to the parent, since the default there
+  discards it.
+- `StdioTarget.path(p)` — a file **cuprum owns**. Cuprum opens it immediately
+  before the spawn and closes its copy in a `finally` right after, so the
+  descriptor never outlives the run; the child keeps writing after that close.
+  The caller names a path and never manages a descriptor.
+- `StdioTarget.fd(f)` — a **borrowed** descriptor or open file object. The
+  caller owns it: cuprum never closes it, and a borrowed file object is flushed
+  before the spawn so buffered caller-side bytes reach the child.
+
+Redirecting two streams to one path is rejected: each open starts at offset 0,
+so the two streams would interleave unpredictably. Use distinct paths, or one
+borrowed descriptor the caller manages — sharing a descriptor across two runs
+shares a single file offset, and the second run writes wherever the first left
+off.
+
+Capture and echo read from a parent-side pipe, so they cannot be combined with
+a redirected stream; `RunOutputOptions` rejects the combination at construction
+rather than silently choosing one. `on_line` and idle observation are not
+rejected that way, because a pipe is not what they require: neither is an error
+when the stream is redirected, but neither sees anything either. `on_line`
+simply receives no lines from a redirected stream, and idle reporting has no
+data to report from it — only piped streams are observed. Request a redirect
+when the child's output should land somewhere other than the parent, and line
+observation when it should be inspected in the parent; the two are alternatives.
+`stdin` is the exception in the other direction: it accepts only `pipe()` and
+`inherit()`, because the input itself arrives on `SafeCmd.run`'s `stdin=`
+argument, which is where the encoding is applied and a producer is pulled.
+`SafeCmd.lines()` requires stdout to be a pipe for the same reason — there is
+no parent-side stream to iterate when stdout goes to a file — and rejects a
+redirected stdout; use `SafeCmd.run` for that case.
+
+<!-- tested-example: redirect-stdout-to-a-file -->
+
+```python
+import sys
+import tempfile
+from pathlib import Path
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, StdioTarget, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="redirect")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+log = Path(tempfile.mkdtemp()) / "out.log"
+result = python("-c", "print('redirected')").run_sync(
+    output=RunOutputOptions(capture=False, stdout=StdioTarget.path(log)),
+)
+assert result.stdout is None, "a redirected stream is not captured"
+assert log.read_text(encoding="utf-8") == "redirected\n"
+```
+
 ### Line-level output
 
 <!-- tested-example: output -->
@@ -344,6 +404,23 @@ assert result.stdout == "ready hello\n"
 A timeout raises `TimeoutExpired`; cancellation of an async run also starts
 child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
+
+For input too large to hold in memory, `StdinStream(chunks=...)` takes an async
+iterable and is pulled one chunk at a time: each chunk is written and `drain()`
+awaited before the next is requested, so a slow reader applies backpressure to
+the producer rather than letting it run to completion. That backpressure limits
+how far _ahead_ the producer is pulled; it does not limit the size of the chunk
+being written. Retention, likewise, is not bounded by the pipe: the chunk just
+pulled and its encoded payload stay in memory until `drain()` returns,
+alongside the transport's write buffer and the OS pipe. A caller who cares
+about peak memory should therefore yield bounded-size chunks. A chunk may be
+`str` (encoded with the context's `encoding` and `errors`) or `bytes` (written
+verbatim). If the producer raises, the child is terminated and the failure
+surfaces as `StdinSourceError` with the producer's exception chained, even when
+the child would otherwise have run to its deadline. A child that closes stdin
+early is normal, not an error: the partial write is recorded as a `stdin_error`
+observation with `operation="early_close"` and the run continues to the child's
+exit code.
 
 ## Connect a pipeline
 
@@ -1136,12 +1213,30 @@ hooks receive `ExecEvent` values describing:
   from an actual child exit. It never carries exception details. Spawn failure
   and cancellation therefore settle without an invented exit code.
 
-- `stdin` — input supplied through `StdinInput` was written to the child;
-  `byte_count` gives its size.
+- `stdin` — bytes were written to the child's stdin; `byte_count` records how
+  many. `StdinInput` emits one as its payload is written. `StdinStream` emits
+  one per chunk that produced bytes, and possibly one more for whatever the
+  incremental encoder was still holding when the producer was exhausted. A
+  chunk stored only inside the encoder — a lone leading surrogate, say —
+  produces no bytes and so emits nothing.
 
 - `stdin_error` — writing or closing the child's stdin failed, typically
   because the child stopped reading early, as `head` does. `operation` names
-  the failing step (`write` or `close`), and execution continues.
+  the failing step (`write`, `close`, or `early_close`), and execution
+  continues.
+
+- `stdio_error` — a standard-stream boundary _outside_ the stdin writer's own
+  pipe operations failed: the caller's producer, an invalid chunk, the encoder,
+  opening a cuprum-owned target file, or flushing a caller's borrowed file
+  object. `operation` names the failing step (`produce`, `write`, `open`, or
+  `flush`), `error_type` the exception class, and `error_category` the boundary
+  that failed. Unlike `stdin_error`, this is never a substitute for the
+  caller-visible exception: a producer failure still raises `StdinSourceError`,
+  and a failed owned-path open still raises `OSError`. Emission is best-effort,
+  so a failing observe hook or logging handler cannot replace the exception the
+  caller receives; no `exit` event follows these boundaries, but `settled`
+  still does, because these failures occur while another exception or a
+  cancellation is already unwinding.
 
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
@@ -1334,6 +1429,8 @@ The hook collects:
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 - `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
 - `cuprum_stdin_errors_total`: Counter of stdin writer failures
+- `cuprum_stdio_errors_total`: Counter of standard-stream boundary failures,
+  labelled by `error_category`
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
   during cleanup
@@ -1362,6 +1459,20 @@ closed three-value enum resolved by Cuprum, never by caller input), so it
 cannot give the series unbounded cardinality, and it is applied only to those
 two metrics: the per-line stream counters omit it, because a line's environment
 says nothing that its execution's mode does not already carry.
+
+`cuprum_stdio_errors_total` additionally carries an `error_category` label
+naming which standard-stream boundary failed — `producer`, `invalid_chunk`,
+`encoder`, `pipe`, `owned_path_open`, or `borrowed_flush`. It is the label and
+not the metric name that separates these boundaries, because several of them
+raise the same exception class: a failed producer advance and a failed pipe
+write both surface as `OSError`, and an invalid chunk and a mistyped encoder
+both surface as `TypeError`. Counting them together would leave an operator
+unable to tell a failure in the caller's own producer from a failure in
+cuprum's write path, which call for opposite responses. Like `env_mode` it is a
+bounded label by construction — `StdioFailureCategory` is a closed enum
+resolved by Cuprum, never by caller input — so it cannot give the series
+unbounded cardinality. The counter carries no path, payload, argv, or error
+message; those are caller data and stay with the caller.
 
 A spawn failure has no `start` or `exit` event, because no child ran, but it
 does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
@@ -1429,16 +1540,23 @@ Output lines (stdout/stderr) are recorded as span events when
 
 #### Ancillary span events
 
-The `stdin_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
-phases are recorded as `cuprum.<phase>` events on the execution's open span.
-They leave the span neither ended nor marked; `settled` closes it and sets its
-status from the terminal category. `timeout` is followed by `exit` and then
-`settled`, while spawn failure and cancellation can settle without `exit`.
+The `stdin_error`, `stdio_error`, `timeout`, `teardown_error`, and
+`capture_eof_grace_expired` phases are recorded as `cuprum.<phase>` events on
+the execution's open span. They leave the span neither ended nor marked;
+`settled` closes it and sets its status from the terminal category. `timeout`
+is followed by `exit` and then `settled`, while spawn failure and cancellation
+can settle without `exit`.
 
 Ancillary events carry whichever of the `line`, `operation`, `error_type`,
-`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers`
-fields are set. An event without a matching open span is dropped. The
-grace-expiry event carries no captured stdout or stderr payload.
+`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, `pending_readers`, and
+`error_category` fields are set. An event without a matching open span is
+dropped. The grace-expiry event carries no captured stdout or stderr payload.
+
+`error_category` is the one field whose value is an enum member rather than a
+plain string, so a backend receives its value — `producer`, say — and not the
+member's `repr`. It is carried by `stdio_error` for the same reason it labels
+the metrics counter: without it a producer failure and a pipe fault record
+identically on the span, because both raise `OSError`.
 
 #### Correlating events with spans
 

@@ -905,6 +905,9 @@ Internally, command execution can be described in terms of events:
 - `stdin` – bytes written to the child's standard input, with a byte count;
 - `stdin_error` – a standard-input write or close failed, with the failing
   operation and the raised error's type;
+- `stdio_error` – a standard-stream boundary outside the stdin writer's own
+  pipe operations failed, with the failing operation, the raised error's type,
+  and a bounded boundary category;
 - `timeout` – a run exceeded its deadline;
 - `teardown_error` – a stream consumer drained with an unexpected error
   during cleanup;
@@ -1480,13 +1483,17 @@ implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
   `stdin_error`, `exit`, `settled`, `timeout`, `teardown_error`,
-  `capture_eof_grace_expired`, and `pipeline_fail_fast` phases for both single
-  commands and pipeline stages — the declared `ExecPhase` values. `timeout`,
-  `teardown_error`, and `capture_eof_grace_expired` are ancillary diagnostics
-  rather than lifecycle phases. `capture_eof_grace_expired` is emitted only
-  when a capturing drain exhausts its fixed `_CAPTURE_EOF_GRACE_S` budget with
-  one or more readers still pending. Pipeline stage events are tagged with a
-  stage index and stage count.
+  `capture_eof_grace_expired`, `pipeline_fail_fast`, and `stdio_error` phases
+  for both single commands and pipeline stages — the declared `ExecPhase`
+  values. `timeout`, `teardown_error`, `capture_eof_grace_expired`, and
+  `stdio_error` are ancillary diagnostics rather than lifecycle phases.
+  `capture_eof_grace_expired` is emitted only when a capturing drain exhausts
+  its fixed `_CAPTURE_EOF_GRACE_S` budget with one or more readers still
+  pending. `stdio_error` reports a standard-stream boundary that failed outside
+  the stdin writer's pipe operations, and its `error_category` is what
+  separates boundaries that raise the same exception class, letting an operator
+  tell a failure in the caller's own producer from one in cuprum's write path.
+  Pipeline stage events are tagged with a stage index and stage count.
 - **Fail-fast decision:** a pipeline emits one `pipeline_fail_fast` event when
   a non-final stage is the first to fail and at least one other stage remains
   running. It is published before every other still-running stage — upstream
@@ -1710,10 +1717,25 @@ from the `_TimeoutFallback`.
 The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
-- `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  assembling the `CommandResult`. It remains the composition root for a run: it
-  decides whether each stream is consumed, and it calls `_build_stream_config`
-  and `_spawn_stream_consumers` to act on that decision.
+- `cuprum/_subprocess_execution.py` owns runner orchestration and assembling
+  the `CommandResult`. It remains the composition root for a run: it decides
+  whether each stream is consumed, and it calls `_spawn_subprocess`,
+  `_build_stream_config`, and `_spawn_stream_consumers` to act on that decision.
+- `cuprum/_subprocess_spawn.py` owns the spawn binding: mapping each resolved
+  stdio onto the value the spawn layer receives, opening a cuprum-owned target
+  file immediately before the fork and closing cuprum's copy immediately after,
+  and the spawn call itself. Its ownership rule is narrow on purpose — only
+  library-owned resources are closed — so a borrowed descriptor or file object
+  is never closed by cuprum, while a borrowed file object is flushed before the
+  spawn so buffered caller-side bytes reach the child. The mapping is where
+  borrowed and owned descriptors are told apart, which is why pipe-ness travels
+  as an explicit `pipes` set: the one piece of the resolution the stdio value
+  cannot express for itself. It was split out of `_subprocess_execution` so
+  that module stays within the Pylint module ceiling, and
+  `_subprocess_execution` re-exports `_spawn_subprocess`, so callers and
+  monkeypatch targets resolve the same name as before. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-27.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured text and settled relay
@@ -1752,15 +1774,51 @@ preserving the `SafeCmd.run()` execution contract:
   one bounded, ASCII-safe keepalive line, resolving and writing it to the
   parent's diagnostic sink, and the failure policy when that write raises.
   Nothing there reads a clock, a process, or a child's output.
-- `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
-  and early-close diagnostics through the `cuprum.stdin` logger.
+- `cuprum/_subprocess_stdin.py` owns writing supplied stdin as a complete
+  payload, closing the pipe, early-close diagnostics through the `cuprum.stdin`
+  logger, and `_spawn_stdin_writer`, the single entry point either kind of
+  source is started from.
+- `cuprum/_subprocess_stdin_stream.py` owns the streaming source: pulling an
+  async producer's chunks one at a time, writing each and draining it before
+  the next pull, and deciding which failures are the producer's rather than the
+  child's.
+- `cuprum/_subprocess_stdin_errors.py` owns building the `StdinSourceError` a
+  classified producer or encoder failure raises. It reads neither the sink nor
+  the process, so it sits below the pull loop rather than inside it.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
-- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
-  deadline, terminating the process (through `_terminate_all_shielded`, so a
-  caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation), and draining the stream consumers exactly once. Its explicit
+- `cuprum/_subprocess_deadline.py` owns the child-exit half of ending a run:
+  how long to wait for a child, which exception a cancelled wait raises, and
+  what a deadline expiry does to the child. `_wait_for_exit_code` awaits the
+  process and terminates it on cancellation, without a timeout of its own, and
+  `_wait_for_exit_code_within_timeout` applies `execution.timeout` around it
+  and translates expiry into the public timeout surface. Termination goes
+  through `_terminate_all_shielded`, so a caller cancelling during the grace
+  period cannot skip the `SIGKILL` escalation. Nothing here touches the
+  parent's stream tasks, which is what keeps a reader wedged on a pipe from
+  delaying the termination that lets it reach EOF. It was split out of
+  `_subprocess_wait`, which re-exports both names, so the single-command run,
+  the line-stream coordinator, and the timeout test modules keep one import
+  path. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+  addendum of 2026-09-27.
+- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
+  failure rather than on the child's exit: `_await_exit_or_writer_failure`
+  waits on the exit wait and the stdin writer together and returns the exit
+  only once it is the sole survivor, so a producer that dies while the child
+  would still be running surfaces as `StdinSourceError` instead of being
+  reported as `TimeoutExpired`. The exit wait is passed in already constructed,
+  so each caller resolves `_wait_for_exit_code_within_timeout` from its own
+  module namespace. It was split out of `_subprocess_wait`, which re-exports
+  the name, so the single-command run, the line-stream coordinator, and the
+  timeout test modules keep one import path. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-27.
+- `cuprum/_subprocess_wait.py` owns the other half of the rules for *ending* a
+  run: draining the stream consumers exactly once, and cancelling the stdin
+  writer alongside them. The race that decides *which* of the two ends the run
+  lives in `_subprocess_rendezvous.py`. The wait and the deadline moved to
+  `_subprocess_deadline`, and this module re-exports both names. Its explicit
   drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
   task with the stdout and stderr consumer tasks, `_DrainContext` to carry
   capture and observability settings, and
@@ -2250,13 +2308,16 @@ design decisions guide these adapters:
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
-  `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`,
+  `cuprum_stdio_errors_total`, `cuprum_pipeline_fail_fast_total`,
+  `cuprum_capture_eof_grace_expired_total`,
   `cuprum_resource_usage_measurements_total`) are incremented on the
   corresponding event phases. The EOF-grace counter has only the low-cardinality
   `program` and `project` labels; duration and pending-reader count remain
-  event fields, not labels. The resource-measurement counter belongs to the
-  resource series and therefore carries `resource_usage_mode` alongside
-  `program` and `project`.
+  event fields, not labels. The standard-stream-error counter carries the
+  bounded `error_category` label, because the boundary that failed — not the
+  exception class, which several boundaries share — is what an operator filters
+  on. The resource-measurement counter belongs to the resource series and
+  therefore carries `resource_usage_mode` alongside `program` and `project`.
 - The `cuprum_duration_seconds` histogram and terminal-category/failure
   counters are emitted on `settled` events. Resource metrics remain on `exit`
   events: the three `cuprum_child_*` histograms are observed only where the
@@ -2282,16 +2343,18 @@ design decisions guide these adapters:
   (8.1.3).
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
-  `stderr`/`stdin_error`/`timeout`/`teardown_error`/
+  `stderr`/`stdin_error`/`stdio_error`/`timeout`/`teardown_error`/
   `capture_eof_grace_expired` /`pipeline_fail_fast`/`exit` events are dropped
   rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
-  `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
-  are also recorded as span events, unconditionally, without ending the span.
-  `capture_eof_grace_expired` is recorded as a
+  `record_output` parameter). `stdin_error`, `stdio_error`, `timeout`, and
+  `teardown_error` are also recorded as span events, unconditionally, without
+  ending the span. `capture_eof_grace_expired` is recorded as a
   `cuprum.capture_eof_grace_expired` event on the matching `exec_id` span with
   its `eof_grace_s` and `pending_readers` fields. The grace-expiry event itself
-  carries no captured stream payload.
+  carries no captured stream payload. `stdio_error` carries `error_category`,
+  the one ancillary field whose value is an enum member rather than a plain
+  string; a backend receives its value rather than the member's `repr`.
 - Span status is successful only for `exit_zero`; all other bounded terminal
   outcomes set an error status.
 - Pipeline stages create separate spans with `pipeline_stage_index` attribute.

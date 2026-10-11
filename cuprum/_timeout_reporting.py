@@ -122,7 +122,12 @@ def _log_teardown_drain_failure(*, pid: int | None, joined: str) -> None:
 
 def _safe_emit(
     observation: _StageObservation,
-    phase: typ.Literal["timeout", "teardown_error", "capture_eof_grace_expired"],
+    phase: typ.Literal[
+        "timeout",
+        "teardown_error",
+        "capture_eof_grace_expired",
+        "stdio_error",
+    ],
     details: _EventDetails,
 ) -> None:
     """Emit an observe event best-effort so telemetry cannot mask a failure.
@@ -134,6 +139,10 @@ def _safe_emit(
     drained by the runner; only the synchronous hook failure is swallowed here.
     Preserving the primary exception and cleanup precedence outranks emitting
     the observe event.
+
+    ``stdio_error`` is included for the same reason: it is emitted on paths
+    where another failure, or a cancellation, is already in flight, and the
+    diagnostic must not become the outcome the caller sees.
     """
     # Swallow a synchronous observe-hook failure (including a hook raising
     # CancelledError) so it cannot replace the timeout/cancellation.

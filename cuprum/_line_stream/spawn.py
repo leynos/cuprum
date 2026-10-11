@@ -22,6 +22,7 @@ from cuprum._line_stream.line_queue import (
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
     _build_stream_config,
     _spawn_stream_consumers,
@@ -131,7 +132,10 @@ def _build_unstarted_run(
         process=process,
         tasks=_RunTaskOwnership(
             stdin_task=_spawn_stdin_writer(
-                process, execution.stdin_data, execution.observation
+                process,
+                execution.stdio.stdin,
+                _stdin_codec(execution.ctx),
+                execution.observation,
             ),
             consumers=_spawn_stream_consumers(
                 process,

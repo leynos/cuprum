@@ -17,6 +17,7 @@ from cuprum.events import (
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
 )
 from cuprum.program import Program
@@ -35,6 +36,7 @@ _OPTIONAL_FIELDS = (
     "resource_usage_mode",
     "env_mode",
     "terminal_outcome",
+    "error_category",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 
@@ -73,6 +75,7 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
+        error_category=draw(st.none() | st.sampled_from(StdioFailureCategory)),
     )
 
 
@@ -168,6 +171,18 @@ class TestAdapterProjectionProperties:
         """Return the structured-log fields the event phase may expose."""
         if event.phase == "pipeline_fail_fast":
             return (canonical - {"argv"}) | {"exec_id"}
+        if event.phase == "stdio_error":
+            return {"program"} | {
+                field
+                for field in (
+                    "pid",
+                    "operation",
+                    "error_type",
+                    "error_category",
+                    "exec_id",
+                )
+                if getattr(event, field) is not None
+            }
         if event.phase != "capture_eof_grace_expired":
             return canonical
 
@@ -185,11 +200,30 @@ class TestAdapterProjectionProperties:
         }
 
     @staticmethod
+    def _assert_extra_mirrors_field(
+        extra: dict[str, object],
+        extra_key: str,
+        event_value: object,
+        message: str,
+    ) -> None:
+        """Assert an extra mirrors its event field whenever the event has one.
+
+        Shared by the phases that may or may not be inside a run: the value is
+        only there to be compared when the event records one, so an absent
+        field is a case this rule has nothing to say about rather than a
+        failure. Each caller words its own message, because the phases report
+        which field went missing to a reader of the log.
+        """
+        if event_value is not None:
+            assert extra[extra_key] == event_value, message
+
+    @staticmethod
     def _assert_phase_specific_logging_rules(
         event: ExecEvent,
         extra: dict[str, object],
     ) -> None:
         """Assert phase-specific privacy and correlation rules for log extras."""
+        mirrors = TestAdapterProjectionProperties._assert_extra_mirrors_field
         if event.phase == "pipeline_fail_fast":
             assert extra["cuprum_exec_id"] == event.exec_id, (
                 "fail-fast extras must preserve the execution correlation token"
@@ -197,14 +231,32 @@ class TestAdapterProjectionProperties:
             assert "cuprum_argv" not in extra, (
                 "fail-fast extras must omit the raw argument vector"
             )
+        elif event.phase == "stdio_error":
+            assert "cuprum_argv" not in extra, (
+                "stdio-failure extras must omit the raw argument vector"
+            )
+            mirrors(
+                extra,
+                "cuprum_exec_id",
+                event.exec_id,
+                "stdio-failure extras must preserve execution correlation",
+            )
+            mirrors(
+                extra,
+                "cuprum_error_category",
+                event.error_category,
+                "stdio-failure extras must name the failing boundary",
+            )
         elif event.phase == "capture_eof_grace_expired":
             assert "cuprum_argv" not in extra, (
                 "grace-expiry extras must omit the raw argument vector"
             )
-            if event.exec_id is not None:
-                assert extra["cuprum_exec_id"] == event.exec_id, (
-                    "grace-expiry extras must preserve execution correlation"
-                )
+            mirrors(
+                extra,
+                "cuprum_exec_id",
+                event.exec_id,
+                "grace-expiry extras must preserve execution correlation",
+            )
         else:
             assert extra["cuprum_argv"] == event.argv, (
                 "logging extras must preserve argv as a tuple"
