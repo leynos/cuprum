@@ -3995,12 +3995,12 @@ deadline. `result` publishes what `wait` returned and never waits itself.
 
 The settlement task carries no deadline at all. It waits for the child, and the
 child only ends early because some caller stopped it, so what `wait` applies is
-a deadline on *its own* await of the shared task: `wait(timeout=...)` bounds one
-caller's wait, not the handle's. A caller whose deadline elapses stops the child
-through the same `SIGTERM`, cancel-grace, `SIGKILL` path a cancelled `run()`
-takes, and the shared task — unblocked by that stop — records the outcome it
-produced. No other caller is affected: one that named a longer deadline, or
-none, keeps waiting for the child it was always waiting for.
+a deadline on *its own* await of the shared task: `wait(timeout=...)` bounds
+one caller's wait, not the handle's. A caller whose deadline elapses stops the
+child through the same `SIGTERM`, cancel-grace, `SIGKILL` path a cancelled
+`run()` takes, and the shared task — unblocked by that stop — records the
+outcome it produced. No other caller is affected: one that named a longer
+deadline, or none, keeps waiting for the child it was always waiting for.
 
 The deadline is recorded on the settlement before the child is stopped, so the
 one settlement can tell that a clock rather than the child ended the run: the
@@ -4009,8 +4009,8 @@ the exit code the recorded result carries is the real one the signal produced.
 The deadline-ran-out caller is then owed its own `TimeoutExpired`, built from
 its own deadline and the outcome the settlement drained, so the error reports
 the command, the deadline, and the output the child had written before it was
-stopped. It reaches the caller whose clock produced it and no other: every
-later `wait`, `terminate`, `kill`, or teardown reads the recorded outcome, and a
+stopped. It reaches the caller whose clock produced it and no other: every later
+`wait`, `terminate`, `kill`, or teardown reads the recorded outcome, and a
 caller arriving after the child is gone has nothing left for a fresh deadline
 to interrupt.
 
@@ -4020,8 +4020,8 @@ asks for one. `start(timeout=...)` is therefore the default deadline for every
 `wait()` on the handle rather than a limit on how long the child may live.
 Because the deadline is applied by the wait rather than carried into the
 settlement, it is translated on the one path that drains the run: the output
-captured before the deadline is drained exactly once and carried onto the
-raised `TimeoutExpired`, exactly as the streamed path does.
+captured before the deadline is drained exactly once and carried onto the raised
+`TimeoutExpired`, exactly as the streamed path does.
 
 #### 13.10.3 Control operations
 
