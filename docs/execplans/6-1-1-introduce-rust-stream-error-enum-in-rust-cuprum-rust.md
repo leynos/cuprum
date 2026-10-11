@@ -2,31 +2,35 @@
 
 Status: COMPLETE — M1 and M2 both closed. Approved 2026-09-26; the publishing
 draft-PR and approval checkboxes below are recorded as done by that approval.
-M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
-and the native extension stage both pass, with `actionlint` locally
-unobservable (recorded in Progress and Surprises). Windows runtime evidence has
-since been obtained: it found two branch defects, both fixed at `dafbfa4e`, and
-the Windows job at that head succeeded (job `108519345532`; evidence in
-Progress). M2 closed the remaining evidence, reconciled the roadmap, and ticked
-6.1.1. The closing head is `11c6cb7f`, whose CI run `36290878443` is
-`completed|success` with **zero** non-success jobs, including the required
-`coverage` check that this work existed to fix; `7dba35cf` is the head where
-that check first went green (job `108538239040`) and where the closing
-documentation was then built on top. A CodeRabbit pass over `11c6cb7f` then
-found one further defect — a behavioural row that passed vacuously on Windows —
-which is fixed and recorded in Progress. The branch was then rebased onto `main`
-(`7f762870`) as a pure replay, and the head is now `b7d1b109`, whose CI run
-`36356062517` is likewise `completed|success` with **17 of 17** jobs green and
-zero non-success, the required `coverage` check included. That rebase moved the
-Rust coverage figure from 87.92% to **88.11%**, because `main` added
-`cuprum-streams` code to the measured workspace; both measurements are recorded
-in Progress, each bound to the revision it measured. A final review pass then
-split `test_rust_streams_boundary_property.py`, which the branch's own Windows
-fixes had grown to 431 lines, back under the 400-line cap; both resulting
-modules are registered in `EXTENSION_TEST_TARGETS`, and the split's third stale
-claim — a developers'-guide table row still credited with payload fuzzing that
-had moved away — was corrected with it. Three further stale figures in this
-plan were then found and corrected, and the gates re-run at the resulting head
+The change surface is one file over this plan's own 18-file tolerance; the
+deviation was requested under that clause and approved by the maintainer on
+2026-10-12, so the work is not blocked and the status stands — see the
+2026-10-12 entries in Progress and the Decision log for its exact scope. M1's
+plateau is reached at head `6a28ff95`: the full pure-Python gate sequence and
+the native extension stage both pass, with `actionlint` locally unobservable
+(recorded in Progress and Surprises). Windows runtime evidence has since been
+obtained: it found two branch defects, both fixed at `dafbfa4e`, and the
+Windows job at that head succeeded (job `108519345532`; evidence in Progress).
+M2 closed the remaining evidence, reconciled the roadmap, and ticked 6.1.1. The
+closing head is `11c6cb7f`, whose CI run `36290878443` is `completed|success`
+with **zero** non-success jobs, including the required `coverage` check that
+this work existed to fix; `7dba35cf` is the head where that check first went
+green (job `108538239040`) and where the closing documentation was then built
+on top. A CodeRabbit pass over `11c6cb7f` then found one further defect — a
+behavioural row that passed vacuously on Windows — which is fixed and recorded
+in Progress. The branch was then rebased onto `main` (`7f762870`) as a pure
+replay, and the head is now `b7d1b109`, whose CI run `36356062517` is likewise
+`completed|success` with **17 of 17** jobs green and zero non-success, the
+required `coverage` check included. That rebase moved the Rust coverage figure
+from 87.92% to **88.11%**, because `main` added `cuprum-streams` code to the
+measured workspace; both measurements are recorded in Progress, each bound to
+the revision it measured. A final review pass then split
+`test_rust_streams_boundary_property.py`, which the branch's own Windows fixes
+had grown to 431 lines, back under the 400-line cap; both resulting modules are
+registered in `EXTENSION_TEST_TARGETS`, and the split's third stale claim — a
+developers'-guide table row still credited with payload fuzzing that had moved
+away — was corrected with it. Three further stale figures in this plan were
+then found and corrected, and the gates re-run at the resulting head
 `9096c804`. Five pass there (`make check-fmt`, `make test`, `make typecheck`,
 `make markdownlint`, `make nixie`), each log recording that head; the sixth,
 `make lint`, reaches ten of its eleven sub-checks and then aborts in the final
@@ -45,9 +49,12 @@ at **18 of 18** for a time. That is no longer current: the stall-flake repair
 described below edited `main`'s own `test_native_pipeline_stall_properties.py`,
 taking both frames to **19**. The surface is therefore **one over the
 tolerance**, recorded as a breach rather than absorbed — see the 2026-10-11
-Progress entry, which carries the commands. The 2026-10-01 entries below
-measure every earlier count. At `1714ac0d` the required `coverage` job failed
-twice on a test this branch does not touch,
+Progress entry, which carries the commands. **The deviation was then approved
+by the maintainer on 2026-10-12, which is the direction the tolerance clause
+requires**; the 2026-10-12 Progress entry records the approval and its scope,
+so the breach is now a sanctioned deviation rather than an open one. The
+2026-10-01 entries below measure every earlier count. At `1714ac0d` the required
+`coverage` job failed twice on a test this branch does not touch,
 `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`.
 The failure is **environmental and measured, not a branch defect**: the
 coverage job is the only lane that runs that test without provisioning
@@ -2885,7 +2892,72 @@ that it is crossed by ordinary runner variance rather than by a code change,
 which is precisely why the failure appeared and disappeared without the branch
 changing anything between the runs that disagreed.
 
+- [x] (2026-10-12) **The 19-file deviation was approved by the maintainer, which
+  is the direction the tolerance clause requires.** The clause at "Tolerances
+  (exception triggers)" reads: stop, record a proposed deviation, set status to
+  `BLOCKED`, and request direction when the work needs changes to more than 18
+  files excluding lockfiles and this plan. The breach was recorded in the
+  2026-10-11 entry above; the direction has now been given, and the approval is
+  recorded here with its scope so a later reader does not have to infer it from
+  a status line.
+
+  What was approved is the surface as it stands at
+  `e9606ed508d594202292b82b7a103df6680054b9`: **19 files** excluding
+  `rust/Cargo.lock` and this plan, one over the 18-file tolerance. The
+  nineteenth is `tests/test_native_pipeline_stall_properties.py`, `main`'s own
+  module, edited by `f2d18849` to assert the uncollected-output rule instead of
+  the composite stall verdict. The two alternatives were put to the maintainer
+  and declined: stacking the repair as a prerequisite PR under this one, and
+  reverting it here to re-file against `main`. Both would have returned the
+  surface to exactly 18, and both were rejected because the repair is bounded —
+  one module, one assertion, test-oracle only, no production, API, or dispatch
+  effect — and because reverting it would leave this branch's own CI exposed to
+  a ~1-in-10 cold-draw failure in a module the branch did not introduce.
+
+  **The approval is for this surface and no further growth.** It does not
+  re-open the tolerance, and it does not authorize the twentieth file. Any
+  further change that would add a path to the change surface needs a fresh
+  direction request under the same clause. The `COMPLETE` status on line 3
+  therefore stands, and no `BLOCKED` transition is recorded: the clause asks for
+  `BLOCKED` only while direction is outstanding, and it is not outstanding
+  now. This is recorded as a deviation approved rather than a tolerance waived
+  — the clause keeps its effect for every future count.
+
+  The approval arrived as a direct instruction from the maintainer in the
+  session that owns this PR, in response to the question the previous entry
+  raised. Its scope is the surface measured above and the reasoning stated
+  beside it; nothing wider is claimed for it.
+
 ## Decision log
+
+- (2026-10-12) **The nineteenth file is approved, and the tolerance keeps its
+  force for every future count.** The clause at "Tolerances (exception
+  triggers)" stops the branch at 18 files excluding lockfiles and this plan and
+  requires a direction request rather than a unilateral decision. The
+  code-review assessment refused to treat the breach as self-authorizing —
+  recording is not approval — and that reading is correct: a tolerance whose
+  author can waive it by writing down that it was breached is not a tolerance.
+  Direction was therefore requested and given, and the approval is recorded in
+  Progress with its exact scope, the surface at
+  `e9606ed508d594202292b82b7a103df6680054b9`.
+
+  Two alternatives were offered and declined: stacking `f2d18849` as a
+  prerequisite PR beneath this one, and reverting it here for a separate change
+  against `main`. Both would have restored exactly 18. The reasoning for
+  keeping it is that the repair is a bounded test-oracle correction — one
+  module, one assertion, no production, API, or dispatch effect — while the
+  cost of reverting is that this branch's own CI keeps running `main`'s
+  ~1-in-10 cold-draw failure in a module the branch did not write. The skill's
+  prerequisite-PR route targets large out-of-scope remediation; this is not
+  that, and spending a new branch, PR, retarget, and two CI rounds to relocate
+  eighteen changed lines was judged the larger cost.
+
+  The approval is scoped and does not generalize. It does not permit a
+  twentieth file; that needs a fresh direction request under the same clause.
+  It does not amend the clause's text. And it is not a precedent that a
+  recorded breach is acceptable without direction — the previous entry's own
+  wording, that "recording is not authorization", remains the rule this
+  approval was obtained *under*, not an exception to.
 
 - (2026-09-29) **The `coverage` job's doctest-contract timeout is a `main`
   defect and is deliberately not patched here.** The branch was then at its
