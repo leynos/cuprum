@@ -16,6 +16,7 @@ import dataclasses as dc
 import pathlib as pth
 import typing as typ
 
+from benchmarks._tee_profile_stream_telemetry import StreamTelemetryPayload
 from benchmarks._tee_profile_worker_backend import BackendName
 from benchmarks.sinks import SinkKind
 from cuprum._streams_pump import _READ_SIZE
@@ -75,6 +76,9 @@ class TeeProfileWorkerResult(typ.TypedDict):
         Total length of captured stdout across runs; ``0`` when not captured.
     stdout_line_count : int
         Total number of stdout line events observed across runs.
+    stream_telemetry : StreamTelemetryPayload
+        Aggregate pure-Python stream-operation measurements grouped by closed
+        operation and outcome, with totals summed over every observed group.
     """
 
     scenario: str
@@ -94,6 +98,7 @@ class TeeProfileWorkerResult(typ.TypedDict):
     exit_code: int
     captured_output_length: int
     stdout_line_count: int
+    stream_telemetry: StreamTelemetryPayload
 
 
 def _validate_repeat_count(repeat_count: int) -> None:

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import typing as typ
 
+from benchmarks._tee_profile_stream_telemetry import (
+    StreamTelemetryAccumulator,
+    StreamTelemetryPayload,
+    StreamTelemetrySnapshot,
+)
 from benchmarks.tee_profile_configuration import _worker_command
 from benchmarks.tee_profile_output import _write_json
 
@@ -138,6 +143,7 @@ def _run_profile_sweep(
                     scenario_dir=sample_dir,
                 )
             )
+    stream_telemetry_summary = _stream_telemetry_summary(samples)
     _write_json(
         config.output_dir / config.scenario_name / "read-size-sweep.json",
         {
@@ -145,9 +151,22 @@ def _run_profile_sweep(
             "read_sizes": list(config.read_sizes),
             "rounds": config.rounds,
             "samples": samples,
+            "stream_telemetry_summary": stream_telemetry_summary,
         },
     )
     return samples
+
+
+def _stream_telemetry_summary(
+    samples: cabc.Iterable[cabc.Mapping[str, object]],
+) -> StreamTelemetryPayload:
+    """Aggregate bounded stream telemetry from every completed sweep sample."""
+    accumulator = StreamTelemetryAccumulator()
+    for sample in samples:
+        accumulator.add_snapshot(
+            StreamTelemetrySnapshot.from_dict(sample.get("stream_telemetry"))
+        )
+    return accumulator.snapshot().as_dict()
 
 
 def _round_read_sizes(

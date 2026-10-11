@@ -112,6 +112,11 @@
   of falling back to `Any` for every import. The marker is empty, which under
   PEP 561 declares the package fully typed; the marker travels in the pure
   Python wheel, the native wheel, and both source distributions.
+- **Aggregate stream telemetry in profiling reports:** `worker-result.json`
+  now reports bounded completed-operation totals, and `read-size-sweep.json`
+  adds their cross-sample summary. The reports consume the opt-in production
+  stream observer and add no per-read or per-chunk production telemetry
+  ([#367](https://github.com/leynos/cuprum/issues/367)).
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper
