@@ -125,8 +125,9 @@ async def _spawn_pipeline_stages(
         _StageCaptureRequest,
     )
 
-    owns_group = _owns_process_group(config.ctx.process_group)
-    ownership_kwargs = _ownership_spawn_kwargs(config.ctx.process_group)
+    policy = config.ctx.resolved_process_group
+    owns_group = _owns_process_group(policy)
+    ownership_kwargs = _ownership_spawn_kwargs(policy)
     last_idx = len(observations) - 1
     for idx, observation in enumerate(observations):
         # Both clocks are sampled before the spawn await, so a stage's

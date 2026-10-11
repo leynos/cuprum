@@ -565,6 +565,47 @@ def test_context_defaults_to_the_inherited_policy() -> None:
     assert ExecutionContext().process_group is ProcessGroupPolicy.INHERIT
 
 
+def test_a_string_policy_resolves_to_the_member_it_names() -> None:
+    """A policy spelled as a string reaches the consumers as a member.
+
+    ``ProcessGroupPolicy`` is a ``StrEnum``, so a caller holding the policy as
+    a configured string — ``"own_group"`` from a settings file — can pass it
+    straight to the context. Every consumer compares with ``is``, so the raw
+    string would match no member and quietly select the inherited default
+    instead: the spawn would not open a session and teardown would signal the
+    direct child alone, with nothing raised to show for it.
+    """
+    context = ExecutionContext(process_group="own_group")
+
+    assert context.process_group is ProcessGroupPolicy.OWN_GROUP, (
+        "a string policy must resolve to the member it names, not fall back "
+        "to the default"
+    )
+    assert context.resolved_process_group is ProcessGroupPolicy.OWN_GROUP, (
+        "the narrow view the execution layer reads must be the same member"
+    )
+
+
+def test_a_string_policy_that_names_no_member_is_rejected() -> None:
+    """A misspelling fails where it is written rather than containing nothing.
+
+    The alternative is the silent degradation above, which is the one outcome
+    the policy's design rules out: accepting a containment request while
+    delivering no containment. A near miss such as ``"own-group"`` therefore
+    has to raise, and the message has to name what was expected, because the
+    caller's next step is to correct the spelling they hold.
+    """
+    with pytest.raises(ValueError, match="invalid process_group") as excinfo:
+        ExecutionContext(process_group="own-group")
+
+    assert "'own-group'" in str(excinfo.value), (
+        f"the rejected spelling must be named; got {excinfo.value}"
+    )
+    assert "own_group" in str(excinfo.value), (
+        f"the accepted spellings must be named; got {excinfo.value}"
+    )
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _SpawnedArgv:
     """The argv the run handed to the spawn call."""

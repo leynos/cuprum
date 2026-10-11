@@ -66,6 +66,39 @@ class ProcessGroupPolicy(enum.StrEnum):
     OWN_GROUP = "own_group"
 
 
+def _parse_process_group_policy(
+    raw: ProcessGroupPolicy | str,
+) -> ProcessGroupPolicy:
+    """Coerce a raw policy value to a :class:`ProcessGroupPolicy` member.
+
+    The pure parsing core behind :meth:`ExecutionContext.__post_init__`. It
+    takes the raw value directly so a caller spelling the policy as a string
+    gets the same validation a member does, and an unrecognized spelling is
+    rejected here rather than silently resolving to a different policy.
+
+    Parameters
+    ----------
+    raw:
+        A :class:`ProcessGroupPolicy` member or its string value.
+
+    Returns
+    -------
+    ProcessGroupPolicy
+        The parsed policy.
+
+    Raises
+    ------
+    ValueError
+        If ``raw`` is not a known policy value.
+    """
+    try:
+        return ProcessGroupPolicy(raw)
+    except ValueError:
+        valid = ", ".join(member.value for member in ProcessGroupPolicy)
+        msg = f"invalid process_group {raw!r}; expected one of: {valid}"
+        raise ValueError(msg) from None
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ExecutionContext:
     """Execution parameters for SafeCmd runtime control.
@@ -109,7 +142,10 @@ class ExecutionContext:
         child in the parent's group and signals only the direct child on
         teardown; ``OWN_GROUP`` spawns the child as the leader of its own
         session and process group on POSIX and terminates that whole group.
-        See :class:`ProcessGroupPolicy`.
+        A member may be given either as a :class:`ProcessGroupPolicy` or as
+        the string spelling of one, which ``__post_init__`` resolves to the
+        member it names and rejects if it names none. See
+        :class:`ProcessGroupPolicy`.
 
     """
 
@@ -124,10 +160,29 @@ class ExecutionContext:
     errors: str = _DEFAULT_ERROR_HANDLING
     tags: cabc.Mapping[str, object] | None = None
     env_mode: EnvMode = EnvMode.OVERLAY
-    process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT
+    process_group: ProcessGroupPolicy | str = ProcessGroupPolicy.INHERIT
 
     def __post_init__(self) -> None:
-        """Validate the native-pump cleanup grace after initialization."""
+        """Normalize the process-group policy, then validate the cleanup grace.
+
+        The field accepts a plain string so a caller can spell the policy as
+        its value; ``__post_init__`` narrows it to a member, which every
+        consumer in the execution layer then compares with ``is``. Without
+        this step a string would compare unequal to every member and silently
+        select the default, so a caller asking for an owned group would get
+        the inherited one and no error to show for it.
+
+        Raises
+        ------
+        ValueError
+            If ``process_group`` names no member, or
+            ``native_pump_cleanup_grace`` is not a valid grace period.
+        """
+        object.__setattr__(
+            self,
+            "process_group",
+            _parse_process_group_policy(self.process_group),
+        )
         cleanup_grace = _validate_timeout(
             self.native_pump_cleanup_grace,
             "ExecutionContext native_pump_cleanup_grace",
@@ -136,6 +191,21 @@ class ExecutionContext:
             msg = "ExecutionContext native_pump_cleanup_grace must not be None"
             raise ValueError(msg)
         object.__setattr__(self, "native_pump_cleanup_grace", cleanup_grace)
+
+    @property
+    def resolved_process_group(self) -> ProcessGroupPolicy:
+        """The policy behind the declared ``ProcessGroupPolicy | str`` field.
+
+        ``__post_init__`` normalizes the field, but the declared type stays
+        wide because a caller may spell the policy as a string. This is the
+        narrow view the execution layer reads, so it never has to parse.
+
+        Returns
+        -------
+        ProcessGroupPolicy
+            The normalized policy member, never a string.
+        """
+        return _parse_process_group_policy(self.process_group)
 
 
 class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-name] - match subprocess.TimeoutExpired naming.

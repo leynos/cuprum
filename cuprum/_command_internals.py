@@ -189,7 +189,7 @@ def _build_subprocess_execution(
         ),
         # Read from the context here so the bundle's spawn and teardown stages
         # share one decision instead of each consulting the context separately.
-        process_group=state.context.process_group,
+        process_group=state.context.resolved_process_group,
     )
 
 
