@@ -300,18 +300,20 @@ class ExecEvent:
         resolved file identity, so a replaced binary is not detected; see the
         TOCTOU note in ``cuprum.executable_binding``.
 
-    New optional fields are appended after every field that already had a
-    positional slot, which is what preserves those slots. In particular,
-    inserting one ahead of ``exec_id`` would silently rebind a positional
-    argument in existing caller code, handing the correlation token to the new
-    field and leaving ``exec_id=None`` — which consumers such as ``TracingHook``
-    treat as uncorrelatable and drop.
+    What preserves an existing positional slot is that no new field is
+    inserted *ahead* of it, so a positional argument in existing caller code
+    keeps binding the field it always bound. Inserting one ahead of ``exec_id``
+    would silently rebind such an argument, handing the correlation token to
+    the new field and leaving ``exec_id=None`` — which consumers such as
+    ``TracingHook`` treat as uncorrelatable and drop.
 
-    Appended *after the pre-existing slots* is the whole rule, not "last in the
-    class". ``terminal_outcome`` is pinned as the declaration tail by
-    ``test_terminal_outcome_public_api``, so a field added after it belongs
-    ahead of it instead: both are past every pre-existing slot, which is the
-    invariant callers depend on.
+    Being appended after some earlier slot is not by itself enough, because
+    every field declared after the insertion point also moves. Since
+    ``terminal_outcome`` is pinned as the declaration tail by
+    ``test_terminal_outcome_public_api`` but already holds a positional slot of
+    its own, a later field cannot be declared ahead of it without shifting it.
+    Such a field is therefore declared ``kw_only``, which keeps the declaration
+    tail intact while leaving every pre-existing positional slot untouched.
 
     """
 
@@ -345,12 +347,14 @@ class ExecEvent:
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
-    # Declared before ``terminal_outcome`` rather than after it so that field
-    # stays the declaration tail. ``test_terminal_outcome_public_api`` pins
-    # ``dc.fields()[-1]`` to it, and a caller reading the generated signature
-    # sees the same ordering. Both are appended after every pre-existing
-    # positional slot, which is the invariant the class docstring states.
-    resolved_path: str | None = None
+    # Declared before ``terminal_outcome`` so that field stays the declaration
+    # tail, which ``test_terminal_outcome_public_api`` pins via
+    # ``dc.fields()[-1]``. ``terminal_outcome`` already holds a positional slot
+    # on the comparison base, so declaring ``resolved_path`` ahead of it
+    # positionally would shift that slot and silently rebind an existing
+    # caller's positional argument. ``kw_only`` keeps the tail without moving
+    # any pre-existing slot; see the class docstring.
+    resolved_path: str | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
 
 

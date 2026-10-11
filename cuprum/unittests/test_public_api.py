@@ -17,7 +17,7 @@ from cuprum import (
     pump_span_observation,
 )
 from cuprum.context import executable_overlay, registration
-from cuprum.events import ExecHook, new_exec_id
+from cuprum.events import ExecHook, TerminalOutcome, new_exec_id
 
 
 def test_public_exports_are_available() -> None:
@@ -156,6 +156,75 @@ def test_exec_id_keeps_its_positional_slot() -> None:
     )
     assert event.timeout_s is None, (
         f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
+    )
+
+
+def test_terminal_outcome_keeps_its_positional_slot() -> None:
+    """``terminal_outcome`` must not be displaced by a later optional field.
+
+    ``terminal_outcome`` arrived on ``main`` already holding a positional slot,
+    so it is not an appended tail for positional purposes even though
+    ``test_terminal_outcome_public_api`` pins it as the *declaration* tail. A
+    field declared ahead of it moves its slot, and a caller passing the
+    outcome positionally then binds that argument to the new field instead and
+    silently gets ``terminal_outcome=None``. A later field is therefore
+    ``kw_only``; this pins both halves of that arrangement.
+    """
+    fields = [f.name for f in dc.fields(c.ExecEvent)]
+    assert fields[-1] == "terminal_outcome", (
+        f"terminal_outcome must stay the declaration tail, got {fields[-1]!r}"
+    )
+
+    positional = [f.name for f in dc.fields(c.ExecEvent) if not f.kw_only]
+    assert positional[-1] == "terminal_outcome", (
+        "terminal_outcome must keep the last positional slot; a field declared "
+        f"ahead of it would rebind positional callers, got {positional}"
+    )
+
+    params = inspect.signature(c.ExecEvent).parameters
+    assert params["resolved_path"].kind is inspect.Parameter.KEYWORD_ONLY, (
+        "resolved_path must be keyword-only so it cannot displace "
+        "terminal_outcome's positional slot"
+    )
+
+    outcome = next(iter(TerminalOutcome))
+    prefix = [
+        "start",  # phase
+        c.ECHO,  # program
+        ("echo",),  # argv
+        None,  # cwd
+        None,  # env
+        4321,  # pid
+        0.0,  # timestamp
+        None,  # line
+        None,  # exit_code
+        None,  # duration_s
+        {},  # tags
+        None,  # note
+        None,  # byte_count
+        None,  # operation
+        None,  # error_type
+        None,  # exec_id
+        None,  # project
+        None,  # timeout_s
+        None,  # timeout_mode
+        None,  # stage_index
+        None,  # stage_count
+        None,  # eof_grace_s
+        None,  # pending_readers
+        None,  # max_rss_bytes
+        None,  # user_cpu_seconds
+        None,  # system_cpu_seconds
+        None,  # resource_usage_mode
+        None,  # env_mode
+    ]
+    event = c.ExecEvent(*prefix, outcome)
+    assert event.terminal_outcome is outcome, (
+        "positional construction must still bind terminal_outcome, got "
+        f"{event.terminal_outcome!r} with resolved_path={event.resolved_path!r}"
+    )
+    assert event.resolved_path is None, (
+        f"the outcome must not land on resolved_path, got {event.resolved_path!r}"
     )
 
 

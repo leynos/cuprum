@@ -88,15 +88,21 @@ escalation, not a workaround.
   logging `program` extra, the tracing `program` attribute, the sink session
   start record, and `CommandResult.program` all keep carrying the logical
   `Program`. The executed path is *additional*, never a replacement.
-- **`ExecEvent` is append-only after `exec_id`.** `ExecEvent` is a public
-  dataclass with positional fields, and
+- **No pre-existing `ExecEvent` positional slot may move.** `ExecEvent` is a
+  public dataclass with positional fields, and
   `cuprum/unittests/test_public_api.py::test_exec_id_keeps_its_positional_slot`
-  pins `exec_id` directly after `error_type`. `resolved_path` is therefore
-  declared after `env_mode`. The rebase onto main (#575) reordered this: main
-  appends its own `terminal_outcome` after `env_mode` and
-  `test_terminal_outcome_public_api` pins that field as the declaration tail, so
-  `resolved_path` sits *before* `terminal_outcome` rather than at the end.
-  Both follow every pre-existing slot, which is the invariant callers rely on.
+  pins `exec_id` directly after `error_type`. Being declared *after* some
+  earlier field is not sufficient on its own, because every field declared
+  after the insertion point also shifts. The rebase onto main (#575) is what
+  exposed this: main appends its own `terminal_outcome` after `env_mode`, so
+  `terminal_outcome` already held positional index 28, and
+  `test_terminal_outcome_public_api` additionally pins it as the declaration
+  tail. Declaring `resolved_path` ahead of it satisfied the tail pin but moved
+  `terminal_outcome` to index 29, silently rebinding a base-compatible
+  positional call. `resolved_path` is therefore `kw_only`
+  (`dc.field(default=None, kw_only=True)`), which keeps the declaration tail
+  intact without shifting any pre-existing slot. Both halves are pinned by
+  `test_terminal_outcome_keeps_its_positional_slot`.
 - **`CommandResult`'s positional prefix is frozen.** `relay_fallbacks` stays
   the seventh and last positional field
   (`test_command_result_keeps_relay_fallbacks_as_its_trailing_slot`).
@@ -206,7 +212,8 @@ escalation, not a workaround.
   at spawn time. `_StageObservation` gained a `resolved_path` field and an
   `argv0` property that is the single home of the fallback rule, so both spawn
   sites read one implementation instead of each rebuilding the argument vector.
-  `ExecEvent` gained `resolved_path` appended after `exec_id`; the shared
+  `ExecEvent` gained `resolved_path` after `exec_id` (later made `kw_only`; see
+  the rebase Progress entry and `Surprises & discoveries`); the shared
   `_verbatim_fields` list projects it into both adapters, and because
   `metrics_adapter.py` never calls `_event_common_fields` at all, the field
   cannot reach a metric label by construction — the plan's highest-severity
@@ -1591,17 +1598,42 @@ escalation, not a workaround.
   already applied to `CommandResult.resolved_path`, which sits before the
   tail-pinned `relay_fallbacks` for exactly the same reason.
 
+  *Superseded by the round-4 assessment; retained as the record of what was
+  believed at the time.* The invariant stated here — "a new field must follow
+  every field that already had a positional slot" — is too weak, and the
+  sentence "no caller binds either by position, so their order relative to each
+  other is unconstrained" is false in the direction that matters. It reasons
+  only about fields declared *after* the insertion point being new; it does not
+  notice that a pre-existing field declared after the insertion point is moved
+  by it. `terminal_outcome` was exactly that field. See the Progress entry of
+  2026-10-11 and `Surprises & discoveries` for the corrected statement and its
+  evidence.
+
   The reorder was checked for positional exposure rather than assumed safe, and
   the check corrected an initial guess of mine. There *is* a positional
   `ExecEvent(...)` construction — `test_public_api.py` builds one to prove that
   positional binding still reaches `exec_id` — so "no positional callers exist"
   would have been false. What makes the reorder safe is narrower and was
   verified directly: that call passes exactly the sixteen fields from `phase`
-  through `exec_id`, and both `resolved_path` and `terminal_outcome` sit at
-  indices 28 and 29, outside every positionally bound slot. The declared
-  sixteen-field prefix is unchanged, which is checked by asserting it equals
-  `fields[:16]`. Beyond that call there is no `dataclasses.astuple` call and no
-  `__match_args__` consumer of the type.
+  through `exec_id`, and both `resolved_path` and `terminal_outcome` sit beyond
+  index 15. The declared sixteen-field prefix is unchanged, which is checked by
+  asserting it equals `fields[:16]`. Beyond that call there is no
+  `dataclasses.astuple` call and no `__match_args__` consumer of the type.
+
+  *That check was too narrow, and a later review round caught it.* It asked
+  whether `exec_id`'s slot still moved, and `resolved_path` declared ahead of
+  `terminal_outcome` does leave `exec_id` alone. But `terminal_outcome` is not
+  an appended tail for positional purposes — main gave it index 28 — so
+  declaring `resolved_path` ahead of it moved *that* slot to 29. The prefix
+  check was satisfied while the contract at the prefix's far end was already
+  broken. The measured fact above is therefore corrected: the two fields sat at
+  28 and 29 only from the candidate's own point of view, not the base's. The
+  fix is `kw_only` on `resolved_path`, with
+  `test_terminal_outcome_keeps_its_positional_slot` pinning both the tail pin
+  and the slot index, and a mutation probe confirming the test fails against
+  the unfixed declaration. The lesson is about the *shape* of the check, not
+  the arithmetic: asking "did the slots I named still move" is not the same as
+  asking "did any pre-existing slot move", and only the second is the contract.
 
   This is the second time in this round that a plausible-sounding negative
   claim about the tree turned out to be false when measured, which is why it is
@@ -1694,7 +1726,59 @@ escalation, not a workaround.
   The local gate run for this head is recorded on the pull request rather than
   here, so that the record of it cannot invalidate the run it reports.
 
+- [x] (2026-10-11 04:05Z) Assessment round 4 returned two findings, and the
+  blocking one was correct: `161b314d`'s reorder moved `terminal_outcome` from
+  base index 28 to 29. An AST slot map of both revisions confirmed it before
+  any edit was made. `resolved_path` is now
+  `dc.field(default=None, kw_only=True)`, which restores every pre-existing
+  slot to its base index while leaving `terminal_outcome` as the declaration
+  tail. Proven by a mutation probe, not by the passing test alone: with the
+  plain-field declaration restored,
+  `test_terminal_outcome_keeps_its_positional_slot` fails on its `KEYWORD_ONLY`
+  assertion; with the fix it passes.
+
+  The round-4 request's `__all__` wording needed no correction: it already said
+  the removal "preserves the named-import contract" rather than that it had no
+  effect, which is the narrower claim both assessment rounds independently
+  restated. The `_testing.py` correction recorded earlier in this Progress list
+  was a separate and genuine error in the same paragraph.
+
+  Two further corrections were attempted in this same session and then
+  reverted, because they were wrong. Refreshing `4484e1df` and `2ac2e207` to
+  their post-rebase twins `fb8ec514` and `161b314d` was unnecessary and
+  destructive: both old hashes name commits that are **accurate for what they
+  claim**, verified by `git show` rather than by ancestry — `4484e1df` really
+  does carry the same five `_pipeline_internals.py` deletions and `2ac2e207`
+  the same `events.py` reorder as its twin. Entries written before the
+  2026-10-10 rebase are *by convention* left citing their own epoch, as the
+  Progress entry of that date states ("Every SHA cited in entries written
+  before this one now names a pre-rebase commit that the rewrite replaced"),
+  with the `range-diff` command there as the mapping. A non-ancestor hash is
+  therefore not by itself a defect; the question is whether the commit still
+  does what the sentence says it does. The generalised test applied to the many
+  other non-ancestor hashes in this plan is that same one.
+
+  The reorder decision and its two rejected alternatives are recorded in the
+  Decision log; the falsified premise is corrected in the Constraints entry and
+  in the Progress entry above; the general lesson is in
+  `Surprises & discoveries`.
+
 ## Surprises & discoveries
+
+- Observation: the rebased `resolved_path` declaration broke a *base* public
+  contract that neither side showed in isolation. The pre-rebase check looked
+  at the wrong thing: it confirmed that `exec_id`'s slot had not moved and that
+  the sixteen-field positional prefix was intact, then concluded the reorder
+  was safe. `terminal_outcome` sits at index 29 in that candidate and at 28 on
+  the base, so the very field the reorder was designed to accommodate had been
+  pushed out of its own slot. Evidence: an AST slot map of both revisions
+  reports `terminal_outcome` at 28 on `390fcf83` and 29 on `0893a6dd`, and two
+  independent assessment rounds converged on the same finding. Impact:
+  `resolved_path` is now `kw_only`, which satisfies the declaration-tail pin
+  and leaves every pre-existing slot where the base put it. The lesson is that
+  "which of the slots I thought to check still move" is a weaker question than
+  "did any pre-existing slot move" — the first is what was asked, and only the
+  second is the contract.
 
 - Observation: there are three spawn call sites but only two `argv[0]`
   constructions. `cuprum/_line_stream/coordinator.py` reuses
@@ -2207,6 +2291,22 @@ escalation, not a workaround.
 
 ## Decision log
 
+- Decision: `ExecEvent.resolved_path` is declared `kw_only`
+  (`dc.field(default=None, kw_only=True)`) rather than positionally ahead of
+  `terminal_outcome`. Rationale: the two requirements that forced a choice are
+  `test_terminal_outcome_public_api`'s declaration-tail pin (`dc.fields()[-1]`)
+  and `main`'s pre-existing positional slot for `terminal_outcome` at index 28.
+  Declaring `resolved_path` ahead of it satisfies the first and breaks the
+  second, because a plain field declared earlier takes the slot and pushes
+  `terminal_outcome` to 29; declaring it after breaks the first. `kw_only`
+  satisfies both: the generated `__init__` places the field after the `*`
+  separator, so it consumes no positional slot, while `dc.fields()` still
+  reports the declaration order with `terminal_outcome` last. Considered and
+  rejected: moving `terminal_outcome` back to 28 and dropping the tail pin
+  (weakens a public contract `main` introduced and this branch does not own);
+  declaring `resolved_path` after `terminal_outcome` (fails the tail pin).
+  Date/Author: 2026-10-11, babysitting agent, in response to a finding raised
+  independently by both the completeness and proof assessment rounds.
 - Decision: bindings live on `CuprumContext`/`ScopeConfig`, not on
   `ProgramCatalogue` or on `SafeCmd`. Rationale: the issue asks for a specified
   *scope lifetime*. The context is the only existing mechanism with a defined
@@ -3032,8 +3132,11 @@ EP-M3 — the bound executable is what runs, and the path is observable.
   `str(cmd.program)`, which is the previous behaviour.
 - Remaining gaps: pipelines do not gain per-stage *result* differentiation
   beyond what `resolved_path` already gives; documentation is not yet written.
-- Compatibility decision: none required. Both new fields are trailing and
-  defaulted.
+- Compatibility decision: none required, but corrected during the rebase.
+  `ExecEvent.resolved_path` is *not* trailing in the positional sense: on the
+  post-rebase candidate it is declared ahead of `terminal_outcome`, which
+  already held a positional slot, so it is `kw_only` to avoid moving that slot.
+  `CommandResult.resolved_path` is likewise `kw_only`.
 
 EP-M4 — the acceptance list is discharged and documented.
 
