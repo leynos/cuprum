@@ -34,6 +34,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Pylint 4.0.9 declares Astroid <=4.1.dev0, so Astroid 4.0.4 is pinned as a
+    # mutually compatible pair with it (see pyproject.toml and ADR 003). A
+    # bump of either alone breaks the pair; Astroid moves with Pylint by hand.
+    ignore:
+      - dependency-name: "astroid"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
