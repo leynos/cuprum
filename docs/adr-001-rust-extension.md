@@ -24,19 +24,21 @@ The core functions affected are:
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental decoding configured by `config.encoding` alone.
+  incremental decoding configured by `config.encoding` and the mode-scoped view
+  policy (`config.view_errors`).
 
 The consume variants reuse `_drain()` for the shared stream-consumption
 mechanics. The line-emitting variant supplies an `on_chunk` delivery hook
 around its per-invocation incremental decoder, while `_drain()` remains the
 sole place for read, echo, and capture fixes and applies `config.errors` when
-decoding captured bytes. The observer's decoder replaces undecodable bytes
-rather than honouring that policy, because it renders a view of the child's
-bytes and a view must not be able to end the run it observes (see
-`OBSERVER_ERROR_POLICY` in `cuprum/_constants.py`).
+decoding captured bytes. In a byte-exact run the observer's decoder replaces
+undecodable bytes rather than honouring that policy, because it renders a view
+of the child's bytes and a view must not be able to end the run it observes (see
+`OBSERVER_ERROR_POLICY` in `cuprum/_constants.py`); a text run's observer
+decoder keeps `config.errors`, so a strict text run still raises from it.
 
 For text-only echo sinks, `_drain()` owns a separate incremental decoder
-configured by `config.encoding` and the same observer policy. It flushes the
+configured by `config.encoding` and `config.view_errors`. It flushes the
 decoder at end of stream so characters split across read chunks are reassembled
 and an incomplete final sequence is replaced rather than left to raise; sinks
 with `.buffer` continue to receive raw bytes.
