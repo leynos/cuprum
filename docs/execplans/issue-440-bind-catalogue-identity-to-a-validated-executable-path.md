@@ -1918,6 +1918,49 @@ escalation, not a workaround.
   caller-spelling-versus-anchoring distinction is stated once, where a reader
   comparing the two helpers will find it.
 
+  **F8, an incomplete widening: the refusal message outlived the annotation.**
+  Found by re-reading my own `22150da6` change rather than by a report, which
+  is the only reason it is in this PR at all. Widening `coerce_path_string` to
+  `str | os.PathLike[str]` changed what the function *accepts* but not what it
+  says when it refuses: both guards still raised
+  `ExecutablePath expects str or Path, got …`. The stale text contradicted the
+  function's own `Raises` section two screens above it ("The value is not a
+  string or path-like object"), and it contradicted the sibling it was widened
+  to match — `executable_binding`'s guard says "a path-like object". A caller
+  who passed a `PurePosixPath`-shaped mistake and read "expects str or Path"
+  would be told to make a change that `os.fspath` had already accepted.
+
+  Scope check before repairing, because the same wording sits in
+  `cuprum/builders/args.py`: that module is **absent from this branch's diff
+  entirely** (verified at `390fcf83`, where the identical
+  `SafePath expects str or Path` text predates the branch), so it is inherited
+  and out of scope. `cuprum/executable_paths.py` is **new in this PR**
+  (`git show 390fcf83:cuprum/executable_paths.py` fails: the path does not
+  exist at base), and both pinned tests are added here (`base=0 head=1` each),
+  so the whole surface is branch-introduced and the repair belongs here rather
+  than in a follow-up.
+
+  Repair: both guards now say "expects a str or a path-like object", and both
+  pinned expectations were repointed first and observed failing against the old
+  text for the intended reason before the message changed. Red→green:
+  `2 failed, 29 passed` → `31 passed` in
+  `cuprum/unittests/test_executable_paths.py`.
+
+  **A related correction, measured rather than assumed.** I had taken it as
+  given that a bare `bytes` value reaches the first guard, and the test named
+  `test_coerce_path_string_rejects_bytes` made that look settled. It is not:
+  `os.fspath(b"/opt/tools/tool")` returns the bytes unchanged rather than
+  raising, so a bare `bytes` sails past the `except TypeError` arm and is
+  rejected only by the second guard — the one that exists for a path-like whose
+  `__fspath__` returned bytes. The two guards therefore have one test each, and
+  the bytes test's name describes the value, not the branch. The path is still
+  rejected either way; what was wrong was my model of which check does it.
+
+  Two stale signatures in this plan's live "Interfaces and dependencies"
+  listing are corrected in the same change: `executable_path` and
+  `coerce_path_string` were still shown as `str | Path` after the widening, in
+  a section that claims to list the module as shipped.
+
 ## Surprises & discoveries
 
 - Observation: the rebased `resolved_path` declaration broke a *base* public
@@ -3594,11 +3637,11 @@ def classify_executable_path(
 
 
 def executable_path(
-    value: str | Path, *, allow_relative: bool = False
+    value: str | os.PathLike[str], *, allow_relative: bool = False
 ) -> ExecutablePath: ...
 
 
-def coerce_path_string(value: str | Path) -> str: ...
+def coerce_path_string(value: str | os.PathLike[str]) -> str: ...
 
 
 def advisory_path_rejection(

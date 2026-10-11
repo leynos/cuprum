@@ -188,7 +188,7 @@ def test_executable_path_accepts_a_path_object() -> None:
 
 def test_executable_path_rejects_a_non_path_like_value() -> None:
     """A value that is neither a string nor path-like raises ``TypeError``."""
-    with pytest.raises(TypeError, match="ExecutablePath expects str or Path"):
+    with pytest.raises(TypeError, match="ExecutablePath expects a str or a path-like"):
         # Deliberately wrong-typed: the runtime guard is what is under test,
         # and a checker-visible call would be rejected before it ran.
         executable_path(typ.cast("typ.Any", 42))
@@ -206,7 +206,7 @@ def test_coerce_path_string_keeps_a_path_string_form() -> None:
 
 def test_coerce_path_string_rejects_bytes() -> None:
     """Bytes are rejected rather than silently decoded."""
-    with pytest.raises(TypeError, match="ExecutablePath expects str or Path"):
+    with pytest.raises(TypeError, match="ExecutablePath expects a str or a path-like"):
         # Deliberately wrong-typed; see the note on the sibling test above.
         coerce_path_string(typ.cast("typ.Any", b"/opt/tools/tool"))
 

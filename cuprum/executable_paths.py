@@ -236,10 +236,16 @@ def coerce_path_string(value: str | os.PathLike[str]) -> str:
     try:
         result = os.fspath(value)
     except TypeError:
-        msg = f"ExecutablePath expects str or Path, got {type(value).__name__}"
+        msg = (
+            "ExecutablePath expects a str or a path-like object, "
+            f"got {type(value).__name__}"
+        )
         raise TypeError(msg) from None
     if isinstance(result, bytes):
-        msg = f"ExecutablePath expects str or Path, got {type(value).__name__}"
+        msg = (
+            "ExecutablePath expects a str or a path-like object, "
+            f"got {type(value).__name__}"
+        )
         raise TypeError(msg)
     return result
 
