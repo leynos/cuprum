@@ -62,6 +62,7 @@ def _observe_start(child: ReadyChild) -> HandleObservation:
     marker = child.marker
 
     async def orchestrate() -> HandleObservation:
+        """Read what the handle exposes while its child is still running."""
         handle = await _start_owned(child.command)
         await _wait_for_ready(marker)
         observation = HandleObservation(
@@ -80,6 +81,7 @@ def _observe_output_wait(command: SafeCmd) -> HandleObservation:
     """Await a child that writes, then ends with its own status."""
 
     async def orchestrate() -> HandleObservation:
+        """Await the child and report the outcome it settled."""
         handle = await _start_owned(command)
         result = await handle.wait()
         return HandleObservation(
@@ -95,6 +97,7 @@ def _observe_failed_start(command: SafeCmd) -> HandleObservation:
     """Start a program that is not on disk and carry out the failure."""
 
     async def orchestrate() -> HandleObservation:
+        """Carry out whatever failure the absent executable's spawn raises."""
         try:
             await _start_owned(command)
         except (FileNotFoundError, OSError) as failure:
@@ -125,6 +128,7 @@ def _observe_early_exit_signal(
     """
 
     async def orchestrate() -> HandleObservation:
+        """Await the early exit, then attempt a signal the handle must refuse."""
         handle = await _start_owned(command)
         result = await handle.wait()
         try:
@@ -147,6 +151,7 @@ def _observe_wait_deadline(command: SafeCmd) -> HandleObservation:
     """Wait on a blocking child under an already-elapsed deadline."""
 
     async def orchestrate() -> HandleObservation:
+        """Wait under an elapsed deadline and carry out the expiry."""
         handle = await _start_owned(command)
         try:
             await handle.wait(timeout=0)
@@ -167,6 +172,7 @@ def _observe_concurrent_waits(command: SafeCmd) -> HandleObservation:
     """Issue several waits on one handle at once and report what each saw."""
 
     async def orchestrate() -> HandleObservation:
+        """Issue every wait at once and keep what each of them observed."""
         handle = await _start_owned(command)
         results = await asyncio.gather(*(handle.wait() for _ in range(_WAITERS)))
         return HandleObservation(

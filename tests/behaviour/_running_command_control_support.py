@@ -72,6 +72,7 @@ def _observe_graceful_termination(child: ReadyChild) -> HandleObservation:
     """Terminate a child that obeys ``SIGTERM`` and report the outcome."""
 
     async def orchestrate() -> HandleObservation:
+        """Start the child, terminate it, and read the settled outcome."""
         handle = await _start_ready(child)
         result = await handle.terminate()
         return HandleObservation(
@@ -87,6 +88,7 @@ def _observe_escalating_termination(child: ReadyChild) -> HandleObservation:
     """Terminate a child that ignores ``SIGTERM`` under a short grace."""
 
     async def orchestrate() -> HandleObservation:
+        """Terminate under a short grace, so the stop has to escalate."""
         handle = await _start_ready(child)
         result = await handle.terminate(grace=_ESCALATION_GRACE)
         return HandleObservation(
@@ -102,6 +104,7 @@ def _observe_kill(child: ReadyChild) -> HandleObservation:
     """Compel a child to exit and report the signal that ended it."""
 
     async def orchestrate() -> HandleObservation:
+        """Start the child, kill it outright, and read the settled outcome."""
         handle = await _start_ready(child)
         result = await handle.kill()
         return HandleObservation(
@@ -117,6 +120,7 @@ def _observe_repeated_termination(child: ReadyChild) -> HandleObservation:
     """Terminate one handle twice and report both outcomes."""
 
     async def orchestrate() -> HandleObservation:
+        """Terminate the one handle twice and keep both outcomes."""
         handle = await _start_ready(child)
         first = await handle.terminate()
         second = await handle.terminate()
@@ -134,6 +138,7 @@ def _observe_context_exit(child: ReadyChild) -> HandleObservation:
     """Leave the handle's context while the child is still running."""
 
     async def orchestrate() -> HandleObservation:
+        """Leave the handle's context with the child still running."""
         handle = await _start_ready(child)
         async with handle:
             pass
@@ -150,6 +155,7 @@ def _observe_context_exit_with_error(child: ReadyChild) -> HandleObservation:
     """Leave the handle's context with the block already failing."""
 
     async def orchestrate() -> HandleObservation:
+        """Leave the context while the block is already failing."""
         handle = await _start_ready(child)
         error: BaseException | None = None
         try:
@@ -200,6 +206,7 @@ def _observe_cancelled_teardown(child: ReadyChild) -> HandleObservation:
     """
 
     async def orchestrate() -> HandleObservation:
+        """Cancel the task leaving the context, and read what it settled."""
         from cuprum.sh import ExecutionContext as Context
 
         context: ExecutionContext = Context(cancel_grace=_CANCEL_GRACE)
@@ -207,6 +214,7 @@ def _observe_cancelled_teardown(child: ReadyChild) -> HandleObservation:
         await _wait_for_ready(child.marker)
 
         async def leave_context() -> None:
+            """Hold the handle's context open long enough to be interrupted."""
             async with handle:
                 await asyncio.sleep(30)
 
@@ -273,6 +281,7 @@ def _observe_unsupported_signal(
     """
 
     async def orchestrate() -> HandleObservation:
+        """Signal the child with the platform predicate replaced."""
         handle = await _start_ready(child)
         monkeypatch.setattr(
             "cuprum._process_handle.control._arbitrary_signals_supported",
