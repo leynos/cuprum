@@ -30,7 +30,11 @@ from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
 from cuprum._process_handle import RunningCommand
-from cuprum._process_handle.tasks import _build_handle_execution, _start_handle_run
+from cuprum._process_handle.tasks import (
+    _build_handle_execution,
+    _HandleRun,
+    _start_handle_run,
+)
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
@@ -273,45 +277,19 @@ class SafeCmd:
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate from the allowlist and stdin resolution
-        # Capture is forced on: a handle exists so its caller can inspect the
-        # child after the fact, and a child whose streams were routed to
-        # ``DEVNULL`` cannot be asked what it said. The caller's own settings
-        # still govern echo and every other presentation decision.
-        out = output or RunOutputOptions()
-        if not out.capture:
-            out = dc.replace(out, capture=True)
-        ctx = context or ExecutionContext()
         _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        prepared = await _prepare_owned_command(
-            self,
-            _ExecutionState(
-                context=ctx,
-                output=out,
-                stdin_data=stdin_data,
-                timeout=effective_timeout,
-            ),
+        ctx = context or ExecutionContext()
+        state = _ExecutionState(
+            context=ctx,
+            # Capture is forced on: a handle exists so its caller can inspect
+            # the child after the fact, and a child whose streams were routed
+            # to ``DEVNULL`` cannot be asked what it said. The caller's own
+            # settings still govern echo and every other presentation choice.
+            output=_with_capture(output),
+            stdin_data=stdin.resolve(ctx) if stdin is not None else None,
+            timeout=_resolve_timeout(timeout=timeout, context=context),
         )
-        # The spawn owns its own child — `_start_handle_run` terminates and
-        # reaps anything it started before letting a failure out. What it
-        # cannot own is the session its execution was prepared against, so
-        # that framing is closed here, on the one path that can fail after
-        # preparation returned.
-        try:
-            run = await _start_handle_run(
-                _build_handle_execution(prepared.execution),
-                prepared.tracking,
-                effective_timeout,
-            )
-        except BaseException as run_error:
-            await _finalize_prepared_command_failure(
-                prepared.tracking,
-                prepared.execution.observation,
-                run_error,
-            )
-            raise
-        return RunningCommand(run)
+        return RunningCommand(await _spawn_owned_run(self, state))
 
     def run_sync(
         self,
@@ -354,3 +332,57 @@ class SafeCmd:
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
+
+
+def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
+    """Return *output*, or the default, with capture forced on.
+
+    Capture is forced on for a handle because a handle exists so its caller can
+    inspect the child after the fact, and a child whose streams were routed to
+    ``DEVNULL`` cannot be asked what it said. The caller's own settings still
+    govern echo and every other presentation decision.
+
+    Returns
+    -------
+    RunOutputOptions
+        The caller's settings with ``capture`` set, or the default settings
+        when none were given.
+    """
+    resolved = output or RunOutputOptions()
+    return resolved if resolved.capture else dc.replace(resolved, capture=True)
+
+
+async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
+    """Prepare *cmd*, spawn its child, and hand back the owned record.
+
+    The spawn owns its own child: ``_start_handle_run`` terminates and reaps
+    anything it started before letting a failure out. What it cannot own is the
+    session the execution was prepared against, so that framing is closed here,
+    on the one path that can fail after preparation returned.
+
+    Returns
+    -------
+    _HandleRun
+        The spawned child and everything its caller needs to drive and settle
+        it.
+
+    Raises
+    ------
+    BaseException
+        Whatever preparation or the spawn raised, once the session opened for
+        the run has been finalized.
+    """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the spawn raised
+    prepared = await _prepare_owned_command(cmd, state)
+    try:
+        return await _start_handle_run(
+            _build_handle_execution(prepared.execution),
+            prepared.tracking,
+            state.timeout,
+        )
+    except BaseException as run_error:
+        await _finalize_prepared_command_failure(
+            prepared.tracking,
+            prepared.execution.observation,
+            run_error,
+        )
+        raise
