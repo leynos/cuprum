@@ -7,9 +7,9 @@ when the pipe fails early.
 The bounded diagnostic the *other* standard-stream boundaries report through —
 the producer, an invalid chunk, the encoder, opening a cuprum-owned target
 file, and flushing a caller's borrowed file object — lives in
-:mod:`cuprum._stdio_diagnostics` rather than here, because this module is at its
-line-count budget and because those boundaries are reached from modules this
-one does not import. Both emitters express the same rule that a diagnostic
+:mod:`cuprum._stdio_diagnostics` rather than here, because this module is at
+its line-count budget, and because those boundaries are reached from modules
+this one does not import. Both emitters express the same rule that a diagnostic
 never carries exception text, so a boundary added later inherits it rather than
 re-deriving it.
 
@@ -21,6 +21,13 @@ dispatcher starts when a caller supplies one. The dispatcher reads a resolved
 :class:`~cuprum._stdio_plan._StdinPlan` rather than the caller's raw argument,
 so the inherited/payload/producer decision is made once, when the stdio is
 resolved, instead of being re-derived here.
+
+Taking back a writer that is still running — the settle window, the cancel, and
+the shielded wait that keeps a cancellation from abandoning either — lives in
+``cuprum._subprocess_stdin_reclaim``, the split that brought this module back
+under the ceiling. The pipe primitives stay here because every writer on every
+path uses them, while the reclaim policy is reached only by the paths that end
+a run.
 """
 
 from __future__ import annotations
@@ -48,15 +55,6 @@ _LOGGER = logging.getLogger("cuprum.stdin")
 # that inherited stdin and does not read it — so this has to be a bound rather
 # than a wait; see ``_close_stdin``.
 _CLOSE_GRACE_S = 0.5
-# How long a stdin writer is given to notice it should stop — both when the
-# child it was feeding has exited and when the writer is being cancelled. Fixed
-# and short for the same reason the readers' EOF grace is (see
-# ``_CAPTURE_EOF_GRACE_S`` in ``cuprum._subprocess_wait``): the bytes are
-# already written and the child that would read them is gone, so the only thing
-# still being waited for is a pipe end held open by the child's own
-# descendants. A writer that can finish at all finishes in well under this; one
-# that cannot will never finish, however long it is given.
-_STDIN_SETTLE_GRACE_S = 0.25
 
 
 def _emit_stdin_error(
@@ -246,73 +244,6 @@ def _abort_stdin_transport(
         )
 
 
-async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
-    """Cancel and drain a stdin writer task, tolerating any raised error.
-
-    Used on the timeout and cancellation paths to reclaim a writer that may be
-    blocked draining bytes into an unread pipe, so its cleanup cannot delay the
-    surrounding failure work.
-
-    Draining it is bounded: a task can absorb cancellation in its own
-    ``finally`` and go on blocking there, which is exactly what the writer's
-    pipe close used to do. Reclaiming a writer is meant to *bound* the wait for
-    it, so an unbounded drain here would hand that guarantee back to the thing
-    it was written to contain.
-    """
-    if stdin_task is None:
-        return
-    stdin_task.cancel()
-    await asyncio.wait((stdin_task,), timeout=_STDIN_SETTLE_GRACE_S)
-
-
-async def _settle_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
-    """Reclaim the stdin writer once the child it was feeding has exited.
-
-    The exit path is the one place a writer can outlive what it writes to. A
-    timeout or a cancellation reclaims the writer through
-    :func:`_cancel_stdin_writer`, and an ordinary run has the producer exhaust
-    and the writer close the pipe *before* the child is done — so by the time
-    an exit settles, a writer that is still pending is one whose remaining work
-    can reach nobody: the child is reaped and its end of the pipe is gone.
-
-    Awaiting such a writer unconditionally is what this replaces. A producer
-    parked in ``anext`` has no continuation that would ever end the wait, so an
-    unbounded await made a stalled producer indistinguishable from a stalled
-    child and outlasted the run's own deadline: the terminator fired, the child
-    was killed, and the caller kept waiting on the producer.
-
-    A writer that already finished is awaited, so a failure it raised before
-    the exit settled still reaches the caller. One that is still pending is
-    given the settle window, which is what lets a write already in flight fail
-    with ``EPIPE`` and take the early-close path, and is then cancelled and
-    reclaimed exactly as the teardown paths reclaim it. A producer that would
-    have failed after that window loses the report, which is the same trade
-    every other teardown path already makes; the alternative is a run that
-    never ends.
-
-    Parameters
-    ----------
-    stdin_task : asyncio.Task[None] | None
-        The run's stdin writer. ``None`` for an inherited stdin, which has no
-        pipe of cuprum's and so nothing to reclaim.
-
-    Raises
-    ------
-    BaseException
-        Whatever the writer raised, when it failed before or within the
-        window. A writer this helper cancels reports nothing: it was reclaimed,
-        not broken.
-    """  # ruff: ignore[docstring-extraneous-exception] - the writer's own exception propagates.
-    if stdin_task is None:
-        return
-    if not stdin_task.done():
-        await asyncio.wait((stdin_task,), timeout=_STDIN_SETTLE_GRACE_S)
-    if stdin_task.done():
-        await stdin_task
-        return
-    await _cancel_stdin_writer(stdin_task)
-
-
 def _spawn_payload_writer(
     process: asyncio.subprocess.Process,
     payload: bytes,
@@ -391,10 +322,8 @@ def _spawn_stdin_writer(
 
 __all__ = [
     "_abort_stdin_transport",
-    "_cancel_stdin_writer",
     "_close_stdin",
     "_emit_stdin_error",
-    "_settle_stdin_writer",
     "_spawn_stdin_writer",
     "_write_stdin",
 ]

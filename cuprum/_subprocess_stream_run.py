@@ -47,10 +47,10 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._subprocess_stdin import (
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
     _cancel_stdin_writer,
     _settle_stdin_writer,
-    _spawn_stdin_writer,
 )
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
@@ -222,7 +222,7 @@ async def _run_subprocess_without_streams(
     # parked in ``anext`` would make a bare await outlast the run's own
     # deadline — the terminator would fire, the child would be killed, and the
     # caller would go on waiting for the producer. See
-    # :func:`~cuprum._subprocess_stdin._settle_stdin_writer`.
+    # :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`.
     await _settle_stdin_writer(stdin_task)
     return exit_code, exited_at
 

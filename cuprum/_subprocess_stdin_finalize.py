@@ -26,7 +26,10 @@ import asyncio
 import contextlib
 import typing as typ
 
-from cuprum._subprocess_stdin import _STDIN_SETTLE_GRACE_S, _cancel_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _STDIN_SETTLE_GRACE_S,
+    _cancel_stdin_writer,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

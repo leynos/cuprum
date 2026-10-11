@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._subprocess_stdin import _settle_stdin_writer
+from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 from cuprum._subprocess_wait import _consumer_awaitable
 
 if typ.TYPE_CHECKING:
