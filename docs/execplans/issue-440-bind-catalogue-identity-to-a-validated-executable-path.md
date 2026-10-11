@@ -2353,13 +2353,22 @@ escalation, not a workaround.
   has the identical `PurePath`-plus-regex combination, and `ExecEvent.program`
   in `cuprum/events.py` is unresolvable for the same `TYPE_CHECKING` reason.
   Evidence: the reproduction returns `None` for `r"C:\tools\..\evil.exe"` on
-  `390fcf83`, and `git diff --name-status 390fcf83..HEAD` does not list either
-  file. Impact: neither is repaired here, because both are outside this
-  feature's diff and the issue's acceptance criteria; they are recorded so the
-  latent defects are not mistaken for consequences of this change. The lesson
-  is the one this plan has already recorded once — a defect found next to new
-  code is not automatically a defect *of* it, and the difference is decided by
-  the diff, not by proximity.
+  `390fcf83`, and `cuprum/builders/args.py` is absent from
+  `git diff --name-status 390fcf83..HEAD` entirely. `cuprum/events.py` is a
+  weaker case that must not be stated the same way: the file **is** in the
+  branch's diff, and only its `ExecEvent` class body is touched. The
+  `TYPE_CHECKING` block that causes this defect is byte-identical to base, and
+  no hunk of `git diff 390fcf83..HEAD -- cuprum/events.py` matches
+  `TYPE_CHECKING` or `from cuprum.program`. Impact: neither is repaired here,
+  because both are inherited defects outside the change this branch makes, and
+  outside the issue's acceptance criteria; they are recorded so the latent
+  defects are not mistaken for consequences of this change. The lesson is the
+  one this plan has already recorded once — a defect found next to new code is
+  not automatically a defect *of* it, and the difference is decided by the
+  diff, not by proximity. A second lesson sits beside it: "is the file in the
+  diff?" and "did this branch cause the defect?" are different questions, and a
+  file can be in the diff for unrelated work while the defect in it is
+  inherited.
 
 ## Decision log
 
