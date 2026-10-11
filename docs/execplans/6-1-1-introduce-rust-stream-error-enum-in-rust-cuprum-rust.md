@@ -2396,12 +2396,13 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
 - [x] (2026-10-11) **`make test` surfaced a latent flake in `main`'s own suite,
   and adjudicating it required disproving my first two measurements before
-  patching anything.** `tests/test_native_pipeline_stall_properties.py::
-  test_uncollected_output_requires_every_child_to_have_exited` failed. The test
-  module and both collaborators are byte-identical to `origin/main`, and so is
-  their entire transitive import closure — 100 modules resolved and compared,
-  none differing. Both files were added by `main`'s own commit `017c06e2`
-  (PR #456), so this is not the branch's defect.
+  patching anything.**
+  `tests/test_native_pipeline_stall_properties.py::
+  test_uncollected_output_requires_every_child_to_have_exited`
+  failed. The test module and both collaborators are byte-identical to
+  `origin/main`, and so is their entire transitive import closure — 100 modules
+  resolved and compared, none differing. Both files were added by `main`'s own
+  commit `017c06e2` (PR #456), so this is not the branch's defect.
 
   The counterexample is decisive. For an exited child at stage 4 holding one
   pending byte, plus a live child at stage 5 with `stdin_parent_writers=(0,)`
