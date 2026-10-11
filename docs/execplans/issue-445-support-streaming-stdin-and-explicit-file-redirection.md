@@ -2625,6 +2625,42 @@ likelihood, and mitigation.
   `make typecheck` are three separate leaves over the same file, and a change
   to an *annotated* call site is precisely the case the first two cannot see.
 
+- Observation: **a green focused suite is not evidence that a commit gates.**
+  The four gap repairs above passed all 94 of their focused tests, all four
+  mutation probes, and `make fmt` — and the commit that carried them still
+  failed `make lint` (three findings) and `make typecheck` (27 diagnostics, one
+  root cause). None of the seven test modules exercises ruff or `ty`, so every
+  check that *could* have caught the defects was one the focused loop never
+  ran. The four defects: a `subprocess` import ruff classifies as
+  typing-only-standard-library-import, `typing.Coroutine` where the banned-api
+  rule requires `collections.abc.Coroutine`, a docstring missing a `Returns`
+  section, and a transport wrapper typed `*args: object, **kwargs: object` that
+  forwarded `object` into a typed callee. The last one is the general case: a
+  wrapper typed loosely enough to accept anything is also loose enough to
+  forward anything, so the substitution stops being callable-compatible with
+  what it replaces. The narrow operational rule is the same one recorded two
+  entries above under a different leaf — `make check-fmt`, `make lint`, and
+  `make typecheck` are separate leaves, and here it was the *last* two, not the
+  first two, that the loop skipped.
+
+- Observation: **a probe can be vacuous for a reason unrelated to the code it
+  probes.** The route trap added above was re-verified after the transport
+  wrapper was retyped, since the retype changed the substituted callable. The
+  first re-verification removed the wait4 arm's platform skip and reported 12
+  passed — which looks like the trap failing to fire. It was not: on a host
+  where `wait4_resource_measurement_available()` is true, removing the skip
+  changes nothing, because the arm already selected wait4 successfully and the
+  trap is never reachable. The probe did not exercise the trap at all. The
+  second attempt forced the dispatch to asyncio *while leaving the wait4 entry
+  patched* — the actual mis-route — and the trap fired correctly, failing those
+  cases with
+  `the asyncio transport was reached, but this case selected
+  'wait4'; the wait4 entry patch did not take effect`.
+  The general form: a probe that cannot reach the code path it claims to
+  exercise reports the same green as a probe that exercises it and finds
+  nothing, and the difference is only visible by asking which branch the
+  mutated input actually takes.
+
 - Observation: **a mutation that cannot distinguish the thing it mutates is not
   a probe.** A test asserting that the outcome-retrieval callback is attached
   *before* the first wait was probed by moving the attachment to after the

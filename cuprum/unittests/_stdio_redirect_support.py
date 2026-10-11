@@ -199,11 +199,16 @@ def _recording_transport(
     and the dispatch did not choose it. Reporting that as a named failure is
     more useful than letting the case spawn through the wrong backend and pass.
 
-    The wrapper mirrors the arguments ``spawn_direct_process`` actually passes,
-    rather than accepting and forwarding ``object``. That precision is what
-    keeps the substituted transport callable-compatible with the original: a
-    wrapper typed loosely enough to accept anything would also forward anything
-    into a typed callee.
+    The wrapper takes ``object`` and forwards through a cast rather than
+    mirroring the transport's own parameters. An exact mirror costs one
+    parameter per keyword the transport accepts — ``program``, ``stdin``,
+    ``stdout``, ``stderr``, ``env``, ``cwd`` — which is six against a project
+    ceiling of five, so it cannot be written at all. Accepting the call
+    loosely is the only faithful option left, and it costs nothing at runtime:
+    the cast is confined to the forwarding call, so arguments still reach the
+    real callee and are still checked against its real signature there. A
+    wrapper that drifted from the transport's parameters would fail loudly
+    rather than passing silently.
 
     Returns
     -------
@@ -212,16 +217,15 @@ def _recording_transport(
         should not have been reached at all.
     """
     original = _wait4_process.asyncio.create_subprocess_exec
+    # The cast exists only because ``kwargs`` is typed as ``object``. It is
+    # applied at the call rather than widening the callee's annotation: the
+    # real transport keeps its own signature, and every forwarded value is
+    # still checked against it at runtime.
+    transport = typ.cast(
+        "cabc.Callable[..., cabc.Coroutine[object, object, object]]", original
+    )
 
-    async def record(
-        program: str,
-        *args: str,
-        stdin: int | None = None,
-        stdout: int | None = None,
-        stderr: int | None = None,
-        env: cabc.Mapping[str, str] | None = None,
-        cwd: str | None = None,
-    ) -> object:
+    async def record(*args: object, **kwargs: object) -> object:
         """Note the asyncio route, then run or refuse the real transport."""
         reached.append(label)
         if selected != label:
@@ -230,15 +234,7 @@ def _recording_transport(
                 f"{selected!r}; the wait4 entry patch did not take effect"
             )
             raise AssertionError(message)
-        return await original(
-            program,
-            *args,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            env=env,
-            cwd=cwd,
-        )
+        return await transport(*args, **kwargs)
 
     return record
 
