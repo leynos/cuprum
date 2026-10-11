@@ -118,6 +118,9 @@ _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum._pipeline_stream_fds._restore_stream_fd_blocking",
     "cuprum._streams_pump._override_read_size",
 })
+_RUNTIME_CLASS_ENTRY_POINTS: typ.Final = frozenset({
+    "cuprum._wait4_process._Wait4InvariantError",
+})
 
 
 def _makefile_report() -> dict[str, object]:
@@ -352,6 +355,7 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
         _RUNTIME_PARAMETER_ENTRY_POINTS
         | _RUNTIME_METHOD_ENTRY_POINTS
         | _RUNTIME_FUNCTION_ENTRY_POINTS
+        | _RUNTIME_CLASS_ENTRY_POINTS
     ), "Skylos entry-point contract must preserve every runtime caller exclusion"
     for entry_point in entry_points:
         names = frozenset(
@@ -362,6 +366,8 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
             entry_point_type = "method"
         elif names & _RUNTIME_FUNCTION_ENTRY_POINTS:
             entry_point_type = "function"
+        elif names & _RUNTIME_CLASS_ENTRY_POINTS:
+            entry_point_type = "class"
         assert entry_point.get("type") == entry_point_type, (
             "Skylos entry-point contract must classify each implicit runtime caller"
         )
