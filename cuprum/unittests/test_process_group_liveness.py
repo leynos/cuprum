@@ -113,8 +113,10 @@ def test_the_probe_reports_an_unsignalled_group_without_logging(
     A query that logs is a query with an externally visible side-effect, and it
     makes the outcome it reports impossible to assert on independently of a log
     capture. The diagnostic therefore belongs to the command boundary that acts
-    on the answer — see
-    ``test_report_settlement_*`` in ``test_process_signal_failure_reporting``.
+    on the answer: see
+    ``test_a_signal_the_kernel_refuses_is_recorded_and_reported`` and
+    ``test_a_refused_direct_signal_is_recorded_like_a_refused_group_signal`` in
+    ``test_process_signal_failure_reporting``.
     """
 
     def unreachable(pgid: int, sig: int) -> None:
