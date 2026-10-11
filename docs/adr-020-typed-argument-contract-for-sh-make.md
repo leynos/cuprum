@@ -132,3 +132,45 @@ The rest of that addendum's submodule inventory still describes the code.
   converted. `ArgValue` names the concrete `pathlib.Path`, so only that class
   is accepted. Widening to `os.PathLike` would be a separate decision with its
   own compatibility surface.
+
+## Addendum (2026-10-11): widen `ArgValue` to text path-likes and harden the domain test
+
+The Assumptions section above records that an arbitrary `os.PathLike[str]`
+implementation was rejected, and that widening the alias would be a separate
+decision. That decision is now taken, in response to review, and the earlier
+text is left in place because accepted ADR text is append-only.
+
+Three statements from the original text are superseded:
+
+- The `ArgValue` alias now reads
+  `str | int | float | bool | Path | os.PathLike[str]`, and the runtime type
+  tuple is reduced to checkable classes with
+  `typ.get_origin(member) or member`, because `os.PathLike[str]` is a
+  parameterized generic that `issubclass` rejects. The single-source-of-truth
+  property is unchanged: the tuple is still derived from `ArgValue` itself.
+- A path-like value is converted with `os.fspath()` rather than `str()`. For a
+  `pathlib.Path` the two agree, so accepted behaviour is unchanged; for any
+  other implementation the protocol's conversion is the correct one.
+- The domain check uses `issubclass(type(value), _ARG_TYPES)` rather than
+  `isinstance`. `isinstance` consults `__class__`, so `Mock(spec=int)` — and
+  any object exposing a `__class__` property — satisfied the check while
+  remaining an unsupported type whose `repr` then reached argv. That is the
+  original defect this ADR exists to close, so it is closed for proxies too.
+
+Two narrower rules follow from the widening:
+
+- `os.PathLike` is structural, so the runtime cannot enforce the `str`
+  parameter from the annotation. The `os.fspath()` result is therefore
+  re-checked, and a `__fspath__` returning `bytes` raises `TypeError` with the
+  bytes rule's message, naming `bytes` rather than the wrapper class because
+  the payload is what would have reached argv.
+- Keyword-only calls are unaffected: `None` keeps its dedicated message, and
+  the reserved execution-option guard still runs ahead of argument
+  serialization.
+
+The user-facing and maintainer accounts move with the alias:
+`docs/users-guide.md` states the accepted domain and the `os.fspath()`
+conversion, and `docs/developers-guide.md` records the honest runtime check.
+Both the static contract and the runtime contract are exercised by the existing
+fixtures and tests, with new cases for a custom text path-like, a
+byte-returning path-like, and a `__class__`-spoofing proxy.

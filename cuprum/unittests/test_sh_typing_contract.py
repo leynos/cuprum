@@ -28,7 +28,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: The positive fixture checked into the repository.
 _VALID_FIXTURE = _REPO_ROOT / "cuprum" / "unittests" / "typing_fixtures"
 
-#: Calls the published ``SafeCmdBuilder`` contract must reject.
+#: Calls the published ``SafeCmdBuilder`` contract must reject, as the body that
+#: follows the shared header. Most entries are a single call; one declares the
+#: class it passes, so the body is free text rather than an expression.
 _INVALID_CALLS: typ.Final[dict[str, str]] = {
     "object-positional": "b(object())",
     "object-keyword": "b(flag=object())",
@@ -36,6 +38,14 @@ _INVALID_CALLS: typ.Final[dict[str, str]] = {
     "none-keyword": "b(flag=None)",
     "bytes-positional": "b(b'raw')",
     "list-positional": "b(['a', 'b'])",
+    "bytes-path-like": (
+        "class BytesPath:\n"
+        "    def __fspath__(self) -> bytes:\n"
+        "        return b'raw'\n"
+        "\n"
+        "\n"
+        "b(BytesPath())"
+    ),
 }
 
 _SNIPPET_HEADER = "from cuprum import ECHO, sh\n\nb = sh.make(ECHO)\n"
@@ -118,7 +128,7 @@ def test_invalid_calls_are_rejected(name: str, tmp_path: Path) -> None:
     output = result.stdout + result.stderr
 
     assert result.returncode != 0, (
-        f"ty must reject {_INVALID_CALLS[name]!r}, but it exited 0:\n{output}"
+        f"ty must reject the {name} call, but it exited 0:\n{output}"
     )
     assert "invalid-argument-type" in output, (
         f"ty must report invalid-argument-type for {name}, got:\n{output}"

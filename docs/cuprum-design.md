@@ -516,12 +516,18 @@ flowchart TD
 
 `sh.make` returns a `SafeCmdBuilder`: a callable that accepts positional and
 keyword arguments, each of which must be a `str`, `int`, `float`, `bool`, or
-`Path` (the public `ArgValue` alias), and returns a `SafeCmd`. Values are
-converted into argv strings according to internal rules. The parameter types
-are part of the published contract, so a static checker rejects an unsupported
-argument at the call site rather than letting `str()` render its `repr` onto a
-command line, and the runtime raises `TypeError` for the same values. For more
-control, projects are expected to wrap `sh.make` with **builders** (see below).
+path-like value — `Path` or any other `os.PathLike[str]` (the public `ArgValue`
+alias) — and returns a `SafeCmd`. Values are converted into argv strings
+according to internal rules, with path-like values going through `os.fspath()`
+and everything else through `str()`. The parameter types are part of the
+published contract, so a static checker rejects an unsupported argument at the
+call site rather than letting `str()` render its `repr` onto a command line,
+and the runtime raises `TypeError` for the same values. Because `os.PathLike`
+is a structural protocol, the runtime re-checks the `os.fspath()` result and
+rejects a `__fspath__` that returns `bytes`; the domain check tests the value's
+real type rather than `isinstance`, so an object that spoofs `__class__` cannot
+smuggle its `repr` onto the command line. For more control, projects are
+expected to wrap `sh.make` with **builders** (see below).
 
 `sh.build_argv(*args, **kwargs)` exposes those argv-construction rules as a
 pure helper for tests and wrapper code that need to inspect normalization
@@ -647,7 +653,7 @@ classDiagram
 
     class ArgValue {
         <<alias>>
-        str | int | float | bool | Path
+        str | int | float | bool | Path | os.PathLike[str]
     }
 
     class sh_module {

@@ -73,10 +73,26 @@ def boolean_flags_carry_both_values() -> None:
 
 
 def path_like_values_are_accepted() -> None:
-    """``Path`` is accepted positionally and as a keyword value."""
+    """``Path`` and any other text path-like are accepted in both positions."""
     typ.assert_type(_ECHO_BUILDER(Path("relative/path")), SafeCmd)
     typ.assert_type(_ECHO_BUILDER("example/status"), SafeCmd)
     typ.assert_type(_ECHO_BUILDER(destination=Path("example/status")), SafeCmd)
+    # A user-defined path-like: the protocol is structural, so ``ArgValue``
+    # admits any ``__fspath__`` returning text, not only ``pathlib.Path``.
+    typ.assert_type(_ECHO_BUILDER(_CustomPath("example/status")), SafeCmd)
+    typ.assert_type(_ECHO_BUILDER(destination=_CustomPath("e/s")), SafeCmd)
+
+
+class _CustomPath:
+    """A minimal ``os.PathLike[str]`` implementation owned by this fixture."""
+
+    def __init__(self, path: str) -> None:
+        """Wrap ``path`` behind the protocol."""
+        self._path = path
+
+    def __fspath__(self) -> str:
+        """Return the wrapped path string."""
+        return self._path
 
 
 def explicit_argument_ordering_preserves_types() -> None:

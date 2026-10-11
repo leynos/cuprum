@@ -142,7 +142,7 @@ def test_make_rejects_bytes_argument(
 
 
 class _FakePath(os.PathLike[str]):
-    """A ``os.PathLike[str]`` that is deliberately not a ``pathlib.Path``."""
+    """A text ``os.PathLike`` that is deliberately not a ``pathlib.Path``."""
 
     def __init__(self, path: str) -> None:
         """Wrap ``path`` behind the ``os.PathLike`` protocol."""
@@ -153,15 +153,43 @@ class _FakePath(os.PathLike[str]):
         return self._path
 
 
+class _BytesPath(os.PathLike[bytes]):
+    """A path-like whose ``__fspath__`` returns bytes rather than text."""
+
+    def __fspath__(self) -> bytes:
+        """Return a raw byte path, which argv must never carry."""
+        return b"raw/path"
+
+
+class _SpoofedInt:
+    """A value whose ``__class__`` claims membership of the domain.
+
+    ``isinstance`` consults ``__class__``, so this object satisfies
+    ``isinstance(value, int)`` while remaining its own unsupported type. It
+    stands in for ``unittest.mock.Mock(spec=int)`` and any other proxy that
+    overrides ``__class__``.
+    """
+
+    @property
+    def __class__(self) -> type:
+        """Report ``int`` regardless of the real type."""
+        return int
+
+    def __str__(self) -> str:
+        """Render a repr-like text, which is what reaches argv."""
+        return "<spoofed int>"
+
+
 _UNSUPPORTED_VALUES = [
-    pytest.param(object(), id="object"),
-    pytest.param(b"raw", id="bytes"),
-    pytest.param(["a", "b"], id="list"),
-    pytest.param(_FakePath("example/path"), id="custom-path-like"),
+    pytest.param(object(), "object", id="object"),
+    pytest.param(b"raw", "bytes", id="bytes"),
+    pytest.param(["a", "b"], "list", id="list"),
+    pytest.param(_BytesPath(), "bytes", id="bytes-path-like"),
+    pytest.param(_SpoofedInt(), "_SpoofedInt", id="class-spoofing-proxy"),
 ]
 
 
-@pytest.mark.parametrize("value", _UNSUPPORTED_VALUES)
+@pytest.mark.parametrize(("value", "named"), _UNSUPPORTED_VALUES)
 @pytest.mark.parametrize(
     "invoke",
     [
@@ -172,6 +200,7 @@ _UNSUPPORTED_VALUES = [
 def test_unsupported_argument_types_are_rejected(
     invoke: cabc.Callable[[SafeCmdBuilder, ArgValue], object],
     value: object,
+    named: str,
 ) -> None:
     """Unsupported types raise TypeError instead of being stringified."""
     builder = sh.make(ECHO)
@@ -182,8 +211,9 @@ def test_unsupported_argument_types_are_rejected(
     with pytest.raises(TypeError) as excinfo:
         invoke(builder, poisoned)
 
-    assert type(value).__name__ in str(excinfo.value), (
-        "The error must name the offending type"
+    assert named in str(excinfo.value), (
+        "The error must name the offending type, or bytes when the offending "
+        "value is a byte path"
     )
     assert "sh.make" in str(excinfo.value), "The error must name sh.make"
 
@@ -203,8 +233,21 @@ def test_none_argument_error_message_is_exact() -> None:
     )
 
 
+def test_custom_path_like_arguments_convert_through_fspath() -> None:
+    """A text path-like other than ``Path`` converts through ``os.fspath()``."""
+    builder = sh.make(ECHO)
+    path_like = _FakePath("example/status")
+
+    cmd = builder(path_like, destination=path_like)
+
+    assert cmd.argv == (
+        "example/status",
+        "--destination=example/status",
+    ), "A custom os.PathLike[str] must serialize to its __fspath__ text"
+
+
 def test_path_arguments_serialize_to_their_as_posix_form(tmp_path: Path) -> None:
-    """``Path`` values serialize through ``str()`` in both positions."""
+    """``Path`` values serialize through ``os.fspath()`` in both positions."""
     builder = sh.make(ECHO)
     target = tmp_path / "nested" / "file.txt"
 

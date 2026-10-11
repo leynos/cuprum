@@ -1136,18 +1136,32 @@ The serializer contract itself:
   as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- accepted values are `str`, `int`, `float`, `bool`, and `Path`;
+- accepted values are `str`, `int`, `float`, `bool`, and path-like values:
+  `Path` and any other `os.PathLike[str]` implementation. A path-like is
+  converted with `os.fspath()` rather than `str()`, which is the conversion the
+  standard library uses for command arguments and the one the protocol
+  documents;
 - `None` raises `TypeError` in positional and keyword positions;
 - `bytes` raises `TypeError` in positional and keyword positions, with the
   offending value in the message, because `str()` would otherwise pass the
-  value's Python `repr` to the child process;
-- any other value outside `ArgValue` (`str | int | float | bool | Path`) raises
-  `TypeError` naming the type, in either position. The accepted-type tuple is
-  derived at runtime from `ArgValue` with
-  `typing.get_args(ArgValue.__value__)`, so the validation and the published
-  annotation cannot drift. `ArgValue` is a PEP 695 alias, so the union is
-  reached through `__value__` rather than by calling `typing.get_args` on the
-  alias object directly.
+  value's Python `repr` to the child process. A path-like whose `__fspath__`
+  returns `bytes` is rejected the same way, and named `bytes` rather than by
+  its own class, because the payload is what would have reached argv;
+- any other value outside `ArgValue`
+  (`str | int | float | bool | Path | os.PathLike[str]`) raises `TypeError`
+  naming the real type, in either position. The accepted-type tuple is derived
+  at runtime from `ArgValue` with `typing.get_args(ArgValue.__value__)`, so the
+  validation and the published annotation cannot drift. `ArgValue` is a PEP 695
+  alias, so the union is reached through `__value__` rather than by calling
+  `typing.get_args` on the alias object directly. Each member is reduced to a
+  runtime-checkable class with `typing.get_origin(member) or member`, because
+  `os.PathLike[str]` is a parameterized generic that `issubclass` rejects;
+- the domain test uses `issubclass` over the value's real type, not
+  `isinstance`. A proxy that overrides `__class__` satisfies `isinstance`
+  against a supported type while remaining a different object, and `str()` on
+  it would put that object's `repr` on the command line. The real type is not
+  spoofable, and `issubclass` still admits genuine subclasses of `str` and
+  `Path`.
 
 The boundary, and why a warning or a per-builder opt-out was rejected instead,
 is recorded in [Cuprum design](cuprum-design.md) §6.2.6.
