@@ -52,7 +52,7 @@ import typing as typ
 from cuprum import _wait4_spawn
 from cuprum._context_policy import _merge_env
 from cuprum._pipeline_types import _EventDetails
-from cuprum._stdio_diagnostics import _emit_stdio_error
+from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum._stdio_plan import (
     _NoStdin,
     _open_owned_path,
@@ -331,7 +331,7 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
 
 def _emit_owned_path_open(
     execution: _SubprocessExecution,
-    stream: str,
+    stream: PipeStream,
     path: Path,
 ) -> int:
     """Open one owned target, reporting a failure without the failing path.
@@ -345,6 +345,18 @@ def _emit_owned_path_open(
 
     ``pid`` is ``None``: this runs immediately before the fork, so no child
     exists to name.
+
+    Parameters
+    ----------
+    execution : _SubprocessExecution
+        The run this binding belongs to, carrying the observation the
+        diagnostic is emitted through.
+    stream : PipeStream
+        Which of the child's streams the file is bound to. The value names the
+        boundary in the ``OSError`` ``_open_owned_path`` raises; the diagnostic
+        deliberately omits it.
+    path : Path
+        The caller-named file to open.
 
     Returns
     -------
@@ -362,10 +374,12 @@ def _emit_owned_path_open(
     except OSError as exc:
         _emit_stdio_error(
             execution.observation,
-            StdioFailureCategory.OWNED_PATH_OPEN,
-            operation="open",
-            error_type=type(exc).__name__,
-            pid=None,
+            _StdioFailure(
+                category=StdioFailureCategory.OWNED_PATH_OPEN,
+                operation="open",
+                error_type=type(exc).__name__,
+                pid=None,
+            ),
         )
         raise
 
@@ -411,10 +425,12 @@ def _flush_borrowed_stdio(execution: _SubprocessExecution) -> None:
         except Exception as exc:
             _emit_stdio_error(
                 execution.observation,
-                StdioFailureCategory.BORROWED_FLUSH,
-                operation="flush",
-                error_type=type(exc).__name__,
-                pid=None,
+                _StdioFailure(
+                    category=StdioFailureCategory.BORROWED_FLUSH,
+                    operation="flush",
+                    error_type=type(exc).__name__,
+                    pid=None,
+                ),
             )
             raise
 

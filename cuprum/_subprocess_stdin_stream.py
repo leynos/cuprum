@@ -49,7 +49,7 @@ import logging
 import typing as typ
 
 from cuprum import _subprocess_stdin_write as _write
-from cuprum._stdio_diagnostics import _emit_stdio_error
+from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
 from cuprum._subprocess_stdin_errors import _stdin_source_error
 from cuprum.stdio_events import StdioFailureCategory
@@ -219,20 +219,24 @@ async def _drain_source_into_pipe(
         # has left _pump_chunks.
         _emit_stdio_error(
             observation,
-            StdioFailureCategory.PRODUCER,
-            operation="produce",
-            error_type=type(exc.cause).__name__,
-            pid=process.pid,
+            _StdioFailure(
+                category=StdioFailureCategory.PRODUCER,
+                operation="produce",
+                error_type=type(exc.cause).__name__,
+                pid=process.pid,
+            ),
         )
         raise _stdin_source_error(exc.cause) from exc.cause
     except Exception as exc:
         if not _write._is_early_close(exc):
             _emit_stdio_error(
                 observation,
-                _write_boundary_category(sink),
-                operation="write",
-                error_type=type(exc).__name__,
-                pid=process.pid,
+                _StdioFailure(
+                    category=_write_boundary_category(sink),
+                    operation="write",
+                    error_type=type(exc).__name__,
+                    pid=process.pid,
+                ),
             )
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
@@ -257,6 +261,11 @@ def _start_producer(
     classification. It is the same treatment :func:`_pump_chunks` gives
     ``__anext__``, and for the same reason: a call into the producer's own code
     cannot have been the child closing cuprum's write end.
+
+    Returns
+    -------
+    cabc.AsyncIterator[str | bytes]
+        The producer's own iterator, ready to be advanced.
 
     Raises
     ------
@@ -288,6 +297,12 @@ def _write_boundary_category(
     A failure with no mark is a genuine pipe fault — the written bytes were
     fine and the pipe itself failed — so it takes the residual category. Early
     closes never reach here; they are classified before this is consulted.
+
+    Returns
+    -------
+    StdioFailureCategory
+        The recorded boundary when the write path marked one, and ``PIPE``
+        otherwise.
     """
     return sink.chunk_error or StdioFailureCategory.PIPE
 

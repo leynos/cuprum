@@ -318,7 +318,10 @@ def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
             if event.error_category is None
             else {"error_category": str(event.error_category)}
         )
-        return (_CounterOp("cuprum_stdio_errors_total", 1.0, labels),)
+        # Read from the mapping rather than repeated as a literal: the comment
+        # above claims the metric name has one definition, and hardcoding it
+        # here would give it two that could drift apart.
+        return (_CounterOp(_PHASE_COUNTERS["stdio_error"], 1.0, labels),)
     counter_name = _PHASE_COUNTERS.get(phase)
     if counter_name is None:
         raise _UnhandledMetricsPhaseError(phase)

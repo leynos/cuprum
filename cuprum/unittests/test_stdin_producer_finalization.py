@@ -215,6 +215,12 @@ async def _run_scenario(
     after ``asyncio.run`` returns would show a closed producer even for a run
     that never closed it. Reading here is what makes the record evidence about
     cuprum rather than evidence about the loop.
+
+    Returns
+    -------
+    _Observation
+        The caller-visible outcome, paired with the producer finalizations the
+        spy recorded before this returned.
     """
     try:
         result = await command.run(
