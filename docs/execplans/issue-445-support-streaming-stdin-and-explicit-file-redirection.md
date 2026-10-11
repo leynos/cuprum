@@ -1580,6 +1580,59 @@ likelihood, and mitigation.
   completion — the leaves the abort left unobserved are the point of the
   re-run, not a formality.
 
+- [x] (2026-10-11 07:05Z) Six-gate run at the working shape that became
+  `68e524e1` — **green**, and the first run in this plan to reach every leaf.
+  `make check-fmt`, `make test` (4216 Python passed, 86 skipped, 0 failed; 127
+  Rust; doctests ok), `make typecheck`, `make lint` *to completion*,
+  `make markdownlint`, and `make nixie` all exit 0. The tree was unchanged by
+  the run, so the `typos.toml` regeneration invalidated nothing.
+
+  Two of the leaves are worth naming because earlier runs never reached them.
+  `interrogate` reports `RESULT: PASSED (minimum: 100.0%, actual: 100.0%)` on
+  8481 units with 3 missed. The misses are `_TerminalHookGate.__init__`,
+  `_RecordedCompile.__init__`, and `_RecordedRun.__init__`;
+  `git diff --name-only origin/main…HEAD` reports **0 files** changed by this
+  branch in each of their three files, so they are the pre-existing misses
+  `origin/main` also carries.
+
+  Exit 0 is not vacuous. The same recipe aborted with exit 2 at `334aeca3` and
+  `fcce831b`, so it demonstrably propagates leaf failures; the earlier reads of
+  "green" came from runs that stopped before the failing leaf existed.
+
+- [x] (2026-10-11 07:16Z) `68e524e1` committed and pushed, then repaired two
+  hosted defects that no local gate had reported. The two are worth recording
+  together because both were **pre-existing in `fcce831b`** and both were found
+  only by reading the failing hosted runs.
+
+  The first is a rounding boundary. `interrogate` counts 8270/8273 = 99.9637% on
+  `origin/main`, which *displays* as `100.0%` and passes; `fcce831b` fell
+  below that to `99.9%` and failed `lint-test` with
+  `make: *** [Makefile:448: python-lint] Error 1`. The gate compares the
+  rounded figure, so a handful of un-documented units is the whole margin.
+  `68e524e1` restores it to 99.9646%, which displays as `100.0%`. That is a
+  thin margin and a fragile gate, and it is recorded here rather than treated
+  as a fixed problem.
+
+  The second is a genuine version split in the standard library. The encoder
+  case asserted `error_type == "UnicodeEncodeError"`, but CPython 3.12's `idna`
+  codec raises a bare `UnicodeError` from its label-length rule where 3.14
+  raises `UnicodeEncodeError`. The case was green on 3.14 and red on 3.12:
+
+  ```text
+  AssertionError: the boundary must report 'UnicodeEncodeError'; found 'UnicodeError'
+  FAILED cuprum/unittests/test_stdio_error_classification_runs.py::TestTheEncoderIsNamedForEncoding::test_a_label_that_fails_only_when_flushed_is_the_encoder
+  ```
+
+  `_idna_flush_error_name()` now reads the class back from the interpreter
+  instead of naming it, which is what the case's own docstring had already
+  predicted. Verified by diff that the helper and its call site are added by
+  `68e524e1`, so the defect really was `fcce831b`'s.
+
+  Hosted run `38120843501` at `68e524e1` is then fully green: all 12 required
+  checks pass, `lint-test` and `Typecheck and test (Python 3.12)` — the two
+  that failed at `fcce831b` — both report `success`, and the PR reads
+  `mergeStateStatus: CLEAN`.
+
 ## Surprises & discoveries
 
 - Observation: a test harness can be wrong in a way that leaves most of its own
