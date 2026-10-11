@@ -2626,6 +2626,33 @@ with 9 throughout. The plan's own behavioural spec says only "a platform error
 code", so 9 was free and the edit was gratuitous. Both the edit and its
 justification are withdrawn; the feature diff is additive only.
 
+- [x] (2026-10-11) **A docs-scoped gate pass caught two defects in this file
+  that a full `check-fmt` run at the same head had reported clean, and the
+  reason is a vacuous probe.** `make check-fmt` passed at `71d69bb2`, yet the
+  same leaf failed at `9d3c1003` on this file alone. The probe used in between
+  was a bare `mdtablefix --check <file>`, which **omits `--wrap`** — and
+  `--wrap` is precisely the flag that checks wrapping, so the probe reported
+  clean on text the gate rejects. The gate's real invocation, from
+  `Makefile:7-10` and `Makefile:413`, is:
+
+  ```text
+  mdtablefix --check --git --include-untracked --md-exts md,markdown,mdx \
+    --wrap --renumber --breaks --ellipsis --fences
+  ```
+
+  This is the second time in this plan that a formatter invoked without its
+  operative flag has produced a false clean: the earlier entry records the same
+  failure with `--in-place`, where a missing write flag made the tool compare a
+  file against itself. The general rule, now recorded in both places: **quote
+  the invocation from the Makefile rather than reconstructing a plausible one.**
+
+  Both defects are fixed in `69399462` — a doubled blank line (MD012) left by
+  `71d69bb2`, and the under-wrapped paragraph `9d3c1003` added without running
+  the formatter on it. The reflow is provably reflow-only, the non-blank token
+  stream being byte-identical before and after. The same pass exercised the
+  `spelling` leaf, which the earlier `markdownlint` failure had aborted before
+  reaching, and it passed with `typos.toml` converging unmodified.
+
 Three lessons. A `#[scenario]` that binds the wrong scenario is
 indistinguishable from a passing test — the macro has no diagnostic for "a
 feature scenario no binding selects", so nothing but line coverage reports the
