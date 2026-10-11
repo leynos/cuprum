@@ -1496,9 +1496,12 @@ settled.
 `_teardown_is_settled` decides whether a teardown target has anything left to
 signal, and it is the one place that decision is made. An owning run asks the
 group probe; a run that does not own its group, and a child that never had a
-pid, keep the `is_done()` short-circuit byte for byte. Both teardown entry
-points read this helper, including the pipeline cleanup path that does not pass
-through `_terminate_process_with_wait`.
+pid, keep the `is_done()` short-circuit byte for byte. Every teardown route
+reads this helper, and it is `_terminate_process_with_wait` that reads it —
+including for the pipeline stages, which reach that function through
+`_terminate_all_shielded` and `_terminate_process`. The rule is stated once, in
+the helper, so the entry point holds no settlement condition of its own to
+audit.
 
 `_await_group_exit` polls because a process group has no completion event to
 await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`

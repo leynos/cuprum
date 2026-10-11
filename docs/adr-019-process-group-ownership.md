@@ -252,22 +252,27 @@ there is no group name to probe and nothing to probe it with.
 ## Addendum (2026-10-11): settlement is decided in `_teardown_is_settled`
 
 The addendum above names `_terminate_process_with_wait` as the place the
-short-circuit was corrected, and that is where the entry point's decision loops
-back to. The decision itself is made in `_teardown_is_settled`, a helper the
-teardown entry points share, because there is more than one of them: the
-pipeline cleanup path reaches settlement without going through
-`_terminate_process_with_wait` at all. A later reader looking only for the
-short-circuit in the function named above would find the `is_done()` call
-unconditional and conclude that the owning route had never been fixed, so the
-helper is recorded here as the one place the rule lives.
+short-circuit was corrected, and that is the function that consults the rule.
+The rule itself is stated in `_teardown_is_settled`, which the correction
+introduced in place of the bare `is_done()` the entry point evaluated before it.
+`_terminate_process_with_wait` no longer holds a settlement condition of its
+own: it reads its target's settlement from the helper, so there is no
+`is_done()` call left in that function for a later reader to inspect.
 
-That single definition is the point rather than an implementation detail. The
-question "is this teardown target settled?" has one answer per run, and both
-teardown entry points have to give it, so it is asked in one place and read by
-both. The probe is asked only where `_signal_child` would signal the group: a
-child with no pid has no group name to ask about, and settlement for that child
-is the same question the inherited route asks. A child with a pid that the run
-does not own keeps the `is_done()` short-circuit byte for byte.
+That single definition is the point rather than an implementation detail, and
+the kernel argument is why it can be stated once. The question "is this
+teardown target settled?" has one answer per run, and the answer turns on the
+same fact wherever it is asked — a group stays addressable for as long as it
+holds a member, so a name that still answers cannot have been recycled onto an
+unrelated group. The probe is asked only where `_signal_child` would signal the
+group: a child with no pid has no group name to ask about, and settlement for
+that child is the same question the inherited route asks. A child with a pid
+that the run does not own keeps the `is_done()` short-circuit byte for byte.
+
+Every teardown route reaches this one helper. The pipeline cleanup path goes
+through `_terminate_all_shielded` and `_terminate_process` to
+`_terminate_process_with_wait`, the single caller of `_teardown_is_settled`, so
+a pipeline stage and a single command are settled by the same code.
 
 The mandatory `owns_group` keyword on the wait helper, and the explicit
 `owns_group=False` at every direct caller, are part of the same boundary: with
