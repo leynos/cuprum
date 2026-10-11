@@ -2394,6 +2394,47 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   deliberately wrong expectation failed the comparison. 23 related Rust-stream
   tests pass.
 
+- [x] (2026-10-11) **`make test` surfaced a latent flake in `main`'s own suite,
+  and adjudicating it required disproving my first two measurements before
+  patching anything.** `tests/test_native_pipeline_stall_properties.py::
+  test_uncollected_output_requires_every_child_to_have_exited` failed. The test
+  module and both collaborators are byte-identical to `origin/main`, and so is
+  their entire transitive import closure — 100 modules resolved and compared,
+  none differing. Both files were added by `main`'s own commit `017c06e2`
+  (PR #456), so this is not the branch's defect.
+
+  The counterexample is decisive. For an exited child at stage 4 holding one
+  pending byte, plus a live child at stage 5 with `stdin_parent_writers=(0,)`
+  and `wchan="pipe_read"`, the classifier returns `HUNG_HANDOFF`.
+  `_exited_children_left_output` is correctly `False` — the live child does
+  disable that rule, exactly as the docstring claims — but
+  `_is_missed_hand_off`, which `_classify_stall` tests first, fires on that
+  same live child. The live reader is a genuine missed hand-off in its own
+  right: it blocks in `pipe_read` under a parent-held write end whose upstream
+  stage has exited. So the classifier is right and the assertion was
+  over-strong, contradicting its own docstring, which names the
+  uncollected-output *rule* rather than the composite *verdict*.
+
+  Two measurements were wrong before one was right, and both errors flattered
+  the wrong conclusion:
+
+  - A shell loop grepping for `'failed,'` reported 40 of 40 passes. The pattern
+    cannot match: pytest writes `1 failed\x1b[0m, 4 passed`, so the ANSI reset
+    sits between the word and the comma. Re-measuring by exit code gave 30 of
+    30 *failures*.
+  - That 30-of-30 is itself not the CI-visible rate. `.hypothesis/examples`
+    persists counterexamples and Hypothesis replays them regardless of seed,
+    so a warm worktree is deterministic while a cold CI checkout is not.
+    Measuring the cold-database draw CI actually makes — 40 draws — gave 36
+    pass and 4 fail, all on the same assertion, for a real rate near one in
+    ten.
+
+  The fix asserts the rule rather than the verdict, matching the docstring's
+  own scope. The same 40-draw cold protocol then passes 40 of 40, the two
+  previously reproducible seeds (108, 201) pass, and the rule is still
+  non-vacuous: a direct probe finds it matching all-exited-with-pending-bytes,
+  declining a zero-byte count, and declining a live child.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
