@@ -323,3 +323,78 @@ before. This addendum corrects the strength of a stated guarantee, not the
 design that rests on it. The corrected statement lives in
 `cuprum/_process_signal.py` and in the developers' guide, so the code and the
 guide no longer claim more than the kernel provides.
+
+## Addendum (2026-10-11): the guarantee is a veto, not a licence
+
+The addendum above records that only one direction of the identifier guarantee
+holds, but it draws the wrong conclusion from it: it states that "a probe that
+still answers proves the name is still this run's group: a group that has
+emptied would not answer, so an answer is conclusive". That inference does not
+follow, and the earlier addenda still read as though a live probe licensed the
+signal that follows it. The kernel holds a number for as long as *a* group
+holds it, not for as long as a *particular* group holds it, so an answer
+attributes nothing. Stated plainly, the probe admits exactly one sound
+inference:
+
+- A probe that has stopped answering is **conclusive**: no group holds the
+  number, so it certainly is not this run's group, and no signal may be sent.
+- A probe that still answers is **necessary but not sufficient**: it proves
+  only that *some* group holds the number. This run's group could have emptied
+  and the kernel could have recycled the number **before** the probe ran, in
+  which case the answering group is a stranger's.
+
+So the probe is a veto and never a licence. It can forbid a signal; it can
+never authorize one, because no probe can attribute a live name to this run.
+
+That distinction is not pedantry — it is the difference between a design that
+knows its residual and one that mistakes it for safety. A reading in which an
+answering probe authorizes the signal would treat the reuse-before-probe window
+as closed when it is open, and a future change that made the probe compulsory
+while treating a positive result as a green light would look like a hardening
+while widening exposure. Recording the one-way inference here is what prevents
+that.
+
+The tests in `cuprum/unittests/test_process_signal_identity.py` pin the
+direction. They assert the outcome rather than forbidding it — a stranger's
+group is signalled when the name answers, because that is what the kernel does
+with a number — and they are written so that treating a live probe as proof of
+ownership fails them. The same statement is in the module docstring of
+`cuprum/_process_signal.py`, which names both reuse windows: the larger one
+before the probe and the smaller one between the probe and the signal.
+
+## Addendum (2026-10-11): a configured timeout bounds the stream collection
+
+Owning a group made a timeout mean less than it says, and the gap was in the
+half of the run that ownership introduced. The deadline was consulted only by
+the exit wait, so "the child exited before the deadline" was taken as "the run
+is finished". For an owning run those are different claims: a child can exit
+well inside its deadline while a descendant it left behind is still holding the
+run's inherited pipes. The consumers then never see end of file, and the run
+waited on them indefinitely — past its own deadline, which nothing was watching
+any more. The timeout measured from the run's start silently covered only its
+first half.
+
+The stream collection is now bounded by what remains of the same deadline, from
+the same reference the exit wait's deadline was scheduled against. A run that
+has already spent its budget has nothing left to spend here, and a run with no
+configured timeout stays unbounded exactly as it was everywhere else. The
+timeout therefore means what its documentation has always said it means:
+wall-clock, measured from the run's start, and expiring whether it was the
+child or a descendant that kept the run alive.
+
+The second half is what expiry *does*. A deadline that merely stopped waiting
+would return on time and leave the descendant holding the pipes — the leak the
+option exists to prevent, arrived at by a different route. Expiry instead takes
+the ordinary error route: the group is settled, which is precisely what
+releases the pipes the descendant was holding, and only then does the resulting
+`TimeoutError` become the internal `_SubprocessTimeoutError` and, at the
+execution boundary, the public `TimeoutExpired` — the same exception a deadline
+expiring during the exit wait produces. One failure contract covers both
+halves, and no expiry path leaves the group unsettled.
+
+This does not disturb the fixed post-exit EOF window recorded under "Timeouts"
+in the users' guide. That window belongs to the drain, which is reached once
+the group has been settled; here the question is what bounds the gather that
+precedes it. The two are complementary: the deadline decides how long the run
+may wait, and the EOF window decides how long a reader may hold on once the run
+has decided.

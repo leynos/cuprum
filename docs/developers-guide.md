@@ -1512,22 +1512,37 @@ Table 1: process-group ownership modules and their responsibilities
 ### The liveness probe
 
 `_group_has_members(pgid)` answers a null signal to the group. The kernel keeps
-a group addressable while it has a member, so while the probe answers, the
-group's name — the leader's pid — still names a group this run created. That is
-what makes the probe decisive: it never signals a group the run does not lead,
-and it knows something the direct child's waiter cannot, namely whether a
-descendant is still inside.
+a group addressable while it has a member, so while the probe answers, the name
+— the leader's pid — names *some* live group. What it knows that the direct
+child's waiter cannot is whether a descendant is still inside the group the run
+created.
 
-The guarantee is one-directional, and the difference is worth stating. A probe
-that answers proves the name is still this run's. A probe that has stopped
-answering proves only that the group has emptied; after that the identifier is
-an ordinary free slot the kernel may recycle, and the probe and the signal it
-guards are two separate syscalls with a window between them. No pidfd
-equivalent exists for a process group — `os.pidfd_open` and
-`signal.pidfd_send_signal` are per-pid — so there is no handle to close that
-window with. The residual risk is the one `Popen` documents between its own
-liveness check and its `os.kill` (bpo-38630); kernel identifier recycling is
-what bounds it in practice.
+The guarantee is one-directional, and the difference is worth stating. The
+probe is a **veto, never a licence**:
+
+- A probe that has **stopped** answering is conclusive. No group holds the
+  number, so it certainly is not this run's group, and no signal may be sent.
+- A probe that **still answers** is necessary but not sufficient. It proves
+  only that some group holds the number. This run's group could have emptied
+  and the kernel could have recycled the number *before* the probe ran, in
+  which case the answering group is a stranger's.
+
+So the probe can forbid a signal; it can never authorize one, because no probe
+can attribute a live name to this run. Two windows follow, and they are
+separate hazards rather than one. The larger is reuse **before** the probe: the
+group empties, the kernel recycles the number onto an unrelated group, and the
+next probe answers for the stranger exactly as it would for this run's own.
+Nothing here can detect that. The smaller is reuse **between** the probe and
+the signal: they are two separate syscalls, so a group that empties in the gap
+is signalled under a name the kernel may already have recycled.
+
+Neither window is closable here. A lifetime-safe handle on the target would
+close both, which is what `pidfd` gives for a single process, but `pidfd` is
+per-pid — `os.pidfd_open` and `signal.pidfd_send_signal` take a process
+identifier — and no process-group equivalent exists on this platform. The
+residual is the one `Popen` documents between its own liveness check and its
+`os.kill` (bpo-38630), bounded in practice by how long the kernel takes to
+recycle an identifier.
 
 `ProcessLookupError` means the group has emptied. `PermissionError` means
 members exist that this process may not signal: neither the grace period nor
@@ -1572,16 +1587,26 @@ having been this run's at spawn time, rather than on a live probe: once the
 group has emptied, the identifier is an ordinary free slot and `killpg` under
 it would reach a group this run never created.
 
-Three cases are covered, with the probe's answer as the only input, so the
-signalled names are read directly and no timing is involved:
+Each case has the probe's answer as the only input, so the signalled names are
+read directly and no timing is involved:
 
 - a group whose probe no longer answers is never signalled under its name, by
   either the graceful phase or the escalation, and the direct route is not
   substituted for the group route;
 - a group whose probe still answers *is* signalled, and the probe is asserted
-  to have run first, because it is what licenses the signal — the leader in
-  this case has already been reaped, which a direct-child-only teardown would
-  mistake for settlement;
+  to have run first — not because a live answer licenses the signal, which it
+  never does, but because it is the last thing consulted before one; the leader
+  in this case has already been reaped, which a direct-child-only teardown
+  would mistake for settlement;
+- reuse before the probe is pinned as a **witness** rather than a prohibition:
+  the double models the kernel faithfully, so when a stranger's group holds the
+  number the signal reaches the stranger, and the test asserts that outcome. It
+  is written so that reading a live probe as proof of ownership fails it;
+- a group that empties during the grace period is not escalated into. Every
+  poll the grace took was answered live, so the escalation is reached on an
+  answer that has since stopped being true; the fresh check before the
+  escalation is what notices, and it is the one place a second probe buys
+  something the first could not;
 - an inherited run reaches its target through the process handle alone, with
   neither the probe nor a group signal touched. The child is `SIGTERM`-immune
   so both phases of the direct route run, making "no group was used" a
@@ -6557,6 +6582,33 @@ Draining is the caller's job either way: after termination it drains the stream
 consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
+
+A configured timeout covers **both** halves of a streamed run, not only the
+exit wait. The direct child exiting settles the wait and nothing else: for an
+owning run a descendant the child left behind can still hold the run's
+inherited pipes, so the consumers never see EOF and the run would otherwise
+wait past its own deadline — the timeout silently covering only the first half.
+`_collect_stream_output` in `cuprum/_subprocess_stream_run.py` therefore bounds
+the consumer gather with `_deadline_for_collection`, which returns what remains
+of the same `perf_counter`-based budget the exit wait was scheduled against (or
+`None` for an unconfigured timeout, keeping a run without a deadline unbounded
+here exactly as everywhere else). Expiry inside the gather takes the ordinary
+error route rather than a special one: `_settle_group_and_discard_consumers`
+settles the group — precisely what releases the pipes the descendant held —
+before `_handle_stream_timeout` raises the internal `_SubprocessTimeoutError`,
+which `_subprocess_execution.py` converts into the public `TimeoutExpired` just
+as it does for a deadline expiring during the exit wait. One failure contract
+covers both halves, and no expiry path leaves the group unsettled.
+
+The three post-exit awaits — stopping the idle monitor, awaiting the stdin
+writer, and the gather — sit inside **one** boundary, and the cleanup that
+follows a cancellation in any of them is **one** shielded unit.
+`_shielded_cleanup` finishes its task and then re-raises the caller's
+cancellation, so two sequential shielded calls are not one shielded sequence: a
+second cancel arriving during the group settlement would exit before
+reconciliation was ever awaited. `_settle_group_and_discard_consumers` composes
+the two phases into a single coroutine held under one shield for exactly that
+reason.
 
 The drain boundary carries an important teardown policy. Only the timeout path
 passes `capture=True`, allowing the fixed `_CAPTURE_EOF_GRACE_S` window to

@@ -2,22 +2,28 @@
 
 `cuprum._process_signal` decides *what* a teardown signal is delivered to.
 For an owning run that target is the group its child led, addressed by the
-child's own process identifier. The kernel keeps that identifier reserved
-only while the group holds a member, so the guarantee this module asserts is
-deliberately one-way and must be pinned as such:
+child's own process identifier. The kernel keeps that identifier reserved only
+while a group holds a member, and once the group empties the number is an
+ordinary free slot it may hand to anyone. The guarantee this module pins is
+therefore deliberately one-way, and the weaker direction is the one that
+matters:
 
-- A probe that still answers proves the name is still this run's group, so
-  teardown may signal it. That is the direction the implementation relies on.
-- A probe that has stopped answering proves only that the group emptied. The
-  identifier is then an ordinary free slot the kernel may have handed to an
-  unrelated group, so no signal may be sent under it.
+- A probe that has stopped answering proves the number is unused, so it
+  certainly is not this run's group. That is a sound **veto**: no signal may
+  be sent.
+- A probe that still answers proves only that *some* group holds the number.
+  It cannot prove the group is this run's, because the original could have
+  emptied and the kernel could have re-used the number **before** the probe
+  ran. A live probe is necessary for a signal to be sound, never sufficient
+  to make it so.
 
-The second case is the defect these tests exist to catch. A teardown that
-signalled on the strength of "the name was ours when we started" rather than
-on a live probe would aim `killpg` at whatever group now holds that number —
-someone else's processes. The doubles here make that deterministic: the
-probe's answer is the whole input, so the set of signalled names is read
-directly and no timing is involved.
+The second case is the hazard these tests exist to catch, and it is easy to
+mistake for safety: an implementation that treats an answering probe as proof
+of ownership will happily `killpg` a stranger's group. The double behind these
+tests makes that deterministic by modelling the kernel faithfully — it cannot
+tell whose group holds a number either, so it delivers wherever the name
+answers. The set of signalled names is therefore read directly, and no timing
+is involved.
 
 The direct-child route is covered too, as the control. A run that did not
 create a group has no identity to ask about, so it must reach its target
@@ -30,15 +36,16 @@ import asyncio
 import os
 import signal
 import sys
-import typing as typ
 
 import pytest
 
 from cuprum import _process_signal
-from cuprum._teardown_policy import _TeardownPolicy
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from cuprum.unittests._process_signal_identity_support import (
+    _LEADER_PID,
+    _as_process,
+    _teardown,
+    _TeardownTarget,
+)
 
 _posix_only = pytest.mark.skipif(
     sys.platform == "win32",
@@ -47,140 +54,158 @@ _posix_only = pytest.mark.skipif(
 
 pytestmark = _posix_only
 
-# The identifier a hypothetical recycled group now holds. Any value proves the
-# point; this one is chosen so a signalled name is unmistakable in a failure
-# message, because it is not the leader's pid below.
-_RECYCLED_PGID = 4242
 
-# The direct child's pid, which is also the name of the group it led: a child
-# spawned with `start_new_session=True` is its own group's leader, so the group
-# identifier equals its process identifier.
-_LEADER_PID = 7005
+def test_reuse_by_an_unrelated_live_group_is_indistinguishable_from_our_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The residual the probe cannot close, pinned as a witness rather than a claim.
 
+    The sequence this models is the one the module docstring names and the one
+    an "an answering probe proves ownership" reading misses entirely:
 
-class _TeardownTarget:
-    """A process handle whose group identity and liveness are scripted.
+    1. this run's group empties after its leader is reaped,
+    2. the kernel hands the number to an unrelated group,
+    3. teardown probes — and that stranger's group is *live*, so the probe
+       answers exactly as this run's own would,
+    4. the signal under that name reaches the stranger.
 
-    Three things vary independently, which is what lets one double cover the
-    stale-identity hazard, the live group it is contrasted with, and the
-    inherited control:
+    No reuse happens between the probe and the signal here; the reuse is already
+    in the past by the time the probe runs. There is no lifetime-safe handle on
+    a process group to close this — ``pidfd`` is per-pid — so the ambiguity is
+    inherent to addressing a group by a number, not a defect this code can fix.
 
-    *is_group_live*
-        What the liveness probe answers. ``False`` models a group that has
-        emptied and whose identifier the kernel may since have recycled —
-        the hazard. ``True`` models a group that still holds a member, so the
-        name is still this run's.
-    *has_exited*
-        Whether the direct child has already been reaped. An owning run must
-        still reach the group it led; an inheriting run has nothing left to do.
-    *exits_on_sigterm*
-        Whether a graceful signal is enough. ``False`` models a `SIGTERM`-
-        immune child, which is what makes the escalation observable rather
-        than letting the grace phase finish the job.
+    That is why this test asserts the outcome rather than forbidding it. A
+    teardown that refused to signal whenever it could not *prove* ownership
+    would refuse always, since no probe can prove it, and would abandon the
+    descendants the option exists to reclaim. What the code owes is an honest
+    statement of the residual, and what this test owes is a witness: the
+    stranger is signalled, with the probe as the only input consulted.
     """
+    stranger = _TeardownTarget(is_group_live=True)
+    monkeypatch.setattr(os, "killpg", stranger.record_killpg)
 
-    def __init__(
-        self,
-        *,
-        is_group_live: bool,
-        has_exited: bool = True,
-        exits_on_sigterm: bool = True,
-    ) -> None:
-        self.pid: int | None = _LEADER_PID
-        self.returncode: int | None = 0 if has_exited else None
-        self.is_group_live = is_group_live
-        self.exits_on_sigterm = exits_on_sigterm
-        self.group_signals: list[tuple[int, int]] = []
-        self.direct_signals: list[str] = []
-        self.probes: list[int] = []
-        self.waits = 0
-        self._exited = asyncio.Event()
+    handled = asyncio.run(_teardown(stranger, owns_group=True))
 
-    def terminate(self) -> None:
-        """Record the graceful direct signal, exiting only if not immune."""
-        self.direct_signals.append("terminate")
-        if self.exits_on_sigterm:
-            self._record_exit(-15)
-
-    def kill(self) -> None:
-        """Record the direct escalation, which always exits."""
-        self.direct_signals.append("kill")
-        self._record_exit(-9)
-
-    async def wait(self) -> int:
-        """Await the child's exit, as the real reap does."""
-        self.waits += 1
-        if self.returncode is None:
-            await self._exited.wait()
-        return self.returncode if self.returncode is not None else 0
-
-    def record_killpg(self, pgid: int, sig: int) -> None:
-        """Probe or signal the named group, recording each attempt.
-
-        ``sig == 0`` is an existence probe: it answers for the group's liveness
-        and delivers nothing. Any other signal is delivered only while the name
-        still answers, and is refused otherwise — a signal delivered under an
-        identifier that is no longer this run's is the defect under test.
-        """
-        if sig == 0:
-            self._record_probe(pgid)
-            return
-        self._require_live_group(pgid)
-        self.group_signals.append((pgid, sig))
-        self._apply_signal_effect(sig)
-
-    def _record_probe(self, pgid: int) -> None:
-        """Record the existence probe, refusing a name that stopped answering."""
-        self.probes.append(pgid)
-        self._require_live_group(pgid)
-
-    def _require_live_group(self, pgid: int) -> None:
-        """Raise unless the group named *pgid* still answers."""
-        if not self.is_group_live:
-            raise ProcessLookupError(pgid, "No such process")
-
-    def _apply_signal_effect(self, sig: int) -> None:
-        """Model a delivered group signal reaching the child that leads it.
-
-        The direct child is a member of its own group, so a delivered group
-        signal kills it too. Modelling that keeps a signal sent down the wrong
-        route from presenting as a hang: the child exits and the assertions
-        upstream report which route was taken instead of a bare timeout.
-        """
-        if sig == signal.SIGTERM and self.exits_on_sigterm:
-            self._record_exit(-15)
-        if sig == signal.SIGKILL:
-            self._record_exit(-9)
-            self.is_group_live = False
-
-    def _record_exit(self, code: int) -> None:
-        """Publish an exit code and release any waiter."""
-        if self.returncode is None:
-            self.returncode = code
-        self._exited.set()
+    assert handled is True, (
+        "teardown proceeds once the probe has answered, because a live answer "
+        "does not veto; this is the documented residual, not a safe outcome"
+    )
+    assert stranger.probes, (
+        "no liveness probe ran, so the signals below went out with nothing "
+        "consulted at all"
+    )
+    assert stranger.probes[0] == _LEADER_PID, (
+        "the probe must be asked about this run's own group name, even though "
+        f"the answer cannot be attributed to this run; got {stranger.probes!r}"
+    )
+    assert stranger.group_signals == [
+        (_LEADER_PID, signal.SIGTERM),
+        (_LEADER_PID, signal.SIGKILL),
+    ], (
+        "a live probe cannot distinguish this run's group from a stranger's "
+        "that inherited the number, so the signals go out under that name. "
+        "This is the documented residual, not a safe outcome; got "
+        f"{stranger.group_signals!r}"
+    )
 
 
-def _as_process(target: _TeardownTarget) -> asyncio.subprocess.Process:
-    """Present the double as the process handle teardown expects."""
-    return typ.cast("asyncio.subprocess.Process", target)
+def test_the_escalation_is_not_attempted_at_a_name_that_emptied_in_the_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group that empties during the grace period is not escalated into.
+
+    The last member of this run's group hangs on through the graceful signal —
+    the whole reason there is a grace period — and exits as it runs out. Every
+    poll the grace period took was answered live, so the escalation is reached
+    on the strength of an answer that has since stopped being true.
+
+    Asking again before the escalation costs one syscall and removes exactly
+    that case: an absent name is conclusive, in a way a live one is not, and it
+    is the only thing a fresh check *can* establish. Sending ``SIGKILL`` into a
+    name nothing holds is at best a wasted syscall and at worst — once the
+    kernel has handed the number on — a signal to a stranger's group.
+    """
+    target = _TeardownTarget(
+        is_group_live=True,
+        exits_on_sigterm=False,
+        goes_dark_on_grace_expiry=True,
+    )
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
+    monkeypatch.setattr(asyncio, "sleep", target._sleep)
+
+    handled = asyncio.run(_teardown(target, owns_group=True))
+
+    assert target.attempts == [(_LEADER_PID, signal.SIGTERM)], (
+        "the live group does not veto the graceful signal; the escalation is "
+        "vetoed, because the group has emptied by the time it is considered "
+        f"and a fresh probe says so; got {target.attempts!r}"
+    )
+    assert handled is False, (
+        "a group that emptied before the escalation leaves nothing to compel, "
+        f"so teardown must not report that it settled one; got {handled!r}"
+    )
 
 
-def _teardown(
-    target: _TeardownTarget,
-    *,
-    owns_group: bool,
-) -> cabc.Coroutine[None, None, bool]:
-    """Tear the target down under a policy carrying *owns_group*."""
+def test_a_settled_group_reports_settlement_without_regard_to_the_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settlement is asked of the group, and a group with no members answers.
 
-    async def wait_for_exit() -> int:
-        """Await the direct child's exit, as the real teardown does."""
-        return await target.wait()
+    The predicate behind both checks in :func:`_terminate_process_with_wait`,
+    asked directly. It is worth pinning on its own because its two answers have
+    opposite weights and the module docstring now says so: a group that answers
+    *yes* is only ever evidence that some group holds the name, while a group
+    that answers *no* is conclusive. The child here is deliberately **live**,
+    so the group's answer is the only thing that can settle this run — an
+    implementation that consulted the child instead would report the opposite.
+    """
+    target = _TeardownTarget(is_group_live=False, has_exited=False)
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
 
-    return _process_signal._terminate_process_with_wait(
+    settled = _process_signal._teardown_is_settled(
         _as_process(target),
-        policy=_TeardownPolicy(0.05, owns_group=owns_group),
+        owns_group=True,
         is_done=lambda: target.returncode is not None,
-        wait_for_exit=wait_for_exit,
+    )
+
+    assert settled is True, (
+        "an owning run is settled by its group, not by its child: the child "
+        "here is still running, and the group has no members left, so there is "
+        "nothing left for a teardown to reach"
+    )
+    assert target.probes == [_LEADER_PID], (
+        f"the group's own name is what must be asked; got {target.probes!r}"
+    )
+
+
+def test_an_inherited_run_asks_the_child_rather_than_probing_a_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inherited route keeps the child's answer, and never probes a name.
+
+    Control for the test above, and the reason the predicate branches at all. A
+    run that did not create its group has no name of its own to ask about:
+    probing would ask whether *some* group holds the child's pid, which for an
+    inherited child is the caller's own group — a question with no bearing on
+    whether this child has exited, and one whose answer would be yes for as
+    long as the caller lives.
+    """
+    target = _TeardownTarget(is_group_live=True, has_exited=False)
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
+
+    settled = _process_signal._teardown_is_settled(
+        _as_process(target),
+        owns_group=False,
+        is_done=lambda: target.returncode is not None,
+    )
+
+    assert settled is False, (
+        "an inherited run is settled by its child's exit, and this child has "
+        "not exited, so the run is not settled however many groups hold its pid"
+    )
+    assert not target.probes, (
+        "an inherited run has no group of its own to ask about; probing the "
+        f"child's pid answers for whichever group holds it; got {target.probes!r}"
     )
 
 
@@ -205,7 +230,7 @@ def test_an_emptied_group_is_never_signalled_under_its_recycled_name(
         "must report that it signalled nothing"
     )
     assert not target.group_signals, (
-        f"no signal may be sent under a recycled identifier; got "
+        "no signal may be sent under a recycled identifier; got "
         f"{target.group_signals!r}"
     )
     assert not target.direct_signals, (
@@ -222,13 +247,20 @@ def test_an_emptied_group_is_never_signalled_under_its_recycled_name(
 def test_a_live_group_is_probed_before_it_is_signalled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """While the probe answers, the name is still this run's and is signalled.
+    """While the probe answers, teardown proceeds under this run's group name.
 
-    The converse of the test above, and the direction the implementation
-    actually relies on: a group that still holds a member cannot have had its
-    identifier recycled, so signalling it reaches this run's own descendant
-    rather than a stranger. Ordering matters as much as the outcome — the
-    probe has to come first, because it is what licenses the signal.
+    This is the ordinary path rather than a safety proof. A group that still
+    holds a member keeps its number, so the probe answers — but the answer
+    cannot attribute the name to this run, as the reuse test above shows: the
+    original could have emptied and the number been recycled before the probe
+    ran. What the implementation relies on is only the negative direction. An
+    answering probe does not veto, so teardown continues, and it does so under
+    the name it asked about.
+
+    Ordering matters for a different reason than safety. The probe comes first
+    because it is the only chance to point at a name that is still held; a
+    probe issued after the signal would be reporting on a group this run had
+    already asked to exit.
 
     The leader here has already been reaped, which is the case a
     direct-child-only teardown would mistake for settlement.
@@ -240,7 +272,7 @@ def test_a_live_group_is_probed_before_it_is_signalled(
 
     assert handled is True, "a live group must be signalled and awaited"
     assert target.probes, (
-        "no liveness probe ran, so the signal below was not licensed by one"
+        "no liveness probe ran, so the signal below had no veto consulted before it"
     )
     assert target.probes[0] == _LEADER_PID, (
         "the liveness probe must run before any signal is sent, so a name is "

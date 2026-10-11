@@ -1039,6 +1039,17 @@ closes is cancelled, but keeps whatever it had already read. This happens when
 a grandchild process inherited the pipe and holds it open; the window is fixed
 because teardown must never wait on a pipe that may never close.
 
+A timeout also covers reading the child's streams, not only waiting for it to
+exit. A child that has exited still counts against the deadline if something
+else keeps the run's pipes open — a descendant that inherited them, which is
+the same situation
+[process-group ownership](#reclaim-a-descendant-with-process-group-ownership)
+addresses. In that case the timeout expires as normal, settling the process
+group rather than merely giving up on the readers, so the descendant is
+reclaimed and the run reports `TimeoutExpired` just as it would have if the
+child itself had overrun. Without this, a timeout on an owning run would have
+covered only the wait for the child and not the reading that follows it.
+
 #### Where a timeout comes from
 
 Cuprum uses the first of these that is set:

@@ -17,13 +17,37 @@ own the group signals exactly the process it always did.
 
 What the name does *not* carry is a guarantee that no unrelated group can ever
 hold it. The kernel keeps a group addressable for as long as it has a member,
-so while the liveness probe answers, the identifier still names this run's
-group — but once the group has emptied the identifier is an ordinary free slot
-the kernel may hand out, and the probe and the signal that follows it are two
-separate syscalls with a window between them. There is no pidfd equivalent for
-a process group, so no lifetime-safe handle exists to close that window here.
-The residual risk is the one ``Popen`` documents between its own liveness check
-and its ``os.kill`` (bpo-38630), and it is bounded in practice by how long the
+but once the group has emptied its identifier is an ordinary free slot the
+kernel may hand to anyone. The liveness probe reads the kernel's answer about
+the *number*, and the kernel has no way to answer about the *group*: every
+``killpg`` a process can make takes a number, so there is nothing to ask that
+would distinguish this run's group from a stranger's that inherited the number.
+That makes the probe a veto rather than a licence — an answer of "no such
+group" is conclusive, and an answer of "yes" is only that some group holds the
+number, never that the group is this run's.
+
+Two windows follow, and they are separate hazards rather than one.
+
+The larger one is reuse **before** the probe: the group empties, the kernel
+recycles the number onto an unrelated group, and the next probe answers for the
+stranger exactly as it would for this run's own. Nothing here can detect that,
+and the signal that follows is delivered to the stranger. Every probe in this
+module has it, and no stronger probe is available to be asked for. The probe
+that guards the escalation is the one exception, in the weaker direction only:
+it fires *after* the group was known live, so it can see that the name has
+since stopped answering for anyone — which is conclusive — but it cannot
+establish that an answering name is this run's.
+
+The smaller one is reuse **between** the probe and the signal: they are two
+separate syscalls, so a group that empties in the gap is signalled under a name
+the kernel may already have recycled.
+
+Neither window is closable here. A lifetime-safe handle on the target would
+close both, which is what ``pidfd`` gives for a single process, but ``pidfd``
+is per-pid — ``os.pidfd_open`` and ``signal.pidfd_send_signal`` take a process
+identifier — and no process-group equivalent exists on this platform. The
+residual is therefore the one ``Popen`` documents between its own liveness
+check and its ``os.kill`` (bpo-38630), bounded in practice by how long the
 kernel takes to recycle an identifier.
 
 Everything in this module is private to the package. It is a split, not a
@@ -67,22 +91,26 @@ def _teardown_is_settled(
 
     An owning run targets the child's whole group, and that group can outlive
     the child that led it. The kernel holds a group addressable for as long as
-    it has a member, so while a live probe answers, the group's name — the
-    leader's pid — still names this run's group and cannot have been recycled
-    onto an unrelated one. A live probe is thus decisive: it knows something
-    *is_done* cannot, namely whether a descendant is still in the group. Such
-    a descendant is exactly the process that keeps an inherited pipe open past
-    a graceful child exit, so treating the reaped leader as settlement would
-    leak the very descendant this policy exists to reclaim.
+    it has a member, so a probe that answers says a group is still there, and
+    it knows something *is_done* cannot: whether a descendant is still in the
+    group. Such a descendant is exactly the process that keeps an inherited
+    pipe open past a graceful child exit, so treating the reaped leader as
+    settlement would leak the very descendant this policy exists to reclaim.
 
-    The guarantee runs one way, and the direction matters. A probe that still
-    answers proves the name is still this run's; a probe that has stopped
-    answering proves only that the group has emptied, after which the kernel
-    may recycle the identifier like any other free one. The probe and the
-    signal it guards are also separate syscalls, so a group that empties
-    between them could be signalled under a recycled name. No pidfd equivalent
-    exists for a process group, so there is no handle to close that window;
-    see the module docstring for the residual and its bound.
+    What the probe cannot do is attribute the answer. It reports whether the
+    *number* is held, never whether the group holding it is this run's; the
+    kernel offers nothing stronger, because every ``killpg`` a process can make
+    takes a number. So the two answers are not equally informative. A probe
+    that has stopped answering proves the group has emptied and is conclusive.
+    A probe that still answers proves only that some group holds the name — the
+    original could have emptied and been re-used before the probe ran, which no
+    probe can detect. The probe is a veto that did not fire, not a licence.
+
+    The weaker answer is still worth having, which is why settlement rests on
+    it rather than on *is_done*: a two-way guarantee is not needed for the
+    deduction above, since a group with a live descendant answers and this run
+    has no other way to ask. See the module docstring for the residual this
+    leaves and why no handle closes it.
 
     The probe is asked only where :func:`_signal_child` would signal the group.
     A child with no pid has no group name to ask about, and that helper falls
@@ -116,12 +144,14 @@ def _signal_child(
 
     The name identifies a group this run made; it does not by itself guarantee
     that group still exists. The caller reaches this function only after the
-    settlement probe has reported the group live, so at the moment of the call
-    the name is still this run's — but the probe and this signal are separate
-    syscalls, and a group that empties between them would leave a name the
-    kernel may already have recycled. The module docstring records that
-    residual, why no process-group equivalent of ``pidfd`` closes it, and how
-    far the kernel's own recycling rate bounds it.
+    settlement probe has declined to veto — but a probe that answers cannot
+    attribute the name to this run. The original group could have emptied and
+    the kernel recycled the number onto a stranger's group *before* the probe
+    ran, and the probe and this signal are separate syscalls besides, so a
+    group that empties between them leaves a name the kernel may already have
+    re-used. The module docstring records both windows, why no process-group
+    equivalent of ``pidfd`` closes them, and how far the kernel's own recycling
+    rate bounds them.
 
     Signalling the group rather than the direct child is what lets a child's
     descendants reach end-of-file on inherited pipes; a descendant that left
@@ -222,16 +252,55 @@ async def _terminate_process_with_wait(
             grace_period,
         )
     except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
-        try:
-            _signal_child(
-                process,
-                group_signal=signal.SIGKILL,
-                direct=process.kill,
-                owns_group=owns_group,
-            )
-        except (ProcessLookupError, OSError):
-            return False
-        await _settle_after_escalation(process, wait_for_exit, owns_group=owns_group)
+        return await _escalate_after_grace(
+            process,
+            wait_for_exit,
+            owns_group=owns_group,
+            is_done=is_done,
+        )
+    return True
+
+
+async def _escalate_after_grace(
+    process: asyncio.subprocess.Process,
+    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    *,
+    owns_group: bool,
+    is_done: cabc.Callable[[], bool],
+) -> bool:
+    """Compel a target that outlived its grace period, or report it settled.
+
+    Settlement is asked again here, and that second ask is the one place a
+    fresh probe buys anything an earlier one cannot. The first probe did not
+    veto the graceful signal; the whole grace period has passed since, which is
+    long enough for the group's last member to exit and for its number to be
+    freed. An absent name is conclusive, so this ask is worth making even
+    though a *live* answer here proves no more than a live answer ever could —
+    it cannot tell this run's group from one the kernel has since handed the
+    number to.
+    What the ask removes is the weaker failure: escalating into a name that
+    currently answers for nobody, which is a signal at best wasted and at worst
+    aimed at whatever the kernel puts there next.
+
+    Returns
+    -------
+    bool
+        Whether the escalation was delivered. ``False`` means the target had
+        settled by the time it was considered, or had gone before the signal
+        could be sent.
+    """
+    if _teardown_is_settled(process, owns_group=owns_group, is_done=is_done):
+        return False
+    try:
+        _signal_child(
+            process,
+            group_signal=signal.SIGKILL,
+            direct=process.kill,
+            owns_group=owns_group,
+        )
+    except (ProcessLookupError, OSError):
+        return False
+    await _settle_after_escalation(process, wait_for_exit, owns_group=owns_group)
     return True
 
 
