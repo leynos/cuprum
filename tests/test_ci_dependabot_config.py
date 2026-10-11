@@ -4,9 +4,8 @@
 only, so nothing in the gate set reads ``.github/dependabot.yml``. A mistake in
 it is silent rather than loud: Dependabot reports nothing at all for a
 ``directory`` that holds no manifest of the declared ecosystem, so a stanza
-pointed at the wrong path is indistinguishable from one that is merely quiet,
-and a dropped label surfaces much later as an unlabelled pull request rather
-than as a failure.
+pointed at the wrong path looks exactly like a quiet one, and a dropped label
+surfaces much later as an unlabelled pull request rather than as a failure.
 
 These tests read the checked-in configuration back and check each stanza
 against the manifests the repository actually has on disk.
