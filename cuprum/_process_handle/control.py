@@ -29,7 +29,7 @@ child is still writing to, turning a clean shutdown into a broken pipe.
 
 from __future__ import annotations
 
-import os
+import sys
 import typing as typ
 
 from cuprum._process_exit import _await_process_exit
@@ -73,7 +73,7 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
         If the child has already exited, carrying its recorded exit code.
     """
     if not _arbitrary_signals_supported():
-        raise UnsupportedSignalError(signal_number, os.name)
+        raise UnsupportedSignalError(signal_number, sys.platform)
     process = run.process
     if process.returncode is not None:
         raise SignalAfterExitError(_get_exit_code(process), process.pid)

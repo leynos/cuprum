@@ -141,7 +141,9 @@ class RunningCommand:
             Seconds to allow the command to finish. Expiry stops the child the
             way a timed-out ``run()`` does and raises
             :class:`~cuprum.sh.TimeoutExpired` carrying the output captured
-            before the deadline. ``None`` waits without a deadline.
+            before the deadline. ``None`` falls back to the deadline
+            :meth:`SafeCmd.start` resolved for this handle, and to no deadline
+            at all when ``start()`` resolved none.
 
         Returns
         -------
@@ -151,9 +153,26 @@ class RunningCommand:
         Raises
         ------
         TimeoutExpired
-            If *timeout* elapsed before the command finished.
+            If *timeout*, or the deadline ``start()`` resolved, elapsed before
+            the command finished.
         """  # ruff: ignore[docstring-extraneous-exception] - TimeoutExpired propagates from the deadline path
-        return await self._settled(timeout)
+        return await self._settled(self._default_deadline(timeout))
+
+    def _default_deadline(self, timeout: float | None) -> float | None:
+        """Return *timeout*, or the deadline ``start()`` resolved in its place.
+
+        A handle is waited on by a caller who may never see the value
+        ``start()`` resolved, so the standing deadline travels on the run and
+        is consulted here rather than being lost with the bundle it was
+        stripped from.
+
+        Returns
+        -------
+        float | None
+            The deadline this wait is measured against, or ``None`` when
+            neither the caller nor ``start()`` supplied one.
+        """
+        return self._run.default_timeout if timeout is None else timeout
 
     async def signal(self, signal_number: int) -> None:
         """Deliver a POSIX signal to the running command.

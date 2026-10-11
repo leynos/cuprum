@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
+import sys
 import time
 import typing as typ
 
@@ -34,6 +35,7 @@ from cuprum._subprocess_wait import _RunTaskOwnership
 from cuprum.sh import (
     ExecutionContext,
     SignalAfterExitError,
+    TimeoutExpired,
     UnsupportedSignalError,
 )
 from tests.helpers.catalogue import python_builder
@@ -136,7 +138,12 @@ async def _consumer(text: str | None) -> str | None:
     return text
 
 
-def _stub_run(process: _StubProcess, *, grace: float) -> _HandleRun:
+def _stub_run(
+    process: _StubProcess,
+    *,
+    grace: float,
+    default_timeout: float | None = None,
+) -> _HandleRun:
     """Assemble the record a handle is driven through around *process*.
 
     Every field is real except the process: the tracking, the bracket, and the
@@ -191,14 +198,20 @@ def _stub_run(process: _StubProcess, *, grace: float) -> _HandleRun:
             sink_bracket=_SinkBracket(None),
         ),
         ownership=ownership,
+        default_timeout=default_timeout,
     )
 
 
 def _handle(
-    process: _StubProcess, *, grace: float = _ESCALATION_GRACE
+    process: _StubProcess,
+    *,
+    grace: float = _ESCALATION_GRACE,
+    default_timeout: float | None = None,
 ) -> RunningCommand:
     """Return a handle owning *process*, ready to be driven."""
-    return RunningCommand(_stub_run(process, grace=grace))
+    return RunningCommand(
+        _stub_run(process, grace=grace, default_timeout=default_timeout)
+    )
 
 
 def test_repeated_termination_reports_the_one_settlement() -> None:
@@ -336,7 +349,11 @@ def test_signal_is_refused_when_platform_cannot_deliver(
 
     The refusal carries both facts a caller needs to choose what to do next —
     the signal that was asked for and the platform that declined — so they
-    never have to re-read the handle to find out why it was refused.
+    never have to re-read the handle to find out why it was refused. The
+    platform is compared against :data:`sys.platform` rather than merely
+    checked for truth: a caller reading a log wants the spelling they would
+    grep for, and a bare ``os.name`` reads ``"nt"`` where the documented answer
+    is ``"win32"``.
     """
 
     async def run_case() -> None:
@@ -354,8 +371,9 @@ def test_signal_is_refused_when_platform_cannot_deliver(
         assert raised.value.signal_number == signal.SIGTERM, (
             "the refusal must name the signal that was asked for"
         )
-        assert raised.value.platform_name, (
-            "the refusal must name the platform that declined"
+        assert raised.value.platform_name == sys.platform, (
+            "the refusal must name the platform as sys.platform spells it, got "
+            f"{raised.value.platform_name!r}"
         )
         assert not process.signals, "an undeliverable signal must not be sent"
         assert process.returncode is None, "the child must be left running"
@@ -483,6 +501,61 @@ def test_teardown_failure_does_not_replace_the_blocks_error() -> None:
         assert handle.result is not None, (
             "teardown must settle the handle even while the block fails"
         )
+
+    asyncio.run(run_case())
+
+
+def test_wait_falls_back_to_the_deadline_start_resolved() -> None:
+    """A wait with no deadline of its own enforces the one ``start()`` resolved.
+
+    ``start(timeout=...)`` is documented as the default deadline for every
+    ``wait()`` on that handle, because the clock a timeout is measured against
+    starts at the wait that asks for one. The bundle cannot carry that value —
+    the spawn path would act on it — so it travels on the run instead, and this
+    case is what holds it there: dropping the field makes every such wait
+    unbounded, which no caller can see coming.
+
+    The deadline is already elapsed, so the wait has to raise rather than
+    return. A double that never exits is what makes the difference observable:
+    an unbounded wait would block until the harness timeout instead.
+    """
+
+    async def run_case() -> None:
+        """Wait with no argument against an already-elapsed default."""
+        process = _StubProcess()
+        handle = _handle(process, default_timeout=0)
+
+        with pytest.raises(TimeoutExpired) as raised:
+            await handle.wait()
+
+        assert raised.value.timeout == 0, (
+            "the expiry must name the deadline start() resolved"
+        )
+        assert process.terminate_calls == 1, (
+            "an expired wait must stop the child it gave up on"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_wait_argument_overrides_the_default_deadline() -> None:
+    """An explicit wait deadline replaces the one ``start()`` resolved.
+
+    The two are not combined and the narrower one does not win: the caller who
+    names a deadline at the wait has decided when to stop waiting, and the
+    standing value is only what serves a caller who names none. A generous
+    standing value with an elapsed explicit one therefore has to expire — the
+    reverse of the fallback case — which is what distinguishes "override" from
+    "whichever is shorter".
+    """
+
+    async def run_case() -> None:
+        """Name an elapsed deadline where the handle's default is generous."""
+        process = _StubProcess()
+        handle = _handle(process, default_timeout=30.0)
+
+        with pytest.raises(TimeoutExpired):
+            await handle.wait(timeout=0)
 
     asyncio.run(run_case())
 

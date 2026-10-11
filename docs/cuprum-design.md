@@ -4171,7 +4171,10 @@ the way the subprocess execution path is split by lifecycle concern:
   deadline-stripping `_build_handle_execution`, and `_start_handle_run`, which
   spawns the child, emits its `start` event, and reclaims the child if that
   emission raises — a `start` event whose synchronous observe hook raises is
-  the one failure that can strand a spawned child.
+  the one failure that can strand a spawned child. `_HandleRun.default_timeout`
+  carries the deadline `start()` resolved, because the bundle cannot hold it
+  without the spawn path acting on it; `RunningCommand.wait` consults it
+  whenever the caller supplies no deadline of their own.
 - `cuprum/_process_handle/control.py` owns signal delivery and termination, and
   is where the ordering of the platform and child-state checks lives.
 - `cuprum/_process_handle/coordinator.py` owns waiting, settling, and result

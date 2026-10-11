@@ -12,12 +12,13 @@ the handle has one reconciliation path, one wait path, and one teardown path
 instead of a capture-dependent fork in all three. The cost is two tasks that
 finish before they are ever awaited.
 
-``_build_handle_execution`` strips the standing deadline. ``start()`` admits no
-deadline of its own — the handle exists so the caller decides when to stop
-waiting, so a timeout could only be settled against a wait that has not
-happened yet. A caller who wants one supplies it to
-``RunningCommand.wait(timeout=...)``, where the clock it is measured against
-actually starts.
+``_build_handle_execution`` strips the deadline from the bundle a handle
+spawns from, because no deadline is enforced while the handle is merely held:
+the clock a timeout is measured against starts at the wait that asks for one,
+and a bundle carrying a deadline would be one the spawn path could act on.
+The resolved value is not discarded, though — it travels on the record as
+``default_timeout``, so ``RunningCommand.wait(timeout=...)`` can fall back to
+the deadline ``start()`` resolved when its caller supplies none.
 
 The idle monitor is *not* detached here, and that is load-bearing in the other
 direction: the monitor's presence is what decides whether the child's streams
@@ -72,6 +73,11 @@ class _HandleRun:
     against; ``wall_clock_started_at`` is the separate instant the published
     result reports, so a consumer correlating a result with a log line is not
     asked to convert between clock bases.
+
+    ``default_timeout`` is the deadline ``start()`` resolved from its own
+    argument, the execution context, and the scoped default, held here because
+    the bundle cannot hold it without the spawn path acting on it. Every
+    ``wait()`` that supplies no deadline of its own uses it.
     """
 
     process: asyncio.subprocess.Process
@@ -80,6 +86,7 @@ class _HandleRun:
     wall_clock_started_at: float
     tracking: _ExecutionTracking
     ownership: _RunTaskOwnership
+    default_timeout: float | None = None
 
 
 def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecution:
@@ -100,6 +107,7 @@ def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecu
 async def _start_handle_run(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
+    default_timeout: float | None = None,
 ) -> _HandleRun:
     """Spawn the child, announce it, and take ownership of its tasks.
 
@@ -117,6 +125,16 @@ async def _start_handle_run(
     the failure propagates. That reclaim is why the ``start`` event, and not
     merely the spawn, is inside the guard: a child nobody has been told about
     is still a child nobody would reap.
+
+    Parameters
+    ----------
+    execution : _SubprocessExecution
+        The bundle to spawn from, already stripped of any standing deadline.
+    tracking : _ExecutionTracking
+        The sink bracket and hook tasks the record takes ownership of.
+    default_timeout : float | None, default=None
+        The deadline every wait on the handle falls back to, already resolved
+        from ``start()``'s argument, the context, and the scoped default.
 
     Returns
     -------
@@ -149,6 +167,7 @@ async def _start_handle_run(
         wall_clock_started_at=wall_clock_started_at,
         tracking=tracking,
         ownership=_attach_run_tasks(process, execution),
+        default_timeout=default_timeout,
     )
 
 

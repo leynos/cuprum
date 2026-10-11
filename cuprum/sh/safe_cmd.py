@@ -295,6 +295,7 @@ class SafeCmd:
         run = await _start_handle_run(
             _build_handle_execution(prepared.execution),
             prepared.tracking,
+            effective_timeout,
         )
         return RunningCommand(run)
 
