@@ -37,8 +37,9 @@ class SafeCmdBuilder(typ.Protocol):
         Parameters
         ----------
         *args
-            Positional argument values, stringified with ``str()`` in the
-            order supplied.
+            Positional argument values, converted to text in the order
+            supplied. A path-like value yields its ``os.fspath`` result; every
+            other accepted value is rendered with ``str()``.
         **kwargs
             Keyword flag values, serialized after the positionals as
             ``--flag=value``, with underscores in each name replaced by
@@ -52,8 +53,10 @@ class SafeCmdBuilder(typ.Protocol):
         Raises
         ------
         TypeError
-            If any value is ``None``, or is not a ``str``, ``int``,
-            ``float``, ``bool``, or :class:`pathlib.Path`.
+            If any value is ``None``, is a ``bytes`` value, or is not a
+            ``str``, ``int``, ``float``, ``bool``, or path-like value. A
+            path-like whose ``__fspath__`` returns bytes is rejected as
+            ``bytes``.
 
         """
         raise NotImplementedError

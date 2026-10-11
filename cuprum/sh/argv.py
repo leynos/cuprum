@@ -155,9 +155,10 @@ def build_argv(*args: ArgValue, **kwargs: ArgValue) -> tuple[str, ...]:
     Raises
     ------
     TypeError
-        If any value is ``None``, or is not a ``str``, ``int``, ``float``,
-        ``bool``, or :class:`pathlib.Path`, in either position. ``bytes`` is
-        rejected with the offending value quoted in the message.
+        If any value is ``None``, is a ``bytes`` value, or is not a ``str``,
+        ``int``, ``float``, ``bool``, or path-like value, in either position.
+        A path-like whose ``__fspath__`` returns bytes is rejected as
+        ``bytes``. Rejected ``bytes`` values are quoted in the message.
 
     Examples
     --------

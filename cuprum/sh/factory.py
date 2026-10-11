@@ -109,7 +109,7 @@ def make(
     SafeCmdBuilder
         A callable that builds ``SafeCmd`` instances for ``program``. It
         accepts the same positional and keyword values the runtime validates:
-        ``str``, ``int``, ``float``, ``bool``, or :class:`pathlib.Path`.
+        ``str``, ``int``, ``float``, ``bool``, or a text path-like value.
 
     Raises
     ------

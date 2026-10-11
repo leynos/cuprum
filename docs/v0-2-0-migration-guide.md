@@ -72,6 +72,42 @@ assert command.argv == ("-c", "print('two words')", argument)
 [build arguments deliberately](users-guide.md#build-arguments-deliberately) in
 the users' guide for the platform differences.
 
+## `sh.make` arguments are a typed contract
+
+`sh.make()` builders and the `build_argv` helper now accept exactly
+`str | int | float | bool | pathlib.Path | os.PathLike[str]`, published as the
+`ArgValue` alias. `sh.make` returns a `SafeCmdBuilder` whose signature states
+that domain, so a call passing anything else is rejected by a static checker as
+well as at run time.
+
+Previously the builder stringified any object with `str()`. A list, a dict, or
+an arbitrary object therefore reached the command line as its `repr` — a
+silently wrong argument rather than an error. Values outside `ArgValue` now
+raise `TypeError` naming the offending type; `None` keeps its own message.
+
+Migrate a call that was relying on that stringification by passing text (or a
+path) yourself:
+
+<!-- tested-example: migration-typed-arguments -->
+
+```python
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs("echo", name="typed-arguments")
+builder = sh.make(Program("echo"), catalogue=catalogue)
+
+# A list used to become "['a', 'b']"; join it into the text you meant.
+tags = ["a", "b"]
+command = builder("--tags", ",".join(tags))
+assert command.argv == ("--tags", "a,b")
+```
+
+Custom path-like objects are accepted: a class defining `__fspath__` that
+returns text is converted with `os.fspath()`, so it behaves exactly as a
+`pathlib.Path` does. Only a `__fspath__` returning `bytes` is rejected. See
+[build arguments deliberately](users-guide.md#build-arguments-deliberately) for
+the full contract.
+
 ## Catalogue-backed scoped contexts
 
 When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue
