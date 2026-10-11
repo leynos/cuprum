@@ -15,6 +15,14 @@ human decision, not something this document can supply. Everything else is
 done: the branch is implemented, gated, and pushed. See the paired entries in
 `Decision log` and `Outcomes & retrospective`.)
 
+Status of the candidate at the round-5 rebase: head `ae9e8962`, base
+`fb268229`. The PR is `mergeable: true` again after a `CHANGELOG.md`-only
+conflict was resolved by rebasing onto current `main`; that conflict was the
+sole reason no hosted check could run at the previous head. CodeScene
+approved the rebased head (`cs delta origin/main` reports only an
+improvement). This status note records the candidate, not a disposition
+change: the deviation above is still open and still the owner's to accept.
+
 ## Purpose / big picture
 
 Today a cuprum caller who wants to feed a child process more input than fits
