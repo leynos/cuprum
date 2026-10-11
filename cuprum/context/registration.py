@@ -8,6 +8,7 @@ base, which owns the ``ContextVar`` token-restoration discipline.
 
 from __future__ import annotations
 
+import os  # ruff: ignore[typing-only-standard-library-import] - public annotations must resolve at runtime,
 import typing as typ
 
 from cuprum.context._env_registration import EnvRegistration, env
@@ -19,17 +20,17 @@ from cuprum.executable_binding import (
     ExecutableResolver,
     executable_binding,
 )
+from cuprum.program import (  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+    Program,
+)
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.context.core import (
         AfterHook,
         BeforeHook,
         CuprumContext,
     )
     from cuprum.events import ExecHook
-    from cuprum.program import Program
 
 
 class AllowRegistration(_TokenRegistration):
@@ -233,7 +234,7 @@ class ExecutableBindingRegistration(_TokenRegistration):
 
 def bind_executable(
     program: Program,
-    path_or_resolver: str | Path | ExecutableResolver,
+    path_or_resolver: str | os.PathLike[str] | ExecutableResolver,
     *,
     allow_relative: bool = False,
 ) -> ExecutableBindingRegistration:

@@ -551,6 +551,34 @@ def test_executable_path_api_type_hints_resolve_at_runtime() -> None:
     )
 
 
+def test_bind_executable_admits_the_path_likes_the_factory_admits() -> None:
+    """The registration factory admits the path-likes its delegate admits.
+
+    ``bind_executable`` delegates to ``executable_binding``, so anything the
+    factory accepts the registration accepts too. When the factory's own
+    annotation was widened to ``os.PathLike`` and this one was not, a typed
+    caller following the annotation was told a ``PurePosixPath`` was illegal
+    for a call the implementation already handled, and no runtime-hint
+    assertion caught it because none of them inspected this signature.
+    """
+    import os
+    import typing as typ
+
+    from cuprum import executable_binding as binding_module
+    from cuprum.context.registration import bind_executable
+
+    admitted = typ.get_type_hints(bind_executable)["path_or_resolver"]
+    members = typ.get_args(admitted)
+    assert os.PathLike[str] in members, (
+        f"bind_executable must admit path-likes, got {admitted!r}"
+    )
+    assert str in members, f"bind_executable must still admit str, got {admitted!r}"
+    # The resolver arm must survive the widening: the union is path-or-resolver.
+    assert binding_module.ExecutableResolver in members, (
+        f"the resolver arm must remain admissible, got {admitted!r}"
+    )
+
+
 def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
     """RelayFallback is immutable and carries only closed-set vocabulary."""
     from cuprum.echo_events import EchoErrorCategory, EchoStream

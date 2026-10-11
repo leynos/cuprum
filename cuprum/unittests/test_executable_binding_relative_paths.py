@@ -46,7 +46,7 @@ if typ.TYPE_CHECKING:
 
 # A working directory that is *relative* to the process's own rather than an
 # absolute one. ``ExecutionContext.cwd`` accepts either, and only the relative
-# spelling exposes a binding anchored once per consumer.
+# form exposes a binding anchored once per consumer.
 _RELATIVE_CWD = "srv/work"
 
 
@@ -139,23 +139,25 @@ def test_a_relative_execution_cwd_reaches_events_unanchored(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Events report the caller's ``cwd`` spelling, not the anchored form.
+    """Events report the caller's configured ``cwd``, not the anchored form.
 
     Resolving a relative binding needs the anchored directory — that is the
     whole reason ``_execution_cwd`` exists — but the *event* does not. Its
-    ``cwd`` is the caller's configuration, and the spawn receives that same
-    spelling through ``_cwd_arg``, so an event carrying the anchored form
-    makes the audit surface disagree with both. The regression scope is wider
-    than bindings: it changed ``ExecEvent.cwd`` for every relative-directory
-    run, bound or not, so the second phase below runs an *unbound* command and
-    still requires the caller's spelling.
+    ``cwd`` is the configured directory: the value the caller passed,
+    represented as a ``Path``, which normalizes lexical detail such as a
+    trailing ``/`` or a ``./`` segment. The spawn receives that same directory
+    through ``_cwd_arg``, so an event carrying the anchored form makes the
+    audit surface disagree with both. The regression scope is wider than
+    bindings: it changed ``ExecEvent.cwd`` for every relative-directory run,
+    bound or not, so the second phase below runs an *unbound* command and still
+    requires the configured directory.
 
     The assertion is ``==`` against ``Path(_RELATIVE_CWD)`` rather than a
-    truthiness check or a containment test, because those pass for both
-    spellings and pin nothing. Equality against a ``Path`` is also what keeps
-    the *type* honest: ``"srv/work" == Path("srv/work")`` is ``False``, so
-    emitting the string the caller typed fails here rather than passing on a
-    coincidence of the value.
+    truthiness check or a containment test, because those pass for both forms
+    and pin nothing. Equality against a ``Path`` is also what keeps the *type*
+    honest: ``"srv/work" == Path("srv/work")`` is ``False``, so emitting the
+    string the caller typed fails here rather than passing on a coincidence of
+    the value.
     """
     monkeypatch.chdir(tmp_path)
     workdir = tmp_path / _RELATIVE_CWD
@@ -180,12 +182,11 @@ def test_a_relative_execution_cwd_reaches_events_unanchored(
     assert events, "a bound run must still emit its observation events"
     for event in events:
         assert event.cwd == Path(_RELATIVE_CWD), (
-            f"the {event.phase} event must report the caller's cwd spelling, "
-            f"got {event.cwd!r}"
+            f"the {event.phase} event must report the configured cwd, got {event.cwd!r}"
         )
 
     # Unbound, in the same relative directory: the anchoring was never about
-    # bindings, so the caller's spelling must reach an unbound event too. The
+    # bindings, so the configured directory must reach an unbound event too. The
     # catalogue's own executable is used because no binding is in play to say
     # which file should run, and this phase has to spawn *something*.
     unbound_catalogue, python = python_catalogue()
@@ -202,8 +203,8 @@ def test_a_relative_execution_cwd_reaches_events_unanchored(
     assert unobserved, "the unbound phase must emit its observation events"
     for event in unobserved:
         assert event.cwd == Path(_RELATIVE_CWD), (
-            f"an unbound run's {event.phase} event must report the caller's "
-            f"cwd spelling too, got {event.cwd!r}"
+            f"an unbound run's {event.phase} event must report the configured cwd "
+            f"too, got {event.cwd!r}"
         )
 
 

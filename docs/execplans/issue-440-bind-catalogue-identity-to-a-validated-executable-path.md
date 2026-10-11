@@ -1145,13 +1145,13 @@ escalation, not a workaround.
   binding; both observation builders — `_prepare_execution_observation`
   (`cuprum/_command_internals.py`) and `_build_pipeline_observations`
   (`cuprum/_pipeline_internals.py`) — resolve against it, while the spawn keeps
-  the caller's own spelling through `_cwd_arg`, which stays a pure
-  pass-through. The three regression tests assert the child's reported path
-  *before* `resolved_path`, and that order is load-bearing: under a double
-  anchoring `resolved_path` still names the singly-anchored file, so an
-  assertion on it alone would pass while the divergence stood. Coverage spans
-  the single command, a two-stage pipeline with a per-stage decoy, and line
-  iteration through `SafeCmd.lines()`, which reaches the same fix by sharing
+  the configured directory through `_cwd_arg`, which stays a pure pass-through.
+  The three regression tests assert the child's reported path *before*
+  `resolved_path`, and that order is load-bearing: under a double anchoring
+  `resolved_path` still names the singly-anchored file, so an assertion on it
+  alone would pass while the divergence stood. Coverage spans the single
+  command, a two-stage pipeline with a per-stage decoy, and line iteration
+  through `SafeCmd.lines()`, which reaches the same fix by sharing
   `_prepare_execution_observation`. Every witness was proven non-vacuous by a
   mutation probe that failed it for its own stated reason — reverting
   `_execution_cwd` to the pre-fix pass-through failed all three at once — and
@@ -1181,7 +1181,7 @@ escalation, not a workaround.
   silent run somewhere the caller never asked for. That answer is unobservable
   in a run only because `asyncio` refuses an empty `cwd` before a child starts,
   so it is pinned in `cuprum/unittests/test_stage_stream_fds.py` at the helper
-  level, beside the `_cwd_arg` row that renders the same spelling.
+  level, beside the `_cwd_arg` row that renders the same directory.
 
 - [x] (2026-10-10 18:22Z) **The bound fail-fast case the proof assessment asked
   for now exists, and building it disproved the arrangement it first assumed.**
@@ -1794,13 +1794,17 @@ escalation, not a workaround.
   builders had begun storing the *anchored* `_execution_cwd(...)` in
   `_StageObservation.cwd`, so `ExecEvent.cwd`, the logging adapter's
   `cuprum_cwd`, and the tracing adapter's `cuprum.cwd` all changed from the
-  caller's spelling to an absolute path for every relative-directory run —
+  configured directory to an absolute path for every relative-directory run —
   bound or not, since the anchoring never had anything to do with bindings.
-  Repair: `cwd` is the caller's spelling again, and only *resolution* receives
-  the anchored form. `_command_internals.py` and `_pipeline_observation.py`
-  both needed `from pathlib import Path` promoted from their `TYPE_CHECKING`
-  blocks, because the repaired expressions are evaluated at runtime — the same
-  trap this plan already recorded for `cabc` and `Program`.
+  Repair: `cwd` is the configured directory again, and only *resolution*
+  receives the anchored form. "Configured" means the value the caller passed
+  represented as a `Path`, not a verbatim copy of their string; `Path`
+  normalizes lexical detail, a distinction both assessment replies insisted on
+  and this record originally blurred by calling it the caller's "spelling".
+  `_command_internals.py` and `_pipeline_observation.py` both needed
+  `from pathlib import Path` promoted from their `TYPE_CHECKING` blocks,
+  because the repaired expressions are evaluated at runtime — the same trap
+  this plan already recorded for `cabc` and `Program`.
 
   **F4, `executable_binding` stored non-callables as resolvers.** The guard
   discriminated on `(str, Path)`, so a `PurePosixPath` — a path-like that
@@ -1862,13 +1866,26 @@ escalation, not a workaround.
       tests rather than losing them: the donor held 17 test functions before
       the split and the two modules hold 12 and 5 afterwards, and an AST
       comparison of the function-name sets reports no name present on one side
-      only. (Collected node IDs necessarily differ, since each carries its
-      module path; the invariant is the name set and the total.) Second,
+      only. Both assessment replies reviewed this independently and asked it be
+      described as **AST-equivalent, not byte-identical**: the comparison is an
+      AST-unparse of each body, so it establishes structural equivalence and
+      cannot establish byte identity. The earlier record in this plan — and the
+      assessment request before it — said "byte-identical", which overstated
+      what an AST comparison can show; `pytest --collect-only` over the two
+      modules reports `12 tests collected` and `5 tests collected`, summing to
+      the `17 tests collected` the pre-split donor itself reports when
+      collected directly, which is collection evidence rather than a byte-level
+      one. Neither module uses `parametrize`, so the def-count and the
+      collection count coincide by construction rather than by coincidence.
+      (Collected node IDs necessarily differ, since each carries its module
+      path; the invariant is the name set and the total.) Second,
       that the moved F2 test still fails for the intended reason: reverting the
       F2 fix in place made
       `test_a_relative_execution_cwd_anchors_a_relative_binding_once` fail with
       `AssertionError: the plan event must report the caller's cwd spelling, got
-      PosixPath('/tmp/pytest-…/srv/work')`, and restoring the fix left
+      PosixPath('/tmp/pytest-…/srv/work')` — the message as it then stood; it
+      now says "configured cwd", per the definitional correction recorded under
+      Progress — and restoring the fix left
       `git diff --stat` empty. The new module was built by AST-slicing the
       donor's own bytes rather than retyping them, because a handwritten split
       header has shipped import defects on this branch before.
@@ -1915,8 +1932,8 @@ escalation, not a workaround.
   since that module already owns this conversion vocabulary; both observation
   builders call it rather than repeating the `None if … else Path(…)` idiom.
   `_command_internals.py` is back to 397 lines, and the
-  caller-spelling-versus-anchoring distinction is stated once, where a reader
-  comparing the two helpers will find it.
+  configured-directory-versus-anchoring distinction is stated once, where a
+  reader comparing the two helpers will find it.
 
   **F8, an incomplete widening: the refusal message outlived the annotation.**
   Found by re-reading my own `22150da6` change rather than by a report, which
@@ -1960,6 +1977,124 @@ escalation, not a workaround.
   listing are corrected in the same change: `executable_path` and
   `coerce_path_string` were still shown as `str | Path` after the widening, in
   a section that claims to list the module as shipped.
+- [x] (2026-10-11 08:40Z) **Both assessment replies converged on the same
+  remaining typed-API omission, and the widening is now complete at every site
+  that ships it.** The completeness reply found the omission; the proof reply
+  confirmed it independently and asked that the two corrections be made before
+  the delta is called consistent.
+
+  **F9, the widening stopped one signature short.** `ce8cf0de` widened
+  `executable_path`, `coerce_path_string`, and `executable_binding` to
+  `str | os.PathLike[str] | …`, but the public registration factory
+  `bind_executable` (`cuprum/context/registration.py`) still declared
+  `str | Path | ExecutableResolver`. Its implementation delegates straight to
+  `executable_binding`, so a `PurePosixPath` a typed caller followed the users'
+  guide to supply would be *accepted at runtime* and reported as illegal by the
+  annotation. That is the same defect class as F4 and F8 — the annotation
+  describing a narrower domain than the code — surviving at the one site the
+  earlier sweep missed because nothing inspected that signature. Repair:
+  `path_or_resolver: str | os.PathLike[str] | ExecutableResolver`.
+
+  Two supporting changes were required rather than cosmetic. `os` is imported
+  at runtime under the repo's marker idiom, because a runtime-resolvable
+  annotation cannot name a `TYPE_CHECKING`-only import; `Program` was promoted
+  from the `TYPE_CHECKING` block for the same reason, because it too appears in
+  the signature this annotation must resolve.
+
+  **This record previously overstated that promotion's reach, and the
+  correction is worth stating rather than quietly editing.** It claimed the
+  promotion "repairs a *pre-existing* latent defect" and that `Program` was
+  "already used in runtime positions". Both halves are false, and both were
+  checked against the revisions rather than against memory:
+
+  - `bind_executable` **does not exist at the base revision.** It is introduced
+    by this branch (`90595aa0`, "Bind logical programs to executables on the
+    context"), so `get_type_hints(bind_executable)` cannot have raised anything
+    there. The defect is introduced and repaired within this PR, which is a
+    materially different claim from a pre-existing one.
+  - `Program` has **no** runtime use in the module. Every one of its five
+    occurrences is inside an annotation (`__init__(*programs: Program)`,
+    `allow(*programs: Program)`, `program: Program`,
+    `def program(self) -> Program`, and `bind_executable`'s own parameter), and
+    annotations are deferred module-wide by `from __future__ import
+    annotations`. So `Program` is not "used at runtime"; it is exactly as
+    annotation-only as `Path` was. The promotion is still correct — it is
+    *required* to resolve this signature — but not for the reason given.
+
+  What *is* pre-existing is the surrounding condition, and it is broader than
+  the module: at `390fcf83`, resolving hints on that file already failed for
+  six functions — `allow` (`Program`), `env` (`cabc`), `before`/`after`
+  (`BeforeHook`/`AfterHook`), `observe` (`ExecHook`), and `_context_with_hook`
+  (`CuprumContext`). Probe evidence, running `typing.get_type_hints` over every
+  function each revision of that file defines:
+
+  | Revision          | Functions whose hints fail to resolve                              |
+  | ----------------- | ------------------------------------------------------------------ |
+  | `390fcf83` (base) | `_context_with_hook`, `after`, `allow`, `before`, `env`, `observe` |
+  | `90595aa0`        | the same, with `bind_executable` in and `env` out                  |
+  | this head         | `_context_with_hook`, `after`, `before`, `observe`                 |
+
+  The count falls from six to four, and the departures divide three ways, which
+  is what the earlier record failed to distinguish. `bind_executable` departs
+  because this PR repaired it — that is the introduced-and-fixed signature.
+  `allow` departs as an unclaimed side effect of the `Program` promotion, a
+  pre-existing failure that happens to resolve once `Program` becomes a runtime
+  import. `env` departs from *this file* at `90595aa0` for a third reason: the
+  module split moved it to `cuprum/context/_env_registration.py`, where it
+  still raises `NameError: name 'cabc' is not defined` — a move, not a repair.
+  The remaining four are pre-existing and untouched. The honest summary is
+  therefore that this module has a general unresolved-hint problem, that this
+  PR fixes precisely the one signature the assessment required, and that fixing
+  the rest is out of scope and is not claimed as done. The marker is echoed
+  here as a code block rather than an inline span, matching the source line:
+
+  ```python
+  import os  # ruff: ignore[typing-only-standard-library-import] - public annotations must resolve at runtime,
+  ```
+
+  **The test, and its mutation.**
+  `test_bind_executable_admits_the_path_likes_the_factory_admits`
+  (`cuprum/unittests/test_public_api.py`) resolves the signature with
+  `typing.get_type_hints` and asserts the union contains `os.PathLike[str]`,
+  `str`, and the resolver alias. It failed with `NameError` before the import
+  promotion for the reason above, then with a missing-`PathLike` assertion when
+  the annotation was reverted in place — red for the intended reason in both
+  arms — and passes at the repaired head. Without the promotion the test could
+  not have been written at all, which is why the discovery is recorded beside
+  the repair rather than as a footnote.
+
+  **Two further stale listings in this plan.** The `executable_binding` entry
+  had been corrected under F8, but the `bind_executable` entry below it still
+  showed `str | os.PathLike[str] | ExecutableResolver`'s *predecessor* and had
+  been missing `Path` entirely since the section was written. Both are now
+  listed as shipped.
+
+  **Three text corrections the replies required, all definitional rather than
+  behavioural.** (1) "Caller spelling" was the wrong name for `_event_cwd`'s
+  output: `Path` normalizes lexical detail such as a trailing `/` or a `./`
+  segment, so the field is the caller's configured *directory*, faithfully, not
+  a verbatim copy of their string. Both replies demanded this qualification
+  independently. It is now stated in `_event_cwd`'s docstring, in the
+  relative-paths test module, and in the F2 record above, where the original
+  wording was a contributor to the confusion. (2) The split-proof record is now
+  "AST-equivalent", never "byte-identical" — see the CodeScene file-budget
+  entry above, where the split is proved. (3) The witness docstring in
+  `test_executable_binding.py` no longer calls `42` "an unvalidatable
+  path-like": an `int` is not path-like, and the assertion proves immediate
+  rejection, not `__repr__` avoidance, which follows from reading the guard.
+  Both replies also required the admission contract to be stated over
+  `str | os.PathLike[str]` with a fixed `__fspath__` result rather than over
+  arbitrary objects; that statement now sits in O1's sub-obligation above.
+
+  **One claim in the posted assessments is withdrawn here rather than
+  restated.** The proof request asserted that `PurePath`, `PureWindowsPath`,
+  `PosixPath` and `WindowsPath` "appear as witnesses nowhere". That is too
+  strong on this host: the existing `Path` examples exercise `PosixPath`, and
+  the `PurePosixPath` witness covers a `PurePath` subtype. What is actually
+  true, and what the replies accepted, is narrower — no path-like other than
+  `PurePosixPath` has a witness, and there is no `@given` generating path-likes
+  at all, so the admission sub-obligation rests on a representative witness
+  plus the shared implementation.
 
 ## Surprises & discoveries
 
@@ -2416,7 +2551,7 @@ escalation, not a workaround.
 - Observation: the anchor belongs beside `_cwd_arg`, not inside it. `_cwd_arg`
   is pinned as a pure pass-through by
   `test_stage_stream_fds.py::test_cwd_arg_conversion`, including the `("", "")`
-  row, and the spawn must keep receiving the caller's own spelling while only
+  row, and the spawn must keep receiving the configured directory while only
   the *resolution base* is anchored. Evidence: that parametrization already
   asserts `_cwd_arg(Path("relative/dir")) == "relative/dir"`. Impact:
   `cuprum/_subprocess_context.py` gained `_execution_cwd` as a second,
@@ -2992,6 +3127,29 @@ O1 — Classification totality and first-match order.
   `classify_executable_path` returns either `None` or exactly one
   `PathBindingRejection`, and when it returns a rejection that member's `value`
   is the message `executable_path` raises for the same input.
+- Sub-obligation, the path-like admission agreement: for
+  `str | os.PathLike[str]` inputs, `executable_binding` and `executable_path`
+  apply the same path-admission rules when given the same `allow_relative`
+  value and the same `__fspath__` result. The qualification matters and is not
+  decoration: a stateful `__fspath__` that answers differently on successive
+  calls would make a naive equality claim false, so the contract is stated over
+  a fixed `__fspath__` result rather than over arbitrary objects. The
+  implementation supports it by construction — `executable_binding` checks the
+  path types before callability, both entry points call `coerce_path_string` and
+  `classify_executable_path`, and a newly constructed `ExecutableBinding`
+  delegates normalization to `executable_path` using the coerced string. A
+  callable path-like therefore takes the *path* branch; a bytes-valued
+  `__fspath__` fails coercion; a callable that is not path-like belongs to the
+  separate resolver contract, and resolver admission is not path-validator
+  admission.
+- Method for the sub-obligation: a representative regression witness, not a
+  quantified proof.
+  `test_executable_binding_accepts_any_path_like_not_only_path` pins
+  `PurePosixPath("/opt/tools/tool")` as a static binding and a non-path,
+  non-callable `42` as an immediate `TypeError`. The broader argument rests on
+  the shared implementation and on `os.PathLike`/`os.fspath` as a trusted
+  third-party interface, which the plan treats as an axiom; the witness is not
+  offered as evidence over every caller-defined `__fspath__` implementation.
 - Method: property test over generated strings, plus a parameterized table for
   the boundaries that a generator reaches only by luck.
 - Rationale: the classifier is a pure total function over an infinite domain,
@@ -3168,6 +3326,14 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
   constructed records).
 - Evidence: `make test-python` passes; the metrics test asserts the label set
   equals `{"program", "project"}` and would fail if a path were added.
+- Scope of the event-directory regression: the F2 regression,
+  `test_a_relative_execution_cwd_reaches_events_unanchored`, covers *direct*
+  runs — one bound and one unbound — against the configured directory. It does
+  **not** independently exercise pipeline events; the pipeline builder and the
+  event carriers that share `_StageObservation.cwd` are source-inspected for
+  that half, and both assessments recorded the same limit. The claim made here
+  is therefore that the direct-run regression witnesses the contract and the
+  inspected call chain extends it, not that the regression covers every path.
 - Non-vacuity: two tests carry the unbound case.
   `test_an_unbound_program_runs_under_its_catalogued_name` asserts
   `resolved_path is None`, and `test_the_unbound_case_emits_no_path_key_at_all`
@@ -3667,7 +3833,7 @@ class ExecutableBinding:
 
 def executable_binding(
     program: Program,
-    path_or_resolver: str | Path | ExecutableResolver,
+    path_or_resolver: str | os.PathLike[str] | ExecutableResolver,
     *,
     allow_relative: bool = False,
 ) -> ExecutableBinding: ...
@@ -3711,7 +3877,7 @@ class ExecutableBindingRegistration(_TokenRegistration):
 
 def bind_executable(
     program: Program,
-    path_or_resolver: str | ExecutableResolver,
+    path_or_resolver: str | os.PathLike[str] | ExecutableResolver,
     *,
     allow_relative: bool = False,
 ) -> ExecutableBindingRegistration: ...

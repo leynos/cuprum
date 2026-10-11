@@ -314,8 +314,10 @@ def test_executable_binding_accepts_any_path_like_not_only_path() -> None:
     deferred rather than immediate: construction succeeds, and the mistake
     surfaces much later as a spawn-time error naming a resolver the caller
     never supplied. The sibling assertion keeps the union honest in the other
-    direction, so an unvalidatable path-like cannot pass silently either, and
-    the message must name the type rather than render the value.
+    direction: a value that is neither path-like nor callable is refused at
+    construction rather than stored. That the refusal names only the type, and
+    never calls the rejected object's ``__repr__``, is established by reading
+    the guard rather than by this assertion.
     """
     binding = executable_binding(PROGRAM, PurePosixPath("/opt/tools/tool"))
     assert binding.path == "/opt/tools/tool"

@@ -59,14 +59,20 @@ def _cwd_arg(cwd: str | Path | None) -> str | None:
 
 
 def _event_cwd(cwd: str | Path | None) -> Path | None:
-    """Return the working directory an *event* reports: the caller's spelling.
+    """Return the working directory an *event* reports: the configured one.
 
     Both observation builders record the run's directory on ``ExecEvent.cwd``
     (and, through the adapters, as ``cuprum_cwd`` / ``cuprum.cwd``). That field
-    is a report of what the caller configured, not a resolution input, so it
-    keeps the caller's own spelling and is never anchored. Anchoring it here
-    would make the event disagree with both the caller and the spawn — the
-    spawn receives the same spelling through :func:`_cwd_arg`.
+    is a report of what the caller configured, not a resolution input, so it is
+    never anchored against the process directory. Anchoring it here would make
+    the event disagree with both the caller and the spawn — the spawn receives
+    the same directory through :func:`_cwd_arg`.
+
+    "Configured directory" means the value the caller passed, represented as a
+    :class:`~pathlib.Path` — not a verbatim copy of their string. ``Path``
+    normalizes lexical detail such as a trailing ``/`` or a ``./`` segment, so
+    this is the caller's *directory*, faithfully, rather than their spelling of
+    it; a caller comparing strings should not expect their bytes back.
 
     Only *resolution* needs the absolute form, which is what
     :func:`_execution_cwd` exists for. Keeping the two side by side states the
