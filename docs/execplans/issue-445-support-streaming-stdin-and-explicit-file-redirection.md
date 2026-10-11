@@ -218,6 +218,22 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) The backend axis now asserts traversal for the *normal*
+  ownership cases, not only the failure suites, and two defects found while
+  doing it are fixed. `spawn_backend` wraps both routes in both arms — the
+  selected one records the spawn, the other traps it — and asserts the
+  traversal in its own teardown. Teardown is the placement that reaches the
+  ownership cases, which request the fixture through `usefixtures` and have no
+  return value to assert on. Three probes, each failing for the intended
+  reason: removing the availability patch fails 22 asyncio cases, bypassing the
+  wait4 skip fails the wait4 arm, and clearing the record at teardown fails
+  both arms. Two things this run corrected: the asyncio arm's comment claimed
+  the wait4 entry was trapped when no such patch existed, and the reverse hole
+  — the asyncio arm silently running wait4 — passed with an *empty* record,
+  which nothing looked at. A spelling-gate abort at `7c216634` was also
+  repaired: one non-Oxford spelling in a docstring, and three hyphenated words
+  the typos gate splits at the hyphen and flags on their first fragment. The
+  abort is why the earlier run certified nothing past that leaf.
 - [x] (2026-10-11) The CodeScene findings on `test_safe_cmd_redirect.py` are
   cleared at the source, and the entry below claiming the `R0917` repair had
   cleared them is corrected. That repair was not wrong about pylint — it moved
@@ -1889,9 +1905,18 @@ likelihood, and mitigation.
     patch nothing, so on a platform without `os.wait4` it ran the asyncio
     transport while being labelled `wait4` — an ownership case reported as
     evidence about a route it never took. It now skips with a platform reason
-    instead, and both arms record the entry point actually reached, with the
-    asyncio transport becoming a *trap* on the wait4 arm so a mis-routed case
-    fails naming the mismatch rather than passing through the wrong backend.
+    instead, and both arms wrap *both* routes: the selected one records the
+    spawn and the other traps it. The traversal is asserted in the fixture's
+    own teardown rather than in each case, because the property belongs to the
+    axis. That placement is what closes the gap for the ownership cases, which
+    request the fixture through `usefixtures` for its side effect and have no
+    return value to assert on: a case that spawned through the wrong route, or
+    through none at all, now fails at teardown whatever it asserted in between.
+    The trap and the teardown assertion catch different halves, and both are
+    needed — the trap names the wrong route, the assertion also catches a case
+    that never spawned. Each half was probed separately; the teardown probe was
+    vacuous on its first attempt because clearing the record at setup ran
+    before the spawn that fills it.
   - *Collected combinations are compared, not case names.* A case that lost one
     execution strategy or the backend axis still appears under its name, so a
     substring check against the collected ids passes while half the cell's
@@ -2652,10 +2677,10 @@ likelihood, and mitigation.
   changes nothing, because the arm already selected wait4 successfully and the
   trap is never reachable. The probe did not exercise the trap at all. The
   second attempt forced the dispatch to asyncio *while leaving the wait4 entry
-  patched* — the actual mis-route — and the trap fired correctly, failing those
-  cases with
-  `the asyncio transport was reached, but this case selected
-  'wait4'; the wait4 entry patch did not take effect`.
+  patched* — the actual wrong-route case — and the trap fired correctly,
+  failing those cases with
+  `the asyncio transport was reached, but this case
+  selected 'wait4'; the wait4 entry patch did not take effect`.
   The general form: a probe that cannot reach the code path it claims to
   exercise reports the same green as a probe that exercises it and finds
   nothing, and the difference is only visible by asking which branch the
@@ -2681,10 +2706,10 @@ likelihood, and mitigation.
   itself as wait4 evidence — one route's behaviour standing in as evidence
   about the other, with nothing in the failure message to say so. The repair is
   to *select* the route in each arm and to record the entry point actually
-  reached, with the non-selected route trapped so a mis-routed case fails
-  naming the mismatch. The general form: an axis parameter that only changes a
-  test's name is not an axis; every arm has to make the alternative unreachable
-  or report that it was reached.
+  reached, with the non-selected route trapped so a case routed to the wrong
+  backend fails naming the mismatch. The general form: an axis parameter that
+  only changes a test's name is not an axis; every arm has to make the
+  alternative unreachable or report that it was reached.
 
 ## Decision log
 
