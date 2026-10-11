@@ -15,7 +15,6 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
-from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._result_assembly import _require_bytes, _require_text
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
