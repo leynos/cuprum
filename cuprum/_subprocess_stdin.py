@@ -4,6 +4,15 @@ Owns the ``cuprum.stdin`` logger and the stdin pipe lifecycle: writing
 caller-provided bytes, closing the pipe, and emitting observable diagnostics
 when the pipe fails early.
 
+The bounded diagnostic the *other* standard-stream boundaries report through —
+the producer, an invalid chunk, the encoder, opening a cuprum-owned target
+file, and flushing a caller's borrowed file object — lives in
+:mod:`cuprum._stdio_diagnostics` rather than here, because this module is at its
+line-count budget and because those boundaries are reached from modules this
+one does not import. Both emitters express the same rule that a diagnostic
+never carries exception text, so a boundary added later inherits it rather than
+re-deriving it.
+
 The two sources differ in how much of the payload exists at once. A payload
 (``StdinInput``) is already complete in memory, so it is written in one go;
 that writer lives here. A producer (``StdinStream``) is pulled one chunk at a
@@ -52,13 +61,21 @@ def _emit_stdin_error(
     *,
     operation: str,
 ) -> None:
-    """Emit an observable diagnostic for stdin pipe write failures."""
+    """Emit an observable diagnostic for stdin pipe write failures.
+
+    Bounded on purpose. The record names the failing operation and the
+    exception's *class*; it does not carry the exception's message and does not
+    attach a traceback. Both used to travel here, and both are caller data: an
+    ``OSError`` from a pipe write quotes whatever the caller's own machinery
+    put in it, and a logged traceback retains every local in the frames it
+    passed through. The caller still sees the full failure — the observed
+    event is a signal, not the channel that carries the error.
+    """
     _LOGGER.error(
         "stdin_%s_failed pid=%s error=%s",
         operation,
         process.pid,
         type(exc).__name__,
-        exc_info=exc,
         extra={
             "cuprum_pid": process.pid,
             "cuprum_stdin_operation": operation,
@@ -71,7 +88,6 @@ def _emit_stdin_error(
             pid=process.pid,
             operation=operation,
             error_type=type(exc).__name__,
-            note=f"{type(exc).__name__}: {exc!s}",
         ),
     )
 

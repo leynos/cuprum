@@ -23,7 +23,10 @@ if typ.TYPE_CHECKING:
     from cuprum.adapters.tracing_adapter import Span
     from cuprum.events import ExecEvent
 
-# Ancillary span-event fields distinguish expiry modes and bounded drain outcomes.
+# Ancillary span-event fields distinguish expiry modes and bounded drain
+# outcomes. ``error_category`` belongs here for the ``stdio_error`` phase: it
+# is what separates two boundaries that raise the same exception class, so a
+# span without it records a producer failure and a pipe fault identically.
 _SPAN_FIELDS = (
     "line",
     "operation",
@@ -33,7 +36,14 @@ _SPAN_FIELDS = (
     "timeout_mode",
     "eof_grace_s",
     "pending_readers",
+    "error_category",
 )
+
+# Of those, the ones whose value is a ``StrEnum`` rather than already a plain
+# string: a backend must receive the value ``producer``, not the member's
+# ``repr``. ``timeout_mode`` needs no entry because it is a ``Literal[str]``,
+# and the figures need none because they are numbers.
+_ENUM_SPAN_FIELDS = frozenset({"error_category"})
 
 # Terminal child-resource fields, written from the child ``exit`` event. The
 # mode lets a backend tell an attributable measurement from the CPU-only
@@ -75,6 +85,7 @@ def write_exit_attributes(span: Span, event: ExecEvent) -> None:
 
 
 __all__ = [
+    "_ENUM_SPAN_FIELDS",
     "_SPAN_FIELDS",
     "write_exit_attributes",
 ]

@@ -321,6 +321,42 @@
     }),
   })
 # ---
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdio_error]
+  dict({
+    'logging_extra': dict({
+      'cuprum_error_category': 'producer',
+      'cuprum_error_type': 'ValueError',
+      'cuprum_operation': 'produce',
+      'cuprum_phase': 'stdio_error',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.env_mode': 'replace',
+      'cuprum.error_category': 'producer',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': dict({
+      'error_category': 'producer',
+      'error_type': 'ValueError',
+      'name': 'cuprum.stdio_error',
+      'operation': 'produce',
+    }),
+  })
+# ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[stdout]
   dict({
     'logging_extra': dict({

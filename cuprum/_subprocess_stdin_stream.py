@@ -42,7 +42,9 @@ import logging
 import typing as typ
 
 from cuprum import _subprocess_stdin_write as _write
+from cuprum._stdio_diagnostics import _emit_stdio_error
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
+from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -203,13 +205,44 @@ async def _drain_source_into_pipe(
         # The producer failed, so there is no child-side close to weigh: the
         # marker is the only reason this is distinguishable once the exception
         # has left _pump_chunks.
+        _emit_stdio_error(
+            observation,
+            StdioFailureCategory.PRODUCER,
+            operation="produce",
+            error_type=type(exc.cause).__name__,
+            pid=process.pid,
+        )
         raise _stdin_source_error(exc.cause) from exc.cause
     except Exception as exc:
         if not _write._is_early_close(exc):
+            _emit_stdio_error(
+                observation,
+                _write_boundary_category(sink),
+                operation="write",
+                error_type=type(exc).__name__,
+                pid=process.pid,
+            )
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
     finally:
         await _finalize_stdin_source(source)
+
+
+def _write_boundary_category(
+    sink: _write._StreamSink,
+) -> StdioFailureCategory:
+    """Name the boundary behind a streaming-write failure.
+
+    The whole reason the category is recorded rather than inferred: an invalid
+    chunk and a mistyped encoder both raise ``TypeError``, so the exception
+    reaching the handler cannot separate them. The write path marks the sink it
+    raised from, and this reads that mark back.
+
+    A failure with no mark is a genuine pipe fault — the written bytes were
+    fine and the pipe itself failed — so it takes the residual category. Early
+    closes never reach here; they are classified before this is consulted.
+    """
+    return sink.chunk_error or StdioFailureCategory.PIPE
 
 
 class _ProducerFailureError(Exception):

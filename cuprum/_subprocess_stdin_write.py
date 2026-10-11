@@ -16,6 +16,7 @@ import errno
 import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails
+from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -23,6 +24,12 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_internals import _StageObservation
     from cuprum._subprocess_stdin_stream import _StdinCodec
+
+# Which boundary inside the streaming write failed, for the failures this
+# module raises itself. ``None`` for a pipe write, because whether that was the
+# child closing its end or a genuine pipe fault is a question only the caller's
+# classifier can answer.
+type _ChunkBoundary = typ.Literal[StdioFailureCategory.INVALID_CHUNK]
 
 
 @dc.dataclass(slots=True)
@@ -40,6 +47,13 @@ class _StreamSink:
     constructed it — before the ``try`` that wraps source failures, and so
     outside the region that finalizes the producer. Lazy construction puts
     that failure where every other source failure is already handled.
+
+    :attr:`chunk_error` is how the boundary survives the raise. Advancing the
+    producer and the write path both raise through ``_drain_source_into_pipe``,
+    and by the time the exception reaches it the two are indistinguishable by
+    type — an invalid chunk and a mistyped encoder are both ``TypeError``. The
+    write path therefore records the boundary on the sink it raised from, and
+    the classifier reads it back rather than guessing from the exception.
     """
 
     process: asyncio.subprocess.Process
@@ -47,6 +61,7 @@ class _StreamSink:
     codec: _StdinCodec
     observation: _StageObservation
     _encoder: codecs.IncrementalEncoder | None = None
+    _chunk_error: _ChunkBoundary | None = None
 
     def encoder(self) -> codecs.IncrementalEncoder:
         """Return this run's incremental encoder, building it on first use.
@@ -57,10 +72,31 @@ class _StreamSink:
             The encoder ``_write_chunk`` encodes ``str`` chunks with. One is
             built per run and reused, so a multi-byte character split across
             two chunks is still encoded correctly.
+
+        Raises
+        ------
+        LookupError
+            If the run's encoding names no codec this build of Python knows.
         """
-        if self._encoder is None:
-            self._encoder = self.codec.encoder()
+        try:
+            if self._encoder is None:
+                self._encoder = self.codec.encoder()
+        except LookupError:
+            # Recorded before re-raising so the classifier can tell an unknown
+            # codec from an invalid chunk; both reach it as a bare
+            # ``LookupError``/``TypeError`` otherwise.
+            self._chunk_error = StdioFailureCategory.ENCODER
+            raise
         return self._encoder
+
+    @property
+    def chunk_error(self) -> _ChunkBoundary | None:
+        """Where this run's own encoding or chunk handling failed, if it did."""
+        return self._chunk_error
+
+    def mark_invalid_chunk(self) -> None:
+        """Record that the producer yielded a chunk cuprum cannot write."""
+        self._chunk_error = StdioFailureCategory.INVALID_CHUNK
 
 
 async def _write_chunk(
@@ -93,6 +129,7 @@ async def _write_chunk(
         case bytes():
             payload = chunk
         case _:
+            sink.mark_invalid_chunk()
             msg = (
                 f"stdin producer yielded {type(chunk).__name__}; "
                 f"chunks must be str or bytes"

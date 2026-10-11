@@ -351,12 +351,15 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
     ]
 
 
+_SENTINEL_MESSAGE = "disk quota-ish"
+
+
 @pytest.mark.parametrize(
-    ("failing_stdin", "expected_note", "expected_events"),
+    ("failing_stdin", "expected_error_type", "expected_events"),
     [
         pytest.param(
-            _FailingStdin(drain_error=OSError("disk quota-ish")),
-            "OSError: disk quota-ish",
+            _FailingStdin(drain_error=OSError(_SENTINEL_MESSAGE)),
+            "OSError",
             [
                 (
                     "stdin_error",
@@ -364,15 +367,14 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
                         pid=123,
                         operation="write",
                         error_type="OSError",
-                        note="OSError: disk quota-ish",
                     ),
                 )
             ],
             id="os_error_from_drain",
         ),
         pytest.param(
-            _FailingStdin(wait_closed_error=RuntimeError("loop closed")),
-            "RuntimeError: loop closed",
+            _FailingStdin(wait_closed_error=RuntimeError(_SENTINEL_MESSAGE)),
+            "RuntimeError",
             [
                 ("stdin", _EventDetails(pid=123, byte_count=7)),
                 (
@@ -381,7 +383,6 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
                         pid=123,
                         operation="close",
                         error_type="RuntimeError",
-                        note="RuntimeError: loop closed",
                     ),
                 ),
             ],
@@ -391,11 +392,18 @@ def test_pipeline_observe_emits_stage_tags_and_env_overlay() -> None:
 )
 def test_write_stdin_observes_error_events(
     failing_stdin: _FailingStdin,
-    expected_note: str,
+    expected_error_type: str,
     expected_events: list[tuple[str, _EventDetails]],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Emit stdin_error details for failures during write/drain/close."""
+    """Emit bounded stdin_error details for failures during write/drain/close.
+
+    The diagnostic names the failing operation and the exception's class, and
+    stops there. The exception's own message is caller data — an ``OSError``
+    from a pipe write quotes whatever the caller's machinery put in it — so the
+    sentinel each case injects must reach neither the observed event nor the
+    log record.
+    """
     process = _FakeProcess(failing_stdin)
     observation = _FakeObservation()
 
@@ -414,9 +422,16 @@ def test_write_stdin_observes_error_events(
     assert observation.events == expected_events, (
         "stdin writer should emit the expected stdin/stdin_error event sequence"
     )
-    assert expected_note in caplog.text, (
-        "stdin failure should be logged with the exception recorded in its traceback"
+    assert expected_error_type in caplog.text, (
+        "stdin failure should be logged with the failing exception's class"
     )
+    assert _SENTINEL_MESSAGE not in caplog.text, (
+        "stdin diagnostic must not export the exception's message"
+    )
+    for _, details in expected_events:
+        assert details.note is None, (
+            "stdin_error must carry no free-text note that could hold caller data"
+        )
 
 
 # -- Timeout observe events (deterministic via the non-positive fast path) ----

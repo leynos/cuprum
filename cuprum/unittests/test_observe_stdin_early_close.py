@@ -139,9 +139,20 @@ def test_observe_emits_stdin_error_event_when_process_closes_stdin_early(
     assert stdin_error_events, (
         "expected at least one stdin_error event when subprocess closes stdin early"
     )
-    assert stdin_error_events[0].pid is not None, (
+    first = stdin_error_events[0]
+    assert first.pid is not None, (
         "expected pid to be present on first stdin_error event"
     )
-    assert stdin_error_events[0].note is not None, (
-        "expected error note/detail to be present on first stdin_error event"
+    # The event names the failing operation and the exception's class, and
+    # carries the exception's message nowhere. That message is caller data: an
+    # ``OSError`` quotes whatever the writing machinery put in it, so leaking
+    # it here would put arbitrary text on an exported diagnostic.
+    assert first.operation == "write", (
+        f"the event must name the failing operation, found {first.operation!r}"
+    )
+    assert first.error_type == "BrokenPipeError", (
+        f"the event must name the exception class, found {first.error_type!r}"
+    )
+    assert first.note is None, (
+        "the stdin-failure event must not carry the exception's message"
     )

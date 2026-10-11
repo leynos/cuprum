@@ -43,6 +43,7 @@ import typing as typ
 
 from cuprum import _wait4_process
 from cuprum._process_lifecycle import _merge_env
+from cuprum._stdio_diagnostics import _emit_stdio_error
 from cuprum._stdio_plan import (
     _NoStdin,
     _open_owned_path,
@@ -50,8 +51,11 @@ from cuprum._stdio_plan import (
     _StdioBinding,
 )
 from cuprum._subprocess_context import _cwd_arg
+from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum._subprocess_execution import _SubprocessExecution
 
 _LOGGER = logging.getLogger(__name__)
@@ -131,8 +135,8 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
     try:
         for binding in (execution.stdio.stdout, execution.stdio.stderr):
             if binding.owned_path is not None:
-                opened[binding.stream] = _open_owned_path(
-                    binding.stream, binding.owned_path
+                opened[binding.stream] = _emit_owned_path_open(
+                    execution, binding.stream, binding.owned_path
                 )
     except BaseException:
         # Opened in the streams' own order, so whatever is recorded here was
@@ -142,6 +146,47 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
         _close_owned_stdio(opened)
         raise
     return opened
+
+
+def _emit_owned_path_open(
+    execution: _SubprocessExecution,
+    stream: str,
+    path: Path,
+) -> int:
+    """Open one owned target, reporting a failure without the failing path.
+
+    The diagnostic and the exception deliberately disagree about the path. The
+    ``OSError`` :func:`~cuprum._stdio_plan._open_owned_path` raises names the
+    file, because a caller with two redirected streams needs to know which one
+    failed; the diagnostic omits it, because it is caller data and this is an
+    operational signal rather than the error channel. Both the exception and
+    its chained cause propagate unchanged.
+
+    ``pid`` is ``None``: this runs immediately before the fork, so no child
+    exists to name.
+
+    Returns
+    -------
+    int
+        The open descriptor, which cuprum owns and must close.
+
+    Raises
+    ------
+    OSError
+        If the target file cannot be opened, propagated from
+        :func:`~cuprum._stdio_plan._open_owned_path`.
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _open_owned_path.
+    try:
+        return _open_owned_path(stream, path)
+    except OSError as exc:
+        _emit_stdio_error(
+            execution.observation,
+            StdioFailureCategory.OWNED_PATH_OPEN,
+            operation="open",
+            error_type=type(exc).__name__,
+            pid=None,
+        )
+        raise
 
 
 def _flush_borrowed_stdio(execution: _SubprocessExecution) -> None:
@@ -160,14 +205,37 @@ def _flush_borrowed_stdio(execution: _SubprocessExecution) -> None:
     descriptor has no buffer cuprum can reach, and a library-owned pipe or path
     has no caller-side buffer to push.
 
+    A flush that fails is diagnosed and then re-raised, because proceeding
+    would silently start the child without the bytes the caller buffered — a
+    wrong result delivered with no error at all. The reporting is bounded like
+    every other stdio diagnostic: the caller's object is named by stream only,
+    and ``pid`` is ``None`` because the fork has not happened yet.
+
     Parameters
     ----------
     execution : _SubprocessExecution
         The run being spawned; its stdout and stderr bindings are consulted.
-    """
+
+    Raises
+    ------
+    Exception
+        Whatever the borrowed object's ``flush`` raised, unchanged.
+    """  # ruff: ignore[docstring-extraneous-exception] - the borrowed object's own failure propagates.
     for binding in (execution.stdio.stdout, execution.stdio.stderr):
-        if binding.borrowed is not None:
-            binding.borrowed.flush()
+        borrowed = binding.borrowed
+        if borrowed is None:
+            continue
+        try:
+            borrowed.flush()
+        except Exception as exc:
+            _emit_stdio_error(
+                execution.observation,
+                StdioFailureCategory.BORROWED_FLUSH,
+                operation="flush",
+                error_type=type(exc).__name__,
+                pid=None,
+            )
+            raise
 
 
 def _close_owned_stdio(opened: dict[str, int]) -> None:
@@ -178,6 +246,11 @@ def _close_owned_stdio(opened: dict[str, int]) -> None:
     would hand it a stale one. A failure to close is reported rather than
     raised: the child is already running and the spawn's own failure, if any,
     is the one that must reach the caller.
+
+    The record is bounded like the other stdio diagnostics. It names the stream
+    and the exception class, and deliberately attaches no traceback: a logged
+    traceback retains every local in the frames it passed through, and those
+    frames hold the caller's own path and file object.
 
     Parameters
     ----------
@@ -192,7 +265,6 @@ def _close_owned_stdio(opened: dict[str, int]) -> None:
                 "stdio_close_failed stream=%s error=%s",
                 stream,
                 type(exc).__name__,
-                exc_info=exc,
                 extra={
                     "cuprum_stream": stream,
                     "cuprum_error_type": type(exc).__name__,
