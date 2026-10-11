@@ -63,21 +63,29 @@ class CompletingPipeline:
         self._result = pipeline_result() if result is None else result
 
     async def run(self, *, timeout: float | None = None) -> PipelineResult:  # ruff: ignore[async-function-with-timeout] - mirrors the real signature
-        """Complete without waiting, and without spawning anything.
+        """Complete without spawning anything, after yielding once.
 
-        The real pipeline is started as a task and completes on a later loop
-        pass; this double instead returns on its first, which is what lets a
-        test assert that the runner still cancels the monitor on the finished
-        path. Measured against that assertion, the body needs no suspension
-        point: removing it leaves the test failing on a deleted cancellation
-        exactly as before, so it is not a scheduling obligation being smuggled
-        in here.
+        The suspension point is fidelity to the object being doubled, not a
+        device for making an assertion fire. The real pipeline spawns
+        subprocesses and drains their streams, so it always suspends; a double
+        that computed its result in a single step would let the monitor task go
+        unscheduled where the real one reliably yields to it. Kept because that
+        scheduling difference is real, and a double should not be less
+        concurrent than the thing it stands in for.
+
+        Measured, so a later reader does not have to guess which line carries
+        the contract: removing this yield alone leaves the runner module's
+        twelve tests passing, while removing the monitor cancellation in
+        ``_run_liveness_bounded`` fails four. The completing path is pinned by
+        that cancellation, and this line is scheduling fidelity rather than
+        load-bearing for any assertion here.
 
         Returns
         -------
         PipelineResult
             The result this double was built to hand back.
         """
+        await asyncio.sleep(0)
         return self._result
 
 

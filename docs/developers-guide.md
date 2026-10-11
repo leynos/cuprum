@@ -4907,6 +4907,18 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
+A `# pylint: disable=` pragma cannot silence a df12 message, and reaching for
+one costs a cycle rather than saving one. The classic PyPy-backed pass runs
+without the plugin, so it cannot resolve the message id and reports
+`W0012: unknown-option-value` at each site; the leaf then aborts with
+`Error 20` before the df12 pass the pragma was meant to satisfy ever runs. For
+`R9104` (`trivial-attribute-wrapper`) the plugin's own message names the
+repair: expose a property, or otherwise move the forwarding out of the
+function. Reusing a shape the rule tolerates is usually cheaper than the
+suppression would have been, because a double whose body does real work, or a
+clock shared from an existing helper, is clearer as well as unremarkable to the
+rule.
+
 ### Markdown linting
 
 The `markdownlint` target lints `.md`, `.markdown`, and `.mdx` files with
