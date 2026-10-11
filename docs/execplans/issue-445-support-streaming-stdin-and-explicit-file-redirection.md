@@ -2329,15 +2329,15 @@ likelihood, and mitigation.
   *code symbol*, but the requirement it quoted asked for tests, and no test
   existed. Evidence: the requirement reads "Add rejection tests for subprocess
   sentinels and accepted controls for genuine descriptors"; the commit that
-  closed it, `bd8ee246`, touched `_stdio_plan.py`, `_subprocess_stdin_write.py`,
-  and `sh/stdio.py` and **no test file**, and exhaustive greps for `fd(-`,
-  `negative values are subprocess`, `_reject_sentinel_descriptor`, and
-  `_reject_negative_descriptor` across the whole tree found no test naming
-  either guard. Impact: "is the guard correct?" and "is the guard covered?" are
-  different questions, and reading source answers only the first. A ledger
-  entry for an assessment finding must cite the artefact the finding asked for
-  — where the finding says *tests*, a symbol is not evidence the finding is
-  discharged. The gap was closed by
+  closed it, `bd8ee246`, touched `_stdio_plan.py`,
+  `_subprocess_stdin_write.py`, and `sh/stdio.py` and **no test file**, and
+  exhaustive greps for `fd(-`, `negative values are subprocess`,
+  `_reject_sentinel_descriptor`, and `_reject_negative_descriptor` across the
+  whole tree found no test naming either guard. Impact: "is the guard correct?"
+  and "is the guard covered?" are different questions, and reading source
+  answers only the first. A ledger entry for an assessment finding must cite
+  the artefact the finding asked for — where the finding says *tests*, a symbol
+  is not evidence the finding is discharged. The gap was closed by
   `cuprum/unittests/test_stdio_descriptor_sentinels.py`, and the guards were
   then proved non-vacuous by mutation: forcing the construction guard to
   `if False:` failed exactly the three sentinel rows, and forcing the
@@ -2349,24 +2349,23 @@ likelihood, and mitigation.
   `test_safe_cmd_redirect.py` takes five positional parameters at
   `test_path_target_does_not_leak_the_descriptor` (added by `ed06abd3`) and at
   `test_path_target_closed_after_a_spawn_failure` (added by `3adc9b00`).
-  Earlier hosted runs had aborted at earlier leaves — `96c16aed` at
-  `check-fmt`, `fcce831b` at `python-lint` — so neither reached the pylint
-  stage. The run at `f84e8f92` did: its `lint-test` job hit `pylint-classic`
-  at 10:21:59 local and printed both findings verbatim before failing, and the
-  local sweep that was running concurrently re-found them at 10:24:26, having
-  reached the same leaf about two and a half minutes later. Impact: the first
-  version of this entry claimed "no gate run on this branch could see them",
-  which the hosted log disproves; it is corrected here rather than left as
-  written. Two lessons follow, and they are different lessons. The first
-  stands from the earlier entries: an aborted gate reports nothing about the
-  leaves it never reached, which is why the failure moved one leaf later each
-  time a repair cleared the previous one. The second is new and is about
-  observation rather than gating — a hosted failure that has already been
-  reported is not made more true by re-deriving it locally, and the local
-  sweep consumed time that the hosted log had already spent. Under the
-  lifecycle contract the hosted check set is observed through the scrutineer,
-  so the correct response to a red `lint-test` is to read its log, not to
-  re-run the gate on the host in parallel with it.
+  Earlier hosted runs had aborted at earlier leaves — `96c16aed` at `check-fmt`,
+  `fcce831b` at `python-lint` — so neither reached the pylint stage. The run at
+  `f84e8f92` did: its `lint-test` job hit `pylint-classic` at 10:21:59 local
+  and printed both findings verbatim before failing, and the local sweep that
+  was running concurrently re-found them at 10:24:26, having reached the same
+  leaf about two and a half minutes later. Impact: the first version of this
+  entry claimed "no gate run on this branch could see them", which the hosted
+  log disproves; it is corrected here rather than left as written. Two lessons
+  follow, and they are different lessons. The first stands from the earlier
+  entries: an aborted gate reports nothing about the leaves it never reached,
+  which is why the failure moved one leaf later each time a repair cleared the
+  previous one. The second is new and is about observation rather than gating —
+  a hosted failure that has already been reported is not made more true by
+  re-deriving it locally, and the local sweep consumed time that the hosted log
+  had already spent. Under the lifecycle contract the hosted check set is
+  observed through the scrutineer, so the correct response to a red `lint-test`
+  is to read its log, not to re-run the gate on the host in parallel with it.
 
 ## Decision log
 
@@ -2914,9 +2913,9 @@ likelihood, and mitigation.
   first attempt took the module from 46 tests to 48, and the second flipped the
   parameter order at a constant count. Keyword-only restores all six affected
   node IDs exactly. Options considered: (a) `usefixtures`, rejected for the two
-  reasons above; (b) dropping a genuine parameter, rejected because each names a
-  distinct axis the case is about; (c) raising the configured limit, rejected as
-  weakening a repository-wide lint for one call site. This also records the
+  reasons above; (b) dropping a genuine parameter, rejected because each names
+  a distinct axis the case is about; (c) raising the configured limit, rejected
+  as weakening a repository-wide lint for one call site. This also records the
   general point that a node-ID baseline captured *before* a test-signature edit
   is what turns "the suite still passes" into "the suite still runs the same
   cases". Date/Author: 2026-10-11, lifecycle agent.
@@ -2930,22 +2929,23 @@ likelihood, and mitigation.
   was accurate when written but is no longer the branch's shape: `aca77867` is
   not an ancestor of `HEAD`, because the series has since been rebased, and its
   base `991dee64` is no longer the merge base. Against the current merge base
-  `e4e4c4ad`, the delivered change at `0c91a664` is **90 files, net 15461 lines**
-  (+16336/−875), split as 41 production files (+4576/−701, net 3875), 36 unit
-  test files (net 6888), 2 behaviour test files (net 4), 7 documents other than
-  this plan (net 947), 2 build-config files (net 12), and this plan itself
-  (net 3585). Options considered: (a) leave the old figure, rejected because a
-  reader comparing it against the branch would measure something else and have
-  no way to tell which was wrong; (b) rewrite the old entry in place, rejected
-  because it records what was true and was acted on at the time; (c) re-measure
-  and state both, chosen. The re-measurement also exposes something the earlier
-  entry could not: this plan is now the single largest file in the delta at 3585
-  net lines, roughly 23% of the net total and larger than any production module
-  the change touches. The living-document requirement therefore inflates the
-  very quantity the tolerance measures, and any future tolerance of this shape
-  should exclude the plan or count it separately. Against the stated bound of 24
-  files and 1400 net lines, every framing remains a breach: production files
-  alone are 41 files and net 3875. Date/Author: 2026-10-11, lifecycle agent.
+  `e4e4c4ad`, the delivered change at `0c91a664` is **90 files, net 15461
+  lines** (+16336/−875), split as 41 production files (+4576/−701, net 3875),
+  36 unit test files (net 6888), 2 behaviour test files (net 4), 7 documents
+  other than this plan (net 947), 2 build-config files (net 12), and this plan
+  itself (net 3585). Options considered: (a) leave the old figure, rejected
+  because a reader comparing it against the branch would measure something else
+  and have no way to tell which was wrong; (b) rewrite the old entry in place,
+  rejected because it records what was true and was acted on at the time; (c)
+  re-measure and state both, chosen. The re-measurement also exposes something
+  the earlier entry could not: this plan is now the single largest file in the
+  delta at 3585 net lines, roughly 23% of the net total and larger than any
+  production module the change touches. The living-document requirement
+  therefore inflates the very quantity the tolerance measures, and any future
+  tolerance of this shape should exclude the plan or count it separately.
+  Against the stated bound of 24 files and 1400 net lines, every framing
+  remains a breach: production files alone are 41 files and net 3875.
+  Date/Author: 2026-10-11, lifecycle agent.
 
 ## Outcomes & retrospective
 
