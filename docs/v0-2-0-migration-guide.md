@@ -481,3 +481,91 @@ titles, and deliberate local activation, see the
 in the users' guide, which covers the
 [group and annotate flags](users-guide.md#group-and-annotate-flags) and
 [direct sink configuration](users-guide.md#configure-the-sink-directly).
+
+## Streaming stdin and standard-stream redirection
+
+Cuprum 0.2.0 adds two opt-in surfaces: a typed streaming stdin source and
+explicit standard-stream targets for stdout and stderr. Both are additive. The
+existing small-payload `StdinInput` API and the inherited-stdin default are
+unchanged, so a caller that supplies no `StdinStream` and no `StdioTarget` sees
+exactly the behaviour it saw before.
+
+`StdinStream(chunks=...)` wraps an async iterable or async iterator of `str` and
+`bytes` chunks. Cuprum pulls one chunk, writes it to the child's stdin pipe,
+and waits for that write to drain before pulling the next, so a producer can
+feed a child more data than the caller would hold in one buffer. The bound is
+on how far _ahead_ the producer runs, not on the size of one chunk, so a caller
+who cares about peak memory should yield bounded-size chunks. A `str` chunk is
+encoded with the run's `ExecutionContext.encoding` and `errors`, incrementally,
+so a multi-byte character split across two chunks still encodes correctly; a
+`bytes` chunk is written verbatim. Cuprum owns the producer for the duration of
+the run: on every exit path it closes the iterator when the producer provides an
+`aclose()`, closes the pipe, and awaits `wait_closed()` within a bounded
+grace, so a caller need not finalize their own generator.
+
+A producer failure raises `StdinSourceError`, which is exported from the
+package root. The original exception is chained as `__cause__`, so
+caller-visible exception detail is preserved. The child is terminated before
+this is raised, and the run's stdin writer and pipe are finalized, so catching
+this type is enough to know that no writer outlives the run. A failure raised
+while pulling the producer is wrapped, as is any failure on the write path
+other than the child closing its end: a chunk that is neither `str` nor
+`bytes`, an encoder that cannot represent a `str` chunk, or a genuine pipe
+fault. Cancellation is not: an `asyncio.CancelledError` propagates unchanged. A
+child that closes its stdin early is normal rather than an error: the run
+continues to the child's exit code.
+
+`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget`, which names
+where one of the child's standard streams is bound. Its four variants differ in
+_ownership_, which is the contract:
+
+- `StdioTarget.pipe()` — a library-owned pipe cuprum creates, consumes or
+  writes, and closes.
+- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
+- `StdioTarget.path(path)` — a file **cuprum owns**. Cuprum opens it
+  immediately before the spawn and closes its copy in a `finally` immediately
+  after, so the descriptor never outlives the run. The caller names a path and
+  never manages a descriptor.
+- `StdioTarget.fd(fd)` — a **borrowed** descriptor or open file object the
+  caller owns. Cuprum never closes it, and a borrowed file object is flushed
+  immediately before the spawn so buffered caller-side bytes reach the child.
+
+The lifetime contract follows from that split. Cuprum closes only what it
+opened: a `path` target's file is opened before the spawn and closed right
+after it, while a borrowed descriptor or file object is only flushed by cuprum.
+A caller who reuses one borrowed descriptor across two runs shares a single
+file offset, so the second run writes wherever the first left off.
+
+Contradictory combinations are rejected. `RunOutputOptions` refuses the
+combinations whose contradiction is visible once its three targets are
+assembled; the inherited-stdin rule is checked when the run is prepared,
+because whether a source was also supplied is not known when the options are
+built:
+
+- A stream that capture or echo must read cannot be redirected: there is no
+  parent-side pipe to read.
+- One path cannot be named for both stdout and stderr: each open starts at
+  offset 0, so the two streams would interleave unpredictably.
+- `RunOutputOptions.stdin` accepts only `StdioTarget.pipe()` and
+  `StdioTarget.inherit()`. A `path` or `fd` target is refused, because the
+  input itself arrives on the run call's `stdin=` argument.
+- An inherited stdin alongside a stdin source is refused: both answer where
+  the child's input comes from, and honouring one would silently discard the
+  other. An explicit stdin pipe alongside a source is accepted, because the
+  source is written through the pipe the target names.
+- `Pipeline` rejects explicit standard-stream targets on all three streams;
+  redirect a single `SafeCmd` instead.
+
+Redirection through a `path` or `fd` target needs POSIX descriptor semantics:
+on a platform without them, cuprum refuses the descriptor arms rather than
+opening a stream and failing to hand it over. Inheriting a stream and a
+library-owned pipe are not platform-limited, so a supported combination keeps
+working there.
+
+`StdioTarget`, `StdinStream`, `StdinSource`, and `StdinSourceError` are all
+exported from the package root, so an existing import line only needs the new
+name added to it. For the full contract, see
+[capture and echo](users-guide.md#capture-and-echo) for the target vocabulary
+and the rules policing it, and
+[supply input, environment, and a deadline](users-guide.md#supply-input-environment-and-a-deadline)
+for the streaming source.

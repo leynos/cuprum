@@ -6167,14 +6167,16 @@ are kept, and `verdict.txt` carries a header saying which is standing. Because
 The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`,
 `cuprum/_subprocess_stream_run.py`, `cuprum/_subprocess_streams.py`,
-`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_stdin_stream.py`,
-`cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_deadline.py`, and
-`cuprum/_subprocess_wait.py`. Pipeline startup has its own boundary in
-`cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
-spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
-`_shielded_cleanup` primitive. The two idle-heartbeat modules,
-`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
-the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_stdio_plan.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_timeout.py`,
+`cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
+`cuprum/_subprocess_wait.py`, and `cuprum/_command_finalization.py`. Pipeline
+startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
+stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
+termination and the shared `_shielded_cleanup` primitive. The two
+idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
+`cuprum/_idle_diagnostic.py`, are private to the same seam. See
+[Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -6187,19 +6189,54 @@ policy belongs in `_subprocess_timeout`; the child-exit half of *ending* a run
 — the wait and the deadline that bounds it, and the process termination a
 deadline expiry reaches — belongs in `_subprocess_deadline`, while the other
 half, draining the stream consumers exactly once and cancelling the stdin
-writer alongside them, stays in `_subprocess_wait`; the resolution of a run's
-stdio into what the spawn layer receives, the lifetime of every descriptor
-cuprum opened for it, and the spawn call itself belong in `_subprocess_spawn`;
-choosing each mirrored stream's destination and single-command stream-consumer
-construction — the stdout `_StreamConfig`, the stderr config derived from it,
-and the consumer tasks that drain into it — belong in `_subprocess_streams`;
-orchestration that coordinates them — spawning, deciding which streams are
-consumed, and assembling the result — belongs in `_subprocess_execution`. On
-the pipeline side, starting stages — and cleaning up whatever a failed startup
-left running — belongs in `_pipeline_spawn`, while terminating stages that are
-already running belongs in `_process_lifecycle` alongside `_shielded_cleanup`.
-The idle heartbeat's timing belongs in `_idle_heartbeat` and its rendering and
-write-failure policy in `_idle_diagnostic`.
+writer alongside them, stays in `_subprocess_wait`; the race that ends a run on
+a stdin failure rather than on the child's exit belongs in
+`_subprocess_rendezvous`; resolving a run's stdio targets into the plan and
+bindings the spawn layer consumes belongs in `_stdio_plan`, whose
+`_resolve_stdio_binding` records an owned *path* rather than opening it; the
+open and close of every cuprum-owned descriptor, the borrowed-file flush, and
+the spawn call itself belong in `_subprocess_spawn`; choosing each mirrored
+stream's destination and single-command stream-consumer construction — the
+stdout `_StreamConfig`, the stderr config derived from it, and the consumer
+tasks that drain into it — belong in `_subprocess_streams`; orchestration that
+coordinates them — spawning, deciding which streams are consumed, and
+assembling the result — belongs in `_subprocess_execution`; and everything
+after the child exists — driving it, invoking the after-hooks, and settling the
+sink bracket, the terminal event, and the observer tasks on every exit path —
+belongs in `_command_finalization`. On the pipeline side, starting stages — and
+cleaning up whatever a failed startup left running — belongs in
+`_pipeline_spawn`, while terminating stages that are already running belongs in
+`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
+belongs in `_idle_heartbeat` and its rendering and write-failure policy in
+`_idle_diagnostic`.
+
+The public `cuprum.sh` package has its own split, and `stdio` is the one module
+there with a sibling rules module rather than an adapter. All three are
+re-exported by `cuprum.sh` with unchanged object identity, so callers and the
+tests that monkeypatch them by module path resolve the same names as before:
+
+- `cuprum/sh/stdio.py` owns the `StdioTarget` vocabulary and its per-variant
+  rules: which of the four kinds a target names, which payload each kind
+  carries, and the normalization a `path` payload undergoes, so two spellings
+  of one file compare equal.
+- `cuprum/sh/stdio_rules.py` owns the rules policing *combinations* of
+  targets, which read a whole `RunOutputOptions`. `_validate_stdio_targets` is
+  every construction-time rule — the three `_reject_*` helpers,
+  `_share_one_owned_path`, and the `_STDIN_KINDS` set they consult — and
+  `cuprum/sh/output.py` re-exports it, so `RunOutputOptions.__post_init__`
+  still calls it by its old name and the rules fire at construction rather than
+  at spawn. `_reject_contested_stdin` is the one rule that cannot run there,
+  because whether the run call also supplied a source is unknown when the
+  options are built; `cuprum/_command_internals.py` calls it from the run's
+  preparation instead.
+- `cuprum/sh/pipeline.py` owns `Pipeline`, which `cuprum.sh` re-exports, plus
+  the deprecated flat `capture`/`echo` adapter `_resolve_pipeline_output` and
+  its `_DeprecatedOutputFlags` payload. `Pipeline.run`/`run_sync` call
+  `_reject_stdio_targets`, which refuses an explicit `stdin`, `stdout`, or
+  `stderr` target: the stage wiring that would carry a target to the right
+  stage does not exist, so accepting one would silently discard it and the run
+  would exit `0` with the file the caller named never created. Redirect a single
+  `SafeCmd` instead.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
 `_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
@@ -6212,6 +6249,43 @@ idle-heartbeat wiring reaches into the stream configs; see the
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
 
+`cuprum/_stdio_plan.py` owns the stdio *plan* for one direct command run: it
+turns the caller's `StdioTarget` values and resolved stdin into the per-stream
+values the spawn layer binds. `_ResolvedStdio` carries a stdin plan (`_NoStdin`,
+`_PayloadStdin`, `_StreamStdin`, or `_PipeStdin`) and one `_StdioBinding` per
+output stream, and its `pipes` frozenset names the streams cuprum really holds
+a parent-side pipe for — the one piece of the resolution neither backend can
+re-derive. Resolution happens when the run is *prepared*, before the child
+exists, which is what keeps the spawn layer a translation rather than a
+decision; the one deliberate exception is the owned path, where
+`_resolve_stdio_binding` records the path and the spawn layer opens it
+immediately before the spawn and closes cuprum's copy immediately after. A
+borrowed file object travels on the binding for the same reason: it still owes
+a flush at the fork, and only the object can perform it. The module is small on
+purpose, and `_subprocess_spawn.py` imports from it rather than the other way
+round.
+
+`cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
+failure rather than on the child's exit.
+`_await_exit_or_writer_failure(exit_wait, stdin_task)` waits on the exit wait
+and the stdin writer together and returns the exit only once it is the sole
+survivor, so a producer that dies while the child would still be running
+surfaces as `StdinSourceError` instead of being reported as a timeout. Only a
+writer that *failed* is an outcome: a producer that merely finishes first is
+the ordinary case, and the exit wait is then cancelled — which is itself the
+termination, since the wait's own cancellation handler escalates through
+`_terminate_all_shielded`. The cancellation grace and the termination policy
+are not restated here. Its three call sites are the non-streaming
+single-command path (`_run_subprocess_without_streams` in
+`cuprum/_subprocess_execution.py`), the streaming path
+(`_wait_for_streamed_process_exit` in `cuprum/_subprocess_stream_run.py`), and
+line iteration (`_wait_for_line_stream_exit` in
+`cuprum/_line_stream/coordinator.py`). The exit wait is passed in already
+constructed so each caller resolves `_wait_for_exit_code_within_timeout` from
+its own module namespace, which is where the test suite's monkeypatch seams
+replace it. `_subprocess_wait` re-exports the name for the same one-import-path
+reason its deadline names are re-exported.
+
 `cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
@@ -6223,6 +6297,29 @@ configuration from `_subprocess_streams`. `_StreamConsumerSpawnContext` is the
 private bundle of stream configuration, PID, and the stdout/stderr diagnostics
 collectors that the streamed run creates before handing those values to the
 consumer tasks.
+
+`cuprum/_command_finalization.py` owns the post-spawn finalization cluster that
+was split out of `cuprum/_command_internals.py` when the stdio-resolution work
+pushed that module past the 400-line ceiling. The seam is the one the code
+already drew: `_command_internals` decides *what* a run is — its observation,
+its stdio plan, its resolved inputs — while this module owns everything that
+happens once the child exists. `_execute_with_hooks(cmd, execution, tracking)`
+is the single site that runs `_execute_subprocess`, iterates the after-hooks,
+and settles the sink bracket, the terminal event, and the observer tasks on
+every exit path, on success and failure alike; `_finalize_command_run_failure`
+and `_finalize_command_run_success` are the two settle paths behind it, and
+`_finalize_prepared_command_failure` is the same work for a command that failed
+before ownership passed on, where a plan observer or before-hook can already
+have scheduled tasks that this layer still owns and must drain before
+re-raising. The ordering is the point of the cluster: closing the sink before
+draining means a drain failure cannot replace a timeout annotation, and
+draining through `_shielded_cleanup` means a caller who cancels repeatedly is
+still waited on rather than leaving observer tasks stranded. The two entry
+points `_execute_with_hooks` and `_finalize_prepared_command_failure` are
+re-exported from `cuprum/_command_internals.py` with unchanged object identity,
+so `cuprum.sh`, `cuprum.sh.safe_cmd`, and the tests that import them are
+unchanged. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+addendum of 2026-10-11.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
@@ -6544,19 +6641,22 @@ executes:
    `_write_stdin`, which writes the bytes, drains the pipe, and closes it. A
    producer (`StdinStream`) goes to `_write_stdin_stream`, which pulls one
    chunk at a time, writes it, awaits `drain()` before pulling the next, and
-   closes the pipe on every exit path. The payload writer logs an `OSError` or a
-   `RuntimeError` to `cuprum.stdin` and emits a `stdin_error` trace event, and
-   the run continues: a child that closed its stdin early is observed rather
-   than treated as fatal. The producer writer distinguishes an early close from
-   a producer that genuinely failed. An early close — a `BrokenPipeError`, a
-   `ConnectionResetError`, or an `OSError` carrying `EPIPE` — gets the same
-   `cuprum.stdin` log and `stdin_error` emission, and the run proceeds to the
-   child's exit code. Any other producer or encoder failure is raised as the
-   public `StdinSourceError` and ends the run, because a producer that broke is
-   not the same event as a child that stopped reading. Successful writes emit a
-   `stdin` event with a byte count. The metrics adapter increments
-   `cuprum_stdin_bytes_total` for successful writes and
-   `cuprum_stdin_errors_total` for failure events.
+   closes the pipe on every exit path. `drain()` returning establishes neither
+   that the transport's write buffer is empty — it returns at the low-water
+   mark — nor that the child has read the bytes off the pipe, so the bound is
+   on how far ahead of the child's reads the writer may run. The payload writer
+   logs an `OSError` or a `RuntimeError` to `cuprum.stdin` and emits a
+   `stdin_error` trace event, and the run continues: a child that closed its
+   stdin early is observed rather than treated as fatal. The producer writer
+   distinguishes an early close from a producer that genuinely failed. An early
+   close — a `BrokenPipeError`, a `ConnectionResetError`, or an `OSError`
+   carrying `EPIPE` — gets the same `cuprum.stdin` log and `stdin_error`
+   emission, and the run proceeds to the child's exit code. Any other producer
+   or encoder failure is raised as the public `StdinSourceError` and ends the
+   run, because a producer that broke is not the same event as a child that
+   stopped reading. Successful writes emit a `stdin` event with a byte count.
+   The metrics adapter increments `cuprum_stdin_bytes_total` for successful
+   writes and `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams` in
    `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
    with the stdout/stderr consumer tasks. On `TimeoutError` or
