@@ -973,6 +973,11 @@ a shared-actions pin moves one commit SHA to another and has no semver level,
 so the typed catch-all never takes it; the group puts those bumps in one pull
 request instead of one per pinned action.
 
+The `uv` stanza lists a `pylint-astroid` group (`pylint` and `astroid`, no
+`update-types`) ahead of the catch-all. Pylint declares the Astroid range it
+supports, and `pyproject.toml` pins the two as one compatible pair, so a bump
+of either alone would break the other; the group moves them in one pull request.
+
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
 actions there would otherwise keep stale pins.
