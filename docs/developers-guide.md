@@ -1587,8 +1587,8 @@ signalled names are read directly and no timing is involved:
   so both phases of the direct route run, making "no group was used" a
   statement about both signals rather than only the first.
 
-The double models a group signal killing the direct child, because the child
-is a member of its own group. Without that, a signal sent down the wrong route
+The double models a group signal killing the direct child, because the child is
+a member of its own group. Without that, a signal sent down the wrong route
 presents as a hang rather than as a failed assertion, and the diagnostic is
 lost.
 

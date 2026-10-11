@@ -114,48 +114,50 @@ class _TeardownTarget:
             await self._exited.wait()
         return self.returncode if self.returncode is not None else 0
 
+    def record_killpg(self, pgid: int, sig: int) -> None:
+        """Probe or signal the named group, recording each attempt.
+
+        ``sig == 0`` is an existence probe: it answers for the group's liveness
+        and delivers nothing. Any other signal is delivered only while the name
+        still answers, and is refused otherwise — a signal delivered under an
+        identifier that is no longer this run's is the defect under test.
+        """
+        if sig == 0:
+            self._record_probe(pgid)
+            return
+        self._require_live_group(pgid)
+        self.group_signals.append((pgid, sig))
+        self._apply_signal_effect(sig)
+
+    def _record_probe(self, pgid: int) -> None:
+        """Record the existence probe, refusing a name that stopped answering."""
+        self.probes.append(pgid)
+        self._require_live_group(pgid)
+
+    def _require_live_group(self, pgid: int) -> None:
+        """Raise unless the group named *pgid* still answers."""
+        if not self.is_group_live:
+            raise ProcessLookupError(pgid, "No such process")
+
+    def _apply_signal_effect(self, sig: int) -> None:
+        """Model a delivered group signal reaching the child that leads it.
+
+        The direct child is a member of its own group, so a delivered group
+        signal kills it too. Modelling that keeps a signal sent down the wrong
+        route from presenting as a hang: the child exits and the assertions
+        upstream report which route was taken instead of a bare timeout.
+        """
+        if sig == signal.SIGTERM and self.exits_on_sigterm:
+            self._record_exit(-15)
+        if sig == signal.SIGKILL:
+            self._record_exit(-9)
+            self.is_group_live = False
+
     def _record_exit(self, code: int) -> None:
         """Publish an exit code and release any waiter."""
         if self.returncode is None:
             self.returncode = code
         self._exited.set()
-
-
-def _install_group_probe(
-    monkeypatch: pytest.MonkeyPatch,
-    target: _TeardownTarget,
-) -> None:
-    """Route every group operation through the target's recorded state.
-
-    The existence probe (``killpg(pgid, 0)``) and the signals both go through
-    ``os.killpg``, so one replacement observes the order they are issued in as
-    well as which names are used.
-    """
-
-    def recorded_killpg(pgid: int, sig: int) -> None:
-        """Probe or signal, as the caller asked, recording each attempt."""
-        if sig == 0:
-            target.probes.append(pgid)
-            if not target.is_group_live:
-                raise ProcessLookupError(pgid, "No such process")
-            return
-        if not target.is_group_live:
-            # The name is not this run's any more, so a signal under it would
-            # be the defect. Refuse it rather than record a delivered signal.
-            raise ProcessLookupError(pgid, "No such process")
-        target.group_signals.append((pgid, sig))
-        # The direct child is a member of its own group, so a delivered group
-        # signal kills it too. Modelling that keeps a mis-routed signal from
-        # presenting as a hang: the child exits and the assertions upstream
-        # report which route was taken instead of a bare timeout.
-        if sig == signal.SIGTERM and target.exits_on_sigterm:
-            target._record_exit(-15)
-        if sig == signal.SIGKILL:
-            target._record_exit(-9)
-            # Compelling the group empties it, as escalation is there to do.
-            target.is_group_live = False
-
-    monkeypatch.setattr(os, "killpg", recorded_killpg)
 
 
 def _as_process(target: _TeardownTarget) -> asyncio.subprocess.Process:
@@ -194,7 +196,7 @@ def test_an_emptied_group_is_never_signalled_under_its_recycled_name(
     created, which is the one thing group addressing must not do.
     """
     target = _TeardownTarget(is_group_live=False)
-    _install_group_probe(monkeypatch, target)
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
 
     handled = asyncio.run(_teardown(target, owns_group=True))
 
@@ -232,7 +234,7 @@ def test_a_live_group_is_probed_before_it_is_signalled(
     direct-child-only teardown would mistake for settlement.
     """
     target = _TeardownTarget(is_group_live=True)
-    _install_group_probe(monkeypatch, target)
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
 
     handled = asyncio.run(_teardown(target, owns_group=True))
 
@@ -277,7 +279,7 @@ def test_an_inherited_run_never_probes_or_signals_a_group(
         has_exited=False,
         exits_on_sigterm=False,
     )
-    _install_group_probe(monkeypatch, target)
+    monkeypatch.setattr(os, "killpg", target.record_killpg)
 
     handled = asyncio.run(_teardown(target, owns_group=False))
 

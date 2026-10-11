@@ -111,12 +111,20 @@ def _selection_is_well_shaped(selected: list[int], stage_count: int) -> bool:
     )
 
 
-def _expected_owned_selection(
+def _expected_selection(
     failure_index: int,
     done: list[bool],
     owns_group: list[bool],
+    cut: int,
 ) -> list[int]:
-    """Return the stages the ownership-aware rule must select, in order.
+    """Return the stages the rule must select, honouring *cut* ownership flags.
+
+    A stage is selected when it owns a group and its flag falls within the first
+    *cut* flags, or when it is still running and is not the stage that failed.
+    ``cut`` is what separates the two statements of the rule: the full rule
+    honours every flag, while a truncated sequence honours only its prefix,
+    which is how the nesting property is stated over shorter and shorter
+    ownership lists.
 
     Returns
     -------
@@ -126,7 +134,7 @@ def _expected_owned_selection(
     return [
         idx
         for idx, is_done in enumerate(done)
-        if owns_group[idx] or (idx != failure_index and not is_done)
+        if (idx < cut and owns_group[idx]) or (idx != failure_index and not is_done)
     ]
 
 
@@ -150,7 +158,9 @@ def _owned_selection_is_exact(
     bool
         Whether the selection matches the ownership-aware rule exactly.
     """
-    return selected == _expected_owned_selection(failure_index, done, owns_group)
+    return selected == _expected_selection(
+        failure_index, done, owns_group, len(owns_group)
+    )
 
 
 def _owned_selection_is_well_formed(
@@ -174,26 +184,6 @@ def _owned_selection_is_well_formed(
     ) and _owned_selection_is_exact(selected, failure_index, done, owns_group)
 
 
-def _expected_prefix_selection(
-    failure_index: int,
-    done: list[bool],
-    owns_group: list[bool],
-    cut: int,
-) -> list[int]:
-    """Return the stages a prefix of ``owns_group`` of length ``cut`` selects.
-
-    Returns
-    -------
-    list[int]
-        The expected stage indices for that prefix, in ascending order.
-    """
-    return [
-        idx
-        for idx, is_done in enumerate(done)
-        if (idx < cut and owns_group[idx]) or (idx != failure_index and not is_done)
-    ]
-
-
 def _short_ownership_degrades(
     prefixes: list[list[int]],
     failure_index: int,
@@ -202,7 +192,7 @@ def _short_ownership_degrades(
 ) -> bool:
     """Report whether every ownership prefix selects exactly its own rule."""
     return all(
-        selected == _expected_prefix_selection(failure_index, done, owns_group, cut)
+        selected == _expected_selection(failure_index, done, owns_group, cut)
         for cut, selected in enumerate(prefixes)
     )
 
