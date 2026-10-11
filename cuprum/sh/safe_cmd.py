@@ -24,9 +24,12 @@ from cuprum._command_internals import (
     _prepare_execution_observation,
     _run_prepared_command,
 )
+from cuprum._command_prepare import _prepare_owned_command
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._process_handle import RunningCommand
+from cuprum._process_handle.tasks import _build_handle_execution, _start_handle_run
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
@@ -213,6 +216,87 @@ class SafeCmd:
                 tracking,
             ),
         )
+
+    async def start(
+        self,
+        *,
+        output: RunOutputOptions | None = None,
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> RunningCommand:
+        """Start the command and return an owned handle to it.
+
+        The child is spawned and its PID announced before this returns; the
+        caller decides what happens next. Await :meth:`RunningCommand.wait` for
+        the outcome, deliver a signal with :meth:`RunningCommand.signal`, or
+        stop the child with :meth:`RunningCommand.terminate` or
+        :meth:`RunningCommand.kill`.
+
+        The handle owns the child's lifetime. Using it as an ``async with``
+        block settles the run on exit — a child still running is stopped down
+        the same ``SIGTERM``, cancel-grace, ``SIGKILL`` path a cancelled
+        ``run()`` takes — so a caller cannot leave a child behind by forgetting
+        about it. Output is captured unless *output* says otherwise, so a
+        handle that is not iterated still reports what the command wrote.
+
+        Unlike ``run()``, no deadline is enforced while the handle is merely
+        held: the clock a timeout is measured against starts at the ``wait``
+        that asks for one. An explicit *timeout* here is therefore the default
+        deadline for every ``wait()`` on this handle rather than a limit on how
+        long the child may live.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. Capture defaults to on, so the handle's
+            result carries the command's streams.
+        timeout : float | None, default=None
+            Default maximum time a ``wait()`` on this handle may take, in
+            seconds. An explicit value overrides the timeout in ``context``.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks, encoding, and the cancel
+            grace a graceful stop allows.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
+
+        Returns
+        -------
+        RunningCommand
+            An owned handle to the running command.
+
+        Raises
+        ------
+        PermissionError
+            If the command is not allowed by the active scope.
+        UnicodeEncodeError
+            If text stdin cannot be encoded by the execution context.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate from the allowlist and stdin resolution
+        # Capture is forced on: a handle exists so its caller can inspect the
+        # child after the fact, and a child whose streams were routed to
+        # ``DEVNULL`` cannot be asked what it said. The caller's own settings
+        # still govern echo and every other presentation decision.
+        out = output or RunOutputOptions()
+        if not out.capture:
+            out = dc.replace(out, capture=True)
+        ctx = context or ExecutionContext()
+        _enforce_allowlist(self)
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        prepared = await _prepare_owned_command(
+            self,
+            _ExecutionState(
+                context=ctx,
+                output=out,
+                stdin_data=stdin_data,
+                timeout=effective_timeout,
+            ),
+        )
+        run = await _start_handle_run(
+            _build_handle_execution(prepared.execution),
+            prepared.tracking,
+        )
+        return RunningCommand(run)
 
     def run_sync(
         self,
