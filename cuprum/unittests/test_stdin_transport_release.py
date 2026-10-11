@@ -113,15 +113,22 @@ def test_a_stalled_close_releases_the_descriptor() -> None:
 
     async def scenario() -> tuple[int, bool, int]:
         process, writer = await _stalled_writer()
-        # Both private attributes are read through ``getattr`` for the same
-        # reason: the transport's published surface does not include them, so
-        # naming them directly is a type error as well as a version risk. The
-        # descriptor is what the assertion below checks the transport released,
-        # and it is not exposed any other way.
-        descriptor: int = getattr(writer.transport, "_fileno")
+        # The descriptor is reached through ``get_extra_info`` rather than the
+        # transport's own ``_fileno``, which is private and untyped. The
+        # published accessor returns the same ``FileIO`` the transport holds for
+        # its pipe, and it narrows the attribute's type: ``get_extra_info`` is
+        # declared to return ``Any``, so the cast states what the pipe key
+        # actually carries. That combination is what lets one read satisfy the
+        # linters and the type checker at once, which neither a direct private
+        # read nor ``getattr`` with a constant name manages.
+        pipe = typ.cast("typ.IO[bytes]", writer.transport.get_extra_info("pipe"))
+        descriptor = pipe.fileno()
         try:
             await _close_stdin(process, writer, observation)
             await asyncio.sleep(0.1)
+            # ``_buffer`` is read with a default because the private attribute
+            # disappears on some transport paths; its absence means no bytes are
+            # retained, which is the state the assertion below requires.
             return (
                 len(getattr(writer.transport, "_buffer", b"")),
                 _descriptor_is_open(descriptor),

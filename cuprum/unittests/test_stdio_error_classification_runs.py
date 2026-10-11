@@ -72,6 +72,7 @@ from cuprum.sh import (
 from cuprum.unittests._stdio_classification_support import (
     NEVER_READS,
     OVERLONG_IDNA_LABEL,
+    ExpectedClassification,
     UnstartableProducer,
     assert_classified_once,
     borrowed_flush_target,
@@ -108,11 +109,13 @@ class TestTheEncoderIsNamedForEncoding:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.ENCODER,
-            operation="write",
-            error_type="UnicodeEncodeError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.ENCODER,
+                operation="write",
+                error_type="UnicodeEncodeError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
     def test_a_label_that_fails_only_when_flushed_is_the_encoder(self) -> None:
@@ -130,11 +133,13 @@ class TestTheEncoderIsNamedForEncoding:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.ENCODER,
-            operation="write",
-            error_type="UnicodeEncodeError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.ENCODER,
+                operation="write",
+                error_type="UnicodeEncodeError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
     def test_a_codec_that_cannot_be_built_is_the_encoder(self) -> None:
@@ -152,11 +157,13 @@ class TestTheEncoderIsNamedForEncoding:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.ENCODER,
-            operation="write",
-            error_type="LookupError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.ENCODER,
+                operation="write",
+                error_type="LookupError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
 
@@ -178,11 +185,13 @@ class TestTheOtherBoundariesNameThemselves:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.INVALID_CHUNK,
-            operation="write",
-            error_type="TypeError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.INVALID_CHUNK,
+                operation="write",
+                error_type="TypeError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
     def test_a_transport_failure_is_the_pipe(
@@ -218,11 +227,13 @@ class TestTheOtherBoundariesNameThemselves:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.PIPE,
-            operation="write",
-            error_type="OSError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.PIPE,
+                operation="write",
+                error_type="OSError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
     def test_a_failing_producer_is_the_producer(self) -> None:
@@ -241,11 +252,13 @@ class TestTheOtherBoundariesNameThemselves:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.PRODUCER,
-            operation="produce",
-            error_type="BrokenPipeError",
-            pid_present=True,
-            raised=StdinSourceError,
+            ExpectedClassification(
+                category=StdioFailureCategory.PRODUCER,
+                operation="produce",
+                error_type="BrokenPipeError",
+                pid_present=True,
+                raised=StdinSourceError,
+            ),
         )
 
     def test_an_unopenable_owned_path_names_no_child(
@@ -270,11 +283,13 @@ class TestTheOtherBoundariesNameThemselves:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.OWNED_PATH_OPEN,
-            operation="open",
-            error_type="OSError",
-            pid_present=False,
-            raised=OSError,
+            ExpectedClassification(
+                category=StdioFailureCategory.OWNED_PATH_OPEN,
+                operation="open",
+                error_type="OSError",
+                pid_present=False,
+                raised=OSError,
+            ),
         )
         assert not missing.exists(), (
             "a path cuprum could not open must not have been created"
@@ -296,11 +311,13 @@ class TestTheOtherBoundariesNameThemselves:
 
         assert_classified_once(
             outcome,
-            category=StdioFailureCategory.BORROWED_FLUSH,
-            operation="flush",
-            error_type="OSError",
-            pid_present=False,
-            raised=OSError,
+            ExpectedClassification(
+                category=StdioFailureCategory.BORROWED_FLUSH,
+                operation="flush",
+                error_type="OSError",
+                pid_present=False,
+                raised=OSError,
+            ),
         )
 
 
@@ -327,11 +344,13 @@ def test_a_pre_spawn_boundary_records_no_start_event() -> None:
     )
     assert_classified_once(
         outcome,
-        category=StdioFailureCategory.OWNED_PATH_OPEN,
-        operation="open",
-        error_type="OSError",
-        pid_present=False,
-        raised=OSError,
+        ExpectedClassification(
+            category=StdioFailureCategory.OWNED_PATH_OPEN,
+            operation="open",
+            error_type="OSError",
+            pid_present=False,
+            raised=OSError,
+        ),
     )
 
 

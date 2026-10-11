@@ -62,6 +62,24 @@ STDIO_ERRORS = "cuprum_stdio_errors_total"
 
 
 @dc.dataclass(frozen=True, slots=True)
+class ExpectedClassification:
+    """What a boundary is expected to have reported.
+
+    The five fields travel together because they are one claim: a case names a
+    boundary and the shape of its report in a single expression. Grouping them
+    keeps each call site a description of *which* boundary and *what* it owes,
+    rather than a run of positional-looking keywords whose order a reader has to
+    hold in mind.
+    """
+
+    category: StdioFailureCategory
+    operation: str
+    error_type: str
+    pid_present: bool
+    raised: type[BaseException]
+
+
+@dc.dataclass(frozen=True, slots=True)
 class RunOutcome:
     """What one run reported, read from every channel at once.
 
@@ -242,15 +260,15 @@ def run_capturing(
 
 def assert_classified_once(
     outcome: RunOutcome,
+    expected: ExpectedClassification,
     *,
-    category: StdioFailureCategory,
-    operation: str,
-    error_type: str,
-    pid_present: bool,
-    raised: type[BaseException],
     execution_id: uuid.UUID | None = None,
 ) -> None:
     """Assert the boundary was reported once, on every channel, coherently.
+
+    ``expected`` carries the boundary and the shape of its report; see
+    ``ExpectedClassification`` for why those five fields are one value rather
+    than five keyword arguments.
 
     The assertions are kept together because they are one claim seen from
     several sides. A category on the event with no matching counter means the
@@ -277,18 +295,20 @@ def assert_classified_once(
     )
     event = events[0]
 
-    assert event.error_category is category, (
-        f"the boundary must be named {category!r}; found {event.error_category!r}"
+    assert event.error_category is expected.category, (
+        f"the boundary must be named {expected.category!r}; "
+        f"found {event.error_category!r}"
     )
-    assert event.operation == operation, (
-        f"the boundary's operation must be {operation!r}; found {event.operation!r}"
+    assert event.operation == expected.operation, (
+        f"the boundary's operation must be {expected.operation!r}; "
+        f"found {event.operation!r}"
     )
-    assert event.error_type == error_type, (
-        f"the boundary must report {error_type!r}; found {event.error_type!r}"
+    assert event.error_type == expected.error_type, (
+        f"the boundary must report {expected.error_type!r}; found {event.error_type!r}"
     )
-    assert (event.pid is not None) is pid_present, (
+    assert (event.pid is not None) is expected.pid_present, (
         "pid must be carried exactly when a child exists; "
-        f"expected present={pid_present}, found {event.pid!r}"
+        f"expected present={expected.pid_present}, found {event.pid!r}"
     )
 
     assert isinstance(event.exec_id, uuid.UUID), (
@@ -324,10 +344,10 @@ def assert_classified_once(
     assert value == 1.0, (  # ruff: ignore[float-equality-comparison] - a count is exact.
         f"one failure counts as one; found {value}"
     )
-    assert labels.get("error_category") == str(category), (
+    assert labels.get("error_category") == str(expected.category), (
         "the metric must be labelled with the same boundary as the event; "
-        f"expected {str(category)!r} and found {labels.get('error_category')!r} "
-        f"in {labels}"
+        f"expected {str(expected.category)!r} and found "
+        f"{labels.get('error_category')!r} in {labels}"
     )
     assert set(labels) == {"program", "project", "error_category"}, (
         "the label set is bounded to the program, the project, and the "
@@ -338,6 +358,6 @@ def assert_classified_once(
     assert outcome.failure is not None, (
         "a boundary that failed must reach the caller, not be swallowed"
     )
-    assert isinstance(outcome.failure, raised), (
-        f"the caller must receive {raised.__name__}; found {outcome.failure!r}"
+    assert isinstance(outcome.failure, expected.raised), (
+        f"the caller must receive {expected.raised.__name__}; found {outcome.failure!r}"
     )
