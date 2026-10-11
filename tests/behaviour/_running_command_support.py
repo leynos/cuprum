@@ -84,9 +84,7 @@ _OUTPUT_EXIT_SOURCE = (
     f"sys.exit({_OUTPUT_EXIT_CODE})\n"
 )
 _DELAYED_WRITER_SOURCE = (
-    "import time\n"
-    "time.sleep(0.2)\n"
-    f"print({DELAYED_WRITER_MARKER!r}, flush=True)\n"
+    f"import time\ntime.sleep(0.2)\nprint({DELAYED_WRITER_MARKER!r}, flush=True)\n"
 )
 
 

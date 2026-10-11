@@ -580,8 +580,7 @@ def then_worker_reports_graceful(observation: HandleObservation) -> None:
     result = observation.result
     assert result is not None, "a terminated handle must settle a result"
     assert result.exit_code == -signal.SIGTERM, (
-        f"a cooperative terminate must report -{signal.SIGTERM}, "
-        f"got {result.exit_code}"
+        f"a cooperative terminate must report -{signal.SIGTERM}, got {result.exit_code}"
     )
 
 
@@ -667,8 +666,7 @@ def then_context_exit_settled(observation: HandleObservation) -> None:
     result = observation.result
     assert result is not None, "context exit must record a settled result"
     assert result.exit_code == -signal.SIGTERM, (
-        "context exit must stop a running child gracefully, "
-        f"got {result.exit_code}"
+        f"context exit must stop a running child gracefully, got {result.exit_code}"
     )
 
 
