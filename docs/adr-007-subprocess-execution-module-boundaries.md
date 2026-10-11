@@ -457,8 +457,9 @@ is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
 The 2026-09-25 addendum -- and, for `Pipeline` alone, the typed `sh.make`
 addendum above -- recorded `cuprum/sh/safe_cmd.py` as holding both `SafeCmd` and
 `Pipeline`. That is no longer so: `Pipeline` now lives in
-`cuprum/sh/pipeline.py`, and `safe_cmd.py` no longer imports it. `SafeCmdBuilder`
-is unaffected by this split and remains in `cuprum/sh/builder.py`.
+`cuprum/sh/pipeline.py`, and `safe_cmd.py` no longer imports it.
+`SafeCmdBuilder` is unaffected by this split and remains in
+`cuprum/sh/builder.py`.
 
 The reference between the two classes was always mutual and always deferred on
 one side. `Pipeline` names `SafeCmd` as its stage type, while `SafeCmd.__or__`
