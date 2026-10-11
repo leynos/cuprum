@@ -218,6 +218,16 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) Typecheck repaired on the new sentinel module. `0c91a664`
+  was committed and pushed before `make typecheck` had run against it; that
+  gate then found two `invalid-argument-type` errors, because `StdioTarget.fd`
+  takes `int | IO[bytes] | IO[str]` and the test double implements only
+  `fileno` and `flush`. The repair confines the cast to one documented helper,
+  `_lying_fd_target`, mirroring `borrowed_flush_target` in
+  `_stdio_classification_support`; both mutation probes still kill exactly 3
+  and 4 rows as before, so the correction is not a weakening. `make typecheck`,
+  `make check-fmt`, `make lint`, `make markdownlint`, and `make nixie` all pass
+  at the repaired shape.
 - [x] (2026-10-11) Assessment finding 4 closed *for real*, and the last two lint
   findings on the branch cleared. The finding had been marked repaired in the
   ledger against a code symbol, but it asked for rejection tests and none
@@ -2362,6 +2372,27 @@ likelihood, and mitigation.
   had already spent. Under the lifecycle contract the hosted check set is
   observed through the scrutineer, so the correct response to a red `lint-test`
   is to read its log, not to re-run the gate on the host in parallel with it.
+- Observation: the new sentinel module was committed in `0c91a664` and pushed
+  before `make typecheck` had ever been run against it, and typecheck then
+  found two real errors in it. Evidence: `StdioTarget.fd` is annotated
+  `int | typ.IO[bytes] | typ.IO[str]`, and the test double `_LyingFile`
+  implements only `fileno` and `flush`, so passing it directly was an
+  `invalid-argument-type` error at both call sites. Impact: this is the fourth
+  instance on this branch of a gate whose result was assumed rather than
+  observed, and the most instructive, because the claim this time was not "the
+  gate passed" but "the gate does not apply to a test-only double". A test-only
+  double does not exempt a call from the callee's declared parameter type —
+  `ty` checks the call, not the intent behind it. The repair follows the
+  repository's own precedent:
+  `_stdio_classification_support.borrowed_flush_target` confines an equivalent
+  cast for the same kind of double, and the new `_lying_fd_target` mirrors it
+  so the cast appears once, with the reason written down, instead of at each
+  call site. Both mutation probes were re-run after the change and still
+  produce identical kill signatures (construction guard: 3 failed/10 passed;
+  resolution guard: 4 failed/9 passed), so the cast did not weaken what the
+  module proves. The narrow operational rule: `make check-fmt`, `make lint`, and
+  `make typecheck` are three separate leaves over the same file, and a change
+  to an *annotated* call site is precisely the case the first two cannot see.
 
 ## Decision log
 
