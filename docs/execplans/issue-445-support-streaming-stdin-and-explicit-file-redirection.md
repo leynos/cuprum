@@ -1305,6 +1305,23 @@ likelihood, and mitigation.
       result — every site named in the reply was found and fixed — but the
       posted wording overstates the instrument's reach, and the honest
       instrument is the stem-based one.
+- [x] (2026-10-11 03:13Z) Round 5 rebase: the PR had gone back to
+      `CONFLICTING` against `main` without any change to the branch, because
+      main advanced one commit to `fb268229` (#367, profiling stream
+      telemetry) and both sides had appended a bullet at the same
+      `CHANGELOG.md` anchor. Replayed `OLD_BASE` `390fcf83`..`OLD_HEAD`
+      `45e57bec` onto `TARGET` `fb268229`: 74 commits in, 74 out, one conflict,
+      resolved as a strict union and verified by diffing the result against
+      `origin/main:CHANGELOG.md` (main's file plus exactly the two #445
+      bullets). `NEW_HEAD` is `f1a142f6`. Audits: target-only paths
+      byte-identical (11 checked, 0 differences), no deletions against the
+      target, no newly-repeated multi-line blocks by comparison with the
+      pre-rebase tree, 66 changed Python files parse, `pyproject.toml` and
+      `typos.toml` load. Recovery refs under
+      `refs/recovery/issue445-r5-20261011T031320Z/` retain `OLD_HEAD`,
+      `OLD_BASE`, `TARGET`, and `REMOTE_HEAD`. This rebase is also what makes
+      hosted CI possible again: the conflict, not the code, was suppressing
+      every check.
 
 ## Surprises & discoveries
 
@@ -1723,6 +1740,28 @@ likelihood, and mitigation.
   audit is cheap even though no gate performs it. Impact: after adding a field
   to an event type, enumerate the snapshots that iterate its fields rather than
   trusting the subset the unit tests exercise.
+- Observation: a one-bullet conflict in `CHANGELOG.md` was enough to put the PR
+  back into `CONFLICTING`, which builds no merge ref and therefore runs no
+  hosted CI at all. Evidence: GitHub reported `mergeable: false`,
+  `mergeable_state: "dirty"` while the branch head had not changed; `git
+  merge-tree --write-tree HEAD origin/main` named `CHANGELOG.md` as the single
+  conflicted path and auto-merged `docs/developers-guide.md`,
+  `docs/users-guide.md`, and `docs/v0-2-0-migration-guide.md` without comment.
+  Main had advanced by exactly one commit (`fb268229`, the #367 profiling
+  telemetry work) and both sides had appended an independent bullet at the same
+  anchor. Impact: conflict state must be re-checked after every push to the
+  target branch, not only at the start of the assignment, because the costing
+  is asymmetric — the resolution is minutes of work and the cost of not doing
+  it is that every check silently stops existing. A `dirty` PR reports no
+  failing check, which is indistinguishable from a passing one unless the check
+  set is enumerated.
+- Observation: the GitHub mergeability field is computed against the *current*
+  target tip, so it can flip from `true` to `dirty` without any change to the
+  PR itself. Evidence: at `45e57bec` the PR was `mergeable: true` and its base
+  SHA was still `390fcf83`; the flip to `dirty` followed main moving to
+  `fb268229`, which the branch head never saw. Impact: a cached `mergeable`
+  reading is a statement about a moment, not a property of the candidate, and
+  the base SHA in the PR record can lag the ref it is really compared against.
 
 ## Decision log
 
@@ -1749,6 +1788,33 @@ likelihood, and mitigation.
   ordering is kept so the file's history reads as target-then-branch, which
   matches how the rebase composed the rest of the tree. Date/Author:
   2026-10-01, implementation agent.
+- Decision: rebase onto `fb268229` (main's #367 profiling-telemetry commit)
+  before observing any CI, rather than waiting for checks to report on the
+  then-current head `45e57bec`. Rationale: the `CHANGELOG.md` conflict had
+  already put the PR in `CONFLICTING`, so GitHub builds no merge ref and no
+  hosted workflow could run against `45e57bec` at all — the checks that had
+  reported at `25c4154c` were the last ones that would ever exist for the
+  pre-rebase candidate. Waiting for a green result on a head that cannot build
+  a merge ref would have waited forever while reading as pending. Options
+  considered: (a) leave the conflict and observe anyway — rejected, it cannot
+  produce evidence; (b) resolve the conflict in a merge commit without
+  rebasing — rejected, the repository's workflow is linear and a merge commit
+  would make the 74-commit series non-replayable. Replay boundary: `OLD_BASE`
+  `390fcf83` (the branch's original base, confirmed an ancestor of `OLD_HEAD`
+  `45e57bec` with no merge commits in the range) onto `TARGET` `fb268229`.
+  Date/Author: 2026-10-11, babysitting agent.
+- Decision: resolve the rebase's single conflict as a strict union — main's
+  #367 bullet followed by the branch's two #445 bullets — and verify the
+  resolution by diffing it against `origin/main:CHANGELOG.md` and confirming
+  the result is exactly main's file plus those two bullets. Rationale: the
+  conflict record showed a base section that contained neither bullet, so the
+  two sides were independent insertions at one anchor and neither could be
+  dropped as superseded. A diff against the target is the cheapest oracle for
+  "nothing but the intended additions survived", and it catches both a lost
+  bullet and an accidentally restored one. Options considered: taking `ours`
+  wholesale — rejected, it would have dropped main's #367 entry and made the
+  file lie about a feature already on trunk. Date/Author: 2026-10-11,
+  babysitting agent.
 
 - Decision: repay the post-rebase module-length overrun by moving
   `_DeprecatedOutputFlags` and `_resolve_pipeline_output` into
