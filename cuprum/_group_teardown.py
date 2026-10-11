@@ -287,56 +287,47 @@ def signal_target_or_report(
 ) -> bool:
     """Signal the run's teardown target, reporting what cannot report itself.
 
-    One function rather than a delivery helper plus a wrapper, because the
-    syscall's answer and its interpretation are one decision: this is the only
-    place the kernel's refusal is observed, so the tolerance and the report
-    belong to the same frame rather than to two that must agree about which
-    exception means what.
+    One function rather than a delivery helper plus a wrapper: the syscall's
+    answer and its interpretation are one decision, and this is the only place
+    the kernel's refusal is observed, so the tolerance and the report share a
+    frame rather than needing two that agree on which exception means what.
 
     *observation* is the execution this signal acts for, and it is a single
-    value rather than a sequence because a signal has exactly one target. The
+    value rather than a sequence because a signal has exactly one target: the
     caller pairs it with the target it is about to signal, so a pipeline
-    teardown that reaches stage two reports against stage two; a run-level
-    report drawn from the front of a sequence would attribute the refusal to
-    whichever execution happened to be first, which is a different stage
-    whenever stage zero exited before the failure. ``None`` is the routes with
-    no execution to correlate with, which keep the log record alone.
+    teardown reaching stage two reports against stage two rather than against
+    whichever execution happened to be first. ``None`` is the routes with no
+    execution to correlate with, which keep the log record alone.
 
     *owns_group* is true only for a child spawned with
-    ``start_new_session=True``, which makes that child the leader of its own
-    session and process group. The group is therefore named by the child's own
-    process identifier: no ``os.getpgid`` lookup is needed, and the identifier
-    is one this run created rather than one it was handed. That flag is the
-    whole of the route choice, so the child-only route is derived from it here
-    rather than passed alongside it — the two could otherwise contradict each
-    other, describing a group signal delivered to a direct child.
+    ``start_new_session=True``, which makes it the leader of its own session and
+    group. The group is therefore named by the child's own process identifier,
+    which needs no ``os.getpgid`` lookup and is one this run created. That flag
+    is the whole of the route choice, so the direct-child route is derived from
+    it here rather than passed alongside it: the two could otherwise contradict
+    each other, describing a group signal delivered to a direct child.
 
     The name identifies a group this run made; it does not guarantee that group
     still exists or still holds the name. The caller reaches this function only
-    after the settlement probe declined to veto, and a probe that answers
-    cannot attribute the name to this run.
-    :mod:`cuprum._process_group` records the two reuse windows that leaves
-    open, and why no process-group equivalent of ``pidfd`` closes them.
+    after the settlement probe declined to veto, and
+    :mod:`cuprum._process_group` records the reuse windows that leaves open.
 
     Signalling the group rather than the direct child is what lets a child's
-    descendants reach end-of-file on inherited pipes; a descendant that left
-    the group deliberately is outside this call's reach, exactly as
-    :class:`~cuprum.sh.ProcessGroupPolicy` documents.
+    descendants reach end-of-file on inherited pipes;
+    :class:`~cuprum.sh.ProcessGroupPolicy` documents what stays out of reach.
 
     The two ways a signal can fail to arrive are not the same. A
-    ``ProcessLookupError`` is the race both routes already tolerate — the
-    target went before the signal could be delivered — so it is passed over
-    silently. A wider ``OSError`` is a target this run believes is there and
-    could not signal, and silence there conflates two outcomes: a teardown that
-    found nothing to do, and one that failed. Both reach the caller as the same
-    ``False``, so only a record distinguishes them. The routes also report an
-    absent target differently: ``os.killpg`` raises ``ProcessLookupError``
-    where :meth:`subprocess.Popen.send_signal` suppresses it (bpo-40550), so
-    the tolerated race is observed on one route only.
+    ``ProcessLookupError`` is the race both routes already tolerate — the target
+    went before the signal could be delivered — so it is passed over silently. A
+    wider ``OSError`` is a target this run believes is there and could not
+    signal, and silence there would conflate two outcomes that both reach the
+    caller as the same ``False``: a teardown that found nothing to do, and one
+    that failed. Only a record distinguishes them. The routes report an absent
+    target differently too: ``os.killpg`` raises ``ProcessLookupError`` where
+    :meth:`subprocess.Popen.send_signal` suppresses it (bpo-40550).
 
     A logging handler the application installed can still raise out of the
-    ``warning`` call, which is left to propagate: the branch is already
-    abnormal, and swallowing it would hide the failure a second time.
+    ``warning`` call, which is left to propagate: the branch is already abnormal.
 
     Returns
     -------

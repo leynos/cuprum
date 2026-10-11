@@ -14,6 +14,35 @@ def _closes_fence(run: str, rest: str, opener: tuple[str, int]) -> bool:
     return not rest.strip()
 
 
+def _step_fence(
+    opener: tuple[str, int] | None, line: str
+) -> tuple[tuple[str, int] | None, bool]:
+    """Advance the fence state by one line.
+
+    The state is carried in and out rather than held by the caller, so the
+    decision that changes it lives in one place: reading a fence line is the
+    only thing that opens, closes, or leaves it alone.
+
+    Returns
+    -------
+    tuple of (optional tuple of (str, int), bool)
+        The state after *line*, and whether the line lies inside a fence.
+    """
+    match = _FENCE.match(line)
+    if match is None:
+        return opener, opener is not None
+    run, rest = match.group(1), match.group(2)
+    if opener is None:
+        # A backtick opener whose info string contains a backtick is content,
+        # per the CommonMark rule above, so it neither opens nor closes.
+        if run[0] == "`" and "`" in rest:
+            return None, False
+        return (run[0], len(run)), True
+    if _closes_fence(run, rest, opener):
+        return None, True
+    return opener, True
+
+
 def _fenced_line_indexes(markdown: str) -> set[int]:
     """Return the indexes of the lines enclosed by fenced code blocks.
 
@@ -51,19 +80,9 @@ def _fenced_line_indexes(markdown: str) -> set[int]:
     # form feed, vertical tab, and the Unicode line separators. Any of those in
     # a document would shift every index after it and desynchronize the two.
     for index, line in enumerate(markdown.split("\n")):
-        match = _FENCE.match(line)
-        if match is None:
-            if opener is not None:
-                fenced.add(index)
-            continue
-        run, rest = match.group(1), match.group(2)
-        if opener is None:
-            if run[0] == "`" and "`" in rest:
-                continue
-            opener = (run[0], len(run))
-        elif _closes_fence(run, rest, opener):
-            opener = None
-        fenced.add(index)
+        opener, is_fenced = _step_fence(opener, line)
+        if is_fenced:
+            fenced.add(index)
     return fenced
 
 
