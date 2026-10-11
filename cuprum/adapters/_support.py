@@ -38,15 +38,35 @@ def _event_common_fields(
     """Yield the canonical common projection of *event* as key/value pairs."""
     yield name("program"), str(event.program)
     yield name("argv"), argv(event.argv)
-    if event.pid is not None:
-        yield name("pid"), event.pid
-    if event.cwd is not None:
+    yield from _optional_common_fields(event, name)
+
+
+def _optional_common_fields(
+    event: ExecEvent,
+    name: cabc.Callable[[str], str],
+) -> cabc.Iterator[tuple[str, object]]:
+    """Yield *event*'s optional common fields, omitting the absent ones.
+
+    The omit-when-``None`` policy is applied once, here, to every optional
+    field; the fields differ only in how each value is transported, which is
+    what the two groups below separate. Concatenating them preserves the
+    projection's field order: the process identity, then the rendered
+    ``StrEnum`` modes, then the verbatim measurements.
+
+    Yields
+    ------
+    tuple[str, str]
+        Each present field's backend-specific name, paired with its value.
+        Absent fields yield nothing at all rather than a ``None``.
+    """
+    optional = (
+        ("pid", event.pid),
         # A ``Path``, rendered rather than passed through.
-        yield name("cwd"), str(event.cwd)
-    for field, value in _rendered_enum_fields(event):
-        if value is not None:
-            yield name(field), value
-    for field, value in _verbatim_fields(event):
+        ("cwd", None if event.cwd is None else str(event.cwd)),
+        *_rendered_enum_fields(event),
+        *_verbatim_fields(event),
+    )
+    for field, value in optional:
         if value is not None:
             yield name(field), value
 

@@ -696,11 +696,13 @@ class _FailingFlushFile(io.FileIO):
         self._failing = True
 
     def flush(self) -> None:
-        """Fail, carrying the caller's own message.
+        """Fail while armed, carrying the caller's own message.
 
-        Real descriptor close also flushes, so the failure is armed only while
-        the test is still watching. Left armed, the ``finally`` cleanup would
-        raise from ``close`` and mask whatever the assertions had established.
+        Raises
+        ------
+        _FlushFailureError
+            If the failure is still armed; see the class docstring for why
+            :meth:`close` disarms it first.
         """
         if self._failing:
             raise _FlushFailureError(self._message)

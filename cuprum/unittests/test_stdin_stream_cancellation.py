@@ -231,15 +231,29 @@ def _settlement_outcome(task: asyncio.Task[CommandResult]) -> str:
     return f"ended with {type(error).__name__}: {error!s}"
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StreamingStance:
+    """The producer under test and the signal that says it is in place.
+
+    The two travel together because they are one decision: each stance parks
+    its producer somewhere specific, and the event is how that same stance
+    reports it has arrived. Splitting them across arguments would let a caller
+    pair one stance's producer with another's signal and wait forever for a
+    state the run never reaches.
+    """
+
+    producer: cabc.AsyncIterator[bytes]
+    ready: asyncio.Event
+
+
 async def _cancel_when_ready(
     command: SafeCmd,
     probe: _CancellationProbe,
-    producer: cabc.AsyncIterator[bytes],
+    stance: _StreamingStance,
     *,
     capture: bool,
-    ready: asyncio.Event,
 ) -> _CancelledRunEvidence:
-    """Start the run, cancel it once *ready* fires, and record the aftermath.
+    """Start the run, cancel it once the stance is reached, and record the aftermath.
 
     Returns
     -------
@@ -250,14 +264,14 @@ async def _cancel_when_ready(
     """
     task = asyncio.create_task(
         command.run(
-            stdin=StdinStream(producer),
+            stdin=StdinStream(stance.producer),
             output=RunOutputOptions(capture=capture),
             context=ExecutionContext(cancel_grace=_CANCEL_GRACE_S),
             timeout=_RUN_DEADLINE_S,
         )
     )
     try:
-        await asyncio.wait_for(ready.wait(), timeout=_READINESS_S)
+        await asyncio.wait_for(stance.ready.wait(), timeout=_READINESS_S)
         assert not task.done(), (
             "the run ended before the writer reached the stance under test, "
             "so this case would not have cancelled a live writer at all"
@@ -371,9 +385,8 @@ def test_cancelling_a_streaming_run_tears_everything_down(
         _cancel_when_ready(
             command,
             probe,
-            producer(),
+            _StreamingStance(producer(), ready),
             capture=capture,
-            ready=ready,
         )
     )
 
