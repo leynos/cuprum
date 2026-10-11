@@ -33,9 +33,34 @@ from tests.behaviour._running_command_children import (
 from tests.behaviour._running_command_support import _start_owned
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     import pytest
 
-    from cuprum.sh import ExecutionContext, RunningCommand
+    from cuprum.sh import CommandResult, RunningCommand
+
+from cuprum.sh import ExecutionContext
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _Acted:
+    """One scenario's own findings, before the shared reaping is added.
+
+    Attributes
+    ----------
+    outcomes : tuple[CommandResult, ...]
+        Every result the scenario produced: one for each scenario except the
+        repeated termination, whose whole point is that two stops agree.
+    error : BaseException | None
+        An error the scenario caught rather than failed on.
+    """
+
+    outcomes: tuple[CommandResult, ...] = ()
+    error: BaseException | None = None
+
+
+#: What each scenario asks a handle to do, and the findings it keeps.
+type _Scenario = cabc.Callable[[RunningCommand], cabc.Awaitable[_Acted]]
 
 __all__ = [
     "_observe_cancelled_teardown",
@@ -61,118 +86,148 @@ _CANCEL_AFTER = 0.3
 _CANCEL_GRACE = 1.5
 
 
-async def _start_ready(child: ReadyChild) -> RunningCommand:
-    """Start *child*'s command and wait until its process is genuinely running."""
-    handle = await _start_owned(child.command)
+async def _start_ready(
+    child: ReadyChild,
+    *,
+    grace: float | None = None,
+) -> RunningCommand:
+    """Start *child*'s command and wait until its process is genuinely running.
+
+    ``grace`` is the cancel grace the handle is started under, which is the
+    window a stop waits out before escalating. ``None`` uses the default one.
+
+    Returns
+    -------
+    RunningCommand
+        The handle to the started child.
+    """
+    context = None if grace is None else ExecutionContext(cancel_grace=grace)
+    handle = await _start_owned(child.command, context=context)
     await _wait_for_ready(child.marker)
     return handle
 
 
-def _observe_graceful_termination(child: ReadyChild) -> HandleObservation:
-    """Terminate a child that obeys ``SIGTERM`` and report the outcome."""
+def _async_scenario(
+    scenario: _Scenario,
+    child: ReadyChild,
+    *,
+    grace: float | None = None,
+) -> HandleObservation:
+    """Run *scenario* against a freshly started child and report what it found.
+
+    Every control scenario has the same shape: start a child, wait until its
+    process is genuinely running, act on the handle, and report both what came
+    back and whether the child was reaped. Only the acting differs, so that is
+    the sole part a scenario supplies — as a coroutine function taking the
+    handle, rather than a closure that opens its own event loop.
+
+    Taking the loop away from the scenarios is the point rather than a
+    side effect. A handle holds an ``asyncio.Lock`` and a subprocess bound to
+    the loop that spawned them, so every scenario needs its own
+    ``asyncio.run``; having one here means the scenarios cannot disagree about
+    when the loop starts, and cannot end it without reaping the child first.
+
+    An exception on the acting step is reported rather than allowed to escape,
+    because a scenario that fails partway — a cancellation landing mid-teardown,
+    say — still has a child to account for and a recorded outcome to publish.
+    Reaping before the record is built is what makes the report complete.
+
+    Returns
+    -------
+    HandleObservation
+        The scenario's outcomes and error, the PID the handle reported, and
+        whether the child had gone by the time this returned.
+    """
 
     async def orchestrate() -> HandleObservation:
-        """Start the child, terminate it, and read the settled outcome."""
-        handle = await _start_ready(child)
-        result = await handle.terminate()
+        """Start the child, act on it, and confirm it was reaped."""
+        handle = await _start_ready(child, grace=grace)
+        try:
+            acted = await scenario(handle)
+        except BaseException as failure:  # ruff: ignore[blind-except] - carried out, not handled: what reached the caller is the fact under test
+            return HandleObservation(
+                error=failure,
+                handle_pid=handle.pid,
+                child_reaped=await _reaped(handle.pid),
+            )
         return HandleObservation(
-            result=result,
+            result=handle.result,
+            results=acted.outcomes,
+            error=acted.error,
             handle_pid=handle.pid,
             child_reaped=await _reaped(handle.pid),
         )
 
     return asyncio.run(orchestrate())
+
+
+async def _terminate(handle: RunningCommand) -> _Acted:
+    """Stop the child gracefully and keep the outcome."""
+    return _Acted(outcomes=(await handle.terminate(),))
+
+
+async def _terminate_under_short_grace(handle: RunningCommand) -> _Acted:
+    """Stop a stubborn child under a grace too short for it to obey."""
+    return _Acted(outcomes=(await handle.terminate(grace=_ESCALATION_GRACE),))
+
+
+async def _kill(handle: RunningCommand) -> _Acted:
+    """Compel the child to exit and keep the outcome."""
+    return _Acted(outcomes=(await handle.kill(),))
+
+
+async def _terminate_twice(handle: RunningCommand) -> _Acted:
+    """Stop one handle twice, keeping both outcomes for comparison."""
+    return _Acted(outcomes=(await handle.terminate(), await handle.terminate()))
+
+
+async def _leave_context(handle: RunningCommand) -> _Acted:
+    """Leave the handle's context with the child still running."""
+    async with handle:
+        pass
+    return _Acted()
+
+
+async def _leave_failing_context(handle: RunningCommand) -> _Acted:
+    """Leave the context while the block is already failing."""
+    try:
+        async with handle:
+            _raise_block_error()
+    except ValueError as raised:
+        # Carried out rather than handled: whether the block's own error
+        # survives teardown is exactly what the scenario asserts.
+        return _Acted(error=raised)
+    return _Acted()
+
+
+def _observe_graceful_termination(child: ReadyChild) -> HandleObservation:
+    """Terminate a child that obeys ``SIGTERM`` and report the outcome."""
+    return _async_scenario(_terminate, child)
 
 
 def _observe_escalating_termination(child: ReadyChild) -> HandleObservation:
     """Terminate a child that ignores ``SIGTERM`` under a short grace."""
-
-    async def orchestrate() -> HandleObservation:
-        """Terminate under a short grace, so the stop has to escalate."""
-        handle = await _start_ready(child)
-        result = await handle.terminate(grace=_ESCALATION_GRACE)
-        return HandleObservation(
-            result=result,
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    return _async_scenario(_terminate_under_short_grace, child)
 
 
 def _observe_kill(child: ReadyChild) -> HandleObservation:
     """Compel a child to exit and report the signal that ended it."""
-
-    async def orchestrate() -> HandleObservation:
-        """Start the child, kill it outright, and read the settled outcome."""
-        handle = await _start_ready(child)
-        result = await handle.kill()
-        return HandleObservation(
-            result=result,
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    return _async_scenario(_kill, child)
 
 
 def _observe_repeated_termination(child: ReadyChild) -> HandleObservation:
     """Terminate one handle twice and report both outcomes."""
-
-    async def orchestrate() -> HandleObservation:
-        """Terminate the one handle twice and keep both outcomes."""
-        handle = await _start_ready(child)
-        first = await handle.terminate()
-        second = await handle.terminate()
-        return HandleObservation(
-            result=first,
-            results=(first, second),
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    return _async_scenario(_terminate_twice, child)
 
 
 def _observe_context_exit(child: ReadyChild) -> HandleObservation:
     """Leave the handle's context while the child is still running."""
-
-    async def orchestrate() -> HandleObservation:
-        """Leave the handle's context with the child still running."""
-        handle = await _start_ready(child)
-        async with handle:
-            pass
-        return HandleObservation(
-            result=handle.result,
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    return _async_scenario(_leave_context, child)
 
 
 def _observe_context_exit_with_error(child: ReadyChild) -> HandleObservation:
     """Leave the handle's context with the block already failing."""
-
-    async def orchestrate() -> HandleObservation:
-        """Leave the context while the block is already failing."""
-        handle = await _start_ready(child)
-        error: BaseException | None = None
-        try:
-            async with handle:
-                _raise_block_error()
-        except ValueError as raised:
-            # Carried out rather than handled: whether the block's own error
-            # survives teardown is exactly what the scenario asserts.
-            error = raised
-        return HandleObservation(
-            result=handle.result,
-            error=error,
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    return _async_scenario(_leave_failing_context, child)
 
 
 def _raise_block_error() -> None:
@@ -204,36 +259,33 @@ def _observe_cancelled_teardown(child: ReadyChild) -> HandleObservation:
     HandleObservation
         The settled outcome, and whether the interruption left a child behind.
     """
+    return _async_scenario(
+        _leave_context_under_cancellation,
+        child,
+        grace=_CANCEL_GRACE,
+    )
 
-    async def orchestrate() -> HandleObservation:
-        """Cancel the task leaving the context, and read what it settled."""
-        from cuprum.sh import ExecutionContext as Context
 
-        context: ExecutionContext = Context(cancel_grace=_CANCEL_GRACE)
-        handle = await child.command.start(context=context)
-        await _wait_for_ready(child.marker)
+async def _leave_context_under_cancellation(handle: RunningCommand) -> _Acted:
+    """Hold the context open, then cancel the task leaving it."""
 
-        async def leave_context() -> None:
-            """Hold the handle's context open long enough to be interrupted."""
-            async with handle:
-                await asyncio.sleep(30)
+    async def leave_context() -> None:
+        """Hold the handle's context open long enough to be interrupted."""
+        async with handle:
+            await asyncio.sleep(30)
 
-        task = asyncio.create_task(leave_context())
-        await asyncio.sleep(_CANCEL_AFTER)
-        # Keep cancelling until the task is finished: teardown runs shielded,
-        # so the first cancellation starts the wait rather than ending it, and
-        # a fresh cancellation is what the scenario is about.
-        while not task.done():
-            task.cancel()
-            await asyncio.sleep(0)
-        return HandleObservation(
-            result=handle.result,
-            error=_task_failure(task),
-            handle_pid=handle.pid,
-            child_reaped=await _reaped(handle.pid),
-        )
-
-    return asyncio.run(orchestrate())
+    task = asyncio.create_task(leave_context())
+    await asyncio.sleep(_CANCEL_AFTER)
+    # Keep cancelling until the task is finished: teardown runs shielded, so
+    # the first cancellation starts the wait rather than ending it, and a fresh
+    # cancellation is what the scenario is about.
+    while not task.done():
+        task.cancel()
+        await asyncio.sleep(0)
+    return _Acted(
+        outcomes=(handle.result,) if handle.result is not None else (),
+        error=_task_failure(task),
+    )
 
 
 def _task_failure(task: asyncio.Task[None]) -> BaseException | None:

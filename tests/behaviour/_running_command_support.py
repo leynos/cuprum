@@ -52,9 +52,24 @@ __all__ = [
 _WAITERS = 5
 
 
-async def _start_owned(command: SafeCmd) -> RunningCommand:
-    """Start *command* and return the handle its outcome is read through."""
-    return await command.start(output=RunOutputOptions(), context=ExecutionContext())
+async def _start_owned(
+    command: SafeCmd,
+    context: ExecutionContext | None = None,
+) -> RunningCommand:
+    """Start *command* and return the handle its outcome is read through.
+
+    ``context`` defaults to the plain execution settings every scenario shares;
+    one is supplied only by a scenario that needs a different cancel grace.
+
+    Returns
+    -------
+    RunningCommand
+        The handle to the started command.
+    """
+    return await command.start(
+        output=RunOutputOptions(),
+        context=ExecutionContext() if context is None else context,
+    )
 
 
 def _observe_start(child: ReadyChild) -> HandleObservation:
