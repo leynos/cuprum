@@ -69,6 +69,11 @@ _READY = 10.0
 #: soon as the child it is waiting on is stopped, so this too is only a guard.
 _SETTLED = 5.0
 
+
+class _HookRefusalError(RuntimeError):
+    """The failure a deliberately refusing ``after`` hook raises."""
+
+
 #: A child that writes its error marker first, then its output marker, then
 #: blocks far longer than any case here will wait. The order is load-bearing:
 #: a case waits for the *stdout* line to arrive, which therefore guarantees
@@ -329,6 +334,49 @@ def test_a_settled_handle_runs_the_callers_after_hooks() -> None:
     assert hooked_result is result, (
         "the hook must receive the settled outcome rather than a copy of it, "
         f"got {hooked_result!r}"
+    )
+
+
+def test_a_refusing_after_hook_settles_the_run_as_its_error() -> None:
+    """A hook that raises is the run's terminal error, not a swallowed one.
+
+    The hooks run before the run is finalized, which is what makes this true:
+    finalizing first would have committed a success and then let a failure
+    arrive afterwards, leaving the run published as completed while its own
+    caller saw a traceback. The classification the caller's hook uses is the
+    same one ``run()`` reports for a failing hook.
+    """
+    events, observe = _observe()
+
+    def refuse(_cmd: SafeCmd, _result: CommandResult) -> None:
+        """Refuse the outcome the way an auditing hook with a bug would."""
+        raise _HookRefusalError
+
+    catalogue, python_program = python_catalogue()
+    builder = sh.make(python_program, catalogue=catalogue)
+    command = builder("-c", "print('hooked', flush=True)")
+
+    async def run_case() -> None:
+        """Start a child, let it exit, and settle under the refusing hook."""
+        with (
+            scoped(
+                ScopeConfig(
+                    allowlist=frozenset([python_program]),
+                    after_hooks=(refuse,),
+                ),
+            ),
+            sh.observe(observe),
+        ):
+            handle = await command.start()
+            with pytest.raises(_HookRefusalError):
+                await handle.wait()
+
+    asyncio.run(run_case())
+
+    settled = _settled_event(events)
+    assert settled.terminal_outcome is TerminalOutcome.ERROR, (
+        "a run refused by its own after hook must settle as an error, got "
+        f"{settled.terminal_outcome}"
     )
 
 
