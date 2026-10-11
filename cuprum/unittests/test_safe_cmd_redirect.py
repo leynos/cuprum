@@ -246,15 +246,22 @@ def _assert_no_descriptor_leak(descriptors: DescriptorLog) -> None:
 def test_path_target_does_not_leak_the_descriptor(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
-    spawn_backend: str,
     tmp_path: Path,
     target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
+    *,
+    spawn_backend: str,
 ) -> None:
     """Cuprum's copy of a path descriptor is closed once the child has it.
 
     The run is observed from the spawn layer, which is the only place the
     descriptor exists: :func:`_spawn_subprocess` opens it, hands it to the
     child, and closes its own copy.
+
+    ``spawn_backend`` is requested for its side effect rather than its value,
+    so it is keyword-only: the ownership rule must hold on both routes, but
+    neither the label nor the choice is read here. Five positional parameters
+    would exceed the configured limit, and the four that are read positionally
+    are the ones the case is about.
     """
     _, execute = execution_strategy
     log = tmp_path / "out.log"
@@ -571,6 +578,7 @@ def test_path_target_closed_after_a_spawn_failure(
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
     target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
+    *,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A spawn that raised still closes the descriptor cuprum opened for it.
