@@ -16,6 +16,7 @@ against the child's raw stdin bytes rather than against a decoded string.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import time
 import typing as typ
 
@@ -173,6 +174,91 @@ def test_stream_text_chunks_use_configured_encoding(
     )
 
 
+# The child reports its raw stdin bytes into the file named by its first
+# argument. Hex keeps the comparison exact and independent of the capture
+# encoding, and a file rather than stdout keeps the evidence readable whether
+# or not the run captures output.
+_RECORD_STDIN_HEX = (
+    "import pathlib, sys; "
+    "pathlib.Path(sys.argv[1]).write_text(sys.stdin.buffer.read().hex())"
+)
+
+# ISO-2022-JP is a stateful codec: it switches between its ASCII and JIS X 0208
+# sets with escape sequences, so the bytes a later chunk encodes depend on the
+# state a previous one left behind, and the final escape back to ASCII only
+# appears on the encoder's own flush. The first chunk ends mid-JIS, so a writer
+# that reset the encoder between chunks emits a fresh escape for the second and
+# a writer that never flushed never returns to ASCII — both plainly visible in
+# the recorded bytes. Mixed ASCII and non-ASCII across the chunks is what makes
+# the state switch happen more than once, so a reset cannot pass by luck.
+_STATEFUL_CODEC_CHUNKS = ("Aあ", "Bい")
+
+# The lexer-driven chunking in _build_tokenizer's neighbourhood would treat
+# CJK ranges as identifiers; these literals are data, so they are escaped.
+
+
+def test_stream_text_chunks_share_encoder_state_and_flush(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """The writer keeps one encoder for the run and emits its final flush.
+
+    Two chunks under a stateful codec are the only way to see either
+    property from the child's side. A per-chunk encoder makes the second chunk
+    re-declare the character set it is already in, and an omitted flush loses
+    the escape that returns the stream to ASCII, so a wrong result differs from
+    the right one in the recorded bytes rather than in a decode that would
+    paper over it.
+
+    The expectation is computed here, from the codec, with the same
+    chunk-by-chunk protocol the writer follows: this is the independent oracle,
+    not a copy of whatever the writer produced. It is checked against the
+    codec's own whole-string encoding too, so the oracle cannot itself be
+    wrong in the same direction as the implementation.
+    """
+    _, execute = execution_strategy
+    record = tmp_path / "stdin.hex"
+    command = python_builder("-c", _RECORD_STDIN_HEX, str(record))
+    context = ExecutionContext(encoding="iso-2022-jp", errors="strict")
+
+    result = execute(
+        command,
+        {"stdin": StdinStream(_chunks(*_STATEFUL_CODEC_CHUNKS)), "context": context},
+    )
+
+    assert result.exit_code == 0, "a stateful-codec stream should exit cleanly"
+    assert record.exists(), "the child must have written its stdin record"
+    expected = _encode_across_chunks(_STATEFUL_CODEC_CHUNKS, "iso-2022-jp")
+    assert expected == "".join(_STATEFUL_CODEC_CHUNKS).encode("iso-2022-jp"), (
+        "the oracle must agree with the whole-string encoding, or it is not an "
+        "independent check of the writer"
+    )
+    assert record.read_text(encoding="utf-8") == expected.hex(), (
+        "the child must receive the bytes a single encoder produces across "
+        "every chunk, including its final flush; expected "
+        f"{expected.hex()!r}"
+    )
+
+
+def _encode_across_chunks(chunks: cabc.Iterable[str], encoding: str) -> bytes:
+    """Encode *chunks* with one incremental encoder, flushing at the end.
+
+    This is the streaming protocol the writer is expected to follow, spelled
+    out independently of it: one encoder for the whole run, a non-final encode
+    per chunk, and one final encode to flush what the last chunk left pending.
+
+    Returns
+    -------
+    bytes
+        The concatenated payload the child should receive.
+    """
+    encoder = codecs.getincrementalencoder(encoding)("strict")
+    return b"".join(encoder.encode(chunk, final=False) for chunk in chunks) + (
+        encoder.encode("", final=True)
+    )
+
+
 def test_stream_survives_early_child_close(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
@@ -242,6 +328,60 @@ def test_stream_text_chunks_honour_strict_errors(
 
     assert isinstance(info.value.__cause__, UnicodeEncodeError), (
         "the encoder failure should be chained as the cause"
+    )
+
+
+def _invalid_chunk_producer() -> cabc.AsyncIterator[str | bytes]:
+    """Yield one value that is neither ``str`` nor ``bytes``.
+
+    The value is a ``bool``, and it is reached without a type error because
+    this is where the types part company with the runtime. The declared chunk
+    type is a promise about what the *caller* supplies, and ``StdinStream``
+    accepts an arbitrary async iterable: a producer that is untyped, that is
+    generated, or that is written in another language satisfies the annotation
+    only by assertion. Cuprum must refuse such a chunk at runtime rather than
+    trusting the annotation, and a test can only reach that refusal by handing
+    it the same kind of value a buggy producer would.
+
+    ``bool`` is chosen over ``None`` or an ``int`` because it is the value that
+    looks most like a legitimate buffer (it is an ``int`` subclass, so a naive
+    ``isinstance(chunk, int)``-shaped check would accept it) and because
+    CPython rejects it for a ``bytes`` payload with a distinct message, so a
+    mistaken acceptance is visible in the failure rather than silent.
+
+    Returns
+    -------
+    collections.abc.AsyncIterator[str | bytes]
+        A producer whose single chunk is not a valid chunk type.
+    """
+    return _chunks(typ.cast("str | bytes", True))
+
+
+def test_a_runtime_invalid_chunk_is_a_source_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A chunk of the wrong runtime type is refused, with its cause chained.
+
+    The child echoes its stdin, so a producer whose bad chunk were *accepted*
+    would either deliver something or fail somewhere less specific. What the
+    caller must see is the documented ``StdinSourceError`` with the offending
+    type's ``TypeError`` chained, because that is the only thing that tells
+    them their producer — not the child, not the pipe — is at fault.
+
+    Both entry points are exercised: ``run()`` and ``run_sync()`` reach the
+    writer by different routes, and a caller meets each one separately.
+    """
+    _, execute = execution_strategy
+    command = _stream_command(python_builder)
+
+    with pytest.raises(StdinSourceError) as info:
+        execute(command, {"stdin": StdinStream(_invalid_chunk_producer())})
+
+    assert isinstance(info.value.__cause__, TypeError), (
+        "the writer's type refusal must be chained as the cause, so the caller "
+        f"can tell it apart from a pipe or encoder failure; got "
+        f"{info.value.__cause__!r}"
     )
 
 

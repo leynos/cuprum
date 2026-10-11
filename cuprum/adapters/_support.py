@@ -55,6 +55,13 @@ def _event_common_fields(
         # failed to resolve a bare program name is indistinguishable from an
         # overlay one without it, and its values are a fixed set of three.
         yield name("env_mode"), str(event.env_mode)
+    if event.error_category is not None:
+        # Also a ``StrEnum``, rendered for the same reason. It is the field
+        # that separates two standard-stream boundaries raising the same
+        # exception class, so a consumer must read the value rather than the
+        # member's ``repr``; it is ``None`` on every phase but ``stdio_error``,
+        # and the adapters that emit it keep their own narrower field set.
+        yield name("error_category"), str(event.error_category)
     if event.terminal_outcome is not None:
         yield name("terminal_outcome"), str(event.terminal_outcome)
     for field, value in _verbatim_fields(event):

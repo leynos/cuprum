@@ -17,6 +17,7 @@ from cuprum.events import (
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
 )
 from cuprum.program import Program
@@ -35,6 +36,7 @@ _OPTIONAL_FIELDS = (
     "resource_usage_mode",
     "env_mode",
     "terminal_outcome",
+    "error_category",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 
@@ -73,6 +75,7 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
+        error_category=draw(st.none() | st.sampled_from(StdioFailureCategory)),
     )
 
 
@@ -168,6 +171,18 @@ class TestAdapterProjectionProperties:
         """Return the structured-log fields the event phase may expose."""
         if event.phase == "pipeline_fail_fast":
             return (canonical - {"argv"}) | {"exec_id"}
+        if event.phase == "stdio_error":
+            return {"program"} | {
+                field
+                for field in (
+                    "pid",
+                    "operation",
+                    "error_type",
+                    "error_category",
+                    "exec_id",
+                )
+                if getattr(event, field) is not None
+            }
         if event.phase != "capture_eof_grace_expired":
             return canonical
 
@@ -197,6 +212,18 @@ class TestAdapterProjectionProperties:
             assert "cuprum_argv" not in extra, (
                 "fail-fast extras must omit the raw argument vector"
             )
+        elif event.phase == "stdio_error":
+            assert "cuprum_argv" not in extra, (
+                "stdio-failure extras must omit the raw argument vector"
+            )
+            if event.exec_id is not None:
+                assert extra["cuprum_exec_id"] == event.exec_id, (
+                    "stdio-failure extras must preserve execution correlation"
+                )
+            if event.error_category is not None:
+                assert extra["cuprum_error_category"] == event.error_category, (
+                    "stdio-failure extras must name the failing boundary"
+                )
         elif event.phase == "capture_eof_grace_expired":
             assert "cuprum_argv" not in extra, (
                 "grace-expiry extras must omit the raw argument vector"
