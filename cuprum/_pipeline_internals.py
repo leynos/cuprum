@@ -74,15 +74,10 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
-# ``_collect_hooks`` and ``_enforce_allowlist`` are re-exported from
-# ``cuprum._context_policy``, which they moved to when this module reached
-# pylint's 400-line ceiling. Callers still reach them through here.
 __all__ = [
     "_await_pipeline_wait_result",
     "_build_timeout_expired_error",
-    "_collect_hooks",
     "_collect_pipeline_inputs",
-    "_enforce_allowlist",
     "_gather_pipeline_outputs",
     "_sh_module",
 ]
