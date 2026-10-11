@@ -27,8 +27,19 @@ from cuprum.sh import (
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from pathlib import Path
+
     from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
+
+# PEP 695 aliases evaluate lazily, so the ``TYPE_CHECKING``-only names in this
+# signature are never resolved at runtime — the same shape the command-path
+# byte tests use for their entry-point alias.
+type PipelineBytesExecuteFn = cabc.Callable[
+    [Pipeline, RunOutputOptions],
+    BytesPipelineResult,
+]
 
 # Every byte value, then a byte no UTF-8 sequence can start with, a NUL, a
 # second such byte, and a lone continuation byte. A pipeline that decoded
@@ -152,18 +163,79 @@ def test_pipeline_text_mode_is_unchanged_beside_the_byte_exact_entry_point() -> 
     )
 
 
-def test_pipeline_run_bytes_rejects_line_observation_before_spawning() -> None:
-    """``on_line`` is refused up front, exactly as the command path refuses it."""
-    pipeline, allowlist = _relay_pipeline()
+def _marker_python_source(marker: Path) -> str:
+    """Return a child that creates ``marker`` as soon as it runs."""
+    return f"import pathlib; pathlib.Path({str(marker)!r}).write_text('spawned')"
+
+
+def _marker_pipeline(marker: Path) -> tuple[Pipeline, frozenset[Program]]:
+    """Build a pipeline whose first stage marks a spawn, then produces output."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", _marker_python_source(marker))
+    consumer = python("-c", "import sys; sys.stdin.buffer.read()")
+    return producer | consumer, frozenset([python_program])
+
+
+def _run_pipeline_bytes_async(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> BytesPipelineResult:
+    """Execute a pipeline through the asynchronous byte-exact entry point."""
+    return asyncio.run(pipeline.run_bytes(output=output))
+
+
+def _run_pipeline_bytes_sync(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> BytesPipelineResult:
+    """Execute a pipeline through the synchronous byte-exact entry point."""
+    return pipeline.run_bytes_sync(output=output)
+
+
+@pytest.fixture(
+    params=[_run_pipeline_bytes_async, _run_pipeline_bytes_sync],
+    ids=["run_bytes()", "run_bytes_sync()"],
+)
+def pipeline_byte_entry_point(
+    request: pytest.FixtureRequest,
+) -> PipelineBytesExecuteFn:
+    """Provide each pipeline byte-exact entry point behind one callable shape."""
+    return typ.cast("PipelineBytesExecuteFn", request.param)
+
+
+def test_pipeline_run_bytes_rejects_line_observation_before_spawning(
+    pipeline_byte_entry_point: PipelineBytesExecuteFn,
+    tmp_path: Path,
+) -> None:
+    """``on_line`` is refused up front, exactly as the command path refuses it.
+
+    The refusal is asserted two ways because the exception alone cannot
+    distinguish the guarantees: a pipeline that spawned its stages and only
+    then raised would still raise ``ValueError``, and would still deliver no
+    line event. The first stage creates a marker file as its first act, so the
+    marker's absence is what proves the pre-spawn guarantee — on both entry
+    points, mirroring the command-path test.
+    """
+    marker = tmp_path / "spawned.txt"
+    pipeline, allowlist = _marker_pipeline(marker)
     observed: list[LineEvent] = []
 
     with (
         scoped(ScopeConfig(allowlist=allowlist)),
         pytest.raises(ValueError, match="on_line"),
     ):
-        pipeline.run_bytes_sync(output=RunOutputOptions(on_line=observed.append))
+        pipeline_byte_entry_point(
+            pipeline,
+            RunOutputOptions(on_line=observed.append),
+        )
 
     assert not observed, "the rejection must happen before any line is observed"
+    assert not marker.exists(), (
+        "no stage must be spawned, but one ran far enough to create "
+        f"{marker}; a spawned stage that raised before observing would pass a "
+        "check that only looks at the callback"
+    )
 
 
 def test_pipeline_run_bytes_reports_timeout_stderr_in_stage_order() -> None:
