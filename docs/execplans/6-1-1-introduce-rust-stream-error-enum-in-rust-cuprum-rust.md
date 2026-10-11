@@ -2448,14 +2448,27 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   agrees rather than contradicting, which is the frame that decides:
 
   ```text
-  git merge-tree --write-tree origin/main HEAD   -> clean, tree 16b15718
-  git diff --name-only origin/main 16b15718      -> 21 paths
+  git merge-tree --write-tree origin/main 3f34f8d9 -> clean, tree 16b15718
+  git diff --name-only origin/main 16b15718        -> 21 paths
+  git merge-tree --write-tree origin/main HEAD     -> clean, tree a94b1c0c
+  git diff --name-only origin/main a94b1c0c        -> 21 paths
   ```
 
   Excluding the lockfile and this plan, that is **19** at the merge ref and
   **19** on the branch — the two frames now list the same paths, since the
   rebase made both `typos` files byte-identical to `main` and they left both
   frames at once, exactly as the prediction-failure entry above records.
+
+  A provenance correction, added rather than folded into the text beside it:
+  the derivation was first written naming only `16b15718`, and that tree is
+  the merge tree of `3f34f8d9`, this entry's parent, not of the `71d69bb2`
+  head that commits the entry. Re-derived at the tip, `HEAD` merges to
+  `a94b1c0c`. Both are printed above because the count is what the entry turns
+  on, and the count does not move: 21 paths either way, 19 excluding the
+  lockfile and this plan, so the surface is one over the tolerance on both
+  heads and the breach stands as recorded. Only the citation was taken a
+  commit early, which is the failure mode an unlabelled `HEAD` in a transcript
+  invites — the reader cannot tell which commit a bare `HEAD` was.
 
   The nineteenth file is `tests/test_native_pipeline_stall_properties.py`. It
   is not branch work: it is `main`'s own module, added by `main`'s commit
