@@ -1985,12 +1985,14 @@ arguments, exception text, and other unbounded values are not metric labels.
 
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
-`config.encoding` and `OBSERVER_ERROR_POLICY`, then flushes that decoder at end
-of stream. This preserves multibyte characters that span read chunks. The error
-policy is the observer's rather than the caller's because echo renders a view
-of the child's bytes: reading `config.errors` here would let a strict capture
-policy end a run from the read loop. The capture decodes its own untouched
-buffer and still honours `config.errors`; see
+`config.encoding` and `config.view_errors`, then flushes that decoder at end of
+stream. This preserves multibyte characters that span read chunks.
+`_StreamConfig.view_errors` resolves the error policy for a view: byte-exact
+runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
+`config.errors` there would let a strict capture policy end a run from the read
+loop, while text runs keep `config.errors`, so a strict text run still raises
+from echo exactly as it did before byte mode existed. The capture decodes its
+own untouched buffer and still honours `config.errors`; see
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw

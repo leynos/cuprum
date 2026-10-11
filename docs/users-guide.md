@@ -275,6 +275,13 @@ decoded lines, so undecodable bytes are replaced in the _event_ while the
 captured payload keeps the child's own bytes. The two travel on separate
 channels, and neither is a substitute for the other.
 
+That replacement is scoped to byte mode. `ExecutionContext.errors` keeps its
+meaning everywhere else: a text-mode run with `errors="strict"` still raises
+`UnicodeDecodeError` from line observation and from echo on undecodable bytes,
+exactly as it did before the byte-exact mode existed. A byte-exact run instead
+returns the child's own bytes for the caller to validate — the run cannot both
+promise bytes nobody decoded and let a decode decide its outcome.
+
 For a pipeline, the same rule applies to each stage: only the final stage's
 stdout is captured, interior stdout feeds the next stage and is reported as
 `None`, and each stage reports its own `stderr`.

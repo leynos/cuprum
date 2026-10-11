@@ -206,25 +206,22 @@ Two behaviours are worth noting before migrating:
   cancellation still re-raises `asyncio.CancelledError` rather than being
   converted into a timeout.
 
-### Strict decoding now governs the capture alone
+### Byte-mode views replace undecodable input; text mode is unchanged
 
-`ExecutionContext(errors="strict")` used to govern every decode, so a strict
-run raised `UnicodeDecodeError` from any undecodable byte it read — including
-one read only to emit a line event on a run that captured nothing. Line
-observation and echo render a *view* of the child's bytes rather than reporting
-them, so from 0.2.0 they always replace undecodable input and the policy
-applies to the capture.
+A byte-exact run's line observation and echo render a *view* of the child's
+bytes rather than reporting them. Undecodable input is replaced in those views
+rather than left to raise, so an ambient `sh.observe()` hook cannot end a
+`run_bytes()` from the read loop and cost it the bytes it had already captured.
+This is the one place `ExecutionContext.errors` does not reach, and it is
+scoped to the byte-exact mode.
 
-In practice the capturing text run is unchanged: `run()`, `run_sync()`, and
-`SafeCmd.lines()` still raise, because each decodes its capture buffer. What
-changed is that a run with `capture=False` raises nothing, and `on_line`
-callbacks, `lines()` events, and echo sinks receive `U+FFFD` rather than
-raising. Code that used strict decoding as stream validation must instead
-validate the captured value: `result.stdout` still raises under a strict
-capture, and `run_bytes()` returns the child's bytes so the caller can validate
-them. An ambient `sh.observe()` hook can no longer end a run under a strict
-policy either, which is what makes a strict `run_bytes()` return the bytes it
-captured.
+Text mode keeps the policy it always had. `run()`, `run_sync()`, and
+`SafeCmd.lines()` under `errors="strict"` still raise `UnicodeDecodeError` on
+undecodable output — from the line reader when a view meets those bytes, and
+from the capture decode otherwise — exactly as they did before 0.2.0. A caller
+who used strict decoding as stream validation keeps that guarantee. For a
+byte-exact run, validation is the caller's to perform on the returned bytes,
+which is what `run_bytes()` exists to make possible.
 
 Callers who previously worked around decoding by round-tripping through a
 surrogate encoding can now drop it and request the byte mode directly. See the

@@ -477,17 +477,20 @@ existing result class, and no `TimeoutExpired`, is subclassed or modified;
 
 ### Observation and echo render a view, never the capture
 
-Keeping both channels open costs one rule, and the rule is not optional: every
-decode that renders a _view_ of the child's bytes replaces undecodable input,
-so it can never end the run it observes. That is `OBSERVER_ERROR_POLICY` in
-`cuprum/_constants.py`, and it governs the line observer's decoder and both
-echo decoders. `ExecutionContext.errors` governs the capture alone, which
-decodes its own untouched buffer.
+Keeping both channels open costs one rule, and the rule is not optional: in a
+byte-exact run, every decode that renders a _view_ of the child's bytes
+replaces undecodable input, so it can never end the run it observes. That is
+`OBSERVER_ERROR_POLICY` in `cuprum/_constants.py`, and it governs the byte-mode
+line observer's decoder and both byte-mode echo decoders. The rule is scoped to
+byte mode by `cuprum/_streams._StreamConfig.view_errors`: a text run's views
+decode under `ExecutionContext.errors`, in step with its capture, exactly as
+they did before byte mode existed. `ExecutionContext.errors` governs the
+capture alone in a byte run, which decodes its own untouched buffer.
 
-The rule is load-bearing rather than stylistic. Reading `config.errors` in a
-view decoder would let a hook the caller never registered decide the run's
-fate: under `errors="strict"` the observer's `UnicodeDecodeError` escapes the
-drain's read loop and kills a `run_bytes()` that had already captured the
+The scope is load-bearing rather than stylistic. Reading `config.errors` in a
+byte run's view decoder would let a hook the caller never registered decide the
+run's fate: under `errors="strict"` the observer's `UnicodeDecodeError` escapes
+the drain's read loop and kills a `run_bytes()` that had already captured the
 child's bytes, so the guarantee above — that a registered `sh.observe()` hook
 stays supported — would hold only for the default error policy. The capture
 still enforces a strict policy, because a text run that asked to reject

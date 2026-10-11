@@ -372,21 +372,17 @@
   a second, contradictory contract for one stream; structured observation
   registered with `sh.observe()` is unaffected and still receives decoded
   lines, since capture and line emission travel on separate channels. That
-  holds even under `ExecutionContext(errors="strict")`: observation and echo
-  render a *view* of the child's bytes and always replace undecodable input, so
-  an ambient hook cannot raise from the read loop and cost a byte-exact run the
-  bytes it had already captured.
+  holds even under `ExecutionContext(errors="strict")`: a byte-exact run's
+  observation and echo render a *view* of the child's bytes and replace
+  undecodable input, so an ambient hook cannot raise from the read loop and
+  cost the byte-exact run the bytes it had already captured.
 
-  Because the policy now governs the capture rather than every decode, strict
-  decoding no longer raises once capture is out of the picture. A strict run
-  still raises on undecodable output when it decodes a capture buffer — so
-  `run()`, `run_sync()`, and `SafeCmd.lines()` are unchanged in the ordinary
-  capturing case — but a run with `capture=False` raises nothing, and `on_line`
-  callbacks, `SafeCmd.lines()` events, and echo sinks receive
-  replacement-character views rather than raising. Previously a strict
-  `on_line` callback or `lines()` event raised `UnicodeDecodeError` in every
-  case, including a run capturing nothing; callers who relied on strict
-  decoding as stream validation should validate the captured value instead.
+  The replacement view is scoped to byte mode, so text mode is unchanged. A
+  strict text run still raises from the line reader and from echo, exactly as
+  it did before the byte-exact mode existed; its views decode under
+  `ExecutionContext.errors` in step with the capture. Only a byte-exact run
+  gets the non-aborting view, and only where the capture is the child's own
+  bytes.
 
   An external cancellation re-raises `asyncio.CancelledError` rather than being
   reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
