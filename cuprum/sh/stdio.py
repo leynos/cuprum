@@ -66,7 +66,7 @@ def _reject_unexpected_payload(
     raise ValueError(msg)
 
 
-def _reject_sentinel_descriptor(value: int | typ.IO[bytes] | typ.IO[str]) -> None:
+def _reject_sentinel_descriptor(value: object) -> None:
     """Refuse a negative descriptor before it can reach ``subprocess``.
 
     Negative integers are not descriptors; they are ``subprocess``'s sentinels,
@@ -81,9 +81,11 @@ def _reject_sentinel_descriptor(value: int | typ.IO[bytes] | typ.IO[str]) -> Non
 
     Parameters
     ----------
-    value : int | IO[bytes] | IO[str]
-        The ``fd`` variant's payload. File objects are left alone: they are
-        resolved to a descriptor later, and a file object is never a sentinel.
+    value : object
+        The ``fd`` variant's payload, already refused by
+        :func:`_reject_unusable_fd` if it was absent or a ``Path``. File objects
+        are left alone: they are resolved to a descriptor later, and a file
+        object is never a sentinel.
 
     Raises
     ------
@@ -98,6 +100,32 @@ def _reject_sentinel_descriptor(value: int | typ.IO[bytes] | typ.IO[str]) -> Non
             "use StdioTarget.pipe() or StdioTarget.inherit()."
         )
         raise ValueError(msg)
+
+
+def _reject_unusable_fd(resource: object) -> None:
+    """Refuse an ``fd`` payload that is not a usable descriptor.
+
+    The two fields are independently typed, so ``kind == "fd"`` does not narrow
+    ``value`` on its own. Refusing a path here states the correlation the type
+    cannot, and keeps :func:`_reject_sentinel_descriptor` total over the
+    payloads an ``fd`` target can actually carry.
+
+    Raises
+    ------
+    ValueError
+        If the payload is absent or is a ``Path``.
+    """
+    if resource is None:
+        msg = "StdioTarget.fd requires a descriptor or file object"
+        raise ValueError(msg)
+    if isinstance(resource, Path):
+        msg = f"StdioTarget.fd requires a descriptor or file object, got {resource!r}"
+        # Refused as a value error for the same reason the ``path`` variant is:
+        # a wrong-shaped payload is a caller error, and the four variants are
+        # one vocabulary whose refusals all read alike. A ``Path`` is a
+        # plausible *intent* here — the caller meant to open a file — so the
+        # refusal names the method that does that rather than the type.
+        raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 def _normalize_payload(target: StdioTarget) -> None:
@@ -117,20 +145,8 @@ def _normalize_payload(target: StdioTarget) -> None:
         the ``path`` variant carries something other than a path.
     """
     if target.kind == "fd":
-        resource = target.value
-        if resource is None:
-            msg = "StdioTarget.fd requires a descriptor or file object"
-            raise ValueError(msg)
-        if isinstance(resource, Path):
-            # The two fields are independently typed, so ``kind == "fd"`` does
-            # not narrow ``value`` on its own. Refusing a path here states the
-            # correlation the type cannot, and keeps the check below total over
-            # the payloads an ``fd`` target can actually carry.
-            msg = (
-                f"StdioTarget.fd requires a descriptor or file object, got {resource!r}"
-            )
-            raise ValueError(msg)
-        _reject_sentinel_descriptor(resource)
+        _reject_unusable_fd(target.value)
+        _reject_sentinel_descriptor(target.value)
         return
     if target.kind != "path":
         return

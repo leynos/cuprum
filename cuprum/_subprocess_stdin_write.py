@@ -16,6 +16,7 @@ import errno
 import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails
+from cuprum._stdio_diagnostics import _emit_stdio_error, _StdioFailure
 from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
@@ -105,6 +106,47 @@ class _StreamSink:
     def mark_invalid_chunk(self) -> None:
         """Record that the producer yielded a chunk cuprum cannot write."""
         self._chunk_error = StdioFailureCategory.INVALID_CHUNK
+
+    def report_boundary(
+        self,
+        exc: BaseException,
+        *,
+        category: StdioFailureCategory,
+        operation: str,
+    ) -> None:
+        """Emit the diagnostic for a failure of this run's write side.
+
+        The approach is unary for the reason this class exists: the observation
+        and the child are bound once per run and never vary between chunks, so
+        the sink already carries them together. A caller names only the two
+        things that differ between one failure and the next — which boundary
+        this was, and which exception it was.
+
+        Only the *report* lives here. Each caller raises its own source error at
+        its own ``raise``, because the linter that requires a raised exception
+        to be visible in the function that raises it is also what keeps a
+        docstring's ``Raises`` section honest about a private class no caller
+        can import.
+
+        Parameters
+        ----------
+        exc : BaseException
+            The failure the diagnostic names. Only its class name is reported;
+            the message stays with the caller, per the payload policy.
+        category : StdioFailureCategory
+            The boundary this failure belongs to.
+        operation : str
+            The stable operation name for that boundary.
+        """
+        _emit_stdio_error(
+            self.observation,
+            _StdioFailure(
+                category=category,
+                operation=operation,
+                error_type=type(exc).__name__,
+                pid=self.process.pid,
+            ),
+        )
 
     def encode(self, text: str, *, final: bool) -> bytes:
         """Encode *text*, attributing any failure to the encoder boundary.

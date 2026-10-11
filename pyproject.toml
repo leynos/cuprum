@@ -502,6 +502,8 @@ full_name = [
     "cuprum.sh.stdio._reject_unknown_kind",
     "cuprum.sh.stdio._reject_unexpected_payload",
     "cuprum.sh.stdio._normalize_payload",
+    "cuprum.sh.stdio._reject_unusable_fd",
+    "cuprum.sh.stdio._reject_sentinel_descriptor",
 ]
 reason = "Called only from StdioTarget.__post_init__, which the dataclass machinery invokes after __init__ and no source line names; StdioTarget is constructed directly (and by RunOutputOptions) rather than through a factory Skylos can follow."
 

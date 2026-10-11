@@ -258,43 +258,11 @@ def run_capturing(
     return RunOutcome(tuple(events), tuple(metrics.calls), raised)
 
 
-def assert_classified_once(
-    outcome: RunOutcome,
+def _assert_event_names_the_boundary(
+    event: ExecEvent,
     expected: ExpectedClassification,
-    *,
-    execution_id: uuid.UUID | None = None,
 ) -> None:
-    """Assert the boundary was reported once, on every channel, coherently.
-
-    ``expected`` carries the boundary and the shape of its report; see
-    ``ExpectedClassification`` for why those five fields are one value rather
-    than five keyword arguments.
-
-    The assertions are kept together because they are one claim seen from
-    several sides. A category on the event with no matching counter means the
-    operator's dashboard and their event stream disagree; a counter without the
-    event means the same in reverse; and either with a correlation token that
-    does not belong to the execution makes the record unattributable.
-
-    The correlation is checked against the run's *other* events rather than by
-    asserting the token is a UUID. A UUID check alone is satisfied by a token
-    the diagnostic minted for itself, which is precisely the defect it is meant
-    to catch; every other event in the run carries the token the execution was
-    started under, so a diagnostic that agrees with them is attributable and
-    one that disagrees is not.
-
-    ``execution_id`` pins the token to a specific execution the caller already
-    observed, for cases that can name one. It is not required, because a
-    pre-spawn boundary starts no child and the caller may have no token in hand
-    — the sibling check above still applies and is the one that matters.
-    """
-    events = outcome.stdio_events()
-    assert len(events) == 1, (
-        f"a failing boundary must report exactly once; found {len(events)} "
-        f"stdio_error events among {[e.phase for e in outcome.events]}"
-    )
-    event = events[0]
-
+    """Assert the diagnostic names the boundary the case expected."""
     assert event.error_category is expected.category, (
         f"the boundary must be named {expected.category!r}; "
         f"found {event.error_category!r}"
@@ -311,6 +279,26 @@ def assert_classified_once(
         f"expected present={expected.pid_present}, found {event.pid!r}"
     )
 
+
+def _assert_event_is_correlated(
+    event: ExecEvent,
+    outcome: RunOutcome,
+    execution_id: uuid.UUID | None,
+) -> None:
+    """Assert the diagnostic carries the execution's own token.
+
+    The correlation is checked against the run's *other* events rather than by
+    asserting the token is a UUID. A UUID check alone is satisfied by a token
+    the diagnostic minted for itself, which is precisely the defect this is
+    meant to catch; every other event in the run carries the token the
+    execution was started under, so a diagnostic that agrees with them is
+    attributable and one that disagrees is not.
+
+    ``execution_id`` pins the token to a specific execution the caller already
+    observed, for cases that can name one. It is not required, because a
+    pre-spawn boundary starts no child and the caller may have no token in
+    hand — the sibling check still applies and is the one that matters.
+    """
     assert isinstance(event.exec_id, uuid.UUID), (
         f"the correlation token must be a minted UUID; found {event.exec_id!r}"
     )
@@ -332,6 +320,12 @@ def assert_classified_once(
             f"carried {event.exec_id!r}"
         )
 
+
+def _assert_metric_reports_the_boundary(
+    outcome: RunOutcome,
+    expected: ExpectedClassification,
+) -> None:
+    """Assert the counter agrees with the event, once, on a bounded label set."""
     counters = outcome.stdio_counters()
     assert len(counters) == 1, (
         "exactly one metric increment must be recorded for one failure; "
@@ -354,6 +348,39 @@ def assert_classified_once(
         "boundary, so no unbounded value can become a metric series; found "
         f"{sorted(labels)}"
     )
+
+
+def assert_classified_once(
+    outcome: RunOutcome,
+    expected: ExpectedClassification,
+    *,
+    execution_id: uuid.UUID | None = None,
+) -> None:
+    """Assert the boundary was reported once, on every channel, coherently.
+
+    ``expected`` carries the boundary and the shape of its report; see
+    ``ExpectedClassification`` for why those five fields are one value rather
+    than five keyword arguments.
+
+    The claims are checked together because they are one claim seen from
+    several sides. A category on the event with no matching counter means the
+    operator's dashboard and their event stream disagree; a counter without the
+    event means the same in reverse; and either with a correlation token that
+    does not belong to the execution makes the record unattributable.
+
+    Each side is asserted by its own helper, so a failure names the channel it
+    came from before it names the disagreement.
+    """
+    events = outcome.stdio_events()
+    assert len(events) == 1, (
+        f"a failing boundary must report exactly once; found {len(events)} "
+        f"stdio_error events among {[e.phase for e in outcome.events]}"
+    )
+    event = events[0]
+
+    _assert_event_names_the_boundary(event, expected)
+    _assert_event_is_correlated(event, outcome, execution_id)
+    _assert_metric_reports_the_boundary(outcome, expected)
 
     assert outcome.failure is not None, (
         "a boundary that failed must reach the caller, not be swallowed"

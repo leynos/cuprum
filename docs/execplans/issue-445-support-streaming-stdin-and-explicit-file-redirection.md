@@ -1431,7 +1431,244 @@ likelihood, and mitigation.
       (`lint-clippy`, `lint-whitaker`, `spelling`), and all of
       `github-actions-lint` (`yamllint`, `actionlint`).
 
+- [x] (2026-10-11 04:38Z) Dropped the stray blank line at head `daa2edc2`.
+      This is the `I001` fix the previous entry described: one deleted line in
+      `cuprum/sh/__init__.py`, verified as the sole change.
+
+- [x] (2026-10-11 04:39Z) Recorded the round-6 rebase and its lint defect in
+      the plan at `8994f723`, and (04:54Z) recorded the proof assessment as
+      **not applicable** at `367ab1f3`. The latter was re-derived at the
+      current head rather than inherited: both verifier families are
+      unaffected. The Kani family is four proof files under
+      `rust/*/src/*kani_proofs.rs` and this branch changes **zero** Rust files;
+      the CrossHair family is three files under `cuprum/unittests/*crosshair*`,
+      all unchanged, as are the production modules they import, so those
+      obligations are untouched by construction rather than by re-running them.
+      Verus is vendored tooling with no proof authored. `afe4a697` (04:59Z)
+      corrected one word in that note, because the spelling gate is a
+      correction table rather than an exemption list: this word is one it
+      *corrects toward* American spelling, so the British-oxendict form is
+      rejected and the American form is required. Quoting the word itself in
+      prose is enough to trip the gate, so this entry names the fact rather
+      than the token.
+
+- [x] (2026-10-11 05:04Z) `bd8ee246` fixed two review-reported boundary
+      defects. `StdioTarget.fd()` rejected only `None`, so a negative integer
+      reached `subprocess` as a **sentinel** rather than a descriptor: `-1` is
+      PIPE, `-2` is STDOUT, `-3` is DEVNULL. For an output stream that is a
+      hang rather than a miswrite — `subprocess` creates a pipe the resolved
+      binding denies, nothing reads it, and the child blocks on a full buffer.
+      The refusal now lands at the target the caller builds, and the resolver
+      guards the value it hands to `subprocess` as well, because a
+      caller-supplied `fileno()` can return a sentinel too. Separately, the
+      encoder boundary was marked only where the encoder is *built*, so a
+      strict codec's `UnicodeEncodeError` reached the classifier unmarked and
+      was reported as `PIPE` — a pipe that was never at fault. Marking now
+      covers every call that can raise for an encoding reason: the lazy build,
+      the per-chunk encode, and the final flush. The pipe write stays outside
+      it, and a successful encode clears the mark, so an ordinary pipe fault
+      still classifies as `PIPE`.
+
+- [x] (2026-10-11 05:09Z) `8135f126` released the stalled stdin pipe instead
+      of only timing out. Bounding a wait is not finishing the close it gave up
+      on: `StreamWriter.close()` delegates to the transport's `write_eof`, and
+      CPython's `_UnixWritePipeTransport` completes that shutdown *only when
+      its buffer is empty*. With bytes still buffered it sets `_closing` and
+      returns, leaving the descriptor open and the writer registered with the
+      loop. The stalled case is exactly the one with a non-empty buffer, so
+      every stalled run leaked a descriptor for the life of the process. The
+      `TimeoutError` branch now calls `stdin.transport.abort()`, the
+      transport's unconditional release. The abort is best-effort and its
+      handler is ordered before the `OSError` arm deliberately: the builtin
+      `TimeoutError` that `wait_for` raises *is* an `OSError`, so the broader
+      handler would otherwise report a timeout as a pipe fault.
+
+- [x] (2026-10-11 05:20Z) `6f5b811f` bounded producer finalization and swapped
+      two cleanup steps. A `StdinStream` producer is caller code and its
+      `aclose()` is caller code too, so two consequences were unhandled. The
+      wait was unbounded because `wait_for` cannot bound a finalizer that
+      catches `CancelledError` while finishing its own release: a 0.1 s
+      `wait_for` window measured 0.50 s against an absorbing finalizer, while
+      `asyncio.wait` honoured the same window. The bound is now `asyncio.wait`,
+      and the asymmetry is deliberate — cuprum bounds its own wait and cannot
+      bound code it does not own, so a finalizer that ignores the request
+      continues in the background. That cooperation limit is stated in the new
+      module rather than papered over. The order was also wrong: the pipe was
+      closed *after* the producer was finalized, so a stalling finalizer held
+      the child's EOF open. The pipe is cuprum's own resource and the child's
+      EOF depends on it, so it is released first, with a nested `finally`
+      keeping the producer from being abandoned if the close is itself
+      interrupted.
+
+- [x] (2026-10-11 05:52Z) `22eb7a54` split two modules past the 400-line
+      ceiling — `_subprocess_stdin` at 408 lines and `_stdio_plan` at 447 —
+      at the seam the code already drew rather than at a line count.
+      `_subprocess_stdin_reclaim` takes the reclaim policy (the settle window
+      and the two operations that bound a writer's exit) out of
+      `_subprocess_stdin`, which keeps *what* cuprum writes into the child's
+      pipe; keeping the window and both operations together is what makes them
+      agree, so a change to that figure cannot leave one path behind.
+      `_stdio_binding_guards` takes the two refusals out of `_stdio_plan`,
+      which keeps deciding *which* binding a target resolves to while the new
+      module decides whether the child may be given it. Both moves also
+      corrected a defect the move carried: `_shielded_cleanup` re-raises the
+      caller's cancellation once its coroutine completes, so shielding the
+      *wait* alone let that re-raise propagate straight past the reclaim below
+      it, leaving the writer and producer pending behind a cancelled run —
+      just later than before. `_expire_or_reclaim_writer` now puts the window
+      and the reclaim inside one shielded coroutine.
+
+- [x] (2026-10-11 05:52Z) `1043f12a` added the readiness-driven post-exit
+      cancellation test the assessment asked for, cancelling after the child
+      has exited but before the settle window ends and inspecting the result
+      inside a still-running event loop. Two scenarios, because the window has
+      two failure directions, and each is the other's negative control:
+      reverting the settle to its shield-only shape fails only the
+      cancellation scenario; making the settle unbounded again fails only the
+      never-reads scenario. A third edit — deleting the direct path's call to
+      the settle — fails **neither**, and the module records that as a limit of
+      both scenarios rather than hiding it. The support module was extracted at
+      the same time (`_stdin_run_cancellation_support`, 444 lines) because the
+      combined file would have crossed the module ceiling.
+
+- [x] (2026-10-11 06:16Z) `334aeca3` added the boundary-classification suite
+      (`test_stdio_error_classification_runs.py` and its support module),
+      which drives `SafeCmd.run` and asserts all three channels agree: the
+      category on the event, the correlation token, and the metric increment.
+      This is the test obligation for the encoder fix in `bd8ee246` — the
+      emitter was already covered, but nothing had exercised the path where the
+      streaming writer must *derive* the boundary. Reaching the final-encode
+      call site needed a buffering codec, because a strict `utf-8` rejects a
+      chunk from the per-chunk call and never fails the flush; `idna` holds a
+      whole label until flushed and applies its DNS length rule there, which is
+      deterministic rather than incidental. The commit message also records two
+      defects found in the harness itself by measuring rather than trusting the
+      assertions, and one mutation that survived (see Surprises).
+
+- [x] (2026-10-11 06:16Z) Gate run at `334aeca3` — **red**. `make typecheck`
+  and `make test` passed (the latter: 2963 passed, 70 skipped for the main
+  Python suite, plus the Rust and doctest leaves, zero failures).
+  `make check-fmt` failed on a 90-character `msg = f"..."` line in
+  `cuprum/sh/stdio.py` against the configured 88-column limit, and `make lint`
+  failed with `R0913` (too many arguments, 7/5) on `assert_classified_once`,
+  whose five expected fields were keyword parameters.
+
+  The `R0913` finding is a plan-relevant signal rather than a style nit: five
+  keyword arguments that describe one thing are a data clump, which this
+  repository's own refactoring heuristics name. They are now an
+  `ExpectedClassification` value, and each of the nine call sites reads as one
+  claim instead of a run of keywords.
+
+- [x] (2026-10-11 06:29Z) `fcce831b` fixed both failures and — importantly — a
+  **third defect that the gate run could not see**. Because `make lint` aborts
+  at its first failing leaf, and it aborted at the `pylint-classic`
+  prerequisite, the `ruff check` leaf never executed; it had one live finding at
+  `334aeca3`, `B009` (`getattr` with a constant name) in
+  `test_stdin_transport_release.py`. That line had been introduced in the same
+  commit while silencing a `ty` diagnostic: a direct read of the transport's
+  private `_fileno` is `unresolved-attribute` to `ty`, and wrapping it in
+  `getattr` silenced the type checker while tripping the linter. The descriptor
+  is reachable through `get_extra_info("pipe")`, which is published API,
+  returns the same `FileIO` the transport holds for its pipe, and narrows under
+  a cast — so one read satisfies the formatter, the linter, and the type
+  checker at once. The `_buffer` read keeps its `getattr` because its constant
+  name clears `B009`'s four-character threshold, which is a fragile accident
+  rather than a principle.
+
+  Pushed as `fcce831b`; `git ls-remote` confirms the remote head. A fresh
+  four-gate run is required at this head, and it must run `make lint` to
+  completion — the leaves the abort left unobserved are the point of the
+  re-run, not a formality.
+
 ## Surprises & discoveries
+
+- Observation: a test harness can be wrong in a way that leaves most of its own
+  assertions green, so "the suite passes" is not evidence that the suite tests
+  anything. Evidence: the first draft of the boundary-classification suite
+  invoked the Python builder as `command(code)`, without `-c`. The interpreter
+  therefore read the program text as a *script path*, failed with
+  `can't open file "import pathlib, sys; ..."`, and exited 2 — before reaching
+  any stdin code at all. What made this invisible is the important part: most
+  cases assert a boundary that is reached in the **parent**, so they pass
+  whether or not the child ever ran. It was caught only by distrusting an
+  implausible `10 passed in 0.09s` for tests that each spawn a subprocess under
+  a 15 s deadline, and confirming against a filesystem sentinel that the child
+  had actually executed. Consequence: `run_capturing` now passes `-c`, and the
+  reason is recorded at the call site, because a wrong argv there is invisible
+  to most of the assertions it feeds.
+
+- Observation: a correlation check that asserts "the token is a UUID" is
+  satisfied by a diagnostic that minted its own token, which is exactly the
+  defect it looks like it guards against. Evidence: the first assertion checked
+  only `isinstance(event.exec_id, uuid.UUID)`. A pre-spawn boundary starts no
+  child, so there is no `start` event to anchor against, and an earlier draft
+  anchored on one and found nothing. The check now compares the diagnostic's
+  token against the run's *other* events, and asserts those events exist, so
+  the comparison cannot pass vacuously by comparing an empty set.
+
+- Observation: a mutation that survives is worth recording as loudly as one
+  that is caught, and the boundary-classification suite has one. Evidence: five
+  mutations were applied to cuprum's own source and restored, each measured
+  against the final test bodies. Unmarking only the final flush fails exactly
+  the idna case; making `mark_invalid_chunk` a no-op fails exactly the chunk
+  case; making the classifier answer `PIPE` unconditionally fails the four
+  marked cases; returning the wrong residual fails exactly the transport case.
+  But **removing the restore after a *successful* encode fails no case**,
+  because a non-chunk failure calls `mark_invalid_chunk`, which overwrites the
+  encoder's mark on every path the suite can reach. That restore is therefore
+  defensive rather than load-bearing, and no docstring claims otherwise.
+
+- Observation: the two directions of the classifier need separate controls, and
+  a suite can appear symmetric while being one-sided. Evidence: "make the
+  classifier always answer `PIPE`" is caught by every marked case *except* the
+  transport one, and "return the wrong residual" is caught by nothing but the
+  transport case. Neither control subsumes the other, which is the argument for
+  the residual case existing at all rather than being a variation on its
+  neighbours.
+
+- Observation: a green formatting gate is compatible with a red lint gate, and a
+  non-zero lint exit can hide other linters entirely. Evidence: at `334aeca3`,
+  `make check-fmt` passed and `ruff check` had a live `B009` finding, because
+  `ruff format` tolerates what `ruff check` rejects. Worse, `make lint` aborts
+  at its first failing leaf — it stopped at the `pylint-classic` prerequisite,
+  so `ruff check`, `interrogate`, DF12 pylint, `ambrleaks`, `skylos`, all of
+  `rust-lint` (clippy / whitaker / spelling), and all of `github-actions-lint`
+  (yamllint / actionlint) produced **no** evidence for that commit. The fix for
+  the visible failure silently introduced the invisible one. Consequence: a
+  lint log must be read for which leaves actually ran, not merely for its exit
+  status, and a `B009`-class finding is exactly what an aborted recipe hides.
+
+- Observation: the same source line can be forced to change by two tools with
+  opposing requirements, and the resolution is a third form neither tool
+  suggested. Evidence: reading `writer.transport._fileno` directly is
+  `unresolved-attribute` to `ty` (`WriteTransport` has no such attribute) while
+  reading it through `getattr` is `B009` to `ruff check`. Both tools are right:
+  the attribute is private and untyped. The descriptor is available through
+  `get_extra_info("pipe")`, published API that returns the same `FileIO`, so a
+  single cast satisfies the formatter, the linter, and the type checker.
+  Consequence: when two gates disagree about one line, look for the accessor
+  the library actually publishes before choosing which gate to appease.
+
+- Observation: `getattr` with a constant name is not uniformly flagged, so
+  "consistent" code here relies on a threshold rather than a reason. Evidence:
+  `getattr(writer.transport, "_buffer", b"")` stays clean while
+  `getattr(writer.transport, "_fileno")` is flagged, because `B009` exempts
+  names shorter than four characters and `_buffer` is seven. The remaining call
+  is left in place — its default argument is doing real work — and the comment
+  says the exemption is accidental rather than principled, so a future reader
+  does not mistake it for a pattern to copy.
+
+- Observation: a base that advances does not necessarily require a rebase, and
+  treating it as though it does costs a full re-certification for nothing.
+  Evidence: `main` moved two commits past the round-6 point during this
+  session, but the repository's `main-required-checks` ruleset lists twelve
+  required status checks and **no** "strict / branches must be up to date"
+  rule. A `git merge-tree --write-tree` dry run against the new base exited 0
+  with no conflicts, and exactly one file is changed by both sides
+  (`docs/developers-guide.md`), which the merged tree keeps in full. Hosted CI
+  tests the PR **merge ref**, so main's new commits are already exercised in
+  combination. Consequence: freshness is a policy question to be read from the
+  ruleset, not assumed from the fact that the base moved.
 
 - Observation: a conflict resolution that edits an import block can be
   simultaneously *correct* and *ungrammatical*, and the two formatting gates in

@@ -95,6 +95,7 @@ def test_a_suspending_finalizer_is_bounded() -> None:
     """
 
     async def scenario() -> float:
+        """Finalize a suspending producer and report how long the wait took."""
         finalizer = _SuspendingFinalizer(absorbs_cancellation=False)
         started = time.monotonic()
         await _finalize_stdin_source(typ.cast("typ.Any", finalizer))
@@ -128,6 +129,7 @@ def test_a_finalizer_absorbing_cancellation_is_still_bounded() -> None:
     """
 
     async def scenario() -> tuple[float, bool]:
+        """Time the wait on an absorbing producer and report if it finished."""
         finalizer = _SuspendingFinalizer(absorbs_cancellation=True)
         started = time.monotonic()
         await _finalize_stdin_source(typ.cast("typ.Any", finalizer))
@@ -176,6 +178,7 @@ def test_a_fast_finalizer_is_awaited_to_completion() -> None:
             self.finalized = True
 
     async def scenario() -> bool:
+        """Finalize a prompt producer and report whether its cleanup ran."""
         quick = _QuickFinalizer()
         await _finalize_stdin_source(typ.cast("typ.Any", quick))
         return quick.finalized
@@ -201,6 +204,7 @@ def test_a_finalizer_without_aclose_is_tolerated() -> None:
             raise StopAsyncIteration
 
     async def scenario() -> None:
+        """Finalize a producer with no cleanup hook, which must not raise."""
         await _finalize_stdin_source(typ.cast("typ.Any", _NoAclose()))
 
     asyncio.run(scenario())
@@ -234,6 +238,7 @@ def test_cancellation_during_the_wait_propagates(absorbs: bool) -> None:
     """
 
     async def scenario() -> str:
+        """Cancel the wait and report whether the cancellation propagated."""
         finalizer = _SuspendingFinalizer(absorbs_cancellation=absorbs)
         task = asyncio.ensure_future(
             _finalize_stdin_source(typ.cast("typ.Any", finalizer))
@@ -282,6 +287,7 @@ async def _run_with_observing_finalizer() -> _FinalizerObservingPipe:
     """Drive the streaming writer to completion with an observing producer."""
 
     async def main() -> _FinalizerObservingPipe:
+        """Write to a real child and return the producer's own record."""
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-c",
