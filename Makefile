@@ -165,6 +165,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_py_typed_marker.py \
   tests/test_running_command_children_contract.py \
   scripts/tests/test_boundary_*.py \
+  scripts/tests/test_check_fmt_import_order_contract.py \
   scripts/tests/test_install_pypy312.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
