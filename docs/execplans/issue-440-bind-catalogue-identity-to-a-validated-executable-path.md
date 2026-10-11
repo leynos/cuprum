@@ -94,8 +94,8 @@ escalation, not a workaround.
   pins `exec_id` directly after `error_type`. `resolved_path` is therefore
   declared after `env_mode`. The rebase onto main (#575) reordered this: main
   appends its own `terminal_outcome` after `env_mode` and
-  `test_terminal_outcome_public_api` pins that field as the declaration tail,
-  so `resolved_path` sits *before* `terminal_outcome` rather than at the end.
+  `test_terminal_outcome_public_api` pins that field as the declaration tail, so
+  `resolved_path` sits *before* `terminal_outcome` rather than at the end.
   Both follow every pre-existing slot, which is the invariant callers rely on.
 - **`CommandResult`'s positional prefix is frozen.** `relay_fallbacks` stays
   the seventh and last positional field
@@ -1554,6 +1554,69 @@ escalation, not a workaround.
   This moves the head again by one commit, so the hosted CI observation that
   was in flight for `92656c79` is superseded rather than failed, and the
   corrected head needs its own.
+- [x] (2026-10-11 00:25Z) **The rebase onto `a026142e` exposed two conflicts
+  between this branch's delta and `main`'s, both of which failed only in
+  combination.** Each side is correct alone; the red sweep was the first
+  observation that the pair cannot coexist. Two repair commits followed.
+
+  *`cuprum/_pipeline_internals.py` was one line over the pylint ceiling.*
+  `main` restored that module to exactly 399 lines, leaving zero headroom under
+  the 400-line cap, and this branch had added a three-line comment and two
+  `__all__` entries on top of it — 404 lines. The two entries, `_collect_hooks`
+  and `_enforce_allowlist`, are provably redundant rather than merely optional,
+  and `main` itself is the evidence: it re-exports those same two names through
+  `as`-self-aliased imports
+  (`from cuprum._pipeline_observation import _collect_hooks as _collect_hooks`)
+  and does *not* list either in `__all__`, whose five entries are the other
+  names. The alias is what performs the re-export; the `__all__` entry was
+  never doing that work. No star-import of this module exists anywhere in the
+  tree, so nothing consults `__all__` for those names either. Removing the
+  comment and the two entries (`4484e1df`, five deletions) restores 399 lines,
+  the same count as `main`. The claim that the entries were load-bearing was
+  mine, from the earlier round, and it was wrong.
+
+  *`ExecEvent`'s declaration tail was pinned by `main`.* `#575` appends
+  `terminal_outcome` and pins it with `test_terminal_outcome_public_api`, which
+  asserts `dc.fields()[-1]`. This branch had appended `resolved_path` *after*
+  it, so both could not hold. The error was in the rule as I had stated it, in
+  the class docstring and in this plan: "new fields are appended to the end of
+  the declaration". The real invariant is that a new field must follow every
+  field that already had a *positional slot*, which is what protects callers
+  who pass arguments positionally. Both reordered fields are brand-new and
+  optional, and no caller binds either by position, so their order relative to
+  each other is unconstrained. `resolved_path` is now declared before
+  `terminal_outcome` (`2ac2e207`), and both docstring and plan say "after every
+  field that already had a positional slot" with the tail pin named as the
+  reason the distinction matters. This mirrors the remedy this branch had
+  already applied to `CommandResult.resolved_path`, which sits before the
+  tail-pinned `relay_fallbacks` for exactly the same reason.
+
+  The reorder was checked for positional exposure rather than assumed safe, and
+  the check corrected an initial guess of mine. There *is* a positional
+  `ExecEvent(...)` construction — `test_public_api.py` builds one to prove that
+  positional binding still reaches `exec_id` — so "no positional callers exist"
+  would have been false. What makes the reorder safe is narrower and was
+  verified directly: that call passes exactly the sixteen fields from `phase`
+  through `exec_id`, and both `resolved_path` and `terminal_outcome` sit at
+  indices 28 and 29, outside every positionally bound slot. The declared
+  sixteen-field prefix is unchanged, which is checked by asserting it equals
+  `fields[:16]`. Beyond that call there is no `dataclasses.astuple` call and no
+  `__match_args__` consumer of the type.
+
+  This is the second time in this round that a plausible-sounding negative
+  claim about the tree turned out to be false when measured, which is why it is
+  recorded as the correction it was rather than as a clean verification.
+
+  The general lesson is that a rebase can fail on *composition* alone. A target
+  that adds a file at exactly its line cap, or adds a test pinning a
+  declaration tail, is correct in itself and breaks a branch whose delta adds a
+  line to that file or a field after that tail. Neither defect is visible on
+  either side in isolation, and both appear only once the two are replayed
+  together — which is why the pre-rebase green said nothing about the rebased
+  head.
+
+  The local gate run for this head is recorded on the pull request rather than
+  here, so that the record of it cannot invalidate the run it reports.
 
 ## Surprises & discoveries
 
