@@ -218,6 +218,20 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-11) Assessment finding 4 closed *for real*, and the last two lint
+  findings on the branch cleared. The finding had been marked repaired in the
+  ledger against a code symbol, but it asked for rejection tests and none
+  existed; they are now in
+  `cuprum/unittests/test_stdio_descriptor_sentinels.py` (13 tests, both guards,
+  each paired with a genuine-descriptor control) and both guards were proved
+  non-vacuous by mutation. Separately, `make lint` taken to completion at the
+  new shape reported two `R0917` findings in `test_safe_cmd_redirect.py` that
+  no scoped or aborted run had reached; both are fixed with keyword-only
+  parameters, verified against a `--collect-only` baseline captured before the
+  edit so the six affected node IDs are byte-identical. Commits `b61641f0` and
+  `0c91a664`; `make check-fmt` and `make lint` both exit 0 at `0c91a664`.
+  Hosted gates and a fresh scrutineer sweep at the new head are pending, as is
+  the follow-up assessment comment.
 - [x] (2026-10-11) Gap C closed in `409a8395`, the last open assessment gap.
   `docs/users-guide.md`, `docs/cuprum-design.md`, and
   `docs/developers-guide.md` now document the `stdio_error` event, all six
@@ -2305,6 +2319,39 @@ likelihood, and mitigation.
   `fb268229`, which the branch head never saw. Impact: a cached `mergeable`
   reading is a statement about a moment, not a property of the candidate, and
   the base SHA in the PR record can lag the ref it is really compared against.
+- Observation: the ledger marked assessment finding 4 "repaired" against a
+  *code symbol*, but the requirement it quoted asked for tests, and no test
+  existed. Evidence: the requirement reads "Add rejection tests for subprocess
+  sentinels and accepted controls for genuine descriptors"; the commit that
+  closed it, `bd8ee246`, touched `_stdio_plan.py`, `_subprocess_stdin_write.py`,
+  and `sh/stdio.py` and **no test file**, and exhaustive greps for `fd(-`,
+  `negative values are subprocess`, `_reject_sentinel_descriptor`, and
+  `_reject_negative_descriptor` across the whole tree found no test naming
+  either guard. Impact: "is the guard correct?" and "is the guard covered?" are
+  different questions, and reading source answers only the first. A ledger
+  entry for an assessment finding must cite the artefact the finding asked for
+  — where the finding says *tests*, a symbol is not evidence the finding is
+  discharged. The gap was closed by
+  `cuprum/unittests/test_stdio_descriptor_sentinels.py`, and the guards were
+  then proved non-vacuous by mutation: forcing the construction guard to
+  `if False:` failed exactly the three sentinel rows, and forcing the
+  resolution guard to `if True: return` failed exactly four, with the
+  genuine-descriptor controls still passing in both cases.
+- Observation: two `R0917` findings had been sitting in new test files since
+  the commits that introduced them, and no gate run on this branch could see
+  them. Evidence: `test_safe_cmd_redirect.py` takes five positional parameters
+  at `test_path_target_does_not_leak_the_descriptor` (added by `ed06abd3`) and
+  at `test_path_target_closed_after_a_spawn_failure` (added by `3adc9b00`);
+  `make lint` reported both only on the first run taken to *completion* after
+  they landed, because every intervening run had either aborted at an earlier
+  leaf or been scoped to the files a given repair touched. Impact: this is the
+  third distinct instance on this branch of the same failure mode — an aborted
+  or narrowed gate reports nothing about the leaves it never reached, and the
+  absence is indistinguishable from a pass. The operational rule that follows
+  is that a "run to completion" is a property of the run, not of the branch: a
+  repair validated by a scoped run leaves the unscoped leaves unobserved, so
+  the full sweep must be re-run at the frozen head rather than assumed
+  inherited.
 
 ## Decision log
 
@@ -2841,6 +2888,49 @@ likelihood, and mitigation.
   Any future conflict resolution that edits an import block should be checked
   with `ruff check` on the resolved file before the rebase continues, since
   that is cheap and local. Date/Author: 2026-10-11, lifecycle agent.
+- Decision: satisfy `max-positional-arguments` on the two flagged ownership
+  tests with keyword-only parameters rather than `pytest.mark.usefixtures`.
+  Rationale: `usefixtures` registers a fixture *before* the explicitly declared
+  parameters, which reorders composite node IDs — `[run()-asyncio]` became
+  `[asyncio-run()]` — and on the second test it *added* a backend axis whose
+  two arms are identical, because that test replaces the spawn wholesale and
+  never reads the fixture. Both consequences were caught by diffing
+  `--collect-only` output against a baseline captured before the edit: the
+  first attempt took the module from 46 tests to 48, and the second flipped the
+  parameter order at a constant count. Keyword-only restores all six affected
+  node IDs exactly. Options considered: (a) `usefixtures`, rejected for the two
+  reasons above; (b) dropping a genuine parameter, rejected because each names a
+  distinct axis the case is about; (c) raising the configured limit, rejected as
+  weakening a repository-wide lint for one call site. This also records the
+  general point that a node-ID baseline captured *before* a test-signature edit
+  is what turns "the suite still passes" into "the suite still runs the same
+  cases". Date/Author: 2026-10-11, lifecycle agent.
+
+  general point that a node-ID baseline captured *before* a test-signature edit
+  is what turns "the suite still passes" into "the suite still runs the same
+  cases". Date/Author: 2026-10-11, lifecycle agent.
+- Decision: re-measure the scope deviation at the pushed head rather than carry
+  the figure recorded earlier, and record the current one. The deviation entry
+  above cites "44 tracked files and 5436 net added lines at `aca77867`", which
+  was accurate when written but is no longer the branch's shape: `aca77867` is
+  not an ancestor of `HEAD`, because the series has since been rebased, and its
+  base `991dee64` is no longer the merge base. Against the current merge base
+  `e4e4c4ad`, the delivered change at `0c91a664` is **90 files, net 15461 lines**
+  (+16336/−875), split as 41 production files (+4576/−701, net 3875), 36 unit
+  test files (net 6888), 2 behaviour test files (net 4), 7 documents other than
+  this plan (net 947), 2 build-config files (net 12), and this plan itself
+  (net 3585). Options considered: (a) leave the old figure, rejected because a
+  reader comparing it against the branch would measure something else and have
+  no way to tell which was wrong; (b) rewrite the old entry in place, rejected
+  because it records what was true and was acted on at the time; (c) re-measure
+  and state both, chosen. The re-measurement also exposes something the earlier
+  entry could not: this plan is now the single largest file in the delta at 3585
+  net lines, roughly 23% of the net total and larger than any production module
+  the change touches. The living-document requirement therefore inflates the
+  very quantity the tolerance measures, and any future tolerance of this shape
+  should exclude the plan or count it separately. Against the stated bound of 24
+  files and 1400 net lines, every framing remains a breach: production files
+  alone are 41 files and net 3875. Date/Author: 2026-10-11, lifecycle agent.
 
 ## Outcomes & retrospective
 
@@ -2896,16 +2986,23 @@ regression above. Both were caught by gates and by a contract test the
 repository already had for exactly this class of change.
 
 The plan also ends with one unplanned outcome: the `Tolerances` scope bound was
-breached, at 44 tracked files and 5436 net lines against a stated 24 files and
-1400 lines. That is recorded as a deviation in `Decision log` rather than
-absorbed silently. The short version is that the bound was set before the price
-of the plan's own constraints was visible — three module splits forced by the
-400-line ceiling, four separate acceptance test modules required by the
-criteria, and a self-contained ExecPlan — and it was met early and repeatedly.
-A future plan of this shape should set the file and line bounds after the
-module-split itinerary is known, or scope the tolerance to *production* files
-alone (24 files, +2122 net), which is the figure that actually tracks the
-feature's cost.
+breached. The figure recorded when the breach was first written was 44 tracked
+files and 5436 net lines against a stated 24 files and 1400 lines; re-measured
+at the pushed head against the current merge base it is 90 files and net 15461
+lines, because the branch has been rebased since and continued to grow. Both
+figures are kept in `Decision log` rather than collapsed into one, since the
+first is what was acted on at the time and the second is what a reviewer would
+measure now. That is recorded as a deviation rather than absorbed silently. The
+short version is that the bound was set before the price of the plan's own
+constraints was visible — three module splits forced by the 400-line ceiling,
+four separate acceptance test modules required by the criteria, and a
+self-contained ExecPlan — and it was met early and repeatedly. A future plan of
+this shape should set the file and line bounds after the module-split itinerary
+is known, or scope the tolerance to *production* files alone (41 files, net
+3875), which is the figure that actually tracks the feature's cost. One
+correction to the earlier version of this paragraph: the "24 files, +2122 net"
+production figure it quoted was measured before the last two rebases and two
+further implementation rounds, and is now itself an understatement.
 
 ## Context and orientation
 
