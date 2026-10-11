@@ -18,7 +18,6 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
-from cuprum._streams_pump import _READ_SIZE
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -71,7 +70,6 @@ def _config(
     capture: bool = True,
     echo: bool = False,
     errors: str = "replace",
-    read_size: int = _READ_SIZE,
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
@@ -80,7 +78,6 @@ def _config(
         sink=sink,
         encoding="utf-8",
         errors=errors,
-        read_size=read_size,
     )
 
 
@@ -193,13 +190,16 @@ def test_drain_empty_capture_returns_empty_text() -> None:
 def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
     """The drain loop retains the injected benchmark read size."""
     reader = _ChunkedReader((b"first", b"second"))
-
-    captured = asyncio.run(
-        _drain(
-            typ.cast("asyncio.StreamReader", reader),
-            _config(io.StringIO(), read_size=17),
-        )
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=False,
+        sink=io.StringIO(),
+        encoding="utf-8",
+        errors="replace",
+        read_size=17,
     )
+
+    captured = asyncio.run(_drain(typ.cast("asyncio.StreamReader", reader), config))
 
     assert captured == "firstsecond", f"expected complete capture, got {captured!r}"
     assert reader.read_sizes == [17, 17, 17], (
