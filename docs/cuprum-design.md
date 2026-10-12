@@ -4158,7 +4158,7 @@ stateDiagram-v2
     Running --> Completed: the child exits on its own
     Running --> Cancelling: terminate(), kill(), async with exit, or cancellation
     Running --> TimedOut: a wait's deadline expires
-    Cancelling --> Terminated: the stop asked for: SIGTERM then SIGKILL, or SIGKILL alone
+    Cancelling --> Terminated: the stop the caller asked for — SIGTERM then SIGKILL, or SIGKILL alone
     TimedOut --> Terminated: existing timeout termination path
     Terminated --> Completed: the settlement records how the child ended
     Completed --> Closed: the run reconciled, CommandResult published

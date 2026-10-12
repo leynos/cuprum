@@ -206,7 +206,7 @@ def test_observed_exit_code_reads_a_child_no_wait_has_reaped() -> None:
     _skip_if_unobservable_exit()
     child = _spawn_exiting_child(_OBSERVED_EXIT_CODE)
     try:
-        _wait_until_exited(typ.cast("int", child.pid))
+        _wait_until_exited(child.pid)
         # The case is only meaningful while the child is unreaped: were it
         # collected, ``returncode`` would carry the status and a reading that
         # consulted it would be indistinguishable from one that did not. This
@@ -237,7 +237,7 @@ def test_observed_exit_code_leaves_the_status_for_the_reaper() -> None:
     _skip_if_unobservable_exit()
     child = _spawn_exiting_child(_OBSERVED_EXIT_CODE)
     try:
-        _wait_until_exited(typ.cast("int", child.pid))
+        _wait_until_exited(child.pid)
         assert child.returncode is None, (
             "the child must still be unreaped when the probe reads it"
         )
