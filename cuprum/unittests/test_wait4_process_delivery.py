@@ -500,7 +500,10 @@ def test_probe_less_delivery_refuses_an_unwaited_exit_with_its_code(
     A child that exited on its own, with no wait having touched it, is a zombie
     whose status is still collectable — and every non-collecting reading of
     that state answers "not collected", so a guard built only from those reads
-    finds nothing to refuse and signals a PID the kernel has already freed.
+    finds nothing to refuse and signals the zombie. Nothing has collected it,
+    so its PID is not freed and no other process can hold it; what the call
+    reaches is a process that has already ended, and the handle reports a
+    delivery that never happened.
 
     The refusal is asserted to name the child's own status, which is the point
     of collecting rather than merely checking: a handle that refuses has to
