@@ -101,9 +101,17 @@ class TestRustConsumeStream:
     # Python's own replacement decoding — so they are one parameterized test
     # rather than four near-identical bodies. A `buffer_size` of ``None`` omits
     # the argument, exercising the extension's default.
+    #
+    # `empty_input` and `single_byte_minimum_buffer` are the two ends of the
+    # read loop rather than more payload variety: the first never enters it, and
+    # the second leaves the smallest buffer with a payload it must refill from,
+    # so a loop that mishandled either size would not be caught by a longer
+    # payload read with a larger buffer.
     @pytest.mark.parametrize(
         ("test_id", "payload", "buffer_size"),
         [
+            ("empty_input", b"", None),
+            ("single_byte_minimum_buffer", b"x", 1),
             ("ascii_explicit_default", b"rust-consume-stream", 65536),
             ("multibyte_split", b"snowman \xe2\x98\x83", 2),
             ("implicit_default_buffer", b"rust-consume-default", None),
@@ -111,6 +119,8 @@ class TestRustConsumeStream:
             ("incomplete_sequence", b"trail-\xe2\x98", 2),
         ],
         ids=[
+            "empty_input",
+            "single_byte_minimum_buffer",
             "ascii_explicit_default",
             "multibyte_split",
             "implicit_default_buffer",

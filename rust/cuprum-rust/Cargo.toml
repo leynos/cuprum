@@ -18,6 +18,9 @@ loom-defect-fixture = []
 cuprum-streams = { path = "../cuprum-streams", version = "0.1.0" }
 cuprum-native-io = { path = "../cuprum-native-io", version = "0.1.0" }
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py312"] }
+# Matches the streams crate's requirement so both crates resolve one version.
+# `thiserror` derives the typed boundary error's `Display` and `From` impls.
+thiserror = "2.0.18"
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7.2"
@@ -25,6 +28,8 @@ loom = "0.7.2"
 [dev-dependencies]
 proptest = "1.11.0"
 rstest = "0.27.0"
+rstest-bdd = "0.5.0"
+rstest-bdd-macros = "0.5.0"
 trybuild = { version = "1.0.116", features = ["diff"] }
 
 [lints]

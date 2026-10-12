@@ -32,6 +32,7 @@ from tests.behaviour._native_pipeline_stall import (
     HandOffVerdict,
     _ChildStallSnapshot,
     _classify_stall,
+    _exited_children_left_output,
     _ParentOutput,
 )
 from tests.helpers.process_state import ChildPipe, ProcessState
@@ -329,16 +330,24 @@ def test_uncollected_output_requires_every_child_to_have_exited(
 
     A ``S`` or ``T`` child is included among the generated ones deliberately:
     not runnable is not the same as exited, and only exited disables the rule.
+
+    The subject is the rule, not the composite verdict. A child that has not
+    exited may still be a missed hand-off in its own right — a live reader
+    blocked in ``pipe_read`` under a parent-held write end whose upstream stage
+    has exited is exactly that — and ``_classify_stall`` tests that rule before
+    this one. Asserting ``HOST_STARVATION`` here would fold two independent
+    rules together and fail whenever the live child generated evidence for the
+    other one, which is a false alarm about a correct classifier.
     """
     assert _classify_stall(_snapshot(exited, ())) is HandOffVerdict.HUNG_HANDOFF, (
         "the generated exited children must be uncollected output"
     )
 
-    widened = _classify_stall(_snapshot([*exited, live], ()))
+    widened = _snapshot([*exited, live], ())
 
-    assert widened is HandOffVerdict.HOST_STARVATION, (
+    assert _exited_children_left_output(widened) is False, (
         "a child that has not exited must defeat the uncollected-output rule, "
-        f"got {widened!r} for a live child {live.process!r}"
+        f"got a match for a live child {live.process!r}"
     )
 
 
