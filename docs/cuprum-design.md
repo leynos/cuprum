@@ -4129,7 +4129,7 @@ the status has been collected the kernel has no child at that PID, so nothing
 can be observed about how it ended, and detection has to come from the delivery
 itself.
 
-Two mechanisms do that, and they cover different collectors. The first is the
+Three mechanisms do that, and they cover different collectors. The first is the
 guard's kernel question: `send_signal` asks the kernel whether this owner still
 has a waitable child, so a refusal does not depend on the code having been
 published first. The second is that the guard and the kill are taken together
@@ -4140,6 +4140,22 @@ the locked section is a few instructions long and never spans the child's
 lifetime. A delivery to a healthy child therefore takes the lock freely; only a
 delivery arriving while a collection is in flight waits, and what it waits for
 is the publication rather than the child.
+
+The third exists because the first cannot be asked everywhere. A platform
+without the non-reaping probe has no way to read a zombie's ending at all, so
+the guard collects instead: it calls the same non-blocking `wait4(..., WNOHANG)`
+the probe-less reap polls with, under the same lock, and a child that has
+exited is reaped and its code published *before* the refusal is raised. The
+refusal therefore still carries the child's own exit code, which is the promise
+that separates this refusal from a bare race — an unwaited child that exited
+while its handle was merely held is reported with how it ended, not with the
+`-1` placeholder. A child that is merely running answers `WNOHANG` with
+nothing collected, so the delivery proceeds and a live child is signalable as
+before. The collection also disarms the guard: the code is published before
+the lock is released, so every later delivery refuses without touching the
+kernel. Nothing can be collected twice, because both the guard and the reaper
+take the lock first and whichever arrives second finds the code already
+published.
 
 How the reaper waits for the child outside the lock depends on what the
 platform can say. Where a non-reaping probe exists — `os.waitid` with `WEXITED`
@@ -4165,7 +4181,11 @@ the child and attributes its resource usage, one proves a delivery arriving
 during the fallback's collection waits for the publication and is then refused
 with the child's own code, and one proves a delivery to a live child is not
 made to wait on the fallback's reap. The last of these is what fails if the
-fallback is ever "simplified" into a lock held across its own waiting.
+fallback is ever "simplified" into a lock held across its own waiting. The
+guard's own collection is covered the same way: a delivery to a child that
+exited before anything waited on it is asserted to report that child's exit
+code, and a delivery to a live child on that route is asserted to land and to
+be reaped with the signal's negation.
 
 That wait is also what the refusal reports. A delivery that waited reads a
 `returncode` the reaper has already written, so `SignalAfterExitError` carries

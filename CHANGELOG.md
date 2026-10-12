@@ -284,14 +284,17 @@
   with no route to a caller-named signal raises `UnsupportedSignalError`. The
   refusal holds for every collection the handle's own reap performs: where the
   platform can be asked, the delivery is checked against the kernel as well as
-  the published exit code, and on every platform the check is taken together
-  with the kill under the reaper's own lock, so the handle's own reap cannot
-  free a PID between them — whether the reap waits for the child and collects
-  once, or polls to collect it because the platform cannot say when it is
-  waitable. A collection the handle does not own is a separate matter: it
-  belongs to code the library cannot serialize against, and a refusal cannot
-  always name the code for one. Where nothing was published, it reports `-1`
-  rather than inventing an exit status. Using the handle as an `async with`
+  the published exit code; where it cannot be asked, the check collects the
+  exited child instead, so the refusal still names how the child ended rather
+  than a placeholder. On every platform the check is taken together with the
+  kill under the reaper's own lock, so the handle's own reap cannot free a PID
+  between them — whether the reap waits for the child and collects once, or
+  polls to collect it because the platform cannot say when it is waitable, and
+  whether the collection happens in the reap or in the delivery's own guard.
+  A collection the handle does not own is a separate matter: it belongs to code
+  the library cannot serialize against, and a refusal cannot always name the
+  code for one. Where nothing was published, it reports `-1` rather than
+  inventing an exit status. Using the handle as an `async with`
   block settles the run on every exit — a child still running is torn down the
   same way a cancelled `run()` does, `SIGTERM`, the cancel grace wait, then
   `SIGKILL` — and never suppresses the block's own error. Every control
