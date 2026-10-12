@@ -22,7 +22,6 @@ machinery those cases share lives there too.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import signal
 import threading
@@ -435,6 +434,15 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
     satisfy the case either. The signal is asserted to have landed, and the
     same reap is asserted to report it — which is what shows the pump and the
     delivery met the same live child rather than two different ones.
+
+    The pump is released explicitly once the delivery has been observed, and
+    the park's own expiry exists only so a failing case cannot hang the suite.
+    Leaving the pump to time out on its own would put two independent deadlines
+    on the same five seconds — the park's and the await below — and the case
+    would then pass or fail on which of them happened to fire first. The
+    release has to follow the join rather than precede it: a pump let go early
+    would collect the child before the delivery reached it, and the refusal
+    that followed would look like the deadlock this case is here to catch.
     """
     _without_the_probe(monkeypatch)
     between_polls = threading.Event()
@@ -463,8 +471,11 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
             delivery["thread"] = _deliver_in_a_thread(process, observed)
             delivery["thread"].join(_OBSERVE_TIMEOUT)
             observed["waited"] = delivery["thread"].is_alive()
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(reaping, _OBSERVE_TIMEOUT)
+            # Bounded rather than bare: a reap that never completes is this
+            # case's own failure and should be reported as one, not left to
+            # the suite's global timeout to name.
+            release.set()
+            await asyncio.wait_for(reaping, _OBSERVE_TIMEOUT)
             observed["status"] = process.returncode
         finally:
             release.set()
