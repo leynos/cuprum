@@ -21,7 +21,11 @@ import typing as typ
 from asyncio.streams import FlowControlMixin
 
 from cuprum._pipeline_types import _ExecutionInvariantError
-from cuprum._process_exit import _await_child_waitable, _child_was_collected
+from cuprum._process_exit import (
+    _NON_REAPING_PROBE_AVAILABLE,
+    _await_child_waitable,
+    _child_was_collected,
+)
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
@@ -200,22 +204,11 @@ class _Wait4Process(asyncio.subprocess.Process):
         ``os.wait4`` fails and the child's resource usage is lost. Sending
         directly keeps :meth:`_reap` the only reaper.
 
-        The guard asks two questions because neither alone is sufficient.
-        ``_returncode`` is the first: once this owner has recorded a code the
-        child is definitively collected. The second is
-        :func:`~cuprum._process_exit._child_was_collected`, which asks the
-        *kernel* whether this process can still wait for the child — closing
-        the gap in which ``wait4`` has collected a status that ``returncode``
-        has not yet recorded, where a ``returncode`` check alone would pass and
-        signal a PID the kernel may have recycled.
-
-        The check and the kill are taken together under
-        :attr:`_settlement_lock`, which makes that gap unreachable rather than
-        merely narrow: the reaper publishes under the same lock, so a delivery
-        arriving during a collection waits and then refuses on the first
-        question, while one arriving at any other time takes the lock freely.
-        ``docs/cuprum-design.md`` §13.10.5 records why ``Popen`` cannot do
-        this.
+        The guard, the refusal, and the kill are taken together under
+        :attr:`_settlement_lock`, so the window in which ``wait4`` has
+        collected a status that ``returncode`` has not yet recorded is
+        unreachable rather than merely narrow. :meth:`_delivery_is_refused`
+        states what the guard asks.
 
         ``ProcessLookupError`` is deliberately **not** suppressed, unlike
         ``Popen.send_signal`` (bpo-40550). It reports to a handle that must
@@ -232,9 +225,33 @@ class _Wait4Process(asyncio.subprocess.Process):
             the kernel reports no process at its PID.
         """
         with self._settlement_lock:
-            if self._returncode is not None or _child_was_collected(self.pid):
+            if self._delivery_is_refused():
                 raise _DeliveryRefusedError(self.pid)
             os.kill(self.pid, signal)
+
+    def _delivery_is_refused(self) -> bool:
+        """Report whether a delivery is refused, collecting a status to tell.
+
+        The caller holds :attr:`_settlement_lock`, which is what lets the
+        probe-less route collect: the collection cannot block, and a delivery
+        arriving while it runs waits for the publication instead of racing it.
+        A child that has exited is collected there because on that route the
+        collection is the only reading that can report how it ended, and the
+        reading happens once: the code is published before the lock is
+        released, so every later delivery refuses on the first question.
+        """
+        if self._returncode is not None:
+            return True
+        if _NON_REAPING_PROBE_AVAILABLE:
+            return _child_was_collected(self.pid)
+        try:
+            return self._collect_when_waitable() is not None
+        except ChildProcessError:
+            # No waitable child of this process remains at the pid. That is
+            # the same state a collection by this owner leaves behind, and it
+            # is reported as a refusal rather than allowed out as itself: the
+            # delivery's contract is a ProcessLookupError, which this is not.
+            return True
 
     @typ.override
     def terminate(self) -> None:
@@ -284,7 +301,16 @@ class _Wait4Process(asyncio.subprocess.Process):
         interval = _REAP_POLL_INITIAL_INTERVAL
         while True:
             with self._settlement_lock:
-                code = self._collect_when_waitable()
+                # The published code is read under the lock, and before the
+                # collection rather than after it. A delivery's guard collects
+                # on this route too, so a child it already reaped would be
+                # collected a second time here — which the kernel refuses,
+                # since no waitable child survives the first collection. Both
+                # publish under this lock, so seeing no code means none exists
+                # and the poll is free to take one of its own.
+                code = self._returncode
+                if code is None:
+                    code = self._collect_when_waitable()
                 if code is not None:
                     return code
             time.sleep(interval)
@@ -299,7 +325,10 @@ class _Wait4Process(asyncio.subprocess.Process):
         # exists to close, and a lock cannot cover a gap across a thread
         # boundary. Where the platform cannot say whether the child is
         # waitable, the collection moves inside the lock and stops blocking,
-        # rather than the lock being abandoned there.
+        # rather than the lock being abandoned there. That route's delivery
+        # guard collects too, and both callers take the lock first, so the two
+        # can never collect the same child: whichever arrives second finds the
+        # code already published.
         if _await_child_waitable(self.pid):
             with self._settlement_lock:
                 return self._collect_and_publish()
