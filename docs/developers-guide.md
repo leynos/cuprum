@@ -6603,9 +6603,23 @@ Dropping `WNOHANG` makes it wait for the child to become waitable; keeping
 reaper is about to perform cannot block, which is what lets `_reap_blocking`
 take the settlement lock only *after* the wait and release it in a few
 instructions — a lock held across the child's lifetime would stall every
-delivery to a healthy child until that child happened to exit. On a platform
-without the probe it answers `False`, and the reaper then collects outside the
-lock rather than holding one that cannot be justified.
+delivery to a healthy child until that child happened to exit.
+
+On a platform without the probe it answers `False`, and the reaper has no such
+wait available: nothing can tell it when the child becomes collectable. The
+lock is *not* abandoned there — that would put the fallback outside the
+coordination the rest of the design provides, and it was the shape this route
+originally had. `_reap_without_a_probe` instead turns the wait into a poll:
+`_collect_when_waitable` performs the collection under the lock with `WNOHANG`,
+which cannot block, and a poll that finds nothing sleeps with the lock released
+and tries again after a capped backoff. The lock is still held for only one
+syscall plus the publication, so a delivery to a live child never waits on the
+reap, and a poll that collects publishes before releasing, so the PID cannot be
+reused in between.
+`test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap` is what
+fails if the poll is ever rewritten to hold the lock across its own sleep.
+macOS on Python 3.12 is this route in practice: CPython exposes `wait4` there
+while guarding `os.waitid` behind `!defined(__APPLE__)` until 3.13.
 
 The settlement lock is what makes the reap-to-publication window unreachable
 rather than narrow. `_collect_and_publish` runs under it and records

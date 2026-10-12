@@ -16,6 +16,7 @@ import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated path owns wait4 reaping.
 import threading
+import time
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
@@ -24,6 +25,7 @@ from cuprum._process_exit import _await_child_waitable, _child_was_collected
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
+    _Wait4Usage,
     capture_child_rusage,
     child_rusage_delta,
     resource_usage_from_wait4,
@@ -32,6 +34,12 @@ from cuprum._rusage import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+#: Backoff for the fallback reap, whose wait becomes a poll because collecting
+#: is the only way such a platform can observe the child. Bounds match the exit
+#: observer's, which answers the same question.
+_REAP_POLL_INITIAL_INTERVAL = 0.01
+_REAP_POLL_MAX_INTERVAL = 1.0
 
 
 class _DeliveryRefusedError(ProcessLookupError):
@@ -238,61 +246,64 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Compel the child to exit without reaping it."""
         self.send_signal(signal.SIGKILL)
 
+    def _publish(self, status: int, usage: _Wait4Usage) -> int:
+        """Record a collected status and its usage, returning the exit code."""
+        code = os.waitstatus_to_exitcode(status)
+        self._returncode = code
+        self._popen.returncode = code
+        self._resource_usage = resource_usage_from_wait4(usage)
+        return code
+
     def _collect_and_publish(self) -> int:
-        """Collect the child's status and record it, returning the code.
-
-        This is the critical section :meth:`_reap_blocking` takes the
-        settlement lock around, so it holds the whole of what a delivery must
-        not interleave with: the collection, the invariant check, and the
-        publication every later reader depends on.
-
-        Returns
-        -------
-        int
-            The collected exit code, as :attr:`returncode` now publishes it.
-
-        Raises
-        ------
-        _Wait4InvariantError
-            If ``wait4`` reported a child this owner did not spawn. The check
-            runs before any assignment, so nothing of a stranger's is
-            attributed to this command.
-        """
+        """Collect the child's status, check the owner, and record it."""
+        # The caller guarantees the child is waitable, so this does not block.
+        # The check runs before any assignment, so nothing of a stranger's is
+        # attributed to this command.
         pid, status, usage = os.wait4(self.pid, 0)
         if pid != self.pid:
             raise _Wait4InvariantError(self.pid, pid)
-        self._returncode = os.waitstatus_to_exitcode(status)
-        self._popen.returncode = self._returncode
-        self._resource_usage = resource_usage_from_wait4(usage)
-        return self._returncode
+        return self._publish(status, usage)
+
+    def _collect_when_waitable(self) -> int | None:
+        """Collect the child if it is waitable, collecting nothing otherwise."""
+        # WNOHANG is what makes this safe under _settlement_lock: a collection
+        # that could block would hold the lock for the child's whole lifetime.
+        pid, status, usage = os.wait4(self.pid, os.WNOHANG)
+        if pid == 0:
+            return None
+        if pid != self.pid:
+            raise _Wait4InvariantError(self.pid, pid)
+        return self._publish(status, usage)
+
+    def _reap_without_a_probe(self) -> int:
+        """Collect under the lock, polling without ever waiting under it."""
+        # The lock is released between attempts, so it never spans the child's
+        # lifetime. That is safe: an uncollected child is running or a zombie,
+        # and neither has its PID reused — only the collection frees it, and
+        # the collection publishes before the lock is released.
+        interval = _REAP_POLL_INITIAL_INTERVAL
+        while True:
+            with self._settlement_lock:
+                code = self._collect_when_waitable()
+                if code is not None:
+                    return code
+            time.sleep(interval)
+            interval = min(interval * 2, _REAP_POLL_MAX_INTERVAL)
 
     def _reap_blocking(self) -> int:
-        """Wait for the child, then collect and publish it under the lock.
-
-        The wait and the collection sit on opposite sides of
-        :attr:`_settlement_lock`, and that split is what makes the coordination
-        cheap: the locked section is entered only once ``wait4`` has nothing
-        left to wait for, so a delivery never queues behind a reap that has not
-        happened yet. Recording stays in the reaping thread because an
-        event-loop hop between collection and publication would reopen the
-        window the lock exists to close, and a lock cannot cover a gap that
-        spans a thread boundary.
-
-        Returns
-        -------
-        int
-            The exit code, as :attr:`returncode` now publishes it.
-        """
-        # Outside the lock: blocking here must not stall a delivery, and by the
-        # time this returns the collection below cannot block at all. Where the
-        # platform cannot answer, the lock is not taken — a wait that might
-        # block for the child's whole lifetime must not be held across a
-        # delivery, and without a confirmed zombie there is nothing the lock
-        # would make atomic.
-        if not _await_child_waitable(self.pid):
-            return self._collect_and_publish()
-        with self._settlement_lock:
-            return self._collect_and_publish()
+        """Wait for the child, then collect and publish it under the lock."""
+        # The wait and the collection sit on opposite sides of the lock, so
+        # the locked section is entered only once wait4 has nothing left to
+        # wait for. Recording stays in the reaping thread: an event-loop hop
+        # between collection and publication would reopen the window the lock
+        # exists to close, and a lock cannot cover a gap across a thread
+        # boundary. Where the platform cannot say whether the child is
+        # waitable, the collection moves inside the lock and stops blocking,
+        # rather than the lock being abandoned there.
+        if _await_child_waitable(self.pid):
+            with self._settlement_lock:
+                return self._collect_and_publish()
+        return self._reap_without_a_probe()
 
     async def _reap(self) -> int:
         """Perform the one blocking child reap in an executor thread."""

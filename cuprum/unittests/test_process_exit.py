@@ -32,6 +32,7 @@ import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - a real child is the only witness with a status to strand.
 import sys
+import threading
 import time
 import typing as typ
 
@@ -50,6 +51,12 @@ from tests.helpers.process_state import process_state
 
 #: How long a case waits for its child to reach the state it is observing.
 _OBSERVE_TIMEOUT = 5.0
+
+#: How long a case gives a wait that should not return yet to prove it by
+#: staying away. Long enough to outlast the dispatch and the syscall itself,
+#: and — because the state under observation is held by the case — it is time
+#: for an answer to *appear*, not time for a wait to finish.
+_NON_BLOCKING_GRACE = 0.2
 
 #: The status the observing cases' children choose for themselves. Non-zero and
 #: not a signal's negation, so a reading that guessed could not match it.
@@ -529,24 +536,52 @@ def test_await_child_waitable_blocks_then_leaves_the_status() -> None:
     inside the locked section, which is the defect the ordering exists to
     avoid. And it must not collect: a probe that consumed the status would
     strand it, and the reaper would find nothing where the child's exit code
-    and resource usage should be.
+    and resource usage should be. A probe that merely answered would satisfy
+    the second property while failing the first, so the two are asserted
+    against a single held child in the two states a wait has to tell apart.
 
-    The child is held alive while the first property is asserted, which is
-    what separates a genuine wait from a probe that merely answers: a child
-    that had already exited would make both implementations agree. It is then
-    killed by the case, so the wait is proven to end on a state the case
-    itself produced.
+    The wait is started while the child is still running, which is what makes
+    the blocking claim testable. Killing it first would let a probe that never
+    waits pass: with the child already a zombie, an immediate answer and a
+    blocking one are indistinguishable. So the caller starts the wait against
+    a live child, observes that the answer has not arrived, and only then
+    releases the child — from another thread, because the waiting thread has
+    to stay in the wait for the first observation to mean anything.
+
+    Killing the child first would be the trivial version of this case, and it
+    is deliberately not what happens: the child must be running at the moment
+    the wait begins.
     """
     _skip_if_unobservable_exit()
     child = _spawn_sleeping_child()
+    answers: list[bool] = []
+
+    def wait_in_a_thread() -> None:
+        """Record the wait's answer without blocking the observing case."""
+        answers.append(_await_child_waitable(child.pid))
+
     try:
         assert _observed_exit_code(_as_process(child)) is None, (
             "the child must be running when the wait begins, or the case "
             "cannot show the wait was what brought it to collectable"
         )
+        waiting = threading.Thread(target=wait_in_a_thread)
+        waiting.start()
+        # The wait has nothing to collect, so an implementation that returned
+        # at once would have answered by now. This is the whole difference
+        # between waiting and answering.
+        waiting.join(_NON_BLOCKING_GRACE)
+        assert waiting.is_alive(), (
+            "the wait must block while the child is still running, but it "
+            "answered with the child held alive"
+        )
+        assert not answers, "a running child must not be reported collectable"
+
         child.kill()
-        assert _await_child_waitable(child.pid), (
-            "a child that has exited must be reported collectable"
+        waiting.join(_OBSERVE_TIMEOUT)
+        assert not waiting.is_alive(), "the wait must return once the child has exited"
+        assert answers == [True], (
+            f"a child that has exited must be reported collectable, got {answers!r}"
         )
         # The wait has returned, and the status must still be there for the
         # reaper that owns it.

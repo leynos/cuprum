@@ -28,6 +28,7 @@ import os
 import signal
 import sys
 import threading
+import time
 import types
 
 import pytest
@@ -431,6 +432,13 @@ class _ParkedCollection:
     collection first, so what follows the park is the code under test's own
     publication rather than a stub's.
 
+    Only a call that actually collects parks. A ``WNOHANG`` caller polls until
+    the child is collectable, and an early poll that returns ``pid == 0`` has
+    taken nothing, so parking on it would open the window before there is any
+    status in it — the case would then observe an interval in which the child
+    is still reachable and a delivery to it is legitimate. Requiring a real
+    collection makes :meth:`wait_until_open` mean what it says.
+
     The window is closed by :meth:`release`, and it closes on its own after
     :data:`_OBSERVE_TIMEOUT` so a failing case cannot hang the suite on a
     delivery that never arrives.
@@ -443,8 +451,12 @@ class _ParkedCollection:
         self._real_wait4 = os.wait4
 
     def __call__(self, pid: int, options: int) -> tuple[int, int, object]:
-        """Collect the status, then hold the window open for the case."""
+        """Collect a waitable child's status, then hold the window open."""
         result = self._real_wait4(pid, options)
+        if result[0] == 0:
+            # An unparked poll: nothing was collected, so there is no window
+            # to open and no status for the case to be looking at yet.
+            return result
         self.collected.set()
         self._release.wait(_OBSERVE_TIMEOUT)
         return result
@@ -626,4 +638,217 @@ def test_send_signal_does_not_wait_on_a_published_child() -> None:
     )
     assert observed["published"] == _EXITED, (
         f"the refusal must report the child's own code, got {observed['published']!r}"
+    )
+
+
+def _without_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make this host take the collection route a probe-less platform takes.
+
+    The route is selected by a capability the host either has or has not, so a
+    host that has it cannot reach the other one by asking nicely. The platform
+    question is replaced at its two call sites in the module under test rather
+    than by switching off the probe's constant, because the constant lives in
+    another module and its value is read there: patching it here would leave
+    both callers reading the real answer, and the case would silently test the
+    coordinated route a second time while claiming to test the fallback.
+
+    The delivery guard is replaced too. It asks the same kernel question, and
+    on a probe-less platform it answers ``False`` — the fallback's own
+    publication is what a delivery must then refuse on.
+    """
+    monkeypatch.setattr(_wait4_process, "_await_child_waitable", lambda pid: False)
+    monkeypatch.setattr(_wait4_process, "_child_was_collected", lambda pid: False)
+
+
+@_wait4_only
+def test_reap_without_a_probe_still_collects_the_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback must reap and publish exactly as the coordinated route does.
+
+    This is the route a platform without ``os.waitid`` takes — macOS on Python
+    3.12 among them, where ``wait4`` exists and the probe does not. It is the
+    configuration the coordinated path cannot reach, so the guarantees have to
+    be met a second way, and this case is what holds that second way to the
+    same promise: one owning reap, the child's own status published, and its
+    resource usage attributed to the command that spawned it.
+
+    The child is a live one signalled after the spawn, so the fallback's poll
+    is driven through the state it exists for — a running child that is not
+    yet collectable — rather than arriving after the child has already gone.
+    A fallback that collected a running child's placeholder, or that lost the
+    usage by asking without ``WNOHANG`` and blocking, would fail here.
+    """
+    _without_the_probe(monkeypatch)
+    observed: dict[str, int] = {}
+
+    async def reap_through_the_fallback() -> None:
+        """Spawn, signal, and let the fallback route reap the child."""
+        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        try:
+            process.send_signal(signal.SIGTERM)
+            observed["status"] = await process.wait()
+            observed["published"] = process.returncode
+            usage = process.resource_usage
+            observed["has_usage"] = int(usage is not None)
+        finally:
+            _abandon(process.pid)
+
+    asyncio.run(reap_through_the_fallback())
+
+    assert observed["status"] == -signal.SIGTERM, (
+        "the fallback must reap the child and report the signal's negation, "
+        f"got {observed['status']!r}"
+    )
+    assert observed["published"] == -signal.SIGTERM, (
+        "the fallback must publish the collected code, not a placeholder, got "
+        f"{observed['published']!r}"
+    )
+    assert observed["has_usage"] == 1, (
+        "the fallback's collection must still return the child's resource "
+        "usage, or the one-reaper guarantee is lost on this platform"
+    )
+
+
+@_wait4_only
+def test_fallback_reap_is_coordinated_against_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delivery during the fallback's collection must wait, not slip past.
+
+    The probe-less route keeps the lock, so it has to keep what the lock buys:
+    a delivery arriving while a collection is in flight waits for the
+    publication instead of racing it. This is the same defect the coordinated
+    route's own case drives, on the route that cannot use the probe — and it
+    is the case that fails if the fallback is ever "simplified" back to an
+    uncoordinated collection.
+
+    The window is opened the same way here: the real ``wait4`` collects, then
+    parks before returning, so the delivery meets a child whose status the
+    kernel has taken but which this instance has not yet recorded.
+    """
+    _without_the_probe(monkeypatch)
+    parked = _ParkedCollection()
+    observed: dict[str, object] = {}
+
+    async def deliver_into_the_window() -> None:
+        """Open the window, deliver into it, then let the collection finish."""
+        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        reaping = asyncio.ensure_future(process.wait())
+        await asyncio.to_thread(parked.wait_until_open)
+        assert process.returncode is None, (
+            "the window is open only while the code is unrecorded; a recorded "
+            "code means the case is not testing the interval it names"
+        )
+
+        delivery = _deliver_in_a_thread(process, observed)
+        await asyncio.sleep(_WINDOW_OBSERVATION)
+        observed["waited"] = delivery.is_alive()
+        parked.release()
+        delivery.join(_OBSERVE_TIMEOUT)
+        assert not delivery.is_alive(), "the delivery must not outlive the window"
+        await reaping
+
+    monkeypatch.setattr(_wait4_process.os, "wait4", parked)
+    try:
+        asyncio.run(deliver_into_the_window())
+    finally:
+        parked.release()
+
+    assert observed["waited"], (
+        "a delivery arriving during the fallback's collection must wait for "
+        "the publication, but it returned while the window was still open"
+    )
+    assert isinstance(observed["error"], ProcessLookupError), (
+        "the delivery must be refused once the collection is published, "
+        f"got {observed['error']!r}"
+    )
+    assert observed["published"] == _EXITED, (
+        "the refusal must read the code the reaper published rather than the "
+        f"-1 placeholder, got {observed['published']!r}"
+    )
+
+
+@_wait4_only
+def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live child must be signalable while the fallback waits to collect it.
+
+    The probe-less route cannot be told when the child becomes collectable, so
+    it polls — and the lock must not span the gap between polls, because that
+    gap is the child's whole life. The gap is the pump's own ``sleep``, the one
+    point in the loop where the lock is provably released, so the case opens
+    its window there: a delivery made while the fallback sleeps between two
+    polls must reach the child at once.
+
+    This is the case that fails if the fallback is ever "simplified" into the
+    shape the route exists to avoid — a loop holding the lock across its own
+    waiting. The child outlives the case by design, so a delivery left waiting
+    there would not merely be slow: the sleep that would release it is behind
+    the lock the delivery is holding, and the join would time out against a
+    deadlock rather than against load.
+
+    A delivery that returned promptly because it refused everything would not
+    satisfy the case either. The signal is asserted to have landed, and the
+    same reap is asserted to report it — which is what shows the pump and the
+    delivery met the same live child rather than two different ones.
+    """
+    _without_the_probe(monkeypatch)
+    between_polls = threading.Event()
+    release = threading.Event()
+    real_sleep = time.sleep
+    observed: dict[str, object] = {}
+    delivery: dict[str, threading.Thread] = {}
+
+    def parking_sleep(interval: float) -> None:
+        """Hold the pump between two polls, the lock released as it does so."""
+        between_polls.set()
+        release.wait(_OBSERVE_TIMEOUT)
+        real_sleep(interval)
+
+    async def deliver_between_polls() -> None:
+        """Signal the child from outside while the fallback sleeps."""
+        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        reaping = asyncio.ensure_future(process.wait())
+        try:
+            assert await asyncio.to_thread(between_polls.wait, _OBSERVE_TIMEOUT), (
+                "the fallback must let the child run on between its polls"
+            )
+            delivery["thread"] = _deliver_in_a_thread(process, observed)
+            delivery["thread"].join(_OBSERVE_TIMEOUT)
+            observed["waited"] = delivery["thread"].is_alive()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(reaping, _OBSERVE_TIMEOUT)
+            observed["status"] = process.returncode
+        finally:
+            release.set()
+            _abandon(process.pid)
+
+    monkeypatch.setattr(_wait4_process.time, "sleep", parking_sleep)
+    try:
+        asyncio.run(deliver_between_polls())
+    finally:
+        release.set()
+
+    assert not observed["waited"], (
+        "a delivery to a live child must not wait on the fallback's reap, but "
+        "it was still blocked while the child was alive"
+    )
+    assert "error" not in observed, (
+        "the child was alive when it was signalled, so the delivery must not "
+        f"have been refused, got {observed.get('error')!r}"
+    )
+    assert observed["status"] == -signal.SIGTERM, (
+        "the fallback must reap the child the delivery signalled and report "
+        f"the signal's negation, got {observed['status']!r}"
     )

@@ -4135,12 +4135,37 @@ has a waitable child, so a refusal does not depend on the code having been
 published first. The second is that the guard and the kill are taken together
 under the same lock the reaper publishes under, which makes the window between
 the collection and the recorded status unreachable rather than narrow. The
-reaper waits for the child *outside* that lock — a blocking `waitid` with
-`WNOWAIT` brings the child to the point where its collection cannot block at
-all — so the locked section is a few instructions long and never spans the
-child's lifetime. A delivery to a healthy child therefore takes the lock
-freely; only a delivery arriving while a collection is in flight waits, and
-what it waits for is the publication rather than the child.
+reaper reaches the lock having already waited for the child *outside* it, so
+the locked section is a few instructions long and never spans the child's
+lifetime. A delivery to a healthy child therefore takes the lock freely; only a
+delivery arriving while a collection is in flight waits, and what it waits for
+is the publication rather than the child.
+
+How the reaper waits for the child outside the lock depends on what the
+platform can say. Where a non-reaping probe exists — `os.waitid` with `WEXITED`
+and `WNOWAIT`, consuming nothing — the wait is a blocking call and the lock is
+entered exactly once, after the child is already a zombie. Where it does not,
+the reap becomes a poll: the child is collected with `wait4(..., WNOHANG)`
+*under* the lock, which cannot block, and a poll that finds nothing is retried
+after a capped backoff with the lock released between attempts. The guarantee
+is the same on both routes, and reaching it a different way does not weaken it:
+the lock is held for one non-blocking syscall plus the publication, never
+across the child's lifetime, so a delivery to a live child is never made to
+wait on a reap. Releasing the lock between polls is safe because a child that
+has not been collected is running or a zombie, and neither state frees its PID
+for reuse — only the collection does that, and the collection publishes before
+the lock is released.
+
+That second route is not hypothetical. CPython exposes `wait4` on macOS while
+guarding `os.waitid` behind `!defined(__APPLE__)` in 3.12, so a macOS host on
+Python 3.12 takes it; the exclusion is gone in 3.13. The route is therefore
+covered by its own tests against the same guarantees, driven by switching the
+platform question rather than by skipping: one proves the fallback still reaps
+the child and attributes its resource usage, one proves a delivery arriving
+during the fallback's collection waits for the publication and is then refused
+with the child's own code, and one proves a delivery to a live child is not
+made to wait on the fallback's reap. The last of these is what fails if the
+fallback is ever "simplified" into a lock held across its own waiting.
 
 That wait is also what the refusal reports. A delivery that waited reads a
 `returncode` the reaper has already written, so `SignalAfterExitError` carries
