@@ -4143,15 +4143,15 @@ is the publication rather than the child.
 
 The third exists because the first cannot be asked everywhere. A platform
 without the non-reaping probe has no way to read a zombie's ending at all, so
-the guard collects instead: it calls the same non-blocking `wait4(..., WNOHANG)`
-the probe-less reap polls with, under the same lock, and a child that has
-exited is reaped and its code published *before* the refusal is raised. The
-refusal therefore still carries the child's own exit code, which is the promise
-that separates this refusal from a bare race — an unwaited child that exited
-while its handle was merely held is reported with how it ended, not with the
-`-1` placeholder. A child that is merely running answers `WNOHANG` with
-nothing collected, so the delivery proceeds and a live child is signalable as
-before. The collection also disarms the guard: the code is published before
+the guard collects instead: it calls the same non-blocking
+`wait4(..., WNOHANG)` the probe-less reap polls with, under the same lock, and
+a child that has exited is reaped and its code published *before* the refusal
+is raised. The refusal therefore still carries the child's own exit code, which
+is the promise that separates this refusal from a bare race — an unwaited child
+that exited while its handle was merely held is reported with how it ended, not
+with the `-1` placeholder. A child that is merely running answers `WNOHANG`
+with nothing collected, so the delivery proceeds and a live child is signalable
+as before. The collection also disarms the guard: the code is published before
 the lock is released, so every later delivery refuses without touching the
 kernel. Nothing can be collected twice, because both the guard and the reaper
 take the lock first and whichever arrives second finds the code already

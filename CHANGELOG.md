@@ -290,18 +290,18 @@
   kill under the reaper's own lock, so the handle's own reap cannot free a PID
   between them — whether the reap waits for the child and collects once, or
   polls to collect it because the platform cannot say when it is waitable, and
-  whether the collection happens in the reap or in the delivery's own guard.
-  A collection the handle does not own is a separate matter: it belongs to code
+  whether the collection happens in the reap or in the delivery's own guard. A
+  collection the handle does not own is a separate matter: it belongs to code
   the library cannot serialize against, and a refusal cannot always name the
   code for one. Where nothing was published, it reports `-1` rather than
-  inventing an exit status. Using the handle as an `async with`
-  block settles the run on every exit — a child still running is torn down the
-  same way a cancelled `run()` does, `SIGTERM`, the cancel grace wait, then
-  `SIGKILL` — and never suppresses the block's own error. Every control
-  operation is idempotent: a repeated or concurrent wait reports the one
-  settlement rather than building a second result, and no child is left
-  unreaped. Capture is forced on, so a stopped child still reports the output
-  it produced ([#437](https://github.com/leynos/cuprum/issues/437)).
+  inventing an exit status. Using the handle as an `async with` block settles
+  the run on every exit — a child still running is torn down the same way a
+  cancelled `run()` does, `SIGTERM`, the cancel grace wait, then `SIGKILL` —
+  and never suppresses the block's own error. Every control operation is
+  idempotent: a repeated or concurrent wait reports the one settlement rather
+  than building a second result, and no child is left unreaped. Capture is
+  forced on, so a stopped child still reports the output it produced
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
 - **`RunningCommand`:** The owned handle `SafeCmd.start()` returns, exposing
   `pid`, `exec_id`, the settled `result`, and the `wait()`, `signal()`,
   `terminate()`, and `kill()` control operations
