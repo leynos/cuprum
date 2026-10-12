@@ -4126,11 +4126,22 @@ reaps it, so `returncode` still reads `None` while the status is right there to
 be observed — the handle reads it without collecting it, leaving the reap to
 the thread that owns it. A child reaped *concurrently* is the harder half: once
 the status has been collected the kernel has no child at that PID, so nothing
-can be observed about how it ended, and the delivery itself is what discovers
-the process is gone. The handle catches that refusal and reports the code the
-reaper published, which is why the backend does not suppress the error the way
-`Popen.send_signal` does. A backend that swallowed it would make the handle
-claim a delivery to a process that no longer exists.
+can be observed about how it ended, and detection has to come from the delivery
+itself. That refusal has two possible sources, and the backend needs both. The
+first is the probe's own blind spot: between the reaper collecting the status
+and recording it there is a gap of a few instructions in which `returncode`
+still reads `None` and the probe observes nothing, so a delivery landing there
+would find no evidence the child is gone — and would signal a PID the kernel is
+free to have handed to another process. The guard in `send_signal` closes that
+gap by asking the kernel whether this owner still has a waitable child, so a
+refusal does not depend on the code having been published first. The second is
+`os.kill` itself, which is what refuses a child that disappears after the
+guard's question; the remaining window between the two is the same irreducible
+race `Popen` documents between its own liveness check and its own kill. The
+handle catches either refusal and reports the code the reaper published, which
+is why the backend does not suppress the error the way `Popen.send_signal`
+does. A backend that swallowed it would make the handle claim a delivery to a
+process that no longer exists.
 
 The platform is checked before the child's state, so a caller on a platform
 that cannot deliver the signal at all learns that, rather than being told the

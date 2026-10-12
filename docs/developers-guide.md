@@ -6488,8 +6488,17 @@ direct-command path on Linux and macOS instead uses `cuprum._wait4_process`: its
 child-reap owner calls `os.wait4` and returns usage for that specific child.
 The direct path must keep exactly one child reaper: do not add a second waiter,
 because a second reap would take the resource usage away from the owner that
-publishes it. The result builder uses that usage for user and system CPU time
-and maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
+publishes it. `_Wait4Process.send_signal` is bound by the same rule, which is
+why it calls `os.kill` directly instead of `Popen.send_signal`: that method
+polls before signalling and its `waitpid` would claim a zombie, leaving this
+owner's `os.wait4` to fail with `ChildProcessError` and the child's usage to be
+lost. The suppression must not creep back in either. A guard checking only the
+published `returncode` would let a delivery pass in the gap between `wait4`
+collecting a status and this instance recording it, so the guard also asks
+`_child_was_collected`, and a refusal raises `ProcessLookupError` rather than
+reporting a delivery that cannot be shown to have happened. The result builder
+uses that usage for user and system CPU time and maximum RSS, converting Linux
+KiB to bytes and preserving macOS bytes.
 
 The direct wait4 path never derives RSS by subtracting snapshots, because
 `ru_maxrss` is a process-global high-water mark rather than an accumulating
@@ -6567,6 +6576,23 @@ against a bounded exponential-backoff poll of that return code, starting at
 the asyncio lost-wakeup race where `returncode` has been published but the
 waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
+
+`cuprum/_process_exit.py` owns two further POSIX-only readings, both built on
+`waitid` with `WNOWAIT`, so neither collects the status a reaper still has to
+record. `_observed_exit_code` reports *how* a child ended while leaving that
+status in place, and folds a still-running child and one whose status has been
+collected into the same `None`; it is what a terminal refusal reads before
+answering. `_child_was_collected` asks the narrower question a delivery needs —
+whether this process can still wait for a PID at all — and those folded answers
+must be told apart there, because a running child and an uncollected zombie are
+both still reachable while a collected PID is one the kernel may have reused.
+The two situations the kernel does *not* separate are a collected child and a
+PID that was never this process's child; both raise `ChildProcessError`, and the
+helper reports both as collected. That looseness is safe only because callers
+pass a PID they spawned, and it makes the answer err towards refusing a
+delivery rather than signalling a stranger. A platform without the probe
+answers `False`, so an unanswerable question is never read as evidence the
+child is gone.
 
 ### Pipeline timeout and teardown
 

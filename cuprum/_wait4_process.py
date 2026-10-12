@@ -19,6 +19,7 @@ import typing as typ
 from asyncio.streams import FlowControlMixin
 
 from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._process_exit import _child_was_collected
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
@@ -166,16 +167,33 @@ class _Wait4Process(asyncio.subprocess.Process):
         with whichever exception the caller was unwinding. Sending directly
         keeps :meth:`_reap` the only reaper, as the module docstring promises.
 
-        The guard on ``_returncode`` covers the case ``Popen`` polls for, that
-        the child is already gone and its PID reusable. It cannot be a poll
-        here without reintroducing the reap above, so it reads
-        :meth:`_reap_blocking`'s published code instead — which is set in the
-        reaping thread before it returns, so the attribute never lags the
-        kernel by an event-loop hop. A child that exits *after* the guard still
-        owns its PID as a zombie and discards the signal harmlessly. Only a
-        caller signalling between the guard and the ``os.kill`` could reach a
-        recycled PID, and ``Popen`` documents the same race between its own
-        check and its ``os.kill`` (bpo-38630).
+        The guard covers the case ``Popen`` polls for, that the child is
+        already gone and its PID reusable, and it asks two questions because
+        neither alone is sufficient. The published ``_returncode`` is the
+        first: once this owner has recorded a code the child is definitively
+        collected. The second is
+        :func:`~cuprum._process_exit._child_was_collected`, which asks the
+        *kernel* whether this process can still wait for the child — the same
+        question ``Popen``'s own ``poll()`` answers, and the one that closes
+        the window ``returncode`` alone leaves open. Between ``wait4``
+        collecting the status and this instance recording it there is a gap of
+        a few instructions, and in that gap ``returncode`` still reads
+        ``None`` for a child whose status is already gone. A delivery there
+        would pass a ``returncode`` check and signal a PID the kernel may have
+        recycled. Asking the kernel closes the gap to the equally irreducible
+        few instructions between that answer and ``os.kill``, which is the
+        race ``Popen`` documents between its own check and its own kill
+        (bpo-38630).
+
+        A refused delivery raises ``ProcessLookupError`` rather than reporting
+        success, and that is deliberate. A live child that exits *after* the
+        guard still owns its PID as a zombie and discards the signal
+        harmlessly, but a child this class has stopped being able to wait for
+        is not in that position. Returning quietly would report a delivery
+        that cannot be shown to have happened, to a PID that may now name a
+        stranger. Refusing is both the honest answer and the safe one, and it
+        is why the guard stays ordered *before* the kill rather than being
+        folded into the error handling below.
 
         ``ProcessLookupError`` is deliberately **not** suppressed here, which
         is a considered divergence from ``Popen.send_signal``: that method
@@ -191,9 +209,19 @@ class _Wait4Process(asyncio.subprocess.Process):
         catches this error and re-reads the child's status to report a real
         ending. A caller wanting ``Popen``'s forgiving behaviour absorbs it
         the same way the lifecycle helpers do.
+
+        Raises
+        ------
+        ProcessLookupError
+            If this owner has already published the child's exit code, or if
+            the kernel reports no process at its PID. Both mean no delivery
+            can be established, and the caller that needs ``Popen``'s
+            forgiving answer absorbs the error itself.
         """
-        if self._returncode is not None:
-            return
+        if self._returncode is not None or _child_was_collected(self.pid):
+            raise ProcessLookupError(
+                f"cannot signal PID {self.pid}: it is already gone"
+            )
         os.kill(self.pid, signal)
 
     @typ.override
@@ -209,17 +237,26 @@ class _Wait4Process(asyncio.subprocess.Process):
     def _reap_blocking(self) -> int:
         """Reap the child and publish its status from the reaping thread.
 
-        Publication happens here rather than after the executor returns, and
-        that is the point of the split. ``os.wait4`` collecting the status and
-        this instance recording it are two events, and an event-loop hop
-        between them would leave a window in which the child has been reaped
-        while :attr:`returncode` still reads ``None``. A signal delivered in
-        that window would be sent by number to a PID the kernel is free to
-        recycle, and the handle could not report the child's ending because it
-        had not yet recorded one. Recording in the reaping thread closes the
-        window to the few instructions between the syscall returning and the
-        assignment, which is the same irreducible gap ``Popen`` documents
-        between its own liveness check and its ``os.kill`` (bpo-38630).
+        Recording happens in the reaping thread rather than after the executor
+        returns, and that is the point of the split: an event-loop hop between
+        the collection and the publication would leave a window in which the
+        child has been reaped while :attr:`returncode` still reads ``None``.
+
+        That window still exists in miniature between the collection and the
+        assignment below, because no ordering removes the last few
+        instructions of a reap. What makes it harmless is the guard in
+        :meth:`send_signal` rather than the order here. The guard asks the
+        *kernel* whether this owner still has a waitable child, so a delivery
+        landing in the window is refused even though no code has been
+        published yet. The gap that remains after both is the few instructions
+        between that kernel question and ``os.kill``, which is the same
+        irreducible race ``Popen`` documents between its own liveness check
+        and its own kill (bpo-38630).
+
+        The invariant check runs before any publication, so a ``wait4`` that
+        reported another child leaves both :attr:`returncode` and
+        :attr:`resource_usage` unset rather than attributing a stranger's
+        status and usage to this command.
 
         Returns
         -------

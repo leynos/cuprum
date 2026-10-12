@@ -1,11 +1,14 @@
 """Observe a subprocess exit without trusting a stranded wait future.
 
-Two readings live here, and they differ in what they cost the caller.
-:func:`_await_process_exit` blocks until the child is gone and is what a
-teardown waits on. :func:`_observed_exit_code` only *looks*: it reports how a
-child ended while leaving its status for the owning reaper, which is what a
-caller needs when it must decide whether the child is still there without
-consuming the very status a later wait has to record.
+Three readings live here. :func:`_await_process_exit` blocks until the child
+is gone and is what a teardown waits on. :func:`_observed_exit_code` only
+*looks*: it reports how a child ended while leaving its status for the owning
+reaper, which is what a caller needs when it must decide whether the child is
+still there without consuming the very status a later wait has to record.
+:func:`_child_was_collected` asks a narrower question of the same kernel
+interface — not how the child ended, but whether this process can still wait
+for it at all — which is what a delivery decision needs before it signals a
+PID by number.
 """
 
 from __future__ import annotations
@@ -23,6 +26,61 @@ _PROCESS_EXIT_MAX_POLL_INTERVAL = 1.0
 _NON_REAPING_PROBE_AVAILABLE = (
     os.name == "posix" and hasattr(os, "waitid") and hasattr(os, "CLD_EXITED")
 )
+
+
+def _child_was_collected(pid: int) -> bool:
+    """Report whether this process has stopped being able to wait for *pid*.
+
+    This is :func:`_observed_exit_code`'s kernel question asked for a
+    different purpose. That probe reports *how* a child ended and folds two
+    very different answers into ``None``: "still running" and "the status is
+    already gone". A caller deciding whether a signal can still be delivered
+    must tell those apart, because they demand opposite responses. A running
+    child is reachable, and a zombie whose status is uncollected still holds
+    its PID against reuse, so a signal to either is meaningful or harmlessly
+    discarded. A child whose status has already been collected is neither: the
+    kernel is free to have handed its PID to an unrelated process, and a
+    signal sent by number could arrive somewhere else entirely.
+
+    Only the ``ChildProcessError`` distinguishes them. ``waitid`` raises it
+    when no waitable child of this process exists at that PID, which is
+    exactly the state a completed collection leaves behind; a running child
+    answers ``None`` under ``WNOHANG`` and a zombie answers with its record.
+
+    That error does not distinguish a collected child from a PID that was
+    never this process's child at all, and this function does not pretend
+    otherwise. The looseness is safe because of where the question is asked:
+    callers pass a PID this owner spawned, so the second case does not arise,
+    and were it to, the answer errs towards refusing a delivery rather than
+    towards signalling a PID that may now name a stranger.
+
+    Asking changes nothing and waits for nothing. ``WNOWAIT`` leaves the
+    status for the reaper that owns it, and ``WNOHANG`` means this returns at
+    once rather than blocking on a child that has not exited — which is what
+    lets a signalling guard consult the kernel without either stealing the
+    reap or stalling.
+
+    Parameters
+    ----------
+    pid : int
+        The process to ask about. The caller owns it, which is what makes the
+        question answerable in the first place.
+
+    Returns
+    -------
+    bool
+        ``True`` when no waitable child remains at *pid*, so a delivery can no
+        longer be established. ``False`` when one does, or when this platform
+        cannot ask — an unanswerable question must not be reported as proof
+        that the child is gone.
+    """
+    if not _NON_REAPING_PROBE_AVAILABLE:
+        return False
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+    except (ChildProcessError, ProcessLookupError):
+        return True
+    return False
 
 
 async def _await_process_exit(process: asyncio.subprocess.Process) -> int:

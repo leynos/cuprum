@@ -281,12 +281,16 @@
   the recorded outcome reports the forced signal rather than whichever one
   happened to end the child. Signals are never the caller's race to lose: a
   child that has already exited raises `SignalAfterExitError`, and a platform
-  with no route to a caller-named signal raises `UnsupportedSignalError`. Using
-  the handle as an `async with` block settles the run on every exit — a child
-  still running is torn down the same way a cancelled `run()` does, `SIGTERM`,
-  the cancel grace wait, then `SIGKILL` — and never suppresses the block's own
-  error. Every control operation is idempotent, a repeated or concurrent wait
-  reports the one settlement rather than building a second result, and no child
+  with no route to a caller-named signal raises `UnsupportedSignalError`. The
+  refusal holds even when the child is reaped outside the handle's own reap
+  path: the delivery is checked against the kernel rather than only against the
+  published exit code, so no signal is sent to a PID the kernel has already
+  freed for reuse. Using the handle as an `async with` block settles the run
+  on every exit — a child still running is torn down the same way a cancelled
+  `run()` does, `SIGTERM`, the cancel grace wait, then `SIGKILL` — and never
+  suppresses the block's own error. Every control operation is idempotent: a
+  repeated or concurrent wait reports the one settlement rather than building a
+  second result, and no child
   is left unreaped. Capture is forced on, so a stopped child still reports the
   output it produced ([#437](https://github.com/leynos/cuprum/issues/437)).
 - **`RunningCommand`:** The owned handle `SafeCmd.start()` returns, exposing

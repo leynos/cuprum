@@ -81,9 +81,12 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
     still uncollected. The ``ProcessLookupError`` catches a child that was
     reaped *concurrently*: once someone collects the status, the kernel has no
     child at that PID, so the probe can no longer observe how it ended and
-    ``os.kill`` is the call that discovers the process is gone. Both are
-    ordinary racing outcomes rather than misuse, and both are reported the
-    same way.
+    ``os.kill`` is the call that discovers the process is gone. On the
+    ``wait4`` backend the refusal may also arrive from the guard inside
+    ``send_signal``, which asks the kernel that same question before it kills;
+    either way it reaches this handler as the same error, and the child is
+    gone. Both are ordinary racing outcomes rather than misuse, and both are
+    reported the same way.
 
     Raises
     ------
