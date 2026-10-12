@@ -84,7 +84,7 @@ is no elapsed-time limit on planning or implementation work itself.
 - [x] (2026-10-13) Create `6-1-2-boundary-proptest-parity` from `32ffe22f`.
 - [x] (2026-10-13) Complete Wyvern reconnaissance and upstream-tool research.
 - [x] (2026-10-13) Reconcile the six expert perspectives into the design.
-- [ ] Pass documentation gates, commit, push, and publish a draft plan PR.
+- [x] (2026-10-13) Pass documentation gates and publish draft PR #619.
 - [ ] Obtain explicit user approval before implementation.
 - [ ] M1: establish the real-boundary test bridge and prove its failure paths.
 - [ ] M2: add generated parity, error witnesses, and replayable seeds.
@@ -131,10 +131,12 @@ without those temporary packs.
 
 ## Outcomes & retrospective
 
-The initial plan and expert review are complete; documentation validation and
-publication are pending. No implementation tests, native builds, performance
-measurements, or runtime changes have been performed for this task. Approval,
-implementation, and roadmap completion remain outstanding.
+The plan, six-perspective expert review, and documentation validation are
+complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619) publishes
+the plan on `6-1-2-boundary-proptest-parity`, tracking its `origin` branch. No
+implementation tests, native builds, performance measurements, or runtime
+changes have been performed for this task. Approval, implementation, and
+roadmap completion remain outstanding.
 
 ## Context and orientation
 
@@ -585,3 +587,8 @@ coverage and the completed 6.1.1 boundary. Implementation remains pending.
 Revision note (2026-10-13): incorporated expert review on native default
 coverage, platform validation order, seed provenance, child cleanup, and
 bounded CI cost. No implementation scope was activated.
+
+Revision note (2026-10-13): `make fmt`, `make check-fmt`, `make markdownlint`
+including spelling, and `make nixie` passed. Draft PR #619 was published after
+commit `617651b2`; implementation still requires explicit approval. The roadmap
+remains unchecked.
