@@ -104,6 +104,8 @@ open each document.
   local Continuous Integration (CI) reproduction notes for workflow debugging.
 - [Execution plans](execplans/) - task-specific implementation plans created
   when substantial work needs a durable plan.
+  - [Stream-boundary parity plan](execplans/6-1-2-boundary-proptest-parity.md)
+    - Approval-gated plan for Rust-generated parity across the Python boundary.
   - [Line-event field hoisting plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
     - implementation and validation for roadmap item 5.2.1. The hoist is
       implemented and measured at a 29.9087% construction share against an
