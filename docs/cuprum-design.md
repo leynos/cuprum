@@ -4127,21 +4127,39 @@ be observed — the handle reads it without collecting it, leaving the reap to
 the thread that owns it. A child reaped *concurrently* is the harder half: once
 the status has been collected the kernel has no child at that PID, so nothing
 can be observed about how it ended, and detection has to come from the delivery
-itself. That refusal has two possible sources, and the backend needs both. The
-first is the probe's own blind spot: between the reaper collecting the status
-and recording it there is a gap of a few instructions in which `returncode`
-still reads `None` and the probe observes nothing, so a delivery landing there
-would find no evidence the child is gone — and would signal a PID the kernel is
-free to have handed to another process. The guard in `send_signal` closes that
-gap by asking the kernel whether this owner still has a waitable child, so a
-refusal does not depend on the code having been published first. The second is
-`os.kill` itself, which is what refuses a child that disappears after the
-guard's question; the remaining window between the two is the same irreducible
-race `Popen` documents between its own liveness check and its own kill. The
-handle catches either refusal and reports the code the reaper published, which
-is why the backend does not suppress the error the way `Popen.send_signal`
-does. A backend that swallowed it would make the handle claim a delivery to a
-process that no longer exists.
+itself.
+
+Two mechanisms do that, and they cover different collectors. The first is the
+guard's kernel question: `send_signal` asks the kernel whether this owner still
+has a waitable child, so a refusal does not depend on the code having been
+published first. The second is that the guard and the kill are taken together
+under the same lock the reaper publishes under, which makes the window between
+the collection and the recorded status unreachable rather than narrow. The
+reaper waits for the child *outside* that lock — a blocking `waitid` with
+`WNOWAIT` brings the child to the point where its collection cannot block at
+all — so the locked section is a few instructions long and never spans the
+child's lifetime. A delivery to a healthy child therefore takes the lock
+freely; only a delivery arriving while a collection is in flight waits, and
+what it waits for is the publication rather than the child.
+
+That wait is also what the refusal reports. A delivery that waited reads a
+`returncode` the reaper has already written, so `SignalAfterExitError` carries
+the child's own exit code. A child collected outside the handle's
+synchronization — by a caller's own `wait`, or by a foreign reaper the backend
+cannot see — leaves nothing for the handle to read, and that is the one case
+where a refusal falls back to the `-1` placeholder: no code was ever
+established. The placeholder is a declared limitation rather than a silent one,
+and it is confined to refusals whose collection the handle did not own.
+
+What remains is the gap between the guard's question and the kill for a child
+collected by code the library does not control: that is the same irreducible
+race `Popen` documents between its own liveness check and its own kill. Within
+the handle's own reap the gap is closed, because the collector must take the
+lock the delivery holds; outside it, the library cannot serialize against code
+it does not own. The handle catches either refusal and reports the code the
+reaper published, which is why the backend does not suppress the error the way
+`Popen.send_signal` does. A backend that swallowed it would make the handle
+claim a delivery to a process that no longer exists.
 
 The platform is checked before the child's state, so a caller on a platform
 that cannot deliver the signal at all learns that, rather than being told the

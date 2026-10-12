@@ -6496,9 +6496,11 @@ lost. The suppression must not creep back in either. A guard checking only the
 published `returncode` would let a delivery pass in the gap between `wait4`
 collecting a status and this instance recording it, so the guard also asks
 `_child_was_collected`, and a refusal raises `ProcessLookupError` rather than
-reporting a delivery that cannot be shown to have happened. The result builder
-uses that usage for user and system CPU time and maximum RSS, converting Linux
-KiB to bytes and preserving macOS bytes.
+reporting a delivery that cannot be shown to have happened. The guard and the
+kill sit together under the settlement lock described above, so the handle's
+own reap cannot free a PID between them. The result builder uses that usage for
+user and system CPU time and maximum RSS, converting Linux KiB to bytes and
+preserving macOS bytes.
 
 The direct wait4 path never derives RSS by subtracting snapshots, because
 `ru_maxrss` is a process-global high-water mark rather than an accumulating
@@ -6577,9 +6579,9 @@ the asyncio lost-wakeup race where `returncode` has been published but the
 waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
 
-`cuprum/_process_exit.py` owns two further POSIX-only readings, both built on
-`waitid` with `WNOWAIT`, so neither collects the status a reaper still has to
-record. `_observed_exit_code` reports *how* a child ended while leaving that
+`cuprum/_process_exit.py` owns three further POSIX-only readings, all built on
+`waitid` with `WNOWAIT`, so none of them collects the status a reaper still has
+to record. `_observed_exit_code` reports *how* a child ended while leaving that
 status in place, and folds a still-running child and one whose status has been
 collected into the same `None`; it is what a terminal refusal reads before
 answering. `_child_was_collected` asks the narrower question a delivery needs —
@@ -6587,12 +6589,34 @@ whether this process can still wait for a PID at all — and those folded answer
 must be told apart there, because a running child and an uncollected zombie are
 both still reachable while a collected PID is one the kernel may have reused.
 The two situations the kernel does *not* separate are a collected child and a
-PID that was never this process's child; both raise `ChildProcessError`, and the
-helper reports both as collected. That looseness is safe only because callers
-pass a PID they spawned, and it makes the answer err towards refusing a
-delivery rather than signalling a stranger. A platform without the probe
-answers `False`, so an unanswerable question is never read as evidence the
-child is gone.
+PID that was never this process's child; both raise `ChildProcessError`, and
+the helper reports both as collected. That looseness is safe only because
+callers pass a PID they spawned, and it makes the answer err towards refusing a
+delivery rather than signalling a stranger. A platform without the probe answers
+`False`, so an unanswerable question is never read as evidence the child is
+gone.
+
+`_await_child_waitable` is the blocking counterpart of that last question, and
+it exists so the reaper can be uncontended for the one instant that matters.
+Dropping `WNOHANG` makes it wait for the child to become waitable; keeping
+`WNOWAIT` makes that wait consume nothing. When it returns, the collection the
+reaper is about to perform cannot block, which is what lets `_reap_blocking`
+take the settlement lock only *after* the wait and release it in a few
+instructions — a lock held across the child's lifetime would stall every
+delivery to a healthy child until that child happened to exit. On a platform
+without the probe it answers `False`, and the reaper then collects outside the
+lock rather than holding one that cannot be justified.
+
+The settlement lock is what makes the reap-to-publication window unreachable
+rather than narrow. `_collect_and_publish` runs under it and records
+`returncode` before releasing, and `send_signal` takes the same lock for its
+guard-and-kill pair, so no delivery can observe a status the kernel has already
+taken while `returncode` still reads `None`. Recording still happens in the
+reaping thread: an event-loop hop between the collection and the publication
+would reopen the window, and a lock cannot cover a gap that spans a thread
+boundary. A delivery that waits reads a published code and its refusal carries
+it; a child collected by code the library does not own leaves nothing to read,
+and that refusal reports `-1` because no code was ever established.
 
 ### Pipeline timeout and teardown
 

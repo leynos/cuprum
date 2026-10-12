@@ -1,14 +1,25 @@
 """Observe a subprocess exit without trusting a stranded wait future.
 
-Three readings live here. :func:`_await_process_exit` blocks until the child
-is gone and is what a teardown waits on. :func:`_observed_exit_code` only
-*looks*: it reports how a child ended while leaving its status for the owning
-reaper, which is what a caller needs when it must decide whether the child is
-still there without consuming the very status a later wait has to record.
+Four readings live here, and they differ in how much they disturb what they
+read. :func:`_await_process_exit` blocks until the child is gone and is what a
+teardown waits on. :func:`_observed_exit_code` only *looks*: it reports how a
+child ended while leaving its status for the owning reaper, which is what a
+caller needs when it must decide whether the child is still there without
+consuming the very status a later wait has to record.
 :func:`_child_was_collected` asks a narrower question of the same kernel
 interface — not how the child ended, but whether this process can still wait
 for it at all — which is what a delivery decision needs before it signals a
-PID by number.
+PID by number. :func:`_await_child_waitable` is the blocking counterpart of
+that last question: it waits for the child to *become* waitable without
+collecting anything, which is how a reaper gets the child to the point where
+its collection takes no time at all.
+
+The four share one rule, and it is the reason they are kernel probes rather
+than ``returncode`` checks. ``returncode`` is published by whoever owns the
+reap, so it lags the kernel by however long that owner takes to record what it
+collected. Each reading here asks the kernel directly, so none of them can be
+fooled by that lag — and the three that ask about state rather than outcome use
+``WNOWAIT`` so they never collect what they asked about.
 """
 
 from __future__ import annotations
@@ -81,6 +92,66 @@ def _child_was_collected(pid: int) -> bool:
     except (ChildProcessError, ProcessLookupError):
         return True
     return False
+
+
+def _await_child_waitable(pid: int) -> bool:
+    """Block until *pid* has exited, without collecting its status.
+
+    This exists so a reaper can be made uncontended for the instant that
+    matters. :func:`_child_was_collected` answers the same question without
+    waiting, which is what a delivery decision needs — it must refuse *now*
+    rather than block — but a reaper deciding whether to take an exclusive lock
+    wants the opposite trade. When this reports ``True`` the child is a zombie
+    that is still waitable, so the ``wait4`` that follows does not block: it
+    runs to completion inside a critical section that no delivery can lengthen.
+    When it reports ``False``, nothing was established and the caller must not
+    take the collection to be uncontended.
+
+    Waiting *here* rather than inside the critical section is the whole point.
+    A lock held across a live child's lifetime would stall every delivery for
+    as long as the child happened to run, turning a fast refusal into a slow
+    one and — worse — making a delivery to a perfectly healthy child wait on a
+    reap it has no relationship to. Holding it only from a confirmed zombie to
+    the collected status is a window measured in instructions.
+
+    Dropping ``WNOHANG`` is what makes this block, and ``WNOWAIT`` is what
+    keeps it from collecting. Both matter: without ``WNOWAIT`` this would
+    consume the very status the reaper is about to collect, and the run's exit
+    code and resource usage would be lost; without the blocking form there
+    would be nothing here that a non-reaping probe does not already do.
+
+    The wait is interruptible by a signal, and Python retries it where the
+    caller has no handler — ``waitid`` is one of the calls ``PEP 475`` gives
+    automatic ``EINTR`` retry, so a signal delivered to this process does not
+    surface here as a failure.
+
+    Parameters
+    ----------
+    pid : int
+        The child to wait for. The caller owns it, so the kernel has a
+        waitable child at this PID to wait on.
+
+    Returns
+    -------
+    bool
+        ``True`` once the child is waitable, and ``False`` in the two cases
+        where readiness was *not* established: this platform cannot ask, or
+        nothing waitable remains because the status was collected by someone
+        else while this owner waited. Both mean the caller must not treat the
+        child as ready, and a caller in that position falls back to whatever
+        its own reap can establish.
+    """
+    if not _NON_REAPING_PROBE_AVAILABLE:
+        return False
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+    except (ChildProcessError, ProcessLookupError):
+        # Nothing waitable remains, which means someone collected it while
+        # this owner was waiting for it. Reporting ``False`` rather than
+        # raising keeps that outcome with the caller that owns the reap: it
+        # is the caller's invariant news, not this probe's error.
+        return False
+    return True
 
 
 async def _await_process_exit(process: asyncio.subprocess.Process) -> int:

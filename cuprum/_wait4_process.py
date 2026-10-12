@@ -15,11 +15,12 @@ import functools
 import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated path owns wait4 reaping.
+import threading
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
 from cuprum._pipeline_types import _ExecutionInvariantError
-from cuprum._process_exit import _child_was_collected
+from cuprum._process_exit import _await_child_waitable, _child_was_collected
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
@@ -31,6 +32,27 @@ from cuprum._rusage import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+class _DeliveryRefusedError(ProcessLookupError):
+    """Raised when the child a delivery names can no longer be waited for.
+
+    This is the backend's own refusal, and it is deliberately separate from the
+    handle's :class:`~cuprum._process_handle_errors.SignalAfterExitError`: this
+    layer knows only that no waitable child remains, not how the child ended.
+    Attaching an exit code here would mean inventing one, because the code — in
+    the cases where one can still be established at all — belongs to whoever
+    completed the collection, one layer up.
+
+    Subclasses :class:`ProcessLookupError` for the same reason the public error
+    does: that is what the kernel reports for the same condition, so a caller
+    that already tolerates a lost process keeps working unchanged.
+    """
+
+    def __init__(self, pid: int) -> None:
+        """Record the child that could not be signalled."""
+        super().__init__(f"cannot signal PID {pid}: it is already gone")
+        self.pid = pid
 
 
 class _Wait4InvariantError(_ExecutionInvariantError):
@@ -109,6 +131,11 @@ class _Wait4Process(asyncio.subprocess.Process):
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
         self._pipe_transports: list[asyncio.BaseTransport] = []
+        # Serializes the collection-and-publication against signal delivery,
+        # and nothing else. It is held only from a confirmed zombie to the
+        # recorded status, never across the child's lifetime, so a delivery to
+        # a healthy child is never made to wait on a reap.
+        self._settlement_lock = threading.Lock()
         self.pid = popen.pid
         self.stdin: asyncio.StreamWriter | None = None
         self.stdout: asyncio.StreamReader | None = None
@@ -161,68 +188,45 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Signal the child directly, leaving reaping to this owner alone.
 
         ``Popen.send_signal`` polls before signalling, and that poll is a
-        ``waitpid``: when the child is dead but not yet reaped it claims the
-        zombie, after which this class's own ``os.wait4`` fails with
-        ``ChildProcessError`` and the child's resource usage is lost — along
-        with whichever exception the caller was unwinding. Sending directly
-        keeps :meth:`_reap` the only reaper, as the module docstring promises.
+        ``waitpid``: it claims a zombie, after which this class's own
+        ``os.wait4`` fails and the child's resource usage is lost. Sending
+        directly keeps :meth:`_reap` the only reaper.
 
-        The guard covers the case ``Popen`` polls for, that the child is
-        already gone and its PID reusable, and it asks two questions because
-        neither alone is sufficient. The published ``_returncode`` is the
-        first: once this owner has recorded a code the child is definitively
-        collected. The second is
+        The guard asks two questions because neither alone is sufficient.
+        ``_returncode`` is the first: once this owner has recorded a code the
+        child is definitively collected. The second is
         :func:`~cuprum._process_exit._child_was_collected`, which asks the
-        *kernel* whether this process can still wait for the child — the same
-        question ``Popen``'s own ``poll()`` answers, and the one that closes
-        the window ``returncode`` alone leaves open. Between ``wait4``
-        collecting the status and this instance recording it there is a gap of
-        a few instructions, and in that gap ``returncode`` still reads
-        ``None`` for a child whose status is already gone. A delivery there
-        would pass a ``returncode`` check and signal a PID the kernel may have
-        recycled. Asking the kernel closes the gap to the equally irreducible
-        few instructions between that answer and ``os.kill``, which is the
-        race ``Popen`` documents between its own check and its own kill
-        (bpo-38630).
+        *kernel* whether this process can still wait for the child — closing
+        the gap in which ``wait4`` has collected a status that ``returncode``
+        has not yet recorded, where a ``returncode`` check alone would pass and
+        signal a PID the kernel may have recycled.
 
-        A refused delivery raises ``ProcessLookupError`` rather than reporting
-        success, and that is deliberate. A live child that exits *after* the
-        guard still owns its PID as a zombie and discards the signal
-        harmlessly, but a child this class has stopped being able to wait for
-        is not in that position. Returning quietly would report a delivery
-        that cannot be shown to have happened, to a PID that may now name a
-        stranger. Refusing is both the honest answer and the safe one, and it
-        is why the guard stays ordered *before* the kill rather than being
-        folded into the error handling below.
+        The check and the kill are taken together under
+        :attr:`_settlement_lock`, which makes that gap unreachable rather than
+        merely narrow: the reaper publishes under the same lock, so a delivery
+        arriving during a collection waits and then refuses on the first
+        question, while one arriving at any other time takes the lock freely.
+        ``docs/cuprum-design.md`` §13.10.5 records why ``Popen`` cannot do
+        this.
 
-        ``ProcessLookupError`` is deliberately **not** suppressed here, which
-        is a considered divergence from ``Popen.send_signal``: that method
-        swallows the same error (bpo-40550) on the grounds that the caller
-        asked to signal a process and it is gone, so there is nothing left to
-        do. This method cannot take that view, because it is not the end of
-        the story — it reports to a handle that has to tell its caller *how*
-        the child ended. Swallowing the error here would make the handle
-        report a successful delivery to a process that no longer exists, which
-        is the precise failure the handle was built to remove. The absorption
-        belongs to the caller that can weigh it, and
-        ``_process_handle.control._deliver_signal`` does exactly that: it
-        catches this error and re-reads the child's status to report a real
-        ending. A caller wanting ``Popen``'s forgiving behaviour absorbs it
-        the same way the lifecycle helpers do.
+        ``ProcessLookupError`` is deliberately **not** suppressed, unlike
+        ``Popen.send_signal`` (bpo-40550). It reports to a handle that must
+        tell its caller *how* the child ended, and swallowing the error would
+        make that handle report a successful delivery to a process that no
+        longer exists. The absorption belongs to the caller that can weigh it:
+        ``_process_handle.control._deliver_signal`` catches it and re-reads the
+        child's status.
 
         Raises
         ------
-        ProcessLookupError
+        _DeliveryRefusedError
             If this owner has already published the child's exit code, or if
-            the kernel reports no process at its PID. Both mean no delivery
-            can be established, and the caller that needs ``Popen``'s
-            forgiving answer absorbs the error itself.
+            the kernel reports no process at its PID.
         """
-        if self._returncode is not None or _child_was_collected(self.pid):
-            raise ProcessLookupError(
-                f"cannot signal PID {self.pid}: it is already gone"
-            )
-        os.kill(self.pid, signal)
+        with self._settlement_lock:
+            if self._returncode is not None or _child_was_collected(self.pid):
+                raise _DeliveryRefusedError(self.pid)
+            os.kill(self.pid, signal)
 
     @typ.override
     def terminate(self) -> None:
@@ -234,39 +238,25 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Compel the child to exit without reaping it."""
         self.send_signal(signal.SIGKILL)
 
-    def _reap_blocking(self) -> int:
-        """Reap the child and publish its status from the reaping thread.
+    def _collect_and_publish(self) -> int:
+        """Collect the child's status and record it, returning the code.
 
-        Recording happens in the reaping thread rather than after the executor
-        returns, and that is the point of the split: an event-loop hop between
-        the collection and the publication would leave a window in which the
-        child has been reaped while :attr:`returncode` still reads ``None``.
-
-        That window still exists in miniature between the collection and the
-        assignment below, because no ordering removes the last few
-        instructions of a reap. What makes it harmless is the guard in
-        :meth:`send_signal` rather than the order here. The guard asks the
-        *kernel* whether this owner still has a waitable child, so a delivery
-        landing in the window is refused even though no code has been
-        published yet. The gap that remains after both is the few instructions
-        between that kernel question and ``os.kill``, which is the same
-        irreducible race ``Popen`` documents between its own liveness check
-        and its own kill (bpo-38630).
-
-        The invariant check runs before any publication, so a ``wait4`` that
-        reported another child leaves both :attr:`returncode` and
-        :attr:`resource_usage` unset rather than attributing a stranger's
-        status and usage to this command.
+        This is the critical section :meth:`_reap_blocking` takes the
+        settlement lock around, so it holds the whole of what a delivery must
+        not interleave with: the collection, the invariant check, and the
+        publication every later reader depends on.
 
         Returns
         -------
         int
-            The exit code, as :attr:`returncode` now publishes it.
+            The collected exit code, as :attr:`returncode` now publishes it.
 
         Raises
         ------
         _Wait4InvariantError
-            If ``wait4`` reported a child this owner did not spawn.
+            If ``wait4`` reported a child this owner did not spawn. The check
+            runs before any assignment, so nothing of a stranger's is
+            attributed to this command.
         """
         pid, status, usage = os.wait4(self.pid, 0)
         if pid != self.pid:
@@ -275,6 +265,34 @@ class _Wait4Process(asyncio.subprocess.Process):
         self._popen.returncode = self._returncode
         self._resource_usage = resource_usage_from_wait4(usage)
         return self._returncode
+
+    def _reap_blocking(self) -> int:
+        """Wait for the child, then collect and publish it under the lock.
+
+        The wait and the collection sit on opposite sides of
+        :attr:`_settlement_lock`, and that split is what makes the coordination
+        cheap: the locked section is entered only once ``wait4`` has nothing
+        left to wait for, so a delivery never queues behind a reap that has not
+        happened yet. Recording stays in the reaping thread because an
+        event-loop hop between collection and publication would reopen the
+        window the lock exists to close, and a lock cannot cover a gap that
+        spans a thread boundary.
+
+        Returns
+        -------
+        int
+            The exit code, as :attr:`returncode` now publishes it.
+        """
+        # Outside the lock: blocking here must not stall a delivery, and by the
+        # time this returns the collection below cannot block at all. Where the
+        # platform cannot answer, the lock is not taken — a wait that might
+        # block for the child's whole lifetime must not be held across a
+        # delivery, and without a confirmed zombie there is nothing the lock
+        # would make atomic.
+        if not _await_child_waitable(self.pid):
+            return self._collect_and_publish()
+        with self._settlement_lock:
+            return self._collect_and_publish()
 
     async def _reap(self) -> int:
         """Perform the one blocking child reap in an executor thread."""

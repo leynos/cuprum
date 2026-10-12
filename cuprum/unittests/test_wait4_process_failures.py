@@ -27,6 +27,7 @@ import enum
 import os
 import signal
 import sys
+import threading
 import types
 
 import pytest
@@ -38,6 +39,38 @@ _wait4_only = pytest.mark.skipif(
     not (sys.platform.startswith("linux") or sys.platform == "darwin"),
     reason="asserts direct-child wait4 process ownership",
 )
+
+#: How long a case waits for the state it is observing before reporting that it
+#: never arrived, and how long it gives a delivery to appear before closing the
+#: window that would hide it. Both are generous because neither is a race: the
+#: state each case waits for is held by the case itself, so the durations only
+#: have to outlast the dispatch that reaches it. A delivery that reads an
+#: unestablished state returns in microseconds, so the second is time for one to
+#: *appear*, not time for one to finish.
+_OBSERVE_TIMEOUT = 5.0
+_WINDOW_OBSERVATION = 0.5
+
+
+def _skip_if_uncoordinated_reap() -> None:
+    """End the case as not applicable where a reap cannot be coordinated.
+
+    The coordination rests on the same kernel question the delivery guard asks,
+    so the cases asserting it are meaningful only where that question can be
+    answered. The platform is asked directly rather than through the constant
+    the code under test exports: that constant is part of what these cases
+    judge, so reading it here would let a probe switched off in the code turn
+    its own failing case into a skip, and the skip would read as a host
+    limitation rather than the defect it is.
+
+    Ends the case through *pytest.skip*, which raises rather than returns, so
+    there is nothing to describe under a returns heading.
+    """
+    probe_platform = (
+        os.name == "posix" and hasattr(os, "waitid") and hasattr(os, "CLD_EXITED")
+    )
+    if not probe_platform:
+        pytest.skip("this host cannot coordinate a reap against a delivery")
+
 
 # A child that outlives the test until something reaps or signals it, so a
 # missing cleanup shows up as a live process rather than a fast exit. The odd
@@ -212,7 +245,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         _ChildOwnership,
     ]:
         """Spawn a real child, then reap it through a mismatching ``wait4``."""
-        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        process = await _wait4_process.spawn_wait4_process(_exiting_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -226,8 +259,10 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
             await process.wait()
         # Probed here, before the caller's cleanup reaps it: this is the only
         # point at which the test can still see what the mismatch branch left
-        # behind. The child is an unexited `sleep`, so a branch that respected
-        # the mismatch leaves it LIVE and unreaped.
+        # behind. The child exits on its own, so the reaper's wait for it is
+        # satisfied before the mismatching ``wait4`` is reached, and a branch
+        # that respected the mismatch leaves the status for this probe to
+        # collect — which is exactly what ``REAPED`` reports.
         return process, caught.value, _probe_child(process.pid)
 
     try:
@@ -239,9 +274,9 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         # blocking collect runs here, off the event loop.
         for pid in spawned:
             _abandon(pid)
-    assert ownership is _ChildOwnership.LIVE, (
-        "the mismatch branch must not have reaped the real child either, but "
-        f"the child was found {ownership!r}"
+    assert ownership is _ChildOwnership.REAPED, (
+        "the child must have exited with its status left for this probe to "
+        f"collect, so the mismatch branch did not reap it; found {ownership!r}"
     )
 
     assert isinstance(failure, _wait4_process._Wait4InvariantError), (
@@ -384,4 +419,211 @@ def test_send_signal_still_delivers_to_a_live_child() -> None:
     assert status == -signal.SIGTERM, (
         f"a live child must still be signalled and report {-signal.SIGTERM}, "
         f"got {status}"
+    )
+
+
+class _ParkedCollection:
+    """A ``wait4`` that collects the status, then holds the window open.
+
+    The parking is the point: it lets a case observe the interval in which the
+    kernel has taken the child's status but this owner has not yet recorded it,
+    without racing the reaper to get there. The call still performs the real
+    collection first, so what follows the park is the code under test's own
+    publication rather than a stub's.
+
+    The window is closed by :meth:`release`, and it closes on its own after
+    :data:`_OBSERVE_TIMEOUT` so a failing case cannot hang the suite on a
+    delivery that never arrives.
+    """
+
+    def __init__(self) -> None:
+        """Start with the window shut and no collection yet observed."""
+        self.collected = threading.Event()
+        self._release = threading.Event()
+        self._real_wait4 = os.wait4
+
+    def __call__(self, pid: int, options: int) -> tuple[int, int, object]:
+        """Collect the status, then hold the window open for the case."""
+        result = self._real_wait4(pid, options)
+        self.collected.set()
+        self._release.wait(_OBSERVE_TIMEOUT)
+        return result
+
+    def release(self) -> None:
+        """Let the parked collection return, publishing what it collected."""
+        self._release.set()
+
+    def wait_until_open(self) -> None:
+        """Block until the reaper has collected and parked.
+
+        Ends the case with an ``assert`` rather than a raise, so there is
+        nothing to describe under a raises heading: a window that never opens
+        means the reaper never reached its collection, which is the case
+        failing to establish its own precondition rather than the code under
+        test misbehaving.
+        """
+        assert self.collected.wait(_OBSERVE_TIMEOUT), (
+            "the reaper must reach the collection for the window to exist"
+        )
+
+
+def _deliver_in_a_thread(
+    process: _wait4_process._Wait4Process,
+    observed: dict[str, object],
+) -> threading.Thread:
+    """Attempt a delivery from another thread, recording what it reported.
+
+    The delivery runs off the event loop and off the reaping thread, which is
+    the only position from which the coordination is observable: a delivery
+    that shares a thread with the reaper cannot demonstrate that one waits for
+    the other. The refusal's own error is recorded rather than raised, because
+    the point of the case is what the caller could learn afterwards, not that
+    the attempt failed.
+
+    Returns
+    -------
+    threading.Thread
+        The delivery, already started. The caller joins it, because whether it
+        finished is itself one of the properties under test.
+    """
+
+    def deliver() -> None:
+        """Record the refusal and the code visible once it returns."""
+        try:
+            process.send_signal(signal.SIGTERM)
+        except ProcessLookupError as exc:
+            observed["error"] = exc
+        observed["published"] = process.returncode
+
+    delivery = threading.Thread(target=deliver)
+    delivery.start()
+    return delivery
+
+
+@_wait4_only
+def test_send_signal_waits_for_a_collection_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delivery arriving during the collection must wait, not slip past.
+
+    This is the defect the coordination closes, driven rather than raced. The
+    reaper is parked between the kernel taking the child's status and this
+    instance recording it — the interval in which ``returncode`` still reads
+    ``None`` for a child that is definitively gone. A delivery checks that
+    attribute first, so a delivery that reached the check during the park
+    would find nothing to refuse and go on to signal a PID the kernel is free
+    to have reused.
+
+    Waiting is what separates the coordinated delivery from the uncoordinated
+    one, and it is asserted as a fact about the thread rather than a duration:
+    the delivery is still running while the park is held, which no
+    lock-free implementation can produce. Once released, the same delivery
+    must refuse — the child is gone — so the wait is proven to end in a
+    collapse of the window rather than merely an absence.
+
+    A counterfactual confirms the park is load-bearing: with the lock removed
+    the delivery completes inside the window instead of waiting, so this case
+    fails on the first assertion rather than passing for an unrelated reason.
+    """
+    _skip_if_uncoordinated_reap()
+    parked = _ParkedCollection()
+    observed: dict[str, object] = {}
+
+    async def deliver_into_the_window() -> None:
+        """Open the window, deliver into it, then let the collection finish."""
+        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        reaping = asyncio.ensure_future(process.wait())
+        # Waiting off the loop is what lets the reaping task run: the park is
+        # reached by that task, so blocking the loop here would deadlock the
+        # case against itself.
+        await asyncio.to_thread(parked.wait_until_open)
+        assert process.returncode is None, (
+            "the window is open only while the code is unrecorded; a recorded "
+            "code means the case is not testing the interval it names"
+        )
+
+        delivery = _deliver_in_a_thread(process, observed)
+        # Time for an uncoordinated delivery to reach the kill. A coordinated
+        # one is still blocked on the lock, so this cannot fail by being early;
+        # it can only catch a delivery that entered the window.
+        await asyncio.sleep(_WINDOW_OBSERVATION)
+        observed["waited"] = delivery.is_alive()
+        parked.release()
+        delivery.join(_OBSERVE_TIMEOUT)
+        assert not delivery.is_alive(), "the delivery must not outlive the window"
+        await reaping
+
+    monkeypatch.setattr(_wait4_process.os, "wait4", parked)
+    try:
+        asyncio.run(deliver_into_the_window())
+    finally:
+        parked.release()
+
+    assert observed["waited"], (
+        "a delivery arriving during the collection must wait for the "
+        "publication, but it returned while the window was still open"
+    )
+    assert isinstance(observed["error"], ProcessLookupError), (
+        "the delivery must be refused once the collection is published, "
+        f"got {observed['error']!r}"
+    )
+    assert observed["published"] == _EXITED, (
+        "the refusal must read the code the reaper published rather than the "
+        f"-1 placeholder, got {observed['published']!r}"
+    )
+
+
+@_wait4_only
+def test_send_signal_does_not_wait_on_a_published_child() -> None:
+    """Once the code is published, a delivery must be refused at once.
+
+    The coordination must cost a delivery nothing when there is nothing to
+    coordinate with. The reaper has already finished here, so the lock is free
+    and no park is involved: a delivery that still took the slow path — or
+    waited for a reap that had already completed — would show up as a
+    delivery that hangs against a child that is definitively gone.
+
+    The refusal is asserted to carry the child's own code as well, because the
+    two delivery paths must agree: whether the delivery arrives during the
+    collection or long after it, the caller must be told the same thing, and a
+    published code is what the second path has to read.
+
+    The delivery is joined within the observation timeout, which is what turns
+    "did not wait" into a claim the case can actually make. An unjoined thread
+    would leave the assertions reading a record the delivery had not yet
+    written, so the case would report the wrong thing under load while still
+    appearing to pass. A delivery that genuinely took the slow path here —
+    waiting for a reap that had already finished — would hang rather than fail,
+    so the join is what keeps the regression inside the case that names it.
+    """
+    _skip_if_uncoordinated_reap()
+    observed: dict[str, object] = {}
+    delivery: dict[str, threading.Thread] = {}
+
+    async def refuse_after_the_reap() -> None:
+        """Signal a child whose reaper has already published its code."""
+        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        await process.wait()
+        assert process.returncode == _EXITED, (
+            "the reaper must have published the code this case delivers after"
+        )
+        delivery["thread"] = _deliver_in_a_thread(process, observed)
+
+    asyncio.run(refuse_after_the_reap())
+
+    delivery["thread"].join(_OBSERVE_TIMEOUT)
+    assert not delivery["thread"].is_alive(), (
+        "a delivery to a published child must be refused without waiting for anything"
+    )
+    assert isinstance(observed["error"], ProcessLookupError), (
+        f"a published child must be refused, got {observed['error']!r}"
+    )
+    assert observed["published"] == _EXITED, (
+        f"the refusal must report the child's own code, got {observed['published']!r}"
     )

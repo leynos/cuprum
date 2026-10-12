@@ -1,16 +1,28 @@
 """Regression coverage for resilient subprocess exit waiting.
 
-Three readings are covered here, and they answer different questions.
+Four readings are covered here, and they answer different questions.
 :func:`~cuprum._process_exit._await_process_exit` blocks until a child is gone,
 and the cases for it use a double because the failure it guards against — a
 waiter that strands after the code is already published — cannot be asked of a
 real child. :func:`~cuprum._process_exit._observed_exit_code` only *looks*, and
 its cases use a real child, because what it must not do is collect the status
-it observes. A double cannot witness that: it has no status to strand. The same
-applies to :func:`~cuprum._process_exit._child_was_collected`, which reports
-whether the kernel can still be asked about a child at all — a double has no
-kernel answer to give, so its cases drive real children through the states a
-delivery decision has to tell apart.
+it observes. A double cannot witness that: it has no status to strand.
+
+The last two ask about a child's state rather than its outcome, and neither
+can be answered by a double either.
+:func:`~cuprum._process_exit._child_was_collected` reports whether the kernel
+can still be asked about a child at all, so its cases drive real children
+through the states a delivery decision has to tell apart.
+:func:`~cuprum._process_exit._await_child_waitable` waits for one of those
+states to arrive without consuming what it waits for, which a double has no
+status to strand and so cannot witness.
+
+The cases that must observe a *running* child hold it there rather than
+starting one and hoping to be quick. A child that exits promptly leaves the
+running state unobserved, so a case built on one cannot distinguish the two
+states it claims to separate, and its first assertion would pass against a
+zombie. :func:`_spawn_sleeping_child` keeps the child alive until the case
+stops it, so the running state is held rather than raced.
 """
 
 from __future__ import annotations
@@ -29,6 +41,7 @@ from cuprum import _wait4_process
 from cuprum._process_exit import (
     _PROCESS_EXIT_INITIAL_POLL_INTERVAL,
     _PROCESS_EXIT_MAX_POLL_INTERVAL,
+    _await_child_waitable,
     _await_process_exit,
     _child_was_collected,
     _observed_exit_code,
@@ -147,6 +160,66 @@ def _spawn_exiting_child(code: int) -> subprocess.Popen[str]:
         stderr=subprocess.PIPE,
         text=True,
     )
+
+
+def _spawn_sleeping_child() -> subprocess.Popen[str]:
+    """Start a child that stays alive until the case stops it.
+
+    The readings asserted here separate a running child from an exited one, so
+    a child that exits promptly cannot witness them: by the time the case asks
+    its first question the child may already be a zombie, and the question that
+    was supposed to distinguish the two states would be answered about one.
+    Holding the child removes that dependence on being quick, and the state
+    under observation is then established by the case rather than hoped for.
+
+    Returns
+    -------
+    subprocess.Popen[str]
+        A child that sleeps until something signals or kills it. It is a real
+        process for the same reason as :func:`_spawn_exiting_child`: only the
+        kernel's own bookkeeping can answer what these cases ask.
+    """
+    # The bandit suppression for this call lives on ``_spawn_exiting_child``
+    # above, where Ruff reports the rule for the module; the argv here is fixed
+    # for the same reason, with no shell and no test input reaching it.
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(997)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _as_process(child: subprocess.Popen[str]) -> asyncio.subprocess.Process:
+    """Present a real child to a probe that declares a process it may not modify.
+
+    The probes take ``asyncio.subprocess.Process`` and read only ``pid`` and
+    ``returncode`` from it, but ``subprocess.Popen`` is the only way to start
+    a child whose waiting the case itself controls. The cast records that
+    narrow use rather than widening the probe's declared type to accommodate
+    a test.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The same child, presented under the type the probes declare. No
+        attribute is copied or adapted, so a probe reading it reaches the real
+        process.
+    """
+    return typ.cast("asyncio.subprocess.Process", child)
+
+
+def _release_child(child: subprocess.Popen[str]) -> None:
+    """Stop a held child and collect it, whatever state the case left it in.
+
+    The child is killed through the raw handle rather than through anything the
+    cases probe, so a probe under test cannot turn this cleanup into a no-op.
+    The wait is what keeps the suite free of the zombie this child would
+    otherwise leave behind.
+    """
+    if child.poll() is None:
+        child.kill()
+    child.wait()
 
 
 def _skip_if_unobservable_exit() -> None:
@@ -271,22 +344,28 @@ def test_child_was_collected_is_false_for_a_child_still_waitable() -> None:
     A check that treated either as "gone" would refuse deliveries that were
     perfectly deliverable, which is a regression in the other direction from
     the one this guard exists to prevent.
+
+    The child is held alive for the first question. A child that exited
+    promptly would answer it while already a zombie, so the case could not
+    distinguish the two states it exists to separate — the running answer
+    would be established by nothing, and a guard that reported every child as
+    collected would still pass. The exit is then produced by the case, so the
+    zombie state is one the case created rather than one it waited for.
     """
     _skip_if_unobservable_exit()
-    running = _spawn_exiting_child(_OBSERVED_EXIT_CODE)
+    running = _spawn_sleeping_child()
     try:
         assert not _child_was_collected(running.pid), (
             "a running child is still this process's to wait for"
         )
+        running.kill()
         _wait_until_exited(running.pid)
         assert not _child_was_collected(running.pid), (
             "an exited but uncollected child is still waitable, and still "
             "holds its PID against reuse"
         )
     finally:
-        if running.poll() is None:
-            running.kill()
-        running.wait()
+        _release_child(running)
 
 
 def test_child_was_collected_is_true_once_the_status_is_gone() -> None:
@@ -396,8 +475,8 @@ def test_send_signal_refuses_from_the_guard_before_any_kill(
         """Record an attempted kill without delivering anything."""
         killed.append((pid, signal_number))
 
-    async def signal_after_foreign_reap() -> ProcessLookupError | None:
-        """Collect the child elsewhere, then attempt the delivery."""
+    async def spawn_child() -> _wait4_process._Wait4Process:
+        """Spawn the child whose status a foreign reaper will collect."""
         config = _wait4_process.DirectProcessConfig(
             argv=(sys.executable, "-c", f"raise SystemExit({_OBSERVED_EXIT_CODE})"),
             stdin=None,
@@ -410,16 +489,20 @@ def test_send_signal_refuses_from_the_guard_before_any_kill(
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
-        reaped_pid, _status = os.waitpid(process.pid, 0)
-        assert reaped_pid == process.pid, "the foreign reaper must collect it"
-        try:
-            process.send_signal(signal.SIGTERM)
-        except ProcessLookupError as exc:
-            return exc
-        return None
+        return process
 
     monkeypatch.setattr(_wait4_process.os, "kill", record_kill)
-    refusal = asyncio.run(signal_after_foreign_reap())
+    # The foreign collection and the delivery are synchronous, so they run
+    # outside the event loop rather than blocking it.
+    process = asyncio.run(spawn_child())
+    reaped_pid, _status = os.waitpid(process.pid, 0)
+    assert reaped_pid == process.pid, "the foreign reaper must collect it"
+    try:
+        process.send_signal(signal.SIGTERM)
+    except ProcessLookupError as exc:
+        refusal: ProcessLookupError | None = exc
+    else:
+        refusal = None
 
     assert refusal is not None, (
         "a child whose status is collected must be refused; ``returncode`` "
@@ -429,4 +512,75 @@ def test_send_signal_refuses_from_the_guard_before_any_kill(
         "the guard must refuse before any kill is attempted, or a PID the "
         f"kernel may have reused is signalled by number; kill was called "
         f"{len(killed)} time(s)"
+    )
+
+
+def test_await_child_waitable_blocks_then_leaves_the_status() -> None:
+    """Waiting for a child must last until it is collectable, and not collect.
+
+    This is what keeps the reaper's locked section to a few instructions: the
+    lock is entered only once ``wait4`` has nothing left to wait for, so no
+    delivery is ever parked behind a child's lifetime. Two properties have to
+    hold together for that to be true, and each would be broken by the obvious
+    wrong implementation of the other.
+
+    The wait must actually wait — a probe that answered at once would report a
+    running child as collectable, and the collection that followed would block
+    inside the locked section, which is the defect the ordering exists to
+    avoid. And it must not collect: a probe that consumed the status would
+    strand it, and the reaper would find nothing where the child's exit code
+    and resource usage should be.
+
+    The child is held alive while the first property is asserted, which is
+    what separates a genuine wait from a probe that merely answers: a child
+    that had already exited would make both implementations agree. It is then
+    killed by the case, so the wait is proven to end on a state the case
+    itself produced.
+    """
+    _skip_if_unobservable_exit()
+    child = _spawn_sleeping_child()
+    try:
+        assert _observed_exit_code(_as_process(child)) is None, (
+            "the child must be running when the wait begins, or the case "
+            "cannot show the wait was what brought it to collectable"
+        )
+        child.kill()
+        assert _await_child_waitable(child.pid), (
+            "a child that has exited must be reported collectable"
+        )
+        # The wait has returned, and the status must still be there for the
+        # reaper that owns it.
+        reaped = child.wait()
+    finally:
+        _release_child(child)
+    assert reaped == -signal.SIGKILL, (
+        f"waiting for the child must leave its status for the reaper, got {reaped}"
+    )
+
+
+def test_await_child_waitable_reports_a_child_that_is_already_gone() -> None:
+    """A child whose status is collected must not be reported collectable.
+
+    The wait is the reaper's route into the locked section, so its answer has
+    to be right in the direction that matters most. Reporting ``True`` for a
+    child that is gone would carry the reaper into a collection that cannot
+    succeed, replacing a recorded status with an invariant failure — and the
+    delivery side of the same question would then be asked against a
+    half-settled instance.
+
+    A foreign reaper collects the status here, which is the state a completed
+    collection leaves behind whatever performed it. The answer must be
+    ``False``, and the caller that owns the reap is then free to fall back to
+    its own collection and report the mismatch rather than proceeding as if
+    the child were ready.
+    """
+    _skip_if_unobservable_exit()
+    child = _spawn_exiting_child(_OBSERVED_EXIT_CODE)
+    reaped_pid, status = os.waitpid(child.pid, 0)
+    assert reaped_pid == child.pid, "the foreign reaper must collect this child"
+    assert os.waitstatus_to_exitcode(status) == _OBSERVED_EXIT_CODE, (
+        "the foreign reaper must have taken the real status"
+    )
+    assert not _await_child_waitable(child.pid), (
+        "a child whose status is collected must not be reported collectable"
     )
