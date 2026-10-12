@@ -16,10 +16,9 @@ agreement:
 from __future__ import annotations
 
 import typing as typ
+from pathlib import Path
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, ExecutionContext, TimeoutExpired
 
@@ -57,6 +56,67 @@ def _current_context() -> CuprumContext:
 def _cwd_arg(cwd: str | Path | None) -> str | None:
     """Return the ``cwd`` argument for ``asyncio.create_subprocess_exec``."""
     return str(cwd) if cwd is not None else None
+
+
+def _event_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the working directory an *event* reports: the configured one.
+
+    Both observation builders record the run's directory on ``ExecEvent.cwd``
+    (and, through the adapters, as ``cuprum_cwd`` / ``cuprum.cwd``). That field
+    is a report of what the caller configured, not a resolution input, so it is
+    never anchored against the process directory. Anchoring it here would make
+    the event disagree with both the caller and the spawn — the spawn receives
+    the same directory through :func:`_cwd_arg`.
+
+    "Configured directory" means the value the caller passed, represented as a
+    :class:`~pathlib.Path` — not a verbatim copy of their string. ``Path``
+    normalizes lexical detail such as a trailing ``/`` or a ``./`` segment, so
+    this is the caller's *directory*, faithfully, rather than their spelling of
+    it; a caller comparing strings should not expect their bytes back.
+
+    Only *resolution* needs the absolute form, which is what
+    :func:`_execution_cwd` exists for. Keeping the two side by side states the
+    distinction once, where a reader comparing them will find it.
+
+    Returns
+    -------
+    Path | None
+        The caller's directory as configured, or ``None`` when they named none.
+    """
+    return None if cwd is None else Path(cwd)
+
+
+def _execution_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the directory a *relative* binding may be anchored at, absolutely.
+
+    A caller may supply the working directory relative to the process's own, and
+    a relative binding is anchored at it. Composing those naively yields a
+    relative ``argv[0]``, which the child then resolves against the very
+    directory it was already anchored to — applying the same prefix a second
+    time. The child would execute one file while ``resolved_path`` named
+    another, disagreeing exactly where a caller audits which file ran.
+
+    Anchoring here makes the composed path absolute, so it is anchored once, by
+    us, and the child cannot re-anchor it. The spawn keeps its own spelling of
+    the same directory, which is what ``_cwd_arg`` already renders. ``""`` falls
+    through as any relative spelling does — ``Path("")`` is ``Path(".")`` — and
+    that answer is unobservable because ``asyncio`` refuses an empty ``cwd``
+    before a child starts; it is left as it falls rather than mapped to ``None``,
+    which would claim the caller named no directory when they named one.
+
+    Returns
+    -------
+    Path | None
+        The absolute anchoring base, or ``None`` when *cwd* is ``None``, since
+        an unspecified working directory means the process's own and both
+        consumers already apply that.
+    """
+    if cwd is None:
+        return None
+    path = Path(cwd)
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
 
 
 def _resolve_timeout(

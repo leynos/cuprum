@@ -88,6 +88,41 @@
 
 ### Added
 
+- **Scoped executable bindings:**
+  `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
+  catalogued program to the executable it should run inside the enclosing
+  scope, so a pinned absolute path, a virtual-environment interpreter, or a
+  controlled test replacement no longer has to become the program's catalogue
+  identity. The logical `Program` still governs the allowlist, project
+  metadata, and telemetry, while the binding decides only what a *permitted*
+  program executes; resolution therefore happens strictly after allowlist
+  enforcement, and a refused program never calls its resolver. `ExecutablePath`
+  and `ExecutableBinding` are the value types, `resolve_binding` the pure
+  resolution helper, `InvalidExecutableBindingError` the rejection, and
+  `merge_executable_bindings` the overlay-only composition rule.
+  `CuprumContext.resolve_executable()` inspects the effective binding without
+  running anything. The path argument accepts any `os.PathLike`, not only
+  `pathlib.Path`, so a `PurePosixPath` binds the way `executable_path()`
+  already accepted it; a value that is neither path-like nor callable is
+  rejected with `TypeError` instead of being stored as a resolver that fails at
+  spawn time. A resolver must return a `str`, so a resolver returning `None`
+  cannot be mistaken for "no binding" and silently run the catalogued name
+  instead. `resolve_binding()` raises `TypeError` for any other result; every
+  execution instead reports a wrong return type, or a resolver that raises, as
+  `ExecutableResolutionError`, naming the logical program and chaining the
+  original exception. `ExecEvent` and `CommandResult` gain `resolved_path`,
+  carrying the executed executable or `None` when nothing was bound; the
+  logging adapter projects it as `cuprum_resolved_path` and the tracing adapter
+  as `cuprum.resolved_path`, and it is deliberately absent from the metrics
+  labels, which stay low-cardinality. `ExecEvent.cwd` keeps the caller's own
+  spelling for a relative `ExecutionContext.cwd`; only a relative *binding* is
+  anchored at the execution's directory, and that anchoring is not reflected
+  back onto the event. Path validation is advisory: construction rejects an
+  empty path, a relative path unless `allow_relative=True`, and NUL or `..`
+  segments, but it cannot close the window between the check and the `exec`, so
+  filesystem ownership, permissions, and read-only deployment remain the
+  operator's responsibility
+  ([#440](https://github.com/leynos/cuprum/issues/440)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state
   ([#434](https://github.com/leynos/cuprum/issues/434)).

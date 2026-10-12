@@ -170,7 +170,7 @@ async def _spawn_subprocess(
     # capture and echo, so a run the watchdog narrates keeps its pipes.
     return await _wait4_process.spawn_direct_process(
         _wait4_process.DirectProcessConfig(
-            argv=execution.cmd.argv_with_program,
+            argv=(execution.observation.argv0, *execution.cmd.argv),
             stdout=(
                 asyncio.subprocess.PIPE
                 if execution.consumes_stdout
@@ -354,6 +354,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
         system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
         relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
+        resolved_path=execution.observation.resolved_path,
     )
 
 

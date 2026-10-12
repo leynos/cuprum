@@ -4,4 +4,11 @@
 values = [
     '^/e6y2XJJDpMXP8Cs5eXFz/SRVOMwLLauMMNBYkoaAd/BVdz5b5/ggZ5KepdLZLVr$',
     '^/6a\+G1dAD\+nKUASogWl5FzyCB8H90WGN/C9Ymex2Lk\+/tldn1J3jgixVTWvW/8W4$',
+    # The executable-binding fixtures name ``/opt/tools/<program>`` as the
+    # approved executable path. The directory is fictional -- no machine binds
+    # anything there -- so the value is deterministic public test data rather
+    # than an accidental host path. It is deliberately not redacted: the
+    # projection snapshot exists to pin the exact spelling each adapter
+    # publishes the executed path under, which a placeholder would erode.
+    '^/opt/tools/[^/]+$',
 ]

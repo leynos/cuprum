@@ -286,13 +286,34 @@ class ExecEvent:
         failure and cannot tell it apart from an overlay run. ``None`` only on
         legacy or manually constructed events; the execution paths always
         resolve a mode.
+    resolved_path:
+        The executable this execution actually ran, when a scope bound the
+        program's logical identity to a specific path. ``None`` when no
+        binding applied, in which case the child ran under the name in
+        ``argv[0]``.
 
-    New optional fields are appended to the end of the declaration to preserve
-    existing positional argument slots. In particular, inserting one ahead of
-    ``exec_id`` would silently rebind a positional argument in existing caller
-    code, handing the correlation token to the new field and leaving
-    ``exec_id=None`` — which consumers such as ``TracingHook`` treat as
-    uncorrelatable and drop.
+        It is the *executable*, not the command: ``argv`` still carries the
+        arguments, and ``program`` still carries the catalogue identity that
+        policy was checked against. Keeping all three means a consumer can see
+        what was permitted, what was asked for, and what ran, without having
+        to infer one from another. The path is a string rather than a
+        resolved file identity, so a replaced binary is not detected; see the
+        TOCTOU note in ``cuprum.executable_binding``.
+
+    What preserves an existing positional slot is that no new field is
+    inserted *ahead* of it, so a positional argument in existing caller code
+    keeps binding the field it always bound. Inserting one ahead of ``exec_id``
+    would silently rebind such an argument, handing the correlation token to
+    the new field and leaving ``exec_id=None`` — which consumers such as
+    ``TracingHook`` treat as uncorrelatable and drop.
+
+    Being appended after some earlier slot is not by itself enough, because
+    every field declared after the insertion point also moves. Since
+    ``terminal_outcome`` is pinned as the declaration tail by
+    ``test_terminal_outcome_public_api`` but already holds a positional slot of
+    its own, a later field cannot be declared ahead of it without shifting it.
+    Such a field is therefore declared ``kw_only``, which keeps the declaration
+    tail intact while leaving every pre-existing positional slot untouched.
 
     """
 
@@ -326,6 +347,14 @@ class ExecEvent:
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
+    # Declared before ``terminal_outcome`` so that field stays the declaration
+    # tail, which ``test_terminal_outcome_public_api`` pins via
+    # ``dc.fields()[-1]``. ``terminal_outcome`` already holds a positional slot
+    # on the comparison base, so declaring ``resolved_path`` ahead of it
+    # positionally would shift that slot and silently rebind an existing
+    # caller's positional argument. ``kw_only`` keeps the tail without moving
+    # any pre-existing slot; see the class docstring.
+    resolved_path: str | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
 
 

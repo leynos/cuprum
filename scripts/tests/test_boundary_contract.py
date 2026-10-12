@@ -50,6 +50,7 @@ class _RecordedCompile:
     """
 
     def __init__(self) -> None:
+        """Start with no recorded compiles."""
         self.probes: list[str] = []
 
     def __call__(self, workspace: Path) -> tuple[int, str]:

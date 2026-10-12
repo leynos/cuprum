@@ -22,6 +22,12 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._context_policy import (
+    _collect_hooks as _collect_hooks,
+)
+from cuprum._context_policy import (
+    _enforce_allowlist as _enforce_allowlist,
+)
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
@@ -37,12 +43,6 @@ from cuprum._pipeline_collect import (
 from cuprum._pipeline_observation import (
     _build_pipeline_observations,
     _emit_plan_events_and_run_before_hooks,
-)
-from cuprum._pipeline_observation import (
-    _collect_hooks as _collect_hooks,
-)
-from cuprum._pipeline_observation import (
-    _enforce_allowlist as _enforce_allowlist,
 )
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
