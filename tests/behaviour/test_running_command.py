@@ -18,8 +18,8 @@ re-open a loop mid-story.
 
 The assertions are about what a caller can observe: the outcome the handle
 recorded, the status it reports, and whether the child was in fact reaped.
-Nothing here reaches inside the handle; the stub-process tests in
-``cuprum/unittests/test_running_command_lifecycle.py`` do that.
+Nothing here reaches inside the handle; the stub-process tests under
+``cuprum/unittests/test_running_command_*.py`` do that.
 """
 
 from __future__ import annotations

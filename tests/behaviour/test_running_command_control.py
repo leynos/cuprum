@@ -15,7 +15,8 @@ Everything asserted here is what a caller observes after a stop: the signal the
 outcome reports, whether captured output survived, and whether the child was in
 fact reaped. The handle's internal bookkeeping under those same operations is
 covered by the stub-process tests in
-``cuprum/unittests/test_running_command_lifecycle.py``.
+``cuprum/unittests/test_running_command_lifecycle.py``, and its refusals to
+deliver a signal by ``cuprum/unittests/test_running_command_signals.py``.
 """
 
 from __future__ import annotations

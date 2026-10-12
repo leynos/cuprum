@@ -1,10 +1,11 @@
 """What one handle owes several callers with their own deadlines.
 
 :mod:`cuprum.unittests.test_running_command_lifecycle` covers the handle's
-bookkeeping — repeated stops, refusals, and a cancellation landing mid-grace.
-This module covers the property those cases lean on: the settlement is shared,
-so a deadline one caller names must bound *that caller* and nobody else. Both
-modules drive the same process doubles, which live in
+bookkeeping — repeated stops and a cancellation landing mid-grace — and
+:mod:`cuprum.unittests.test_running_command_signals` covers the refusals a
+delivery can meet. This module covers the property those cases lean on: the
+settlement is shared, so a deadline one caller names must bound *that caller*
+and nobody else. All three drive the same process doubles, which live in
 :mod:`cuprum.unittests._running_command_support`.
 
 Three consequences are asserted here and nowhere else.
