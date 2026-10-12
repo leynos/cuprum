@@ -74,12 +74,25 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
     report success for a delivery that no longer means anything — the exact
     race the handle exists to remove from the caller's plate.
 
+    The probe and the delivery are both needed, because each covers a case the
+    other cannot. The probe catches a child that exited *before* this call —
+    a zombie whose status the owning reaper has not yet collected — and it is
+    the only check that can report that child's ending while its status is
+    still uncollected. The ``ProcessLookupError`` catches a child that was
+    reaped *concurrently*: once someone collects the status, the kernel has no
+    child at that PID, so the probe can no longer observe how it ended and
+    ``os.kill`` is the call that discovers the process is gone. Both are
+    ordinary racing outcomes rather than misuse, and both are reported the
+    same way.
+
     Raises
     ------
     UnsupportedSignalError
         If the platform cannot deliver a caller-named signal.
     SignalAfterExitError
-        If the child has already exited, carrying its recorded exit code.
+        If the child has already exited, carrying the exit code the handle
+        recorded, or the best reading available when a concurrent reap
+        collected the status first.
     """
     if not _arbitrary_signals_supported():
         raise UnsupportedSignalError(signal_number, sys.platform)
@@ -90,12 +103,16 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
     try:
         process.send_signal(signal_number)
     except ProcessLookupError:
-        # The child exited between the check above and the delivery, so this is
-        # the same outcome as finding it already gone. The probe is re-read
-        # rather than reused: the exit happened after it ran, so this is the
-        # first chance to learn how. It is compared against ``None`` and not
-        # used as a truth value, because an exit code of zero is a real ending
-        # that a falsy test would discard in favour of the ``-1`` placeholder.
+        # The child exited between the check above and the delivery, or was
+        # reaped concurrently and so is no longer observable, so this is the
+        # same outcome as finding it already gone. The probe is re-read rather
+        # than reused: the exit happened after it ran, so this is the first
+        # chance to learn how. It is compared against ``None`` and not used as
+        # a truth value, because an exit code of zero is a real ending that a
+        # falsy test would discard in favour of the ``-1`` placeholder. The
+        # re-read still fails to see a status a concurrent reaper collected,
+        # and only then does the published attribute stand in — a reaper that
+        # collected the child has published its code by the time it returns.
         rechecked = _observed_exit_code(process)
         raise SignalAfterExitError(
             _get_exit_code(process) if rechecked is None else rechecked,

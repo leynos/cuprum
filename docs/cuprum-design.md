@@ -4115,10 +4115,22 @@ platform that declined it. A caller on such a platform has to reach for
 A child that has already exited is an ordinary racing outcome rather than a
 misuse, because a caller coordinating several signals cannot avoid racing the
 child's own exit. That condition raises `SignalAfterExitError`, a
-`ProcessLookupError` subclass carrying the exit code the handle recorded and
-the PID it belonged to — and nothing is delivered. Subclassing
-`ProcessLookupError` is what keeps a caller who already tolerates a lost
-process working once the handle names the condition.
+`ProcessLookupError` subclass carrying the child's exit code and the PID it
+belonged to — and nothing is delivered. Subclassing `ProcessLookupError` is
+what keeps a caller who already tolerates a lost process working once the
+handle names the condition.
+
+The exit code that refusal carries is established two ways, and the handle
+needs both. A child that exited *before* the call is a zombie until its owner
+reaps it, so `returncode` still reads `None` while the status is right there to
+be observed — the handle reads it without collecting it, leaving the reap to
+the thread that owns it. A child reaped *concurrently* is the harder half: once
+the status has been collected the kernel has no child at that PID, so nothing
+can be observed about how it ended, and the delivery itself is what discovers
+the process is gone. The handle catches that refusal and reports the code the
+reaper published, which is why the backend does not suppress the error the way
+`Popen.send_signal` does. A backend that swallowed it would make the handle
+claim a delivery to a process that no longer exists.
 
 The platform is checked before the child's state, so a caller on a platform
 that cannot deliver the signal at all learns that, rather than being told the

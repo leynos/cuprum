@@ -35,6 +35,7 @@ from cuprum.unittests._running_command_support import (
     _KILLED,
     _TERMINATED,
     _WAITERS,
+    _ConcurrentlyReapedProcess,
     _handle,
     _SigtermImmuneProcess,
     _StubProcess,
@@ -166,6 +167,56 @@ def test_signal_after_exit_names_the_recorded_code() -> None:
             "the refusal must name the process it could not reach"
         )
         assert not process.signals, "nothing may be delivered to a gone child"
+
+    asyncio.run(run_case())
+
+
+def test_signal_refused_after_a_concurrent_reap_names_the_real_code() -> None:
+    """A delivery refused for a reaped child still reports how it ended.
+
+    The probe catches a child that exited but has not been reaped. Once
+    *someone else* has collected the status — a settle, or a caller's own
+    ``wait()`` that started first — the kernel has no child at that PID and
+    the probe can no longer observe the ending, so the delivery's own refusal
+    is the only signal that the child is gone. The handle still has to name
+    the exit code, and the value the collecting reaper published is where it
+    comes from.
+
+    This is the case a suppressed ``ProcessLookupError`` would hide: the
+    delivery would read as success and the caller would believe a signal
+    reached a process that had already been collected. The refusal is asserted
+    to carry the real code rather than the ``-1`` placeholder, because a
+    caller deciding whether the command's ending already satisfies them needs
+    the actual status. The case is witnessed rather than arranged: the double
+    records the attempt, and the kernel refused it, so the recording is intent
+    rather than delivery. If a probe short-circuited the call the record would
+    be empty, the code would be read rather than reported from a refusal, and
+    the branch under test would go unexercised while still satisfying every
+    assertion about the error.
+    """
+
+    async def run_case() -> None:
+        """Attempt a signal as a concurrent reaper collects the child."""
+        process = _ConcurrentlyReapedProcess(exit_code=_EARLY_EXIT)
+        handle = _handle(process)
+
+        with pytest.raises(SignalAfterExitError) as raised:
+            await handle.signal(signal.SIGTERM)
+
+        assert process.signals == [signal.SIGTERM], (
+            "the delivery must have been attempted with the requested signal, "
+            "or the refusal came from the probe and the suppressed-error "
+            f"branch this case exists to cover was never reached (got "
+            f"{process.signals})"
+        )
+        assert raised.value.exit_code == _EARLY_EXIT, (
+            "the refusal must carry the reaped child's real status "
+            f"{_EARLY_EXIT}, not the -1 placeholder, got "
+            f"{raised.value.exit_code}"
+        )
+        assert raised.value.pid == process.pid, (
+            "the refusal must name the process it could not reach"
+        )
 
     asyncio.run(run_case())
 

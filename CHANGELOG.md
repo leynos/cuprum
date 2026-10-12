@@ -294,8 +294,8 @@
   `terminate()`, and `kill()` control operations
   ([#437](https://github.com/leynos/cuprum/issues/437)).
 - **`SignalAfterExitError`:** Raised when a signal is requested for a child
-  that has already exited. A `ProcessLookupError` subclass carrying the exit
-  code the handle recorded and the PID it belonged to
+  that has already exited. A `ProcessLookupError` subclass carrying the child's
+  exit code and the PID it belonged to
   ([#437](https://github.com/leynos/cuprum/issues/437)).
 - **`UnsupportedSignalError`:** Raised when the platform cannot deliver a
   caller-named signal, carrying the signal that was asked for and the platform

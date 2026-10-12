@@ -1,16 +1,22 @@
 """The failure paths ``cuprum._wait4_process`` owns but a live run never takes.
 
 A command that runs to completion exercises one branch of this module: spawn,
-attach pipes, reap once. Two other branches exist only for things going wrong,
-and both protect the same promise — that ``_Wait4Process._reap`` is the only
-reaper. Nothing a caller can observe through ``CommandResult`` separates "the
-child was cleaned up" from "the child leaked", so neither branch is covered by
-running a command and reading its result. These tests drive them directly.
+attach pipes, reap once. The other branches exist only for things going wrong,
+and they protect two promises. The first is that ``_Wait4Process._reap`` is the
+only reaper, which keeps the child's status and its resource usage attributable
+to the command that spawned it. The second is that a caller can always learn
+how the child ended: the reap publishes the status from the thread that
+collected it, and a delivery that the kernel refuses is reported rather than
+swallowed. Nothing a caller can observe through ``CommandResult`` separates
+"the child was cleaned up" from "the child leaked", or "the signal was refused"
+from "the signal landed", so these paths are driven directly rather than
+through a command's result.
 
 Each test spawns a real child rather than a stub, because the guarantees under
-test are about process lifetime: the cleanup branch must leave no zombie, and
-the mismatch branch must not adopt another child's exit status. A fake process
-can demonstrate neither.
+test are about process lifetime: the cleanup branch must leave no zombie, the
+mismatch branch must not adopt another child's exit status, and the two
+signal-reporting branches must agree with what the kernel actually did. A fake
+process can stand for none of those.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import types
 import pytest
 
 from cuprum import _wait4_process
+from cuprum._process_exit import _observed_exit_code
 
 _wait4_only = pytest.mark.skipif(
     not (sys.platform.startswith("linux") or sys.platform == "darwin"),
@@ -38,6 +45,11 @@ _wait4_only = pytest.mark.skipif(
 # distinctive enough that a process a failed run did strand can be told apart
 # from every other sleeper on a shared machine.
 _SLEEP_FOREVER = ("sleep", "997")
+
+#: Status the short-lived children below choose for themselves. Non-zero and
+#: not a signal's negation, so a reading that guessed or defaulted could not
+#: match it.
+_EXITED = 21
 
 
 class _FakeUsage(types.SimpleNamespace):
@@ -249,4 +261,127 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
     )
     assert process.resource_usage is None, (
         "a rejected reap must not publish another child's resource usage"
+    )
+
+
+def _exiting_config() -> _wait4_process.DirectProcessConfig:
+    """Build spawn inputs for a child that exits at once with ``_EXITED``."""
+    return _wait4_process.DirectProcessConfig(
+        argv=(sys.executable, "-c", f"import sys; sys.exit({_EXITED})"),
+        stdin=None,
+        stdout=None,
+        stderr=None,
+        env=None,
+        cwd=None,
+    )
+
+
+@_wait4_only
+def test_reap_publishes_the_status_before_it_returns() -> None:
+    """The reaping thread publishes the code, so no signal can race the gap.
+
+    ``os.wait4`` collecting the status and the instance recording it are two
+    events. If they were separated by an event-loop hop, the window between
+    them would leave a child that is reaped while ``returncode`` still reads
+    ``None`` — and a signal delivered in that window goes by number to a PID
+    the kernel may already have recycled, while the handle cannot report the
+    child's ending because it has not recorded one. Publishing from the
+    reaping thread removes the hop, so this asserts the reaper's own
+    postcondition rather than a timing assumption: when the blocking reap has
+    returned, the code is already published.
+
+    The assertion is made through the probe the handle uses, because that is
+    the observable the defect would corrupt. A colon is deliberately absent
+    from the child's command: ``comm`` in procfs is parenthesized, and the
+    probe must not depend on parsing it.
+    """
+    process = asyncio.run(_wait4_process.spawn_wait4_process(_exiting_config()))
+    assert isinstance(process, _wait4_process._Wait4Process), (
+        "the POSIX path must yield the wait4-owning process"
+    )
+    published = process._reap_blocking()
+    assert published == _EXITED, (
+        f"the reaping thread must report the child's own status {_EXITED}, "
+        f"got {published}"
+    )
+    assert process.returncode == _EXITED, (
+        "the status must be published before the reap returns, so a signal "
+        f"cannot observe a reaped child with returncode {process.returncode!r}"
+    )
+    assert _observed_exit_code(process) == _EXITED, (
+        "the published code must be what the handle's probe reports"
+    )
+
+
+@_wait4_only
+def test_send_signal_reports_a_child_reaped_outside_this_owner() -> None:
+    """A refused delivery reaches the caller instead of reading as success.
+
+    ``Popen.send_signal`` absorbs ``ProcessLookupError`` (bpo-40550) because
+    the caller merely asked to signal a process. This owner cannot take that
+    view: it reports to a handle that has to tell its caller *how* the child
+    ended, so a swallowed refusal would make the handle claim a delivery to a
+    process that does not exist. The error is asserted here, on the backend
+    where the suppression would live, because this is the only place the
+    distinction is visible.
+
+    The child is collected by a foreign reaper — ``os.waitpid`` called
+    directly, which is Case 2 in ``Popen.send_signal``'s own account — so
+    nothing publishes a code onto this instance and the ``_returncode`` guard
+    cannot answer for it. That leaves delivery as the only operation that can
+    discover the child is gone, which is exactly the situation the suppression
+    used to hide. The reaped status is checked independently so the case
+    cannot pass by signalling a child that was still alive.
+    """
+    process = asyncio.run(_wait4_process.spawn_wait4_process(_exiting_config()))
+    assert isinstance(process, _wait4_process._Wait4Process), (
+        "the POSIX path must yield the wait4-owning process"
+    )
+    reaped_pid, status = os.waitpid(process.pid, 0)
+    assert reaped_pid == process.pid, (
+        "the foreign reaper must have collected this case's own child"
+    )
+    assert os.waitstatus_to_exitcode(status) == _EXITED, (
+        "the foreign reaper must have collected the child's real status"
+    )
+    assert process.returncode is None, (
+        "the guard must be unable to answer, or delivery is never reached and "
+        "the branch under test stays unexercised"
+    )
+
+    with pytest.raises(ProcessLookupError):
+        process.send_signal(signal.SIGTERM)
+
+
+@_wait4_only
+def test_send_signal_still_delivers_to_a_live_child() -> None:
+    """Un-suppressing the failure must not cost the ordinary delivery.
+
+    The negative case above proves the error is reported; this one proves it
+    is reported *only* when the child is gone. A change that raised
+    unconditionally would satisfy the first test and break every caller that
+    signals a running child, which is the operation the handle exists for.
+
+    The child is signalled and then reaped, and the reported status is
+    asserted to be the signal's negation rather than a default: that is what
+    separates a delivered ``SIGTERM`` from one that never arrived.
+    """
+
+    async def signal_and_reap() -> tuple[int, int]:
+        """Signal a live child, then reap it and report how it ended."""
+        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        assert isinstance(process, _wait4_process._Wait4Process), (
+            "the POSIX path must yield the wait4-owning process"
+        )
+        try:
+            process.send_signal(signal.SIGTERM)
+            return process.pid, await process.wait()
+        finally:
+            _abandon(process.pid)
+
+    _, status = asyncio.run(signal_and_reap())
+
+    assert status == -signal.SIGTERM, (
+        f"a live child must still be signalled and report {-signal.SIGTERM}, "
+        f"got {status}"
     )

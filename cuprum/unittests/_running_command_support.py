@@ -43,6 +43,7 @@ __all__ = [
     "_KILLED",
     "_TERMINATED",
     "_WAITERS",
+    "_ConcurrentlyReapedProcess",
     "_SigtermImmuneProcess",
     "_StubProcess",
     "_StubRunConfig",
@@ -107,6 +108,57 @@ class _StubProcess:
         if self.returncode is None:
             self.returncode = code
         self.exited.set()
+
+
+class _ConcurrentlyReapedProcess(_StubProcess):
+    """Process double whose child is reaped and published during delivery.
+
+    This models the one sequence the probe alone cannot cover. The handle
+    reads the child's state and sees nothing — the status has not been
+    published yet — so it attempts delivery. A reaper collecting the child
+    concurrently is what makes that delivery fail: the kernel no longer has
+    the process, and once the status is collected the non-reaping probe cannot
+    observe the ending either. The exit code exists only in the value the
+    collecting reaper publishes.
+
+    The two moments are ordered as they really happen rather than raced for:
+    the double is unexited when the handle reads it, and the reap lands inside
+    the delivery attempt. That ordering is what makes the case deterministic —
+    a real race here would be winnable in one direction only by luck, and the
+    behaviour under test is the handle's reporting, not the scheduler's
+    choices.
+    """
+
+    def __init__(self, *, exit_code: int, pid: int = 4325) -> None:
+        """Start with the child still unexited and nothing published."""
+        super().__init__(pid=pid)
+        self._reaped_under = exit_code
+
+    def send_signal(self, signal_number: int) -> None:
+        """Record the attempt, publish the concurrent reap, refuse delivery.
+
+        The parent's recording runs first, so ``signals`` carries the number
+        the caller asked to deliver. That is what witnesses the attempt: a
+        handle that short-circuited on a probe would leave the list empty, and
+        the case would appear to pass while never reaching the refusal it
+        exists to cover. The kernel refusing the signal is why the list
+        records intent rather than delivery — the child was already collected,
+        so nothing landed.
+
+        Raises
+        ------
+        ProcessLookupError
+            Always, standing in for the kernel's refusal to deliver to a child
+            it no longer has. The refusal *is* the scenario this double exists
+            to reproduce, so it is unconditional.
+        """
+        super().send_signal(signal_number)
+        # The reaper finished between the handle's read and this call, so the
+        # status is published before the delivery discovers the process gone.
+        self.returncode = self._reaped_under
+        self.exited.set()
+        msg = f"No such process (PID {self.pid})"
+        raise ProcessLookupError(msg)
 
 
 class _SigtermImmuneProcess(_StubProcess):

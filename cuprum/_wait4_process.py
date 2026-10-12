@@ -10,7 +10,6 @@ concurrent resource figures cannot be attributed to individual stages.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import functools
 import os
@@ -169,24 +168,33 @@ class _Wait4Process(asyncio.subprocess.Process):
 
         The guard on ``_returncode`` covers the case ``Popen`` polls for, that
         the child is already gone and its PID reusable. It cannot be a poll
-        here without reintroducing the reap above, and it reads one loop-thread
-        hop behind the kernel: between ``os.wait4`` returning in its worker
-        thread and :meth:`_reap` recording the code, the child is reaped while
-        ``_returncode`` is still ``None``, so a signal landing in that window
-        is sent by number. A child that exits *after* the guard still owns its
-        PID as a zombie and discards the signal harmlessly; only a caller
-        signalling inside that single hop could reach a recycled PID, and
-        ``Popen`` documents the same race between its own check and its
-        ``os.kill`` (bpo-38630).
+        here without reintroducing the reap above, so it reads
+        :meth:`_reap_blocking`'s published code instead — which is set in the
+        reaping thread before it returns, so the attribute never lags the
+        kernel by an event-loop hop. A child that exits *after* the guard still
+        owns its PID as a zombie and discards the signal harmlessly. Only a
+        caller signalling between the guard and the ``os.kill`` could reach a
+        recycled PID, and ``Popen`` documents the same race between its own
+        check and its ``os.kill`` (bpo-38630).
 
-        ``ProcessLookupError`` means the child exited between the caller's
-        liveness check and this call, the same race ``Popen`` absorbs, so it
-        stays suppressed.
+        ``ProcessLookupError`` is deliberately **not** suppressed here, which
+        is a considered divergence from ``Popen.send_signal``: that method
+        swallows the same error (bpo-40550) on the grounds that the caller
+        asked to signal a process and it is gone, so there is nothing left to
+        do. This method cannot take that view, because it is not the end of
+        the story — it reports to a handle that has to tell its caller *how*
+        the child ended. Swallowing the error here would make the handle
+        report a successful delivery to a process that no longer exists, which
+        is the precise failure the handle was built to remove. The absorption
+        belongs to the caller that can weigh it, and
+        ``_process_handle.control._deliver_signal`` does exactly that: it
+        catches this error and re-reads the child's status to report a real
+        ending. A caller wanting ``Popen``'s forgiving behaviour absorbs it
+        the same way the lifecycle helpers do.
         """
         if self._returncode is not None:
             return
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(self.pid, signal)
+        os.kill(self.pid, signal)
 
     @typ.override
     def terminate(self) -> None:
@@ -198,15 +206,42 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Compel the child to exit without reaping it."""
         self.send_signal(signal.SIGKILL)
 
-    async def _reap(self) -> int:
-        """Perform the one blocking child reap in an executor thread."""
-        pid, status, usage = await asyncio.to_thread(os.wait4, self.pid, 0)
+    def _reap_blocking(self) -> int:
+        """Reap the child and publish its status from the reaping thread.
+
+        Publication happens here rather than after the executor returns, and
+        that is the point of the split. ``os.wait4`` collecting the status and
+        this instance recording it are two events, and an event-loop hop
+        between them would leave a window in which the child has been reaped
+        while :attr:`returncode` still reads ``None``. A signal delivered in
+        that window would be sent by number to a PID the kernel is free to
+        recycle, and the handle could not report the child's ending because it
+        had not yet recorded one. Recording in the reaping thread closes the
+        window to the few instructions between the syscall returning and the
+        assignment, which is the same irreducible gap ``Popen`` documents
+        between its own liveness check and its ``os.kill`` (bpo-38630).
+
+        Returns
+        -------
+        int
+            The exit code, as :attr:`returncode` now publishes it.
+
+        Raises
+        ------
+        _Wait4InvariantError
+            If ``wait4`` reported a child this owner did not spawn.
+        """
+        pid, status, usage = os.wait4(self.pid, 0)
         if pid != self.pid:
             raise _Wait4InvariantError(self.pid, pid)
         self._returncode = os.waitstatus_to_exitcode(status)
         self._popen.returncode = self._returncode
         self._resource_usage = resource_usage_from_wait4(usage)
         return self._returncode
+
+    async def _reap(self) -> int:
+        """Perform the one blocking child reap in an executor thread."""
+        return await asyncio.to_thread(self._reap_blocking)
 
 
 def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
