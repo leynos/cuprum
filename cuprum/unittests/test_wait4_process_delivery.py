@@ -130,6 +130,64 @@ class _ParkedCollection:
         )
 
 
+class _ParkedBetweenPolls:
+    """A ``sleep`` that holds the fallback pump between two of its polls.
+
+    The probe-less route cannot be told when the child becomes collectable, so
+    it polls, and the lock must not span the gap between polls: that gap is the
+    child's whole life. The gap is the pump's own ``sleep``, the one point in
+    the loop where the lock is provably released, so a case opens its window by
+    standing in the pump's way there. The pause is therefore the seam a case
+    arranges, and it happens between polls rather than inside one. That
+    matters: parking inside a poll would mean the lock was already open
+    unobserved, and a delivery let through then would say nothing about what
+    the lock actually allows.
+
+    :meth:`wait_until_parked` observes the arrival, and :meth:`release` lets
+    the pump go on — or, if the case is failing, lets it go on after
+    :data:`_OBSERVE_TIMEOUT` so a case cannot hang the suite. It is a context
+    manager so the pump is released on every path out, including the paths an
+    assertion or an exception takes.
+
+    The release has to follow the observation rather than precede it. A pump
+    let go early would collect the child before the delivery reached it, so the
+    refusal that followed would look like the deadlock the case is there to
+    catch.
+    """
+
+    def __init__(self) -> None:
+        """Start with the pump unobserved and free to run on."""
+        self.parked = threading.Event()
+        self._release = threading.Event()
+        # The patch that installs this seam reaches the ``time`` module itself,
+        # so the real sleep has to be taken before it is installed. Without
+        # this, the interval sleep below would call straight back into this
+        # method and the pump would recurse instead of waiting.
+        self._real_sleep = time.sleep
+
+    def __call__(self, interval: float) -> None:
+        """Park the pump, then sleep for the interval it asked for."""
+        self.parked.set()
+        self._release.wait(_OBSERVE_TIMEOUT)
+        self._real_sleep(interval)
+
+    def release(self) -> None:
+        """Let the pump move on from the poll it is parked after."""
+        self._release.set()
+
+    def wait_until_parked(self) -> bool:
+        """Report whether the pump reached the gap before the deadline."""
+        return self.parked.wait(_OBSERVE_TIMEOUT)
+
+    def __enter__(self) -> _ParkedBetweenPolls:
+        """Offer the seam to a case."""
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Release the pump on every path out of the case."""
+        self.release()
+
+
 def _deliver_in_a_thread(
     process: _wait4_process._Wait4Process,
     observed: dict[str, object],
@@ -416,13 +474,6 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
 ) -> None:
     """A live child must be signalable while the fallback waits to collect it.
 
-    The probe-less route cannot be told when the child becomes collectable, so
-    it polls — and the lock must not span the gap between polls, because that
-    gap is the child's whole life. The gap is the pump's own ``sleep``, the one
-    point in the loop where the lock is provably released, so the case opens
-    its window there: a delivery made while the fallback sleeps between two
-    polls must reach the child at once.
-
     This is the case that fails if the fallback is ever "simplified" into the
     shape the route exists to avoid — a loop holding the lock across its own
     waiting. The child outlives the case by design, so a delivery left waiting
@@ -435,37 +486,25 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
     same reap is asserted to report it — which is what shows the pump and the
     delivery met the same live child rather than two different ones.
 
-    The pump is released explicitly once the delivery has been observed, and
-    the park's own expiry exists only so a failing case cannot hang the suite.
-    Leaving the pump to time out on its own would put two independent deadlines
-    on the same five seconds — the park's and the await below — and the case
-    would then pass or fail on which of them happened to fire first. The
-    release has to follow the join rather than precede it: a pump let go early
-    would collect the child before the delivery reached it, and the refusal
-    that followed would look like the deadlock this case is here to catch.
+    The park is released once the delivery has been observed, and its own
+    expiry exists only so a failing case cannot hang the suite. Leaving the
+    pump to time out on its own would put two independent deadlines on the same
+    five seconds — the park's and the await below — and the case would then
+    pass or fail on which of them happened to fire first.
     """
     _without_the_probe(monkeypatch)
-    between_polls = threading.Event()
-    release = threading.Event()
-    real_sleep = time.sleep
     observed: dict[str, object] = {}
     delivery: dict[str, threading.Thread] = {}
 
-    def parking_sleep(interval: float) -> None:
-        """Hold the pump between two polls, the lock released as it does so."""
-        between_polls.set()
-        release.wait(_OBSERVE_TIMEOUT)
-        real_sleep(interval)
-
     async def deliver_between_polls() -> None:
-        """Signal the child from outside while the fallback sleeps."""
+        """Signal the child from outside while the pump is parked between polls."""
         process = await _wait4_process.spawn_wait4_process(_sleep_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
         reaping = asyncio.ensure_future(process.wait())
         try:
-            assert await asyncio.to_thread(between_polls.wait, _OBSERVE_TIMEOUT), (
+            assert await asyncio.to_thread(park.wait_until_parked), (
                 "the fallback must let the child run on between its polls"
             )
             delivery["thread"] = _deliver_in_a_thread(process, observed)
@@ -474,18 +513,15 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
             # Bounded rather than bare: a reap that never completes is this
             # case's own failure and should be reported as one, not left to
             # the suite's global timeout to name.
-            release.set()
+            park.release()
             await asyncio.wait_for(reaping, _OBSERVE_TIMEOUT)
             observed["status"] = process.returncode
         finally:
-            release.set()
             _abandon(process.pid)
 
-    monkeypatch.setattr(_wait4_process.time, "sleep", parking_sleep)
-    try:
+    with _ParkedBetweenPolls() as park:
+        monkeypatch.setattr(_wait4_process.time, "sleep", park)
         asyncio.run(deliver_between_polls())
-    finally:
-        release.set()
 
     assert not observed["waited"], (
         "a delivery to a live child must not wait on the fallback's reap, but "
