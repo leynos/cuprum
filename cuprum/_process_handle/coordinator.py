@@ -213,5 +213,10 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
         stderr=outcome.stderr_text,
         started_at=run.wall_clock_started_at,
         duration=max(0.0, outcome.exited_at - run.started_at),
+        # Carried through from the observation for the same reason ``run()``
+        # carries it: the handle spawns the bound executable, so a result that
+        # reported ``None`` here would claim no binding applied while the
+        # caller's binding is exactly what chose the file that ran.
+        resolved_path=execution.observation.resolved_path,
         relay_fallbacks=_relay_fallbacks_for_result(run.ownership.relay_diagnostics),
     )

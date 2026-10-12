@@ -27,6 +27,11 @@ Feature: Running command handle
     Then the signal is refused because the child has already exited
     And the exited child's process has gone
 
+  Scenario: A child that exits while the handle is merely held is refused
+    Given a safe command whose child exits immediately with status 3
+    When I start it and signal it without awaiting its outcome
+    Then the refusal reports the child's own status before any wait
+
   Scenario: Readiness timeout settles the handle
     Given a safe command whose child blocks until stopped
     When I start it and wait with an elapsed deadline

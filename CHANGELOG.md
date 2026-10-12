@@ -266,26 +266,29 @@
 - **`SafeCmd.start()`:** Start a command and hold it. The child is spawned and
   its PID announced before the call returns, so the caller decides what happens
   next, and an owned `RunningCommand` is returned rather than a
-  `CommandResult`. Await its `wait()` for the outcome — with an optional
-  deadline, whose expiry stops the child exactly as a timed-out `run()` does
-  and raises `TimeoutExpired` carrying the output captured before it, while the
-  outcome of the child it stopped is recorded for every later `wait()`,
-  `terminate()`, `kill()`, or teardown on the same handle — or read the settled
-  outcome from `result`. Deliver a POSIX signal with `signal()` without
-  settling the run; stop the child gracefully with `terminate()` (`SIGTERM`,
-  the cancel grace, then `SIGKILL` if it is still there); or compel it with
-  `kill()`, which sends `SIGKILL` without asking so the recorded outcome
-  reports the forced signal rather than whichever one happened to end the
-  child. Signals are never the caller's race to lose: a child that has already
-  exited raises `SignalAfterExitError`, and a platform with no route to a
-  caller-named signal raises `UnsupportedSignalError`. Using the handle as an
-  `async with` block settles the run on every exit — a child still running is
-  torn down the same way a cancelled `run()` does, `SIGTERM`, the cancel grace
-  wait, then `SIGKILL` — and never suppresses the block's own error. Every
-  control operation is idempotent, a repeated or concurrent wait reports the
-  one settlement rather than building a second result, and no child is left
-  unreaped. Capture is forced on, so a stopped child still reports the output
-  it produced ([#437](https://github.com/leynos/cuprum/issues/437)).
+  `CommandResult`. A spawn that cannot start belongs to `start()` itself: it
+  raises the failure the spawn produced — `FileNotFoundError` for an absent
+  executable, for instance — and returns no handle, so there is no orphaned
+  child to own and nothing for the caller to clean up. Await its `wait()` for
+  the outcome — with an optional deadline, whose expiry stops the child exactly
+  as a timed-out `run()` does and raises `TimeoutExpired` carrying the output
+  captured before it, while the outcome of the child it stopped is recorded for
+  every later `wait()`, `terminate()`, `kill()`, or teardown on the same handle
+  — or read the settled outcome from `result`. Deliver a POSIX signal with
+  `signal()` without settling the run; stop the child gracefully with
+  `terminate()` (`SIGTERM`, the cancel grace, then `SIGKILL` if it is still
+  there); or compel it with `kill()`, which sends `SIGKILL` without asking so
+  the recorded outcome reports the forced signal rather than whichever one
+  happened to end the child. Signals are never the caller's race to lose: a
+  child that has already exited raises `SignalAfterExitError`, and a platform
+  with no route to a caller-named signal raises `UnsupportedSignalError`. Using
+  the handle as an `async with` block settles the run on every exit — a child
+  still running is torn down the same way a cancelled `run()` does, `SIGTERM`,
+  the cancel grace wait, then `SIGKILL` — and never suppresses the block's own
+  error. Every control operation is idempotent, a repeated or concurrent wait
+  reports the one settlement rather than building a second result, and no child
+  is left unreaped. Capture is forced on, so a stopped child still reports the
+  output it produced ([#437](https://github.com/leynos/cuprum/issues/437)).
 - **`RunningCommand`:** The owned handle `SafeCmd.start()` returns, exposing
   `pid`, `exec_id`, the settled `result`, and the `wait()`, `signal()`,
   `terminate()`, and `kill()` control operations

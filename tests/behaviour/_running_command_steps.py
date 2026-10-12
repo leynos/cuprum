@@ -47,6 +47,7 @@ from tests.behaviour._running_command_support import (
     _observe_failed_start,
     _observe_output_wait,
     _observe_start,
+    _observe_unwaited_exit_signal,
     _observe_wait_deadline,
 )
 
@@ -200,6 +201,22 @@ def when_start_await_and_signal(early_exit_command: SafeCmd) -> HandleObservatio
         The settled outcome, and the refusal the signal raised.
     """
     return _observe_early_exit_signal(early_exit_command, signal.SIGTERM)
+
+
+@when(
+    "I start it and signal it without awaiting its outcome",
+    target_fixture="observation",
+)
+def when_start_and_signal_unwaited(early_exit_command: SafeCmd) -> HandleObservation:
+    """Signal a child that exited while its handle was only held.
+
+    Returns
+    -------
+    HandleObservation
+        The refusal, the handle's unsettled state when it was raised, and
+        whether the child was reaped.
+    """
+    return _observe_unwaited_exit_signal(early_exit_command, signal.SIGTERM)
 
 
 @when("I start it and wait with an elapsed deadline", target_fixture="observation")

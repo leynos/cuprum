@@ -23,6 +23,8 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+import pytest
+
 from cuprum.sh import ExecutionContext, RunOutputOptions, TimeoutExpired
 from tests.behaviour._running_command_children import (
     DELAYED_WRITER_MARKER,
@@ -30,8 +32,10 @@ from tests.behaviour._running_command_children import (
     ReadyChild,
     _reaped,
     _wait_for_ready,
+    _wait_until_exited,
     live_child_pids,
 )
+from tests.helpers.process_state import process_state
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import RunningCommand, SafeCmd
@@ -45,6 +49,7 @@ __all__ = [
     "_observe_failed_start",
     "_observe_output_wait",
     "_observe_start",
+    "_observe_unwaited_exit_signal",
     "_observe_wait_deadline",
     "_start_owned",
 ]
@@ -176,6 +181,74 @@ def _observe_early_exit_signal(
                 child_reaped=await _reaped(handle.pid),
             )
         return HandleObservation(result=result, handle_pid=handle.pid)
+
+    return asyncio.run(orchestrate())
+
+
+def _skip_if_unobservable_exit(handle: RunningCommand) -> None:
+    """End the scenario as not applicable where this host cannot see the exit.
+
+    The scenario's subject is the window between a child's exit and its reaping,
+    and that window is only observable on a host that can report a process as
+    exited while it remains listed. Without procfs there is no way to wait for
+    the window to open, so a signal issued anyway would race the child's own
+    start-up and pass or fail for the wrong reason. Skipping says that honestly,
+    which a vacuous pass would not.
+
+    Ends the scenario through *pytest.skip*, which raises rather than returns,
+    so there is nothing to describe under a returns heading.
+    """
+    pid = handle.pid
+    if pid is None or not process_state(pid).available:
+        pytest.skip("this host cannot observe an unreaped child's exit")
+
+
+def _observe_unwaited_exit_signal(
+    command: SafeCmd,
+    signal_number: int,
+) -> HandleObservation:
+    """Signal a child that exited while its handle was only held.
+
+    The window under test sits between the child's exit and the reaper that
+    would publish its status, and no wait may cross it: the existing
+    early-exit scenario waits first, which settles the handle and publishes
+    the code before the signal is attempted. Here the handle is held and
+    nothing else, so a refusal that reports the child's real status cannot
+    have read it from the handle. That is what
+    :attr:`HandleObservation.unsettled_when_refused` records, read at the
+    moment of the refusal rather than afterwards — settling the handle to
+    find out would close the very window being tested.
+
+    Returns
+    -------
+    HandleObservation
+        The refusal, the handle's own unsettled state at that instant, and
+        whether the child was reaped once the scenario stopped it.
+    """
+
+    async def orchestrate() -> HandleObservation:
+        """Signal a merely-held handle whose child has already exited."""
+        handle = await _start_owned(command)
+        _skip_if_unobservable_exit(handle)
+        pid = typ.cast("int", handle.pid)
+        await _wait_until_exited(pid)
+        try:
+            await handle.signal(signal_number)
+        except ProcessLookupError as refusal:
+            # Carried out rather than handled: that the refusal reached the
+            # caller, and what it named, is the scenario's subject. The
+            # unsettled flag is read here, before anything settles the handle.
+            observation = HandleObservation(
+                error=refusal,
+                unsettled_when_refused=handle.result is None,
+                handle_pid=pid,
+            )
+        else:
+            observation = HandleObservation(handle_pid=pid)
+        # The child outlived the refusal because nothing else stopped it, so
+        # the scenario stops it here and only then observes that it has gone.
+        await handle.kill()
+        return dc.replace(observation, child_reaped=await _reaped(pid))
 
     return asyncio.run(orchestrate())
 

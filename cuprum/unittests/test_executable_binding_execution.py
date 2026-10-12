@@ -34,6 +34,7 @@ were written for live.
 
 from __future__ import annotations
 
+import asyncio
 import stat
 import typing as typ
 
@@ -570,4 +571,47 @@ def test_the_context_reports_the_binding_the_execution_uses(tmp_path: Path) -> N
     )
     assert result.resolved_path == queried, (
         "the executed path must equal the one the context reports"
+    )
+
+
+def test_a_handle_reports_the_binding_its_child_ran_under(tmp_path: Path) -> None:
+    """``start()`` reports the bound executable exactly as ``run()`` does.
+
+    The handle spawns through the same resolution the blocking path uses, so a
+    result that reported no resolved path would say the program ran under its
+    catalogued name while the caller's own binding is what chose the file. The
+    two routes are asserted against each other rather than only against the
+    literal path, because the claim under test is that they agree — a
+    divergence is the regression, and only the pair can show one.
+    """
+    approved = _write_script(tmp_path / "handle.py", _APPROVED)
+    catalogue, (tool,) = _catalogue_for("handle-tool")
+    builder = sh.make(tool, catalogue=catalogue)
+
+    async def orchestrate() -> CommandResult:
+        """Run the bound program through a handle and await its outcome."""
+        handle = await builder().start(output=RunOutputOptions(capture=True))
+        return await handle.wait()
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([tool]))),
+        bind_executable(tool, str(approved)),
+    ):
+        # The blocking route is run outside the loop: ``run_sync`` drives its
+        # own, so calling it from inside this one would nest two event loops.
+        blocking_result = _run_capturing(builder())
+        handle_result = asyncio.run(orchestrate())
+
+    assert blocking_result.resolved_path == str(approved), (
+        "the blocking route must report the bound executable, got "
+        f"{blocking_result.resolved_path!r}"
+    )
+    assert handle_result.resolved_path == blocking_result.resolved_path, (
+        "a handle must report the binding its child ran under, not one route's "
+        f"account of it: run() said {blocking_result.resolved_path!r} while "
+        f"start() said {handle_result.resolved_path!r}"
+    )
+    assert handle_result.stdout == blocking_result.stdout, (
+        "both routes must run the same file, got "
+        f"{handle_result.stdout!r} against {blocking_result.stdout!r}"
     )

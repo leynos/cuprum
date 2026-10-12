@@ -88,6 +88,14 @@ def test_signal_after_exit_is_refused() -> None:
 
 @scenario(
     "../features/running_command.feature",
+    "A child that exits while the handle is merely held is refused",
+)
+def test_signal_unwaited_exit_is_refused() -> None:
+    """Behavioural coverage for signalling before anything settles the handle."""
+
+
+@scenario(
+    "../features/running_command.feature",
     "Readiness timeout settles the handle",
 )
 def test_readiness_timeout_settles() -> None:
@@ -180,6 +188,29 @@ def then_signal_refused(observation: HandleObservation) -> None:
     )
     assert error.exit_code == _EARLY_EXIT_CODE, (
         f"the refusal must carry the child's own status, got {error.exit_code}"
+    )
+
+
+@then("the refusal reports the child's own status before any wait")
+def then_refusal_has_unsettled_status(observation: HandleObservation) -> None:
+    """Assert the refusal carried a status no wait had yet published.
+
+    The exit code is the fact under test, and reading it from ``result`` would
+    let the assertion pass for a handle that only refused *because* a wait had
+    already published it. The child's own status is the oracle, and the
+    handle's own field says whether it had published anything at all when the
+    refusal was raised.
+    """
+    assert observation.unsettled_when_refused, (
+        "the handle must have settled nothing when it refused the signal"
+    )
+    error = observation.error
+    assert isinstance(error, SignalAfterExitError), (
+        f"signalling an exited child must raise SignalAfterExitError, got {error!r}"
+    )
+    assert error.exit_code == _EARLY_EXIT_CODE, (
+        "a refusal raised before any wait must still report the child's own "
+        f"status {_EARLY_EXIT_CODE}, got {error.exit_code}"
     )
 
 

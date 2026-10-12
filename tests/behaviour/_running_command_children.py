@@ -27,7 +27,7 @@ from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue
 from cuprum.program import Program
 from tests.helpers.catalogue import python_catalogue
-from tests.helpers.process_state import parent_pid_from_stat
+from tests.helpers.process_state import parent_pid_from_stat, process_state
 from tests.helpers.timeouts import (
     CHILD_STDOUT,
     child_argv,
@@ -56,6 +56,7 @@ __all__ = [
     "_ready_child",
     "_reaped",
     "_sleep_command",
+    "_wait_until_exited",
     "live_child_pids",
 ]
 
@@ -113,6 +114,12 @@ class HandleObservation:
     error : BaseException | None
         The exception the scenario's operation raised, carried out rather than
         handled away: what reached the caller is the fact under test.
+    unsettled_when_refused : bool
+        Whether the handle had settled nothing at the moment its operation was
+        refused. The scenario that signals a child it never waited on sets
+        this, because that is the whole of its subject: a held handle publishes
+        no status, so a refusal carrying the child's real one cannot have read
+        it from the handle.
     handle_pid : int | None
         The PID the handle reported, as its ``start`` event announced it.
     exec_id : ExecId | None
@@ -135,6 +142,7 @@ class HandleObservation:
     result: CommandResult | None = None
     results: tuple[CommandResult, ...] = ()
     error: BaseException | None = None
+    unsettled_when_refused: bool = False
     handle_pid: int | None = None
     exec_id: ExecId | None = None
     child_was_live: bool = False
@@ -275,6 +283,25 @@ async def _wait_for_ready(marker: Path, timeout: float = _READY_TIMEOUT) -> None
     """
     if not await _poll_until(marker.exists, timeout):
         msg = f"readiness marker {marker} was not written within {timeout}s"
+        raise TimeoutError(msg)
+
+
+async def _wait_until_exited(pid: int, timeout: float = _READY_TIMEOUT) -> None:
+    """Wait until the child *pid* has exited but is not necessarily reaped.
+
+    A child that has exited and not been reaped remains visible in procfs as a
+    zombie, which is the window this waits for. Waiting on that fact rather
+    than on elapsed time is what makes the scenario deterministic: a handle
+    whose child is still starting would refuse nothing, so a signal sent early
+    would test the wrong thing.
+
+    Raises
+    ------
+    TimeoutError
+        If the child has not exited within *timeout* seconds.
+    """
+    if not await _poll_until(lambda: process_state(pid).exited, timeout):
+        msg = f"child {pid} had not exited within {timeout}s"
         raise TimeoutError(msg)
 
 

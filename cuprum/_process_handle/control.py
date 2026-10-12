@@ -32,7 +32,7 @@ from __future__ import annotations
 import sys
 import typing as typ
 
-from cuprum._process_exit import _await_process_exit
+from cuprum._process_exit import _await_process_exit, _observed_exit_code
 from cuprum._process_handle_errors import (
     SignalAfterExitError,
     UnsupportedSignalError,
@@ -65,6 +65,15 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
     platform that cannot deliver the signal at all learns that, rather than
     being told the child happened to be gone.
 
+    The child's state has to be read through :func:`_observed_exit_code`
+    rather than from ``returncode`` alone. A handle holds a spawned child
+    whose status is published only when its owning reaper runs, and no reaper
+    is running while the caller merely holds the handle: a child that exited
+    on its own is a zombie with ``returncode`` still ``None``. Trusting that
+    attribute would deliver a signal into a child that is already gone and
+    report success for a delivery that no longer means anything — the exact
+    race the handle exists to remove from the caller's plate.
+
     Raises
     ------
     UnsupportedSignalError
@@ -75,15 +84,23 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
     if not _arbitrary_signals_supported():
         raise UnsupportedSignalError(signal_number, sys.platform)
     process = run.process
-    if process.returncode is not None:
-        raise SignalAfterExitError(_get_exit_code(process), process.pid)
+    observed = _observed_exit_code(process)
+    if observed is not None:
+        raise SignalAfterExitError(observed, process.pid)
     try:
         process.send_signal(signal_number)
     except ProcessLookupError:
         # The child exited between the check above and the delivery, so this is
-        # the same outcome as finding it already gone. The recorded code is the
-        # best answer available until the run is settled and reaps it properly.
-        raise SignalAfterExitError(_get_exit_code(process), process.pid) from None
+        # the same outcome as finding it already gone. The probe is re-read
+        # rather than reused: the exit happened after it ran, so this is the
+        # first chance to learn how. It is compared against ``None`` and not
+        # used as a truth value, because an exit code of zero is a real ending
+        # that a falsy test would discard in favour of the ``-1`` placeholder.
+        rechecked = _observed_exit_code(process)
+        raise SignalAfterExitError(
+            _get_exit_code(process) if rechecked is None else rechecked,
+            process.pid,
+        ) from None
 
 
 async def _terminate_shielded(

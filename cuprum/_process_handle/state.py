@@ -33,6 +33,7 @@ from cuprum._process_handle.settlement import _Settlement
 from cuprum._process_lifecycle import _run_shielded_step
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
     from cuprum._process_handle.tasks import _HandleRun
@@ -215,8 +216,7 @@ class RunningCommand:
         CommandResult
             The ended command's outcome.
         """
-        await self._stop(grace)
-        return await self._settlement.outcome()
+        return await self._stop_and_settle(self._stop(grace))
 
     async def kill(self) -> CommandResult:
         """Stop the command immediately, without a grace period.
@@ -233,8 +233,7 @@ class RunningCommand:
         CommandResult
             The ended command's outcome.
         """
-        await _kill_shielded(self._run.process)
-        return await self._settlement.outcome()
+        return await self._stop_and_settle(_kill_shielded(self._run.process))
 
     async def __aenter__(self) -> RunningCommand:
         """Return self, so ``async with`` owns the child for the block."""
@@ -295,3 +294,50 @@ class RunningCommand:
             self._run.process,
             self._run.execution.ctx.cancel_grace if grace is None else grace,
         )
+
+    async def _stop_and_settle(self, stop: cabc.Awaitable[None]) -> CommandResult:
+        """Settle the run however the stop that preceded it ended.
+
+        A stop and a settle are two steps because a cancellation arriving
+        during the first must not skip the second. ``_shielded_cleanup``
+        finishes the teardown and then re-raises the caller's cancellation, so
+        awaiting a stop and settling on the following line leaves a handle
+        whose child was reaped but whose :attr:`result` stays ``None`` forever
+        — reaping without settling is the half-owned state the handle exists
+        to prevent, and every later ``wait``, ``terminate``, or ``kill`` would
+        report it.
+
+        :meth:`__aexit__` already runs these two steps separately for exactly
+        this reason. The public stop operations need the same ordering, so the
+        rule is stated once here rather than repeated on each of them.
+
+        The stop's failure outranks the settle's, because the stop is what the
+        caller asked for while the settle is what this method does on its way
+        out. A cancellation outranks both, so a cancelled caller sees its own
+        cancellation rather than a teardown error it never asked about.
+
+        The outcome the two steps reported is re-read from the settlement for
+        the return, because a step report carries a value that may be absent
+        while the caller is owed a settled result.
+
+        Returns
+        -------
+        CommandResult
+            The settled outcome, whether the stop completed cleanly or not.
+        """
+        stop_step = await _run_shielded_step(stop)
+        settle_step = await _run_shielded_step(self._settlement.outcome())
+        cancellation = stop_step.cancellation or settle_step.cancellation
+        stop_error = (
+            stop_step.failure if stop_step.failure is not None else settle_step.failure
+        )
+        if cancellation is not None:
+            raise cancellation
+        if stop_error is not None:
+            raise stop_error
+        # Both steps completed cleanly, so the settle just run has recorded its
+        # outcome. This reads that record rather than waiting again — the
+        # settlement hands back its cached result immediately — and is the one
+        # route back that is typed as the non-optional outcome the caller is
+        # owed, since the step report carries a value that may be absent.
+        return await self._settlement.outcome()

@@ -304,6 +304,91 @@ def test_teardown_cancelled_mid_grace_still_settles() -> None:
     asyncio.run(run_case())
 
 
+def test_terminate_cancelled_mid_grace_still_settles() -> None:
+    """A cancellation inside ``terminate()`` reaps the child *and* settles.
+
+    The public stop operations run the same two steps ``__aexit__`` does, and
+    for the same reason: the stop is shielded so the teardown completes, which
+    means it re-raises the caller's cancellation only after the child is
+    reaped. Settling on the line that follows would never run, leaving a
+    handle whose child is gone and whose ``result`` is ``None`` forever.
+
+    This is the public-path counterpart of the block-exit case above. It is
+    separate because the two are reached through different methods, and a
+    future change that restores the ordering to ``__aexit__`` alone would
+    leave this path broken while every block-exit case stayed green.
+    """
+
+    async def run_case() -> None:
+        """Cancel ``terminate()`` mid-grace and inspect what survived."""
+        process = _SigtermImmuneProcess()
+        handle = _handle(process, _StubRunConfig(grace=0.5))
+
+        task = asyncio.ensure_future(handle.terminate())
+        await process.signalled.wait()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert process.returncode == _KILLED, (
+            f"the escalation must still reap the child, got {process.returncode}"
+        )
+        assert task.cancelled(), (
+            "the caller's cancellation must still reach it after teardown"
+        )
+        result = handle.result
+        assert result is not None, (
+            "a cancelled terminate() must not leave the handle unsettled; "
+            "reaping without settling is the half-owned state it must avoid"
+        )
+        assert result.exit_code == _KILLED, (
+            f"the recorded outcome must report the kill, got {result.exit_code}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_kill_cancelled_while_reaping_still_settles() -> None:
+    """A cancellation inside ``kill()`` also leaves the handle settled.
+
+    ``kill()`` takes the same two-step route as ``terminate()``, so it needs
+    the same guarantee. Without it, a forced stop interrupted while the child
+    was being reaped would be the one stop that silently handed back a handle
+    with no recorded outcome.
+    """
+
+    async def run_case() -> None:
+        """Cancel ``kill()`` as it reaps, then inspect what survived."""
+        process = _StubProcess()
+        handle = _handle(process, _StubRunConfig(grace=0.5))
+
+        task = asyncio.ensure_future(handle.kill())
+        # The double announces its own exit, so this waits on the event rather
+        # than spinning: a busy loop over ``kill_calls`` would pass by
+        # accident whenever the scheduler happened to run the task first,
+        # which is exactly the timing this case exists to control.
+        await process.exited.wait()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert process.kill_calls == 1, (
+            f"the forced stop must be delivered exactly once, got {process.kill_calls}"
+        )
+        assert task.cancelled(), (
+            "the caller's cancellation must still reach it after teardown"
+        )
+        result = handle.result
+        assert result is not None, (
+            "a cancelled kill() must not leave the handle unsettled"
+        )
+        assert result.exit_code == _KILLED, (
+            f"the recorded outcome must report the kill, got {result.exit_code}"
+        )
+
+    asyncio.run(run_case())
+
+
 def test_teardown_failure_does_not_replace_the_blocks_error() -> None:
     """A block that fails keeps its own error, whatever teardown did.
 
