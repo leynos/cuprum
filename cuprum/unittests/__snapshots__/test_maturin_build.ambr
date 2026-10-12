@@ -81,6 +81,7 @@
       'cuprum/_testing.py',
       'cuprum/_timeout_reporting.py',
       'cuprum/_wait4_process.py',
+      'cuprum/_wait4_process_errors.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/_metrics_operations.py',
       'cuprum/adapters/_support.py',

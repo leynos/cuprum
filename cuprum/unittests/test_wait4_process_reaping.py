@@ -19,22 +19,27 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import types
+import typing as typ
 
 import pytest
 
 from cuprum import _wait4_process
+from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._process_exit import _observed_exit_code
+from cuprum._wait4_process_errors import _Wait4InvariantError
 from cuprum.unittests._wait4_process_support import (
     _EXITED,
-    _ChildOwnership,
-    _FakeUsage,
     _abandon,
+    _ChildOwnership,
     _exiting_config,
+    _FakeUsage,
     _probe_child,
     _sleep_config,
     _wait4_only,
 )
+
+if typ.TYPE_CHECKING:
+    import types
 
 
 @_wait4_only
@@ -107,7 +112,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
 
     async def spawn_and_reap() -> tuple[
         _wait4_process._Wait4Process,
-        _wait4_process._Wait4InvariantError,
+        _Wait4InvariantError,
         _ChildOwnership,
     ]:
         """Spawn a real child, then reap it through a mismatching ``wait4``."""
@@ -121,7 +126,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         # error and nothing else. A bare `except BaseException` would also
         # absorb a `CancelledError` or an unrelated failure and let the
         # assertions below report it as the wrong type.
-        with pytest.raises(_wait4_process._Wait4InvariantError) as caught:
+        with pytest.raises(_Wait4InvariantError) as caught:
             await process.wait()
         # Probed here, before the caller's cleanup reaps it: this is the only
         # point at which the test can still see what the mismatch branch left
@@ -145,7 +150,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         f"collect, so the mismatch branch did not reap it; found {ownership!r}"
     )
 
-    assert isinstance(failure, _wait4_process._Wait4InvariantError), (
+    assert isinstance(failure, _Wait4InvariantError), (
         f"a mismatched reap must raise the wait4 invariant error, got {failure!r}"
     )
     assert failure.expected_pid == process.pid, (
@@ -154,7 +159,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
     assert failure.reaped_pid == process.pid + 1, (
         "the error must name the pid wait4 actually reported"
     )
-    assert isinstance(failure, _wait4_process._ExecutionInvariantError), (
+    assert isinstance(failure, _ExecutionInvariantError), (
         "the error must stay inside the internal invariant hierarchy"
     )
     assert process.returncode is None, (

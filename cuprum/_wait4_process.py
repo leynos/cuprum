@@ -20,7 +20,6 @@ import time
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
-from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._process_exit import (
     _NON_REAPING_PROBE_AVAILABLE,
     _await_child_waitable,
@@ -35,6 +34,10 @@ from cuprum._rusage import (
     resource_usage_from_wait4,
     wait4_resource_measurement_available,
 )
+from cuprum._wait4_process_errors import (
+    _DeliveryRefusedError,
+    _Wait4InvariantError,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -44,44 +47,6 @@ if typ.TYPE_CHECKING:
 #: observer's, which answers the same question.
 _REAP_POLL_INITIAL_INTERVAL = 0.01
 _REAP_POLL_MAX_INTERVAL = 1.0
-
-
-class _DeliveryRefusedError(ProcessLookupError):
-    """Raised when the child a delivery names can no longer be waited for.
-
-    This is the backend's own refusal, and it is deliberately separate from the
-    handle's :class:`~cuprum._process_handle_errors.SignalAfterExitError`: this
-    layer knows only that no waitable child remains, not how the child ended.
-    Attaching an exit code here would mean inventing one, because the code — in
-    the cases where one can still be established at all — belongs to whoever
-    completed the collection, one layer up.
-
-    Subclasses :class:`ProcessLookupError` for the same reason the public error
-    does: that is what the kernel reports for the same condition, so a caller
-    that already tolerates a lost process keeps working unchanged.
-    """
-
-    def __init__(self, pid: int) -> None:
-        """Record the child that could not be signalled."""
-        super().__init__(f"cannot signal PID {pid}: it is already gone")
-        self.pid = pid
-
-
-class _Wait4InvariantError(_ExecutionInvariantError):
-    """Raised when ``wait4`` reports a child this owner did not spawn.
-
-    A mismatch means some other code reaped this child, so the resource usage
-    the direct path is about to publish belongs to a different process. Both
-    identifiers are exposed as attributes so a caller can tell this failure
-    apart from the other invariant failures without parsing the message.
-    """
-
-    def __init__(self, expected_pid: int, reaped_pid: int) -> None:
-        """Record the two identifiers and build the preserved diagnostic."""
-        msg = f"wait4 reaped unexpected child {reaped_pid}, expected {expected_pid}"
-        super().__init__(msg)
-        self.expected_pid = expected_pid
-        self.reaped_pid = reaped_pid
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -239,6 +204,13 @@ class _Wait4Process(asyncio.subprocess.Process):
         collection is the only reading that can report how it ended, and the
         reading happens once: the code is published before the lock is
         released, so every later delivery refuses on the first question.
+
+        Returns
+        -------
+        bool
+            ``True`` when the delivery must be refused: the exit code is
+            already published, or the kernel reports no waitable child at this
+            owner's PID. ``False`` when a live child remains reachable.
         """
         if self._returncode is not None:
             return True

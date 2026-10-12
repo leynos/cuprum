@@ -30,10 +30,10 @@ from cuprum import _process_exit, _wait4_process
 from tests.helpers.process_state import process_state
 
 __all__ = [
-    "_ChildOwnership",
     "_EXITED",
-    "_FakeUsage",
     "_SLEEP_FOREVER",
+    "_ChildOwnership",
+    "_FakeUsage",
     "_abandon",
     "_exiting_config",
     "_probe_child",
