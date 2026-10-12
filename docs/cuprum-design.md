@@ -4084,6 +4084,19 @@ raised only when the block itself succeeded, since otherwise it would replace
 the error that caused the exit; it is recorded on the run's event stream either
 way.
 
+Each step runs through `_run_shielded_step`, the refinement of
+`_shielded_cleanup` that *reports* how a shielded step ended instead of raising
+it. The distinction it preserves is the one the policy above depends on: a
+cancellation and an ordinary failure are owed different treatment, so a step
+returns which of the two it absorbed, and the handle weighs the stop's result
+against the settle's before deciding what the caller is owed. Deciding inside
+the helper would settle the question too early — the stop's outcome must be
+known before the settle's failure can be ranked against it — and raising there
+would abandon the settle, which is exactly the half-owned handle the ordering
+exists to prevent. A cancellation is taken from the first step that absorbed
+one, because the request that arrived is the one the caller is owed and a
+second is a repeat of it.
+
 Because capture is forced on and the drain is the same one `run()` uses, a
 terminated or killed child still reports what it wrote before it ended.
 

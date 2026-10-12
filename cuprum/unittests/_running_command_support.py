@@ -10,7 +10,7 @@ them and neither has to import the other.
 The doubles are deliberately thin. They record what was delivered and expose a
 ``returncode`` and a ``wait()``, which is the whole surface the handle's
 control and settlement paths read; nothing here re-implements a subprocess.
-:func:`_stub_run` assembles the real surrounding record around one of them, so
+:func:`_handle` assembles the real surrounding record around one of them, so
 the paths under test are the production ones and only the child is a double.
 """
 
@@ -45,8 +45,8 @@ __all__ = [
     "_WAITERS",
     "_SigtermImmuneProcess",
     "_StubProcess",
+    "_StubRunConfig",
     "_handle",
-    "_stub_run",
 ]
 
 #: Grace a teardown is given before it escalates. Short, because the
@@ -149,24 +149,45 @@ async def _consumer(text: str | None, delay: float = 0.0) -> str | None:
     return text
 
 
-def _stub_run(
-    process: _StubProcess,
-    *,
-    grace: float,
-    default_timeout: float | None = None,
-    after_hooks: tuple[cabc.Callable[[SafeCmd, CommandResult], None], ...] = (),
-    drain_delay: float = 0.0,
-) -> _HandleRun:
-    """Assemble the record a handle is driven through around *process*.
+class _StubRunConfig(typ.NamedTuple):
+    """What a case varies about the run behind a stubbed handle.
 
-    Every field is real except the process: the tracking, the bracket, and the
-    observation are the same objects ``SafeCmd.start()`` builds, so the paths
-    under test are the production ones and only the child is a double.
+    Every field is a straight pass-through to the record the handle is driven
+    through: the grace its stop allows, the deadline ``start()`` would have
+    resolved, the after-hooks its settlement fires, and how long its stubbed
+    consumers stay open past the capture EOF grace. They are one record rather
+    than four keyword arguments because they describe one thing — how the
+    stubbed run behaves — so a case that varies one is configuring that run
+    rather than choosing among unrelated knobs. The defaults are the shape a
+    case gets when it is not varying anything.
+    """
+
+    grace: float = _ESCALATION_GRACE
+    default_timeout: float | None = None
+    after_hooks: tuple[cabc.Callable[[SafeCmd, CommandResult], None], ...] = ()
+    drain_delay: float = 0.0
+
+
+#: The configuration a case leaves alone unless it is varying something.
+_UNVARIED_RUN = _StubRunConfig()
+
+
+def _handle(
+    process: _StubProcess,
+    config: _StubRunConfig = _UNVARIED_RUN,
+) -> RunningCommand:
+    """Return a handle owning *process*, ready to be driven.
+
+    Every field of the assembled record is real except the process: the
+    tracking, the bracket, and the observation are the same objects
+    ``SafeCmd.start()`` builds, so the paths under test are the production ones
+    and only the child is a double.
 
     Returns
     -------
-    _HandleRun
-        The owned record the handle's methods read.
+    RunningCommand
+        The handle, owning *process* and driven entirely by the production
+        control and settlement paths.
     """
     command = python_builder()("-c", "pass")
     observation = _StageObservation(
@@ -180,7 +201,7 @@ def _stub_run(
     )
     execution = _SubprocessExecution(
         cmd=command,
-        ctx=ExecutionContext(cancel_grace=grace),
+        ctx=ExecutionContext(cancel_grace=config.grace),
         capture=True,
         echo_stdout=False,
         echo_stderr=False,
@@ -193,43 +214,24 @@ def _stub_run(
     ownership = _RunTaskOwnership(
         stdin_task=None,
         consumers=(
-            asyncio.ensure_future(_consumer("", drain_delay)),
-            asyncio.ensure_future(_consumer("", drain_delay)),
+            asyncio.ensure_future(_consumer("", config.drain_delay)),
+            asyncio.ensure_future(_consumer("", config.drain_delay)),
         ),
         discard_on_cancel=asyncio.Event(),
         relay_diagnostics=(_RelayDiagnostics(), _RelayDiagnostics()),
     )
     started_at = time.perf_counter()
-    return _HandleRun(
+    run = _HandleRun(
         process=typ.cast("asyncio.subprocess.Process", process),
         execution=execution,
         started_at=started_at,
         wall_clock_started_at=time.time(),
         tracking=_ExecutionTracking(
-            execution_hooks=_ExecutionHooks((), after_hooks, ()),
+            execution_hooks=_ExecutionHooks((), config.after_hooks, ()),
             pending_tasks=[],
             sink_bracket=_SinkBracket(None),
         ),
         ownership=ownership,
-        default_timeout=default_timeout,
+        default_timeout=config.default_timeout,
     )
-
-
-def _handle(
-    process: _StubProcess,
-    *,
-    grace: float = _ESCALATION_GRACE,
-    default_timeout: float | None = None,
-    after_hooks: tuple[cabc.Callable[[SafeCmd, CommandResult], None], ...] = (),
-    drain_delay: float = 0.0,
-) -> RunningCommand:
-    """Return a handle owning *process*, ready to be driven."""
-    return RunningCommand(
-        _stub_run(
-            process,
-            grace=grace,
-            default_timeout=default_timeout,
-            after_hooks=after_hooks,
-            drain_delay=drain_delay,
-        )
-    )
+    return RunningCommand(run)

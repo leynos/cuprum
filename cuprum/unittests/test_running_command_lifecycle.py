@@ -38,6 +38,7 @@ from cuprum.unittests._running_command_support import (
     _handle,
     _SigtermImmuneProcess,
     _StubProcess,
+    _StubRunConfig,
 )
 
 
@@ -268,7 +269,7 @@ def test_teardown_cancelled_mid_grace_still_settles() -> None:
         # enough that the case does not spend five seconds proving it: the
         # cancellation is timed against ``process.signalled``, not the clock,
         # so it fires as soon as the SIGTERM has been delivered.
-        handle = _handle(process, grace=0.5)
+        handle = _handle(process, _StubRunConfig(grace=0.5))
 
         async def leave_context() -> None:
             """Enter the handle's context and leave it at once."""
@@ -315,7 +316,7 @@ def test_teardown_failure_does_not_replace_the_blocks_error() -> None:
     async def run_case() -> None:
         """Fail the block while teardown stops the child."""
         process = _SigtermImmuneProcess()
-        handle = _handle(process, grace=0.05)
+        handle = _handle(process, _StubRunConfig(grace=0.05))
         raised: BaseException | None = None
         try:
             async with handle:
@@ -354,7 +355,7 @@ def test_wait_falls_back_to_the_deadline_start_resolved() -> None:
     async def run_case() -> None:
         """Wait with no argument against an already-elapsed default."""
         process = _StubProcess()
-        handle = _handle(process, default_timeout=0)
+        handle = _handle(process, _StubRunConfig(default_timeout=0))
 
         with pytest.raises(TimeoutExpired) as raised:
             await handle.wait()
@@ -383,7 +384,7 @@ def test_wait_argument_overrides_the_default_deadline() -> None:
     async def run_case() -> None:
         """Name an elapsed deadline where the handle's default is generous."""
         process = _StubProcess()
-        handle = _handle(process, default_timeout=30.0)
+        handle = _handle(process, _StubRunConfig(default_timeout=30.0))
 
         with pytest.raises(TimeoutExpired):
             await handle.wait(timeout=0)
@@ -409,7 +410,7 @@ def test_expired_wait_records_the_outcome_it_stopped() -> None:
     async def run_case() -> None:
         """Expire a wait, then read the outcome three ways."""
         process = _StubProcess()
-        handle = _handle(process, default_timeout=0)
+        handle = _handle(process, _StubRunConfig(default_timeout=0))
 
         with pytest.raises(TimeoutExpired):
             await handle.wait()
@@ -453,7 +454,7 @@ def test_expired_wait_does_not_displace_the_outcome_for_a_later_kill() -> None:
     async def run_case() -> None:
         """Expire a wait, then kill the handle."""
         process = _StubProcess()
-        handle = _handle(process, default_timeout=0)
+        handle = _handle(process, _StubRunConfig(default_timeout=0))
 
         with pytest.raises(TimeoutExpired):
             await handle.wait()
@@ -484,7 +485,7 @@ def test_teardown_after_an_expired_wait_keeps_the_recorded_outcome() -> None:
     async def run_case() -> None:
         """Expire a wait inside a block that then exits normally."""
         process = _StubProcess()
-        handle = _handle(process, default_timeout=0)
+        handle = _handle(process, _StubRunConfig(default_timeout=0))
 
         async with handle:
             with pytest.raises(TimeoutExpired):
@@ -522,7 +523,7 @@ def test_cancellation_survives_a_failing_block() -> None:
     async def run_case() -> None:
         """Fail the block, cancel inside the grace, and inspect the task."""
         process = _SigtermImmuneProcess()
-        handle = _handle(process, grace=0.5)
+        handle = _handle(process, _StubRunConfig(grace=0.5))
 
         async def fail_and_leave() -> None:
             """Fail the block, then leave the context while teardown runs."""

@@ -6622,6 +6622,19 @@ the cleanup's own failure when the caller was not cancelled; callers that must
 absorb failures do so themselves — `_await_teardown_shielded` does this by
 passing `return_exceptions=True`.
 
+`_run_shielded_step` in the same module is the *reporting* variant, for a
+caller that must run two cleanup steps and weigh them against each other before
+it can say what the caller is owed. It shields the step identically and returns
+a `_ShieldedStepFailure(cancellation, failure)` rather than raising: a step
+that absorbs a cancellation reports it separately from a step that raises an
+ordinary failure, because the two are owed different treatment.
+`RunningCommand.__aexit__` (`cuprum/_process_handle/state.py`) is the caller,
+and it needs the separation for both of its rules — the stop's failure has to
+be known before the settle's failure can be ranked against it, and the
+cancellation has to be re-raised even when the block itself is already failing.
+Absorbing either inside the helper would decide too early; raising would
+abandon the settle and leave a handle whose `result` stays `None`.
+
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
 cleanup paths in `_run_subprocess_with_streams`

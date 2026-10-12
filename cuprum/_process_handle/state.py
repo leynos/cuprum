@@ -22,7 +22,6 @@ and what each answer guarantees.
 
 from __future__ import annotations
 
-import asyncio
 import typing as typ
 
 from cuprum._process_handle.control import (
@@ -31,7 +30,7 @@ from cuprum._process_handle.control import (
     _terminate_shielded,
 )
 from cuprum._process_handle.settlement import _Settlement
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _run_shielded_step
 
 if typ.TYPE_CHECKING:
     import types
@@ -266,37 +265,29 @@ class RunningCommand:
         failures defer to the block's error.
 
         Settlement is attempted even when the stop did not complete cleanly,
-        and that ordering is deliberate. The two steps are separate *try*
-        blocks rather than one, because a cancellation arriving during the
+        and that ordering is deliberate. The two steps are separate guarded
+        steps rather than one, because a cancellation arriving during the
         stop would otherwise skip the settle entirely: the child would be
         reaped but no result recorded, leaving a handle whose :attr:`result`
         stays ``None`` forever. Reaping without settling is half-ownership,
         which is the state this method exists to prevent.
+
+        Each step reports how it ended so this method can weigh the two
+        together, which is why the per-step bookkeeping — signalling a
+        cancellation, recording an ordinary failure, and letting the stop's
+        failure outrank the settle's — lives here rather than in the helper
+        that runs a step. Neither error is ever re-raised unexamined: both are
+        held while the remaining step runs, because abandoning the settle
+        would leave exactly the half-owned handle described above.
         """
-        stop_error: BaseException | None = None
-        cancellation: asyncio.CancelledError | None = None
-        try:
-            await _shielded_cleanup(self._stop(None))
-        except asyncio.CancelledError as cancelled:
-            cancellation = cancelled
-        except BaseException as stop_failure:  # ruff: ignore[blind-except] - held, not handled: settling must still run
-            stop_error = stop_failure
-        try:
-            await _shielded_cleanup(self._settlement.outcome())
-        except asyncio.CancelledError as cancelled:
-            # The first cancellation is the one the caller is owed: it is the
-            # request that arrived, and a second is a repeat of it.
-            cancellation = cancellation or cancelled
-        except BaseException as settle_failure:  # ruff: ignore[blind-except] - held, not handled: the stop's failure takes precedence
-            if stop_error is None:
-                stop_error = settle_failure
+        stop = await _run_shielded_step(self._stop(None))
+        settle = await _run_shielded_step(self._settlement.outcome())
+        cancellation = stop.cancellation or settle.cancellation
+        stop_error = stop.failure if stop.failure is not None else settle.failure
         if cancellation is not None:
             raise cancellation
         if stop_error is not None and exc is None:
             raise stop_error
-        # Otherwise the block is already failing. That error is the one the
-        # caller has to see, so an ordinary teardown failure is dropped rather
-        # than allowed to take its place.
 
     async def _stop(self, grace: float | None) -> None:
         """Escalate the child to a stop; idempotent, and never waits to settle."""

@@ -13,7 +13,11 @@ enough on its own: it stops cancellation reaching the inner coroutine, but
 the awaiting coroutine resumes immediately, so a caller's ``CancelledError``
 propagates while cleanup is still running. ``_shielded_cleanup`` instead
 retries the wait under a shield until the owned task is done, absorbing
-however many cancellations arrive before re-raising.
+however many cancellations arrive before re-raising. ``_run_shielded_step``
+refines that primitive for callers that must run *two* cleanups and decide
+afterwards which failure the caller is owed: it reports how the step ended,
+distinguishing a cancellation from an ordinary failure, so the deciding stays
+with the caller rather than being duplicated into every cleanup.
 
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
@@ -91,6 +95,48 @@ async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
             # it is the error the run is ending on.
             task.exception()
         raise
+
+
+class _ShieldedStepFailure(typ.NamedTuple):
+    """How one shielded cleanup step ended, for the caller to weigh.
+
+    A cancellation is reported separately from an ordinary failure because the
+    two are owed different treatment: a cancellation must always reach the
+    caller — it is a request that the task stop, not a failure to report — while
+    an ordinary failure may legitimately defer to an error the caller is
+    already raising. Reporting both in one value keeps that distinction visible
+    to the caller instead of flattening it here.
+    """
+
+    cancellation: asyncio.CancelledError | None
+    failure: BaseException | None
+
+
+async def _run_shielded_step[T](
+    cleanup: cabc.Awaitable[T],
+) -> _ShieldedStepFailure:
+    """Run a shielded cleanup, reporting rather than raising how it ended.
+
+    The step is shielded exactly as ``_shielded_cleanup`` shields it, so a
+    cancellation arriving mid-step still completes it. What differs is only
+    what happens to the outcome: it is returned, because a caller running two
+    steps has to weigh the first against the second before it can say which
+    failure, if any, the caller is owed. Absorbing the failure here would
+    decide that too early; raising it here would abandon the second step.
+
+    Returns
+    -------
+    _ShieldedStepFailure
+        How the step ended: the cancellation it absorbed, the failure it
+        raised, or neither when it completed cleanly.
+    """
+    try:
+        await _shielded_cleanup(cleanup)
+    except asyncio.CancelledError as cancelled:
+        return _ShieldedStepFailure(cancelled, None)
+    except BaseException as failed:  # ruff: ignore[blind-except] - reported, not handled: the caller weighs it against a later step's failure
+        return _ShieldedStepFailure(None, failed)
+    return _ShieldedStepFailure(None, None)
 
 
 async def _await_teardown_shielded(

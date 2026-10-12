@@ -46,6 +46,7 @@ from cuprum.unittests._running_command_support import (
     _TERMINATED,
     _handle,
     _StubProcess,
+    _StubRunConfig,
 )
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import CHILD_STDERR, CHILD_STDOUT
@@ -437,10 +438,12 @@ def test_a_deadline_after_the_child_exited_is_not_recorded() -> None:
         process = _ExitedProcess()
         handle = _handle(
             process,
-            after_hooks=(lambda _cmd, result: hook_calls.append(result.exit_code),),
-            # The settlement's drain stays open past the deadline, which is the
-            # window the rule under test is about.
-            drain_delay=_DRAIN_DELAY,
+            _StubRunConfig(
+                after_hooks=(lambda _cmd, result: hook_calls.append(result.exit_code),),
+                # The settlement's drain stays open past the deadline, which is
+                # the window the rule under test is about.
+                drain_delay=_DRAIN_DELAY,
+            ),
         )
         return await handle.wait(timeout=_DEADLINE)
 
