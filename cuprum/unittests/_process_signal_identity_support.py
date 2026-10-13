@@ -28,6 +28,8 @@ from cuprum._teardown_policy import _TeardownPolicy
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
+
 # The direct child's pid, which is also the name of the group it led: a child
 # spawned with `start_new_session=True` is its own group's leader, so the group
 # identifier equals its process identifier.
@@ -216,8 +218,22 @@ def _teardown(
     target: _TeardownTarget,
     *,
     owns_group: bool,
+    observation: _StageObservation | None = None,
 ) -> cabc.Coroutine[None, None, bool]:
-    """Tear the target down under a policy carrying *owns_group*."""
+    """Tear the target down under a policy carrying *owns_group*.
+
+    *observation* is the execution the teardown reports its outcomes against.
+    It defaults to ``None`` because most cases here read the log record or the
+    signals the double received, and the reporter skips the event half entirely
+    for an absent observation. A case that wants the metric a teardown produces
+    has to supply the execution it belongs to.
+
+    Returns
+    -------
+    cabc.Coroutine of (None, None, bool)
+        The teardown awaiting delivery, handing the result back to whichever
+        loop runs it.
+    """
 
     async def wait_for_exit() -> int:
         """Await the direct child's exit, as the real teardown does."""
@@ -230,4 +246,5 @@ def _teardown(
             is_done=lambda: target.returncode is not None,
             wait_for_exit=wait_for_exit,
         ),
+        observation=observation,
     )

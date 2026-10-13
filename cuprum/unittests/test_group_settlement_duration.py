@@ -23,6 +23,14 @@ the bound instead keeps the real clock, so the recorded figure is genuinely
 measured, and it removes any dependence on host load: a double that returns
 after a fifth of a second cannot be mistaken for one that ran out an eight
 second bound however busy the machine is.
+
+The record and the histogram are two channels carrying one figure, and the
+producer and the projection are two halves of one path. A test that read either
+half alone would leave the trip between them unpinned: a producer that measured
+correctly and a projection that forwarded correctly could still disagree about
+the value between them. Both are therefore driven end to end below, over the
+real :class:`~cuprum._pipeline_types._StageObservation` and the real
+:class:`~cuprum.adapters.metrics_adapter.MetricsHook`.
 """
 
 from __future__ import annotations
@@ -35,6 +43,11 @@ import time
 import pytest
 
 from cuprum import _group_teardown, _process_group
+from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
+from cuprum.adapters.metrics_adapter import MetricsHook
+from cuprum.events import GroupTeardownOutcome
+from cuprum.unittests._adapter_test_support import _LabelRecordingCollector
+from cuprum.unittests._cqrs_fixtures import _echo_cmd
 from cuprum.unittests._process_signal_identity_support import (
     _LEADER_PID,
     _teardown,
@@ -81,6 +94,38 @@ def _settlement_timeout_args(caplog: pytest.LogCaptureFixture) -> tuple[object, 
         f"the record must carry positional log arguments; got {args!r}"
     )
     return args
+
+
+def _collecting_observation(
+    collector: _LabelRecordingCollector,
+) -> _StageObservation:
+    """Return an execution whose one observe hook is the recording collector.
+
+    A real observation rather than a stand-in for one, because the seam under
+    test is the producer handing its event to whatever hook the run carries: a
+    double that received the event directly would skip exactly the wiring this
+    case exists to pin.
+
+    Returns
+    -------
+    _StageObservation
+        An execution whose only observe hook is a ``MetricsHook`` over
+        *collector*, carrying no tags and no environment overlay so the labels
+        it produces are the command's own.
+    """
+    return _StageObservation(
+        cmd=_echo_cmd(),
+        hooks=_ExecutionHooks(
+            before_hooks=(),
+            after_hooks=(),
+            observe_hooks=(MetricsHook(collector),),
+        ),
+        tags={},
+        cwd=None,
+        env_overlay=None,
+        pending_tasks=[],
+        wall_clock=lambda: 1.0,
+    )
 
 
 class _MembersOutstandingGroup:
@@ -168,4 +213,81 @@ def test_the_recorded_settlement_duration_is_the_measured_wait(
     assert pid == _LEADER_PID, f"the record must name the group it probed; got {pid!r}"
     assert owns_group is True, (
         f"the record must name the route it took; got {owns_group!r}"
+    )
+
+
+def test_the_measured_wait_reaches_the_collector_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measured duration crosses the producer-to-collector seam intact.
+
+    The record's own figure is pinned above and the projection is pinned in
+    ``test_group_teardown_metrics``, but neither spans the trip between them:
+    only a case that drives the real producer into a real hook can show the
+    figure an operator reads off the histogram is the one the wait measured.
+    A rewrite anywhere along the way — the bound substituting itself, a label
+    lookup losing the figure, an event dropping the field — passes both of
+    those and fails here.
+    """
+    collector = _LabelRecordingCollector()
+    observation = _collecting_observation(collector)
+    poll = _MembersOutstandingGroup()
+
+    async def run_case() -> None:
+        """Escalate against a group that will not settle, collecting metrics."""
+        target = _TeardownTarget(
+            is_group_live=True,
+            has_exited=False,
+            exits_on_sigterm=False,
+        )
+        # The double's pid is a plausible group name, so the same reasoning as
+        # the record's case applies: patching the kernel call keeps the signals
+        # this test sends inside the double rather than reaching the host.
+        monkeypatch.setattr(os, "killpg", target.record_killpg)
+        monkeypatch.setattr(_process_group, "_POST_KILL_SETTLEMENT_S", _WIDENED_BOUND_S)
+        monkeypatch.setattr(_process_group, "_await_group_exit", poll)
+        delivered = await _teardown(
+            target,
+            owns_group=True,
+            observation=observation,
+        )
+        assert delivered, (
+            "the escalation must have been delivered, or the settlement wait "
+            "this test observes was never reached"
+        )
+
+    asyncio.run(run_case())
+
+    assert len(collector.calls) == 2, (
+        "the expired wait must reach the collector as exactly one counter and "
+        f"one duration, or an emission was duplicated or lost; got {collector.calls!r}"
+    )
+    duration_name, measured_s, duration_labels = collector.calls[1]
+    assert collector.calls[0] == (
+        "cuprum_group_teardowns_total",
+        1.0,
+        {
+            "program": "echo",
+            "project": "unknown",
+            "outcome": str(GroupTeardownOutcome.SETTLEMENT_TIMEOUT),
+        },
+    ), (
+        "the teardown must be counted once, before it is timed, under its own "
+        f"bounded outcome category; got {collector.calls[0]!r}"
+    )
+    assert duration_name == "cuprum_group_settle_seconds", (
+        "the wait must be observed as a duration, not counted as one; got "
+        f"{duration_name!r}"
+    )
+    assert measured_s == pytest.approx(_STUBBED_WAIT_S, abs=_STUBBED_WAIT_S), (
+        "the histogram must carry the wait's own measured figure, so one near "
+        f"the stub's return is expected; got {measured_s!r}"
+    )
+    assert measured_s != pytest.approx(_WIDENED_BOUND_S), (
+        "a figure equal to the configured bound is the defect this test exists "
+        "to catch, and it reaches the collector by the same route the record does"
+    )
+    assert duration_labels == {"program": "echo", "project": "unknown"}, (
+        "the duration must carry the same low-cardinality labels as the counter, "
+        f"and no pid; got {duration_labels!r}"
     )
