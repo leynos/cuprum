@@ -501,6 +501,24 @@ full_name = [
 ]
 reason = "Called by TracingHook.record_line_stream_event, which callers register through observe_line_stream."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum.control_observation._ControlMeasurement.complete",
+    "cuprum.stream_observation._StreamOperationMeasurement.complete",
+]
+reason = "Both are called by their module's own completion helper, _complete_control and _complete_stream_operation, which _process_handle and _streams_pump reach. A second 'complete' method makes the scanner resolve the name globally and lose the chain for both, including the stream path it reported as live until cuprum/control_observation.py was added."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum.control_observation._emit_control_event",
+    "cuprum.control_observation._discard_hook_result",
+    "cuprum.stream_observation._emit_stream_operation_event",
+    "cuprum.stream_observation._discard_hook_result",
+]
+reason = "Shared private helper names are resolved globally by the scanner: the two modules define _discard_hook_result each, and the emit/discard pair each is reached only from its own module's completion chain, so neither survives the collision. Both chains are exercised by test_control_observation and test_stream_operation_observation_hooks."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"
