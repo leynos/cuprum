@@ -30,7 +30,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import typing as typ
 
+from cuprum.control_events import ControlOperation, ControlOutcome
+from cuprum.control_observation import observe_control
 from cuprum.unittests._running_command_support import (
     _KILLED,
     _TERMINATED,
@@ -40,6 +43,9 @@ from cuprum.unittests._running_command_support import (
     _StubProcess,
     _StubRunConfig,
 )
+
+if typ.TYPE_CHECKING:
+    from cuprum.control_events import ControlEvent
 
 
 def test_repeated_termination_reports_the_one_settlement() -> None:
@@ -297,22 +303,31 @@ def test_kill_cancelled_while_reaping_still_settles() -> None:
     the same guarantee. Without it, a forced stop interrupted while the child
     was being reaped would be the one stop that silently handed back a handle
     with no recorded outcome.
+
+    As with ``terminate()`` in
+    :mod:`cuprum.unittests.test_running_command_lifecycle_waits`, settling is
+    only half of what a caller is owed. The kill reached the child, so the run
+    must also say so on the control channel: a handle that records *that* the
+    child died but not *who* compelled it loses the distinction the channel
+    exists to draw.
     """
 
     async def run_case() -> None:
         """Cancel ``kill()`` as it reaps, then inspect what survived."""
         process = _StubProcess()
         handle = _handle(process, _StubRunConfig(grace=0.5))
+        emitted: list[ControlEvent] = []
 
-        task = asyncio.ensure_future(handle.kill())
-        # The double announces its own exit, so this waits on the event rather
-        # than spinning: a busy loop over ``kill_calls`` would pass by
-        # accident whenever the scheduler happened to run the task first,
-        # which is exactly the timing this case exists to control.
-        await process.exited.wait()
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        with observe_control(emitted.append):
+            task = asyncio.ensure_future(handle.kill())
+            # The double announces its own exit, so this waits on the event rather
+            # than spinning: a busy loop over ``kill_calls`` would pass by
+            # accident whenever the scheduler happened to run the task first,
+            # which is exactly the timing this case exists to control.
+            await process.exited.wait()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
         assert process.kill_calls == 1, (
             f"the forced stop must be delivered exactly once, got {process.kill_calls}"
@@ -326,6 +341,14 @@ def test_kill_cancelled_while_reaping_still_settles() -> None:
         )
         assert result.exit_code == _KILLED, (
             f"the recorded outcome must report the kill, got {result.exit_code}"
+        )
+        assert [event.operation for event in emitted] == [ControlOperation.KILL], (
+            "the completed kill must still be reported on the control channel"
+        )
+        (event,) = emitted
+        assert event.outcome is ControlOutcome.DELIVERED, (
+            "a forced stop that reached the child reports delivery, "
+            f"got {event.outcome}"
         )
 
     asyncio.run(run_case())
