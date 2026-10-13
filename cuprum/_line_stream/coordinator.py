@@ -45,8 +45,8 @@ from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _require_text
 from cuprum._stream_drain import _drain_stream_consumers
-from cuprum._subprocess_execution import (
-    _relay_fallbacks_for_result,
+from cuprum._subprocess_execution import _relay_fallbacks_for_result
+from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )

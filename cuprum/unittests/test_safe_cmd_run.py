@@ -21,6 +21,7 @@ from cuprum import (
     _command_internals,
     _rusage,
     _subprocess_execution,
+    _subprocess_spawn,
     _wait4_process,
     observe,
     sh,
@@ -266,7 +267,11 @@ def test_records_start_times_before_subprocess_spawn(
     # that attribute is read from — not in ``sh``, which no longer imports
     # ``time`` now that observation construction lives in ``_command_internals``.
     monkeypatch.setattr(_command_internals.time, "time", wall_clock)
-    monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
+    # Patched on the module that owns the spawn, not on
+    # ``_subprocess_execution``: ``_start_owned_process`` resolves this name
+    # from ``_subprocess_spawn``'s globals, so a patch applied to a re-export
+    # there would rebind a name no call path reads and let the real spawn run.
+    monkeypatch.setattr(_subprocess_spawn, "_spawn_subprocess", fake_spawn)
     monkeypatch.setattr(
         _subprocess_execution,
         "_run_subprocess_without_streams",

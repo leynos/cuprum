@@ -568,3 +568,71 @@ The 2026-10-11 addendum's `SafeCmdBuilder` half still stands.
 `cuprum/sh/__init__.py` continues to re-export both classes unchanged, so
 `cuprum.sh.Pipeline` is the same object as `cuprum.sh.pipeline.Pipeline` and
 importers of the facade see no difference.
+
+## Addendum (2026-10-11): split the spawn seam into `cuprum/_subprocess_spawn.py`
+
+`cuprum/_subprocess_execution.py` had grown past the repository's 400-line
+module ceiling. Rather than compress the comments that explain the timing
+invariants, the spawn step moved into its own module, taking with it the three
+names that describe it: `_SubprocessExecution`, the bundle that decides how a
+child is wired; `_spawn_subprocess`, the seam that creates it; and
+`_start_owned_process`, which spawns and announces a child for the direct run.
+
+Announcing is not owned by this module. `_start_owned_process` is the only
+place _it_ announces a child, and the direct run is its only caller. The other
+two entry points call `_spawn_subprocess` directly and emit their own `start`
+event, because each needs the process in hand before announcing it: the
+line-stream coordinator to attach its consumers, and the owned-handle start to
+attach the tasks that will drive and settle the run. That deviation is
+deliberate rather than an oversight of the split — the seam is shared, the
+announcement is not.
+
+These belong together because the spawn is what the bundle describes. A test
+that needs to refuse a spawn patches `_spawn_subprocess`, and keeping the
+bundle in the same module means such a test never has to reach across a module
+boundary to build the value it refuses to spawn with.
+
+`_subprocess_execution` re-exports `_SubprocessExecution` and the stream-wiring
+names it no longer defines, so importers keep working. It does not re-export
+`_spawn_subprocess`: `_start_owned_process` resolves that name from
+`_subprocess_spawn`'s globals, so a re-exported copy would be a name no call
+path reads. Patching it there would rebind the copy and leave the real spawn
+running — a test that still passes while exercising nothing. A test that
+refuses a spawn therefore patches the module whose globals its entry point
+resolves the name from: `cuprum._subprocess_spawn` for `SafeCmd.run()`,
+`cuprum._line_stream.coordinator` for `SafeCmd.lines()`, and
+`cuprum._process_handle.tasks` for `SafeCmd.start()`. Each binds the seam into
+its own globals, so patching the defining module reaches none of the importers,
+and one patch per entry point is the rule rather than one patch for all of them.
+
+The module boundary is by responsibility, not by call depth:
+`_subprocess_spawn` creates a child and announces it; `_subprocess_execution`
+samples the clocks, waits, and assembles the result. The one invariant the
+split must not disturb is the pre-spawn sampling order, which is why
+`_start_owned_process` still takes `started_at` as an argument instead of
+reading a clock itself — the callers keep owning _when_ their reading is taken.
+
+## Addendum (2026-10-13): `SafeCmd.start` moves to `cuprum/_process_handle/owned_start.py`
+
+The spawn-seam split above was prepared for `SafeCmd.start()`, and once the
+byte-exact work landed its siblings the `SafeCmd` module was one method away
+from the repository's 400-line ceiling. `start` moved to
+`cuprum/_process_handle/owned_start.py`, where `_OwnedStart` contributes it to
+the class by inheritance rather than by delegation, so `SafeCmd.start` is still
+an ordinary bound method and `typing.get_type_hints` still resolves its
+`-> RunningCommand` annotation — from the new module's globals, which is where
+the class that annotation names is imported.
+
+The move is by responsibility rather than by size. `start` resolves a different
+set of run inputs from `run()`: capture is forced on, because a handle exists
+so its caller can inspect the child after the fact, and an explicit deadline
+becomes the default for every `wait()` on the handle rather than a limit on the
+child's life. Keeping that resolution in `_process_handle` means the package
+that owns the handle owns the whole answer to "what does a handle start from?"
+instead of borrowing half of it from the command module.
+
+`_OwnedStart` is deliberately not a dataclass, and declares `__slots__ = ()`.
+`dataclasses.dataclass` refuses a base that already declares `__slots__`, and
+an un-slotted mixin would donate a `__dict__` to the slotted dataclass that
+inherits it, so the empty declaration is what keeps `SafeCmd` a slotted
+dataclass with the field set its callers already rely on.

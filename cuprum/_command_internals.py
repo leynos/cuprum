@@ -18,7 +18,6 @@ import sys
 import time
 import typing as typ
 
-from cuprum._context_policy import _collect_hooks
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor
@@ -37,10 +36,8 @@ from cuprum._pipeline_types import (
 )
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import (
-    _command_session_start,
     _outcome_for_error,
     _outcome_for_result,
-    _SinkBracket,
 )
 from cuprum._subprocess_context import _event_cwd, _execution_cwd
 from cuprum._subprocess_execution import (
@@ -49,7 +46,7 @@ from cuprum._subprocess_execution import (
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum._timeout_reporting import _safe_emit_terminal
-from cuprum.context import EnvMode, current_context
+from cuprum.context import EnvMode
 from cuprum.events import CaptureMode, TerminalOutcome
 
 if typ.TYPE_CHECKING:
@@ -62,6 +59,7 @@ __all__ = [
     "_ExecutionTracking",
     "_build_subprocess_execution",
     "_execute_with_hooks",
+    "_finalize_prepared_command_failure",
     "_prepare_execution_observation",
     "_run_prepared_command",
 ]
@@ -344,6 +342,12 @@ async def _run_prepared_command(
     on :class:`_ExecutionState` claims it is — one run's resolved inputs
     travelling as a unit — rather than a temporary built only to be unpacked.
 
+    The preparation prefix is shared with ``SafeCmd.start()`` and lives in
+    ``cuprum._command_prepare``, so the two entry points cannot drift apart.
+    It owns the failure handling for everything it does; what remains here is
+    executed under :func:`_execute_with_hooks`, which owns finalization for the
+    run itself.
+
     Parameters
     ----------
     cmd : SafeCmd
@@ -356,40 +360,13 @@ async def _run_prepared_command(
     CommandResult | BytesCommandResult
         The completed command's result, byte-exact when bytes were asked for.
     """
-    output = state.output
-    # The bracket owns the session for the whole run: a plan observer, a
-    # before hook, or anything else that raises before execution starts
-    # still finalizes the adapter's framing rather than stranding an open
-    # group, and the guard below closes exactly what those paths leave.
-    sink_bracket = _SinkBracket.open(
-        output.sink,
-        _command_session_start(cmd),
+    # Imported here, not at module scope: ``cuprum._command_prepare`` borrows
+    # helpers from this module, so a module-level import would close the cycle.
+    from cuprum._command_prepare import _prepare_owned_command
+
+    prepared = await _prepare_owned_command(cmd, state)
+    return await _execute_with_hooks(
+        cmd,
+        prepared.execution,
+        prepared.tracking,
     )
-    tracking = _ExecutionTracking(
-        execution_hooks=_collect_hooks(current_context()),
-        pending_tasks=[],
-        sink_bracket=sink_bracket,
-    )
-    observation: _StageObservation | None = None
-    try:
-        observation = _prepare_execution_observation(
-            cmd,
-            state,
-            tracking,
-        )
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(cmd)
-        return await _execute_with_hooks(
-            cmd,
-            _build_subprocess_execution(
-                cmd,
-                state,
-                observation=observation,
-                sink_session=tracking.sink_bracket.session,
-            ),
-            tracking,
-        )
-    except BaseException as run_error:
-        await _finalize_prepared_command_failure(tracking, observation, run_error)
-        raise

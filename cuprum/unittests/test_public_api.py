@@ -467,6 +467,10 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
     [
         ("SafeCmd.run", "CommandResult"),
         ("SafeCmd.run_sync", "CommandResult"),
+        # ``start`` is asynchronous but resolves its annotation eagerly all the
+        # same: the handle it names has to be a runtime import for this to hold,
+        # which is what stops ``RunningCommand`` drifting into a type-only name.
+        ("SafeCmd.start", "RunningCommand"),
         ("SafeCmd.run_bytes", "BytesCommandResult"),
         ("SafeCmd.run_bytes_sync", "BytesCommandResult"),
         ("Pipeline.run", "PipelineResult"),

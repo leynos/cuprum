@@ -13,7 +13,11 @@ enough on its own: it stops cancellation reaching the inner coroutine, but
 the awaiting coroutine resumes immediately, so a caller's ``CancelledError``
 propagates while cleanup is still running. ``_shielded_cleanup`` instead
 retries the wait under a shield until the owned task is done, absorbing
-however many cancellations arrive before re-raising.
+however many cancellations arrive before re-raising. ``_run_shielded_step``
+refines that primitive for callers that must run *two* cleanups and decide
+afterwards which failure the caller is owed: it reports how the step ended,
+distinguishing a cancellation from an ordinary failure, so the deciding stays
+with the caller rather than being duplicated into every cleanup.
 
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
@@ -29,9 +33,6 @@ import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
-from cuprum.context import current_context
-from cuprum.context._policy import _resolve_env_policy
-from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -40,14 +41,87 @@ if typ.TYPE_CHECKING:
 async def _terminate_process(
     process: asyncio.subprocess.Process,
     grace_period: float,
-) -> None:
+) -> _TerminationOutcome:
     """Terminate a running process, escalating to kill after the grace period."""
-    await _terminate_process_with_wait(
+    return await _terminate_process_with_wait(
         process,
         grace_period=grace_period,
         is_done=lambda: process.returncode is not None,
         wait_for_exit=lambda: _await_process_exit(process),
     )
+
+
+class _TerminationOutcome(typ.NamedTuple):
+    """What a cooperative stop did to the child, and how the wait for it ended.
+
+    Three facts that a single ``bool`` used to flatten, kept apart because they
+    answer different questions and can disagree. ``delivered`` is about the
+    child: whether any signal was actually sent to it. ``escalated`` is about
+    the grace window: whether it closed with the child still running. And
+    ``waiter_completed`` is about the caller's own waiter: whether it returned
+    rather than being left pending.
+
+    They disagree at the edges. A forced signal that raises
+    ``ProcessLookupError`` — the child died in the instant between the window
+    closing and the kill — leaves ``delivered`` and ``escalated`` both true
+    while ``waiter_completed`` is false, because the SIGTERM that started the
+    window did reach a child, and the waiter that was watching it may still be
+    the caller's to await. Reporting one ``bool`` here would have to pick one
+    of those questions and silently answer the others wrong.
+
+    ``refused`` is the fourth fact and the only one this module never sets. The
+    stop helpers cannot tell a delivery the platform would not make from a
+    child that had already gone, because both reach them as the same
+    ``ProcessLookupError``; only the child's own status separates them, and the
+    handle reads that. It defaults to ``False`` so the helpers keep reporting
+    exactly what they observed, and the one caller that can weigh the two
+    against each other rewrites it.
+    """
+
+    delivered: bool
+    escalated: bool
+    waiter_completed: bool
+    refused: bool = False
+
+
+_NO_STOP = _TerminationOutcome(
+    delivered=False,
+    escalated=False,
+    waiter_completed=False,
+)
+"""What a stop reports when it sent nothing to the child.
+
+Both of this module's early returns mean the same thing — the child was not
+running, or the signal never reached it — and neither the grace window nor the
+waiter was ever engaged.
+"""
+
+_TERMINATED_IN_GRACE = _TerminationOutcome(
+    delivered=True,
+    escalated=False,
+    waiter_completed=True,
+)
+"""The cooperative ending: the child took the graceful signal and exited in time."""
+
+_KILLED_AFTER_GRACE = _TerminationOutcome(
+    delivered=True,
+    escalated=True,
+    waiter_completed=True,
+)
+"""The escalated ending: the grace window ran out with the child alive."""
+
+_KILLED_AFTER_GRACE_UNWAITED = _TerminationOutcome(
+    delivered=True,
+    escalated=True,
+    waiter_completed=False,
+)
+"""The escalated ending whose reaping wait never returned.
+
+The graceful signal reached the child and the window did run out, but the
+forced signal's own ``ProcessLookupError`` means the exit this caller would
+have waited for was collected elsewhere — see the class docstring for why the
+three facts disagree here.
+"""
 
 
 async def _terminate_process_with_wait(
@@ -56,24 +130,46 @@ async def _terminate_process_with_wait(
     grace_period: float,
     is_done: cabc.Callable[[], bool],
     wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
-) -> bool:
-    """Terminate a process and report whether its waiter completed."""
+) -> _TerminationOutcome:
+    """Terminate a process and report what the stop did to it."""
     grace_period = max(0.0, grace_period)
     if is_done():
-        return False
+        return _NO_STOP
     try:
         process.terminate()
     except (ProcessLookupError, OSError):
-        return False
+        return _NO_STOP
+    # Past this point the graceful signal reached the child, whatever happens
+    # to the waiter below.
     try:
         await asyncio.wait_for(wait_for_exit(), grace_period)
     except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
         try:
             process.kill()
         except (ProcessLookupError, OSError):
-            return False
+            return _KILLED_AFTER_GRACE_UNWAITED
         await wait_for_exit()
-    return True
+        return _KILLED_AFTER_GRACE
+    return _TERMINATED_IN_GRACE
+
+
+async def _settle_shielded[T](task: asyncio.Task[T]) -> T | None:
+    """Wait out a shielded task after cancellation; report what it produced.
+
+    Retrieving the outcome here keeps a task failure from surfacing later as an
+    unretrieved task exception.
+
+    Returns
+    -------
+    T | None
+        What the task produced, or ``None`` when it produced nothing.
+    """
+    while not task.done():
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.shield(task)
+    if task.cancelled() or task.exception() is not None:
+        return None
+    return task.result()
 
 
 async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
@@ -82,15 +178,64 @@ async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        while not task.done():
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.shield(task)
-        if not task.cancelled():
-            # Retrieve the outcome so a cleanup failure is not reported as an
-            # unretrieved task exception. The caller's cancellation still wins:
-            # it is the error the run is ending on.
-            task.exception()
+        await _settle_shielded(task)
         raise
+
+
+class _ShieldedStepFailure[T](typ.NamedTuple):
+    """How one shielded cleanup step ended, for the caller to weigh.
+
+    A cancellation is reported separately from an ordinary failure because the
+    two are owed different treatment: a cancellation must always reach the
+    caller — it is a request that the task stop, not a failure to report — while
+    an ordinary failure may legitimately defer to an error the caller is
+    already raising. Reporting both in one value keeps that distinction visible
+    to the caller instead of flattening it here.
+
+    The value is carried alongside the failure rather than only returned on
+    success, because a step's *outcome* and its *completion* are independent
+    facts. A stop that delivered what it was asked to and then had its caller
+    cancelled has still stopped the child, and a caller describing that stop
+    needs to say so; a report that dropped the value whenever anything went
+    wrong would leave it unable to.
+    """
+
+    cancellation: asyncio.CancelledError | None
+    failure: BaseException | None
+    value: T | None
+
+
+async def _run_shielded_step[T](
+    cleanup: cabc.Awaitable[T],
+) -> _ShieldedStepFailure[T]:
+    """Run a shielded cleanup, reporting rather than raising how it ended.
+
+    The step is shielded exactly as ``_shielded_cleanup`` shields it, so a
+    cancellation arriving mid-step still completes it. What differs is only
+    what happens to the outcome: it is returned, because a caller running two
+    steps has to weigh the first against the second before it can say which
+    failure, if any, the caller is owed. Absorbing the failure here would
+    decide that too early; raising it here would abandon the second step.
+
+    Returns
+    -------
+    _ShieldedStepFailure
+        How the step ended — the cancellation it absorbed, the failure it
+        raised, or neither — together with whatever the step produced. The
+        value is absent only when the step failed or was cancelled.
+    """
+    task = asyncio.ensure_future(cleanup)
+    try:
+        value = await asyncio.shield(task)
+    except asyncio.CancelledError as cancelled:
+        # The step's own value survives the cancellation rather than being
+        # dropped: a stop that delivered its signal and was cancelled while the
+        # delivery was finishing has still stopped the child, and the control
+        # event describing it has to be emitted.
+        return _ShieldedStepFailure(cancelled, None, await _settle_shielded(task))
+    except BaseException as failed:  # ruff: ignore[blind-except] - reported, not handled: the caller weighs it against a later step's failure
+        return _ShieldedStepFailure(None, failed, None)
+    return _ShieldedStepFailure(None, None, value)
 
 
 async def _await_teardown_shielded(
@@ -127,37 +272,19 @@ async def _cleanup_pipeline_on_error(
     return await _reconcile_pipe_tasks(pipe_tasks)
 
 
-def _merge_env(
-    extra: EnvOverlay | None,
-    env_mode: EnvMode = EnvMode.OVERLAY,
-    *,
-    include_context_overlay: bool = True,
-) -> dict[str, str] | None:
-    """Render the ambient and per-call environment policies for a child."""
-    context = current_context()
-    parent_overlay = context.env_overlay if include_context_overlay else None
-    parent_mode = context.env_mode if include_context_overlay else EnvMode.OVERLAY
-    overlay, mode = _resolve_env_policy(
-        parent_overlay,
-        parent_mode,
-        extra,
-        env_mode,
-    )
-    return render_env(overlay, mode)
-
-
 async def _terminate_process_via_wait_task(
     process: asyncio.subprocess.Process,
     wait_task: asyncio.Task[int],
     grace_period: float,
 ) -> bool:
     """Terminate a process and report whether its provided waiter completed."""
-    return await _terminate_process_with_wait(
+    outcome = await _terminate_process_with_wait(
         process,
         grace_period=grace_period,
         is_done=wait_task.done,
         wait_for_exit=lambda: asyncio.shield(wait_task),
     )
+    return outcome.waiter_completed
 
 
 def _stages_to_terminate(

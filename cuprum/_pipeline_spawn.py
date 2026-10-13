@@ -24,11 +24,12 @@ import dataclasses as dc
 import time
 import typing as typ
 
+from cuprum._context_policy import _merge_env
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_results import _emit_terminal_events
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._process_lifecycle import _merge_env, _terminate_all_shielded
+from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _cwd_arg
 

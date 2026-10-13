@@ -44,7 +44,16 @@ __all__ = ["Pipeline"]
 
 @dc.dataclass(frozen=True, slots=True)
 class Pipeline:
-    """A sequence of SafeCmd stages connected via stdout/stdin piping."""
+    """A sequence of SafeCmd stages connected via stdout/stdin piping.
+
+    Attributes
+    ----------
+    parts : tuple[SafeCmd, ...]
+        The stages in execution order. The first stage's stdin is the
+        pipeline's stdin and the last stage's stdout is its stdout; each
+        intervening stage feeds the next. Always at least
+        ``_MIN_PIPELINE_STAGES`` long, as :meth:`__post_init__` enforces.
+    """
 
     parts: "tuple[SafeCmd, ...]"
 
@@ -55,7 +64,18 @@ class Pipeline:
             raise ValueError(msg)
 
     def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
-        """Compose pipelines, appending stages in left-to-right order."""
+        """Compose this pipeline with another stage.
+
+        Parameters
+        ----------
+        other : SafeCmd | Pipeline
+            The stage, or sequence of stages, appended after this pipeline's.
+
+        Returns
+        -------
+        Pipeline
+            A pipeline whose stages are this one's followed by *other*'s.
+        """
         return Pipeline.concat(self, other)
 
     @classmethod
@@ -77,10 +97,31 @@ class Pipeline:
         -------
         Pipeline
             A pipeline whose stages are *left*'s followed by *right*'s.
+
+        Raises
+        ------
+        TypeError
+            If either operand is neither a :class:`SafeCmd` nor a
+            :class:`Pipeline`. Structural matching cannot express
+            exhaustiveness, so an unhandled operand would otherwise fall out
+            of the ``match`` and return ``None`` from a function that promises
+            a pipeline, deferring the failure to a distant attribute access.
         """
-        left_parts = left.parts if isinstance(left, Pipeline) else (left,)
-        right_parts = right.parts if isinstance(right, Pipeline) else (right,)
-        return cls((*left_parts, *right_parts))
+        match left, right:
+            case Pipeline(parts=left_parts), Pipeline(parts=right_parts):
+                return cls((*left_parts, *right_parts))
+            case Pipeline(parts=left_parts), SafeCmd() as right_stage:
+                return cls((*left_parts, right_stage))
+            case SafeCmd() as left_stage, Pipeline(parts=right_parts):
+                return cls((left_stage, *right_parts))
+            case SafeCmd() as left_stage, SafeCmd() as right_stage:
+                return cls((left_stage, right_stage))
+            case _:
+                msg = (
+                    "pipeline stages must be SafeCmd or Pipeline, got "
+                    f"{type(left).__name__} and {type(right).__name__}"
+                )
+                raise TypeError(msg)
 
     async def run(
         self,
@@ -296,10 +337,11 @@ class Pipeline:
 # Imported at the foot of the module, after ``Pipeline`` exists, to break the
 # mutual dependency with ``cuprum.sh.safe_cmd``: that module imports this one
 # for ``Pipeline``, so importing it at the head would leave it reading a
-# half-built module. The annotations above name ``SafeCmd`` in strings and so
-# cost nothing at class-creation time, but ``typing.get_type_hints`` resolves
-# them from this module's globals, which is what makes the name a genuine
-# runtime import rather than a ``TYPE_CHECKING`` one.
+# half-built module. The annotations above name ``SafeCmd`` in strings, but
+# ``typing.get_type_hints`` resolves them from this module's globals, and the
+# ``concat`` match arms use the name at run time to match a stage operand —
+# both of which make this a genuine runtime import rather than a
+# ``TYPE_CHECKING`` one.
 from cuprum.sh.safe_cmd import (  # ruff: ignore[module-import-not-at-top-of-file]  # deferred to break the cuprum.sh.safe_cmd dependency cycle
-    SafeCmd,  # ruff: ignore[typing-only-first-party-import]  # mutual dependency with cuprum.sh.safe_cmd; resolved eagerly by get_type_hints
+    SafeCmd,
 )

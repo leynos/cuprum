@@ -14,7 +14,9 @@ composes into a pipeline and a pipeline is built from commands — so the cycle
 between them is broken the same way ``cuprum.sh`` breaks its own: each side
 defers the import it needs to the point of use. ``cuprum/sh/__init__.py``
 re-exports the classes unchanged, so importers of ``cuprum.sh`` see the same
-objects they always did.
+objects they always did. ``SafeCmd.start`` is contributed by ``_OwnedStart``
+in :mod:`cuprum._process_handle.owned_start`, which this class inherits; the
+handle path resolves its own run inputs, so it lives with the handle package.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -38,10 +40,8 @@ from cuprum._command_internals import (
 )
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
-from cuprum._pipeline_internals import (
-    _collect_hooks,
-    _enforce_allowlist,
-)
+from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._process_handle.owned_start import _OwnedStart
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
@@ -52,13 +52,12 @@ from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import BytesCommandResult, CommandResult
 
 __all__ = [
-    "Pipeline",
     "SafeCmd",
 ]
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd:
+class SafeCmd(_OwnedStart):
     """Typed representation of a curated command ready for execution."""
 
     program: Program
