@@ -15,6 +15,7 @@ import signal
 import typing as typ
 from unittest import mock
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -28,13 +29,16 @@ from hypothesis.stateful import (
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_handle import settlement as settlement_module
 from cuprum.control_observation import observe_control
-from cuprum.events import TerminalOutcome
 from cuprum.sh import SignalAfterExitError, TimeoutExpired
+from cuprum.unittests._running_command_settlement_support import (
+    _expected_outcome,
+    _reports_a_stop,
+    _settled_event,
+    _stop_code,
+)
 from cuprum.unittests._running_command_support import (
     _EARLY_EXIT,
     _ESCALATION_GRACE,
-    _KILLED,
-    _TERMINATED,
     _WAITERS,
     _handle,
     _observe,
@@ -53,15 +57,15 @@ if typ.TYPE_CHECKING:
 _DEADLINE = 0.02  # Long enough to be a real wait, short enough to expire.
 _STEP_PATIENCE = 5.0  # A step that overruns this has stalled, not been slow.
 # Caller-named signals to deliver, none of them a stop: those settle the run.
-_SIGNAL_NUMBERS = (signal.SIGHUP, signal.SIGUSR1, signal.SIGCONT)
-
-
-def _expected_outcome(report: str, exit_code: int) -> TerminalOutcome:
-    """Return the terminal outcome a run that ended this way must publish."""
-    if report == "timeout":
-        return TerminalOutcome.TIMEOUT
-    succeeded = report == "ordinary" and exit_code == 0
-    return TerminalOutcome.EXIT_ZERO if succeeded else TerminalOutcome.EXIT_NONZERO
+# Sourced by name so this module imports on any platform; a name the host does
+# not define is simply not drawn, rather than raising while pytest collects.
+_SIGNAL_NAMES = ("SIGHUP", "SIGUSR1", "SIGCONT")
+if not all(hasattr(signal, name) for name in _SIGNAL_NAMES):
+    pytest.skip(
+        "these POSIX signals are not defined on this platform",
+        allow_module_level=True,
+    )
+_SIGNAL_NUMBERS = tuple(getattr(signal, name) for name in _SIGNAL_NAMES)
 
 
 class _RunningCommandSettlementMachine(RuleBasedStateMachine):
@@ -175,11 +179,14 @@ class _RunningCommandSettlementMachine(RuleBasedStateMachine):
         if report == "timeout":
             assert code == self._process.returncode, "a deadline keeps the child's end"
         elif report == "ordinary":
-            assert code not in {_TERMINATED, _KILLED}, "an own ending reports no signal"
+            assert not _reports_a_stop(result), "an own ending reports no signal"
         else:
-            stop = _TERMINATED if self._process.terminate_calls > graceful else _KILLED
+            stop = _stop_code(
+                terminated=self._process.terminate_calls,
+                grace=graceful,
+            )
             assert code == stop, f"a {report} step records its stop's own status"
-        event = next((item for item in self._events if item.phase == "settled"), None)
+        event = _settled_event(self._events)
         assert event is not None, "a recorded outcome publishes a terminal event"
         expected = _expected_outcome(report, code)
         assert event.terminal_outcome is expected, (
