@@ -203,11 +203,26 @@ def _emit_control_event(
     *,
     hooks: tuple[ControlHook, ...],
 ) -> None:
-    """Deliver an event without allowing observer failures to affect control."""
+    """Deliver an event without allowing observer failures to affect control.
+
+    ``BaseException`` is caught rather than ``Exception``, and the difference is
+    load-bearing rather than defensive. ``asyncio.CancelledError`` derives from
+    ``BaseException``, so an observer raising one would escape this guard into
+    the worst possible place. The stop path emits this event before it starts
+    settling, so an escaping cancellation abandons the settle and leaves a
+    reaped child with no result recorded; the signal path emits it where an
+    escaping cancellation replaces the public refusal the caller is owed.
+
+    An observer raising ``KeyboardInterrupt`` or ``SystemExit`` is reported and
+    swallowed like any other observer failure. Letting either through would
+    abandon the same in-flight control operation, which is the harm this guard
+    exists to prevent, and the operation a hook runs inside is a bounded
+    synchronous call rather than a place an interpreter-level exit belongs.
+    """
     for hook in hooks:
         try:
             result = hook(event)
-        except Exception as exc:
+        except BaseException as exc:
             _LOGGER.warning(
                 "control_observer_failed operation=%s outcome=%s error=%s",
                 event.operation,

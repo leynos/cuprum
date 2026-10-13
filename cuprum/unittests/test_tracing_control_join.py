@@ -70,6 +70,12 @@ def _on(
     The token is required because every case below has to say what it is
     correlating on: a case that means "no token at all" passes ``None``
     explicitly rather than leaving the target to a default.
+
+    Returns
+    -------
+    _ControlTarget
+        The target carrying *exec_id* and, unless overridden, this suite's
+        usual child and signal number.
     """
     return _ControlTarget(exec_id=exec_id, signal_number=signal_number, pid=pid)
 
