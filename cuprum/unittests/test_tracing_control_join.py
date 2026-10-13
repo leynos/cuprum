@@ -248,7 +248,9 @@ class TestSpanJoin:
 
         with record_control_events(tracing_hook.hook):
             _perform_control(
-                ControlOperation.TERMINATE, ControlOutcome.DELIVERED, target=_on(exec_id)
+                ControlOperation.TERMINATE,
+                ControlOutcome.DELIVERED,
+                target=_on(exec_id),
             )
             _perform_control(
                 ControlOperation.KILL, ControlOutcome.ESCALATED, target=_on(exec_id)
@@ -314,7 +316,9 @@ def test_the_join_is_a_separate_registration(tracing_hook: Traced) -> None:
     """Leave an unjoined run's span free of control events."""
     exec_id = _open_span(tracing_hook)
 
-    _perform_control(ControlOperation.KILL, ControlOutcome.DELIVERED, target=_on(exec_id))
+    _perform_control(
+        ControlOperation.KILL, ControlOutcome.DELIVERED, target=_on(exec_id)
+    )
 
     assert not _span_events(tracing_hook), (
         "a caller who never registered the join sees no control events"
