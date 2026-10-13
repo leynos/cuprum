@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import dataclasses as dc
 import time
+import typing as typ
 from functools import partial
 
 import pytest
@@ -28,6 +29,9 @@ from cuprum._testing import _prepare_pipeline_config
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import ExecutionContext, RunOutputOptions
 
+if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
+
 
 class _AfterHookError(Exception):
     """Raised by the failing pipeline after-hook in this test."""
@@ -43,7 +47,7 @@ class _SuccessfulStage:
 
     events: list[ExecEvent]
     observation: _StageObservation
-    result: sh.CommandResult
+    result: _AnyCommandResult
 
 
 class _TerminalHookGate:
@@ -207,7 +211,7 @@ def test_after_hook_failure_settles_each_stage_as_error() -> None:
 
         def failing_after_hook(
             _command: sh.SafeCmd,
-            _result: sh.CommandResult,
+            _result: _AnyCommandResult,
         ) -> None:
             """Fail after the child has produced a successful result."""
             raise _AfterHookError

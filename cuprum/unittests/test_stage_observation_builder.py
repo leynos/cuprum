@@ -26,6 +26,7 @@ from hypothesis import strategies as st
 
 from cuprum import ECHO, sh
 from cuprum._command_internals import (
+    _ExecutionState,
     _ExecutionTracking,
     _prepare_execution_observation,
 )
@@ -179,9 +180,13 @@ def _single_command_tags(
     )
     observation = _prepare_execution_observation(
         cmd,
-        context,
+        _ExecutionState(
+            context=context,
+            output=RunOutputOptions(capture=capture, echo=echo),
+            stdin_data=None,
+            timeout=None,
+        ),
         tracking,
-        RunOutputOptions(capture=capture, echo=echo),
     )
     return observation.tags
 

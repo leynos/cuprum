@@ -16,6 +16,7 @@ import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
 from cuprum.events import (
+    CaptureMode,
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
@@ -40,6 +41,7 @@ if typ.TYPE_CHECKING:
     # imports this module, so taking the record back from it would close a
     # cycle. The other direction is the reason the record lives here.
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamConsumerTask, _StreamPayload
     from cuprum.context import AfterHook, BeforeHook
 
     # Annotation-only, as in ``cuprum.events``: ``env_mode`` is read as a value
@@ -130,6 +132,12 @@ class _StageObservation:
     # program was unbound and runs under its catalogued name, which
     # ``argv0`` turns into ``str(cmd.program)``.
     resolved_path: str | None = None
+    # Whether this stage's captured streams are reported as text or as the
+    # child's own bytes. Like ``env_mode`` it is a trusted typed field rather
+    # than a tag, because a caller may shadow any tag key and a consumer of the
+    # capture mode must be able to rely on it. ``None`` only for a hand-built
+    # observation; both builders resolve it.
+    capture_mode: CaptureMode | None = None
 
     @property
     def argv0(self) -> str:
@@ -196,6 +204,7 @@ class _StageObservation:
             resource_usage_mode=details.resource_usage_mode,
             env_mode=self.env_mode,
             resolved_path=self.resolved_path,
+            capture_mode=self.capture_mode,
         )
         self._emit_event(event)
 
@@ -256,6 +265,10 @@ class _StageObservation:
             # needs it: whether the failing stage ran under a replacement
             # boundary is the first thing that explains a missing ``PATH``.
             env_mode=self.env_mode,
+            # Carried for the same reason as ``env_mode``: it is a bounded
+            # policy name with no caller data, and whether the failing stage
+            # was collecting bytes is part of explaining its teardown.
+            capture_mode=self.capture_mode,
             # Deliberately unset: this sanitized decision event describes no
             # stage's execution, and the failing stage reports its own path on
             # the ``exit`` event that follows. Carrying one here would invite a
@@ -307,8 +320,8 @@ class _PipelineStageResultInputs:
     """
 
     wait_result: _PipelineWaitResult
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
+    stderr_by_stage: tuple[_StreamPayload | None, ...]
+    final_stdout: _StreamPayload | None
     relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...]
 
 
@@ -352,8 +365,8 @@ class _PipelineSpawnResult:
     """Processes and output tasks produced when spawning a pipeline."""
 
     processes: list[asyncio.subprocess.Process]
-    stderr_tasks: list[asyncio.Task[str | None] | None]
-    stdout_task: asyncio.Task[str | None] | None
+    stderr_tasks: list[_StreamConsumerTask | None]
+    stdout_task: _StreamConsumerTask | None
     relay_diagnostics_by_stage: tuple[
         tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
         ...,
@@ -371,7 +384,12 @@ class _PipelineOutputs:
     whatever was already recorded before the wait failed.
     """
 
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
+    stderr_by_stage: tuple[_StreamPayload | None, ...]
+    final_stdout: _StreamPayload | None
     capture: bool
+    # Whether the captured payloads are bytes rather than decoded text. Read
+    # only where the ``TimeoutExpired`` is built, because that is the one
+    # payload this path has to *combine* rather than pass through: joining
+    # stage stderr needs the empty value of the mode it is joining in.
+    capture_bytes: bool = False
     relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...] = ()

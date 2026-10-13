@@ -446,6 +446,53 @@
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above
   ([#375](https://github.com/leynos/cuprum/issues/375)).
+- **Byte-exact result mode:** `SafeCmd.run_bytes()` / `run_bytes_sync()` and
+  `Pipeline.run_bytes()` / `run_bytes_sync()` return a subprocess's output as
+  the child's own bytes, through `BytesCommandResult` and
+  `BytesPipelineResult`. The new classes declare the same fields as
+  `CommandResult` and `PipelineResult` — measurements included — except that
+  `stdout` and `stderr` are `bytes | None`, so a binary payload survives the
+  round trip instead of being decoded with a lossy error handler. Capture is
+  the only thing the mode changes: text stays the default, `run()` never
+  returns bytes and `run_bytes()` never returns text, echo sinks and idle
+  heartbeats behave as they do in text mode, and a timeout still carries
+  partial output in the same field. A caller-supplied
+  `RunOutputOptions.on_line` is refused with `ValueError` before the child
+  spawns, because a decoded-text callback beside a byte-exact capture would be
+  a second, contradictory contract for one stream; structured observation
+  registered with `sh.observe()` is unaffected and still receives decoded
+  lines, since capture and line emission travel on separate channels. That
+  holds even under `ExecutionContext(errors="strict")`: a byte-exact run's
+  observation and echo render a *view* of the child's bytes and replace
+  undecodable input, so an ambient hook cannot raise from the read loop and
+  cost the byte-exact run the bytes it had already captured.
+
+  The replacement view is scoped to byte mode, so text mode is unchanged. A
+  strict text run still raises from the line reader and from echo, exactly as
+  it did before the byte-exact mode existed; its views decode under
+  `ExecutionContext.errors` in step with the capture. Only a byte-exact run
+  gets the non-aborting view, and only where the capture is the child's own
+  bytes.
+
+  An external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout.
+
+  The mode an execution used is observable. `ExecEvent` carries a
+  `capture_mode` field on every phase — `CaptureMode.TEXT` or
+  `CaptureMode.BYTES` — for the reason `env_mode` is carried: the mode is
+  resolved before the child spawns and describes the whole execution rather
+  than one measurement, and without it a byte-exact run and a text run of the
+  same command are identical in every counter and span attribute, leaving a
+  timeout or teardown failure unattributable to the mode that hit it. It is a
+  trusted typed field rather than an observation tag, since a caller may shadow
+  any tag key. The logging adapter projects it as `cuprum_capture_mode`, the
+  tracing adapter as `cuprum.capture_mode`, and the metrics adapter as a
+  `capture_mode` label on `cuprum_executions_total` and
+  `cuprum_failures_total`. Only the mode travels; no captured payload, argument
+  vector, or other unbounded value joins it. Two mode-boundary diagnostics are
+  recorded without rendering their inputs: a refused `on_line` logs the mode it
+  turned away, and a mode/payload invariant mismatch logs the mode, stream, and
+  the two types ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 

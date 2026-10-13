@@ -80,9 +80,8 @@ async def _prepare_owned_command(
     try:
         observation = _prepare_execution_observation(
             cmd,
-            state.context,
+            state,
             tracking,
-            output,
         )
         observation.emit("plan", _EventDetails(pid=None))
         for hook in tracking.execution_hooks.before_hooks:

@@ -22,6 +22,8 @@ from cuprum._subprocess_wait import (
 if typ.TYPE_CHECKING:
     import pytest
 
+    from cuprum.unittests._stream_drain_support import ConsumerTask
+
 _DRAIN_LOGGER = "cuprum._subprocess_wait"
 
 
@@ -141,7 +143,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
         )
 
         async def expire_immediately(
-            _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+            _consumers: tuple[ConsumerTask, ConsumerTask],
         ) -> None:
             """Close the test grace window without elapsed wall-clock time."""
 

@@ -1918,9 +1918,9 @@ relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
 read/echo/buffer loop behind both consume variants. It reads in that configured
-size, extends the capture buffer when capturing, echoes each chunk to the
-configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing:
+size, extends the capture buffer with the **raw** chunk when capturing, echoes
+each chunk to the configured sink when echoing, and hands the chunk to the
+optional `on_chunk` callback for variant-specific processing:
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -1941,6 +1941,70 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 `_override_read_size`, so every value supplied through `--read-sizes` reaches
 the consume and pipeline pump paths without changing public runtime
 configuration.
+
+### Byte-exact capture mode
+
+The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
+runners. A byte run is an ordinary run carrying one extra fact,
+`capture_bytes`, on its resolved `_SubprocessExecution` state. That fact flows
+to `_StreamConfig.capture_bytes`, and the single payload renderer,
+`cuprum._stream_drain_finish._captured_payload`, decides at the end of the
+drain whether to return `bytes(buffer)` or
+`buffer.decode(config.encoding, errors=config.errors)`.
+
+Capture and line emission are independent channels, which is what lets one
+drain serve both modes:
+
+- The drain's buffer always holds the child's raw bytes; it is never decoded in
+  place.
+- `_consume_stream_with_lines` decodes a *copy* through its own incremental
+  decoder to find line boundaries and publish lines.
+- The two therefore compose. A byte-exact run with a registered `sh.observe()`
+  hook returns the child's own bytes while its observers receive decoded lines.
+
+Narrowing happens on the way out, at one seam per result class:
+`_require_bytes` and `_require_text` in `cuprum._result_assembly` re-take the
+guarantee that a drain's widened `str | bytes | None` payload matches the mode
+the result is being built for, raising `_ExecutionInvariantError` on a mismatch.
+`cuprum._bytes_run` holds the equivalent narrowing for whole result objects,
+plus `_validate_bytes_output`, which rejects a caller-supplied
+`RunOutputOptions.on_line` before anything spawns.
+
+The resolved mode reaches observation as a typed event field, not a tag.
+`_prepare_execution_observation` reads `_ExecutionState.capture_bytes` and
+`_build_pipeline_observations` reads `_PipelineRunConfig.capture_bytes`; each
+builder resolves the flag to a `CaptureMode` member on
+`_StageObservation.capture_mode`, and every emitted `ExecEvent` therefore
+carries `capture_mode` on every phase, exactly as `env_mode` does and for the
+same reason. It must stay a trusted field: the adapters assert that
+`cuprum_tags` never reaches their extras, so a mode travelling as a tag would
+never be projected at all. `_event_common_fields` in `cuprum.adapters._support`
+renders it once for both the `cuprum_` and `cuprum.` prefixes;
+`cuprum.adapters._metrics_operations` adds the `capture_mode` label to
+`cuprum_executions_total` and `cuprum_failures_total` through
+`_execution_mode_labels`, the one place both execution-mode labels are composed.
+
+Two diagnostics sit on the mode boundaries and neither may render a captured
+payload: `_validate_bytes_output` in `cuprum._bytes_run` warns on the pre-spawn
+`on_line` refusal — a rejection emits no execution event, so the warning is the
+only record an operator can see — and `_require_mode_payload` in
+`cuprum._result_assembly` logs the mode, stream, expected type, and actual type
+on a mode/payload invariant mismatch before raising. Both must keep to bounded
+fields; the callback object and the payload stay out.
+
+Re-use policy: a new narrowed result class must go through both seams rather
+than asserting a payload's type away with a cast, and any new consume variant
+must keep the buffer raw so byte mode stays available to it. A new mode value
+must be added to `CaptureMode` rather than spelled as a literal, since the
+value is a metric label and a log field that operators filter on. The `on_line`
+rejection is policy, not capability — the drain itself honours the combination;
+see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
+boundaries it belongs to, and the
+[binary output section](users-guide.md#binary-output) of the users' guide.
+
+A stream that was never attached is the one payload the drain does not render:
+`_empty_capture` reports `b""` or `""` according to the mode, matching
+`_consume_stream_without_lines`.
 
 ### Aggregate Python stream-operation observation
 
@@ -1985,8 +2049,18 @@ arguments, exception text, and other unbounded values are not metric labels.
 
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
-`config.encoding` and `config.errors`, then flushes that decoder at end of
+`config.encoding` and `config.view_errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
+`_StreamConfig.view_errors` resolves the error policy for a view: byte-exact
+runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
+`config.errors` there would let a strict capture policy end a run from the read
+loop, while text runs keep `config.errors`, so a strict text run still raises
+from echo exactly as it did before byte mode existed. See
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md), and
+`cuprum._stream_drain_finish._captured_payload` renders the capture from the
+drain's own untouched buffer per its config: a text run decodes under
+`config.errors`, while a byte-exact run returns `bytes(buffer)` and never
+consults that policy.
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw
 read, before decoding, echoing, truncation, and line callbacks. This is the
@@ -2082,9 +2156,9 @@ intermediate `await` before that chunk write finishes.
 Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
 cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
 `config.capture_output` is true and `config.discard_on_cancel` is unset, the
-bytes captured so far are decoded and returned; when the discard event is set
-(or output is not being captured), those bytes are discarded and cancellation
-propagates.
+bytes captured so far are rendered in the run's mode and returned — decoded for
+a text run, raw for a byte-exact one; when the discard event is set (or output
+is not being captured), those bytes are discarded and cancellation propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
@@ -6234,10 +6308,10 @@ lifecycle records.
 
 Line observation is independent of capture and echo. Enabling either line
 interface keeps the relevant subprocess streams consumed even when
-`capture=False` and `echo=False`; capture still controls whether text is kept
-on the result, and echo still controls whether text is mirrored to the
-configured sinks. This is why a line-only result can have `stdout` and `stderr`
-set to `None` while its callers receive every line.
+`capture=False` and `echo=False`; capture still controls whether the drain's
+bytes are kept on the result, and echo still controls whether text is mirrored
+to the configured sinks. This is why a line-only result can have `stdout` and
+`stderr` set to `None` while its callers receive every line.
 
 `SafeCmd.lines()` uses a finite, bounded queue between the stream consumers and
 the iterator. Its line sink awaits `queue.put`, and the consumer awaits that
@@ -6444,16 +6518,17 @@ optional stdin-writer task with the stdout and stderr consumer tasks,
 `discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)` cancels
 stdin before settling both consumers. The reconciliation is one unit for
 shielded cleanup. A capturing context gives readers the bounded EOF-grace
-window and decodes absent output as text, while a non-capturing context settles
-promptly and discards output. `_await_capture_eof_grace` uses an injected
-waiter when supplied and otherwise delegates to the bounded `_await_eof_grace`;
-`_settle_consumers` is the single optional settlement boundary that sets the
-discard event before cancelling pending readers.
-`_build_stream_config(execution, discard_on_cancel)` (in
+window and renders absent output as the mode's empty value, while a
+non-capturing context settles promptly and discards output.
+`_await_capture_eof_grace` uses an injected waiter when supplied and otherwise
+delegates to the bounded `_await_eof_grace`; `_settle_consumers` is the single
+optional settlement boundary that sets the discard event before cancelling
+pending readers. `_build_stream_config(execution, discard_on_cancel)` (in
 `cuprum/_subprocess_streams.py`) passes that shared event into each stream's
-`_StreamConfig`, so timeout capture can retain buffered text while cancellation
-and failure cleanup can discard it. It was split out of `_subprocess_execution`
-so that module stays about orchestration; termination routes through
+`_StreamConfig`, so timeout capture can hand back the bytes buffered so far —
+decoded for a text run, raw for a byte-exact one — while cancellation and
+failure cleanup can discard it. It was split out of `_subprocess_execution` so
+that module stays about orchestration; termination routes through
 `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
 cancelling during the grace period cannot skip the `SIGKILL` escalation.
 

@@ -46,7 +46,7 @@ from cuprum._subprocess_streams import (
     _spawn_stream_consumers,
     _StreamConsumerSpawnContext,
 )
-from cuprum._subprocess_wait import _RunTaskOwnership
+from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

@@ -94,6 +94,8 @@ from cuprum.pump_span_observation import PumpHopSpanRegistration, observe_pump_s
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
     ArgValue,
+    BytesCommandResult,
+    BytesPipelineResult,
     CommandResult,
     ExecutionContext,
     IOOptions,
@@ -129,6 +131,8 @@ __all__ = [
     "ArgValue",
     "BeforeHook",
     "BrokenPipePolicy",
+    "BytesCommandResult",
+    "BytesPipelineResult",
     "CommandResult",
     "ConcurrentConfig",
     "ConcurrentResult",

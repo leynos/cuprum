@@ -62,6 +62,10 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
     on_line: _LineHookFn | None = None
+    # Whether this run's captured streams are reported as bytes rather than
+    # decoded text. Defaulted for the tests that build this bundle directly and
+    # for every text-mode caller; only the binary entry points set it.
+    capture_bytes: bool = False
     # Defaulted for the tests that build this bundle directly, and resolved by
     # ``RunOutputOptions.__post_init__`` on the production path, so the value
     # reaching the stream config is always a member, never a raw spelling.

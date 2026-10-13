@@ -28,7 +28,7 @@ from cuprum._process_handle.tasks import _HandleRun
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_spawn import _SubprocessExecution
-from cuprum._subprocess_wait import _RunTaskOwnership
+from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_builder
 

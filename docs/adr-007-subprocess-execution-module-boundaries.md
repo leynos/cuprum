@@ -436,6 +436,99 @@ package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
 
+## Addendum (2026-10-01): byte-exact runs share the execution seams
+
+Byte-exact runs (issue #444) are not a second execution path.
+`SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
+counterparts, reuse the existing runners and carry one extra fact —
+`capture_bytes` — from the resolved execution state through the stream
+configuration to the drains. The reusable parts of that refactor live in
+separate modules:
+
+- `cuprum/_result_assembly.py` — the rules a finished execution applies when
+  reporting its result: `_RunMeasurements`, which carries the measured fields
+  both result classes declare identically, and the `_require_bytes`/
+  `_require_text` narrowing pair that re-establishes each class's declared
+  payload type. Single-command and per-stage pipeline construction both read
+  these rules from here, so a stage and a direct run of the same command differ
+  only in what could actually be measured. `_pipeline_finalize.py` owns the
+  completed-pipeline teardown ordering for the same reason, keeping
+  `_pipeline_internals` on the spawn half of a run.
+- `cuprum/_bytes_run.py` — the decisions the two byte-exact entry points owe
+  regardless of which is called: `_validate_bytes_output` rejects the one
+  combination bytes mode does not offer (a caller-supplied line observer)
+  before anything is spawned, and the `_require_command_result`/
+  `_require_pipeline_result` helpers re-take the narrower class a text-mode
+  entry point promised. The refusal is policy, not capability: the drain serves
+  byte-exact capture and decoded-line observation at once, so a registered
+  `sh.observe()` hook stays supported.
+- `cuprum/_result_types.py` — the unions the widened internal seam speaks
+  (`_AnyCommandResult`, `_AnyPipelineResult`). It imports nothing from the
+  assembly rules because `cuprum.context` publishes hook signatures that accept
+  either result class, and the assembly rules reach back into `cuprum.context`,
+  so the unions have to be nameable without closing that cycle.
+
+The widening is deliberately confined to the internal seam. Each public
+boundary re-takes the narrower class it promised, and `_require_bytes`/
+`_require_text` raise `_ExecutionInvariantError` on a mode/type contradiction
+rather than reporting a replacement character as the child's output. No
+existing result class, and no `TimeoutExpired`, is subclassed or modified;
+`BytesCommandResult` and `BytesPipelineResult` are separate frozen types.
+
+### Observation and echo render a view, never the capture
+
+Keeping both channels open costs one rule, and the rule is not optional: in a
+byte-exact run, every decode that renders a _view_ of the child's bytes
+replaces undecodable input, so it can never end the run it observes. That is
+`OBSERVER_ERROR_POLICY` in `cuprum/_constants.py`, and it governs the byte-mode
+line observer's decoder and both byte-mode echo decoders. The rule is scoped to
+byte mode by `cuprum/_streams._StreamConfig.view_errors`: a text run's views
+decode under `ExecutionContext.errors`, in step with its capture, exactly as
+they did before byte mode existed. `ExecutionContext.errors` governs the
+capture alone in a byte run, which decodes its own untouched buffer.
+
+The scope is load-bearing rather than stylistic. Reading `config.errors` in a
+byte run's view decoder would let a hook the caller never registered decide the
+run's fate: under `errors="strict"` the observer's `UnicodeDecodeError` escapes
+the drain's read loop and kills a `run_bytes()` that had already captured the
+child's bytes, so the guarantee above — that a registered `sh.observe()` hook
+stays supported — would hold only for the default error policy. The capture
+still enforces a strict policy, because a text run that asked to reject
+undecodable bytes keeps rejecting them; the byte-exact mode simply never
+decodes its capture at all.
+
+This is the same division the mode already relies on elsewhere: a renderer's
+job is to show, and the capture's job is to report. The bounded-echo path needs
+no equivalent change because
+`cuprum/_echo_truncation._validate_bounded_echo_encoding` restricts it to
+ASCII-compatible stateless codecs, and every encode on that path carries
+ASCII-only marker text — a strict policy there has nothing to refuse.
+
+### Guard against shadowed sibling definitions
+
+Moving these seams left one hazard the refactor's own tools could not see. The
+module split landed a second copy of `_build_stream_config` in
+`cuprum/_subprocess_streams.py`, and every gate passed: by the time the
+duplicate was noticed, the only definition reachable was the later one, and the
+earlier body had been unreachable since the commit that added it.
+
+Neither linter the project runs reports it, on exactly the nouns this codebase
+uses. Ruff 0.16.4's F811 and Pylint 4.0.9's E0102 both decline to report a
+redefinition of an underscore-prefixed name, and private helpers here are
+underscore-prefixed by convention. Upstream Pyflakes _does_ report it
+(`redefinition of unused '_foo' from line 1`), so this is a deviation in the
+two linters actually installed rather than a defensible reading of the rule.
+
+`cuprum/unittests/test_no_duplicate_module_definitions.py` closes the gap by
+parsing each scanned module and reporting a name bound twice within one
+statement list. The unit of the check is the statement list rather than the
+module, which is what keeps the branch idiom out of the findings without
+special-casing it: the two arms of an `if`/`else` are separate lists, so a
+platform-specific `_probe` defined once per arm stays legal, while two
+definitions in one arm — or two methods in one class body — are reported. The
+rule is deliberately structural and said so in its own docstring, so a future
+reader can tell which redefinitions it refuses and which it permits.
+
 ## Addendum (2026-10-11): typed `sh.make` argument contract
 
 The 2026-09-25 addendum's inventory is historical for two entries.
@@ -452,40 +545,29 @@ same domain the builders enforce, without repeating the union or reaching for
 `object`. The contract itself, including which values are rejected at run time,
 is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
 
-## Addendum (2026-10-11): split `Pipeline` out of `cuprum/sh/safe_cmd.py`
+## Addendum (2026-10-12): `Pipeline` moves to its own module
 
-The 2026-09-25 addendum -- and, for `Pipeline` alone, the typed `sh.make`
-addendum above -- recorded `cuprum/sh/safe_cmd.py` as holding both `SafeCmd` and
-`Pipeline`. That is no longer so: `Pipeline` now lives in
-`cuprum/sh/pipeline.py`, and `safe_cmd.py` no longer imports it.
-`SafeCmdBuilder` is unaffected by this split and remains in
-`cuprum/sh/builder.py`.
+The 2026-10-11 addendum closed with "`SafeCmd` and `Pipeline` remain in
+`cuprum/sh/safe_cmd.py`"; that entry was accurate when it landed and is
+historical for the `Pipeline` half. The byte-exact work split the two execution
+primitives into one module each, so `Pipeline` now lives in
+`cuprum/sh/pipeline.py`.
 
-The reference between the two classes was always mutual and always deferred on
-one side. `Pipeline` names `SafeCmd` as its stage type, while `SafeCmd.__or__`
-resolved `Pipeline` at call time regardless, so the only reason both classes
-sat in one module was to keep that deferred name resolvable. A separate module
-makes the dependency one-way and explicit: `Pipeline` imports `SafeCmd` for
-real, and `SafeCmd.__or__` imports `Pipeline` from inside the operator body,
-where the package is already imported and the lookup costs one `sys.modules`
-read.
+That brings the addendum's own rule to `Pipeline`: `cuprum/sh/safe_cmd.py` holds
+`SafeCmd` and `cuprum/sh/pipeline.py` holds `Pipeline`, so each execution
+primitive owns a module rather than sharing one. Each module imports the other
+— a command composes into a pipeline through `SafeCmd.__or__`, which returns
+`Pipeline.concat`, and a pipeline is built from commands — so each defers the
+import it needs to the foot of its own file, after the class it defines exists:
+`cuprum/sh/safe_cmd.py` reaches for `Pipeline` there, and
+`cuprum/sh/pipeline.py` reaches for `SafeCmd`. The annotations are quoted
+strings, but `typing.get_type_hints` resolves them from module globals, so the
+deferred name is a genuine runtime import rather than a `TYPE_CHECKING` one.
+The 2026-10-11 addendum's `SafeCmdBuilder` half still stands.
 
-`SafeCmd.__or__`'s annotations — `other: SafeCmd | Pipeline` and
-``-> Pipeline`` — name `Pipeline` under `typing.TYPE_CHECKING` only. They are
-quoted strings, and `typing.get_type_hints` is never called on `SafeCmd.__or__`;
-`cuprum/unittests/test_public_api.py` resolves `SafeCmd`'s field annotations
-and `Pipeline`'s own methods, which is exactly the set this deferral leaves
-resolvable. A future test that asks for hints on either `__or__` would get a
-`NameError` for `Pipeline` from `safe_cmd`, so add the name to the module's
-runtime imports at that point rather than assuming it resolves.
-
-`cuprum/sh/__init__.py` imports `Pipeline` from the new module and `SafeCmd`
-from the old one, so `cuprum.sh.Pipeline`, `cuprum.sh.SafeCmd`, and
-`cuprum.Pipeline` keep their object identity and their `__module__` moves to
-where the class is now defined. The
-`from cuprum.sh.safe_cmd import asyncio as asyncio` attribute compatibility
-shim is unaffected: `asyncio` is still imported there for `run_sync`.
-
+`cuprum/sh/__init__.py` continues to re-export both classes unchanged, so
+`cuprum.sh.Pipeline` is the same object as `cuprum.sh.pipeline.Pipeline` and
+importers of the facade see no difference.
 ## Addendum (2026-10-11): split the spawn seam into `cuprum/_subprocess_spawn.py`
 
 `cuprum/_subprocess_execution.py` had grown past the repository's 400-line
@@ -519,3 +601,27 @@ samples the clocks, waits, and assembles the result. The one invariant the
 split must not disturb is the pre-spawn sampling order, which is why
 `_start_owned_process` still takes `started_at` as an argument instead of
 reading a clock itself — the callers keep owning _when_ their reading is taken.
+## Addendum (2026-10-13): `SafeCmd.start` moves to `cuprum/_process_handle/owned_start.py`
+
+The spawn-seam split above was prepared for `SafeCmd.start()`, and once the
+byte-exact work landed its siblings the `SafeCmd` module was one method away
+from the repository's 400-line ceiling. `start` moved to
+`cuprum/_process_handle/owned_start.py`, where `_OwnedStart` contributes it to
+the class by inheritance rather than by delegation, so `SafeCmd.start` is still
+an ordinary bound method and `typing.get_type_hints` still resolves its
+`-> RunningCommand` annotation — from the new module's globals, which is where
+the class that annotation names is imported.
+
+The move is by responsibility rather than by size. `start` resolves a different
+set of run inputs from `run()`: capture is forced on, because a handle exists so
+its caller can inspect the child after the fact, and an explicit deadline
+becomes the default for every `wait()` on the handle rather than a limit on the
+child's life. Keeping that resolution in `_process_handle` means the package
+that owns the handle owns the whole answer to "what does a handle start from?"
+instead of borrowing half of it from the command module.
+
+`_OwnedStart` is deliberately not a dataclass, and declares `__slots__ = ()`.
+`dataclasses.dataclass` refuses a base that already declares `__slots__`, and an
+un-slotted mixin would donate a `__dict__` to the slotted dataclass that
+inherits it, so the empty declaration is what keeps `SafeCmd` a slotted
+dataclass with the field set its callers already rely on.
