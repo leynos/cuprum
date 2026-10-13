@@ -186,16 +186,16 @@ def then_failed_start_leaves_no_child(observation: HandleObservation) -> None:
     children, compared across the attempt — a spawn that leaked would appear
     there, and a start that never reached its spawn would not.
 
-    The comparison is only an oracle where the listing was available, so that
-    is asserted before the empty difference is read as proof. An unsupported
-    scan returns an empty set for both readings, and the difference of two
-    empty sets is empty whatever the library did; treating it as a passing
+    The comparison is only an oracle where both listings were actually read,
+    so that is asserted before the empty difference is read as proof. A reading
+    that could not be taken is not an empty set of children, and the difference
+    of two of them is empty whatever the library did; treating it as a passing
     check is the one way this step could report success for a leaking child.
     """
     assert observation.child_listing_available, (
         "the orphan check compares two listings of this process's children, "
-        "so both readings must have come from a host that can enumerate them; "
-        "an unavailable scan produces an empty difference that proves nothing"
+        "so both readings must have actually been taken; a reading that could "
+        "not be taken produces an empty difference that proves nothing"
     )
     assert not observation.spawned_children, (
         "a start that failed before its child existed must leave no process "

@@ -35,7 +35,7 @@ from tests.behaviour._running_command_children import (
     _wait_until_exited,
     live_child_pids,
 )
-from tests.helpers.process_state import can_list_processes, process_state
+from tests.helpers.process_state import process_state
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import RunningCommand, SafeCmd
@@ -114,6 +114,28 @@ def _observe_output_wait(command: SafeCmd) -> HandleObservation:
     return asyncio.run(orchestrate())
 
 
+def _new_children_since(before: frozenset[int] | None) -> tuple[frozenset[int], bool]:
+    """Read the child listing again and report what appeared, if anything.
+
+    The availability flag is derived from the readings themselves rather than
+    from a capability probe taken beforehand. A host that can enumerate can
+    still fail the enumeration, and a probe that ran before it would report
+    that host as one where the comparison was made — leaving a failed scan
+    indistinguishable from a library that leaked nothing.
+
+    Returns
+    -------
+    tuple[frozenset[int], bool]
+        The PIDs that appeared, and whether both readings answered. The set is
+        empty when they did not, which a caller must read only once the flag
+        says the comparison was actually made.
+    """
+    after = live_child_pids()
+    if before is None or after is None:
+        return frozenset(), False
+    return after - before, True
+
+
 def _observe_failed_start(command: SafeCmd) -> HandleObservation:
     """Start a program that is not on disk and carry out the failure.
 
@@ -123,22 +145,20 @@ def _observe_failed_start(command: SafeCmd) -> HandleObservation:
     the attempt and again after, and a spawn that leaked would leave the before
     set a strict subset of the after set.
 
-    Whether that comparison was available is recorded alongside it rather than
-    assumed. A host that cannot enumerate the listing returns an empty set for
-    both readings, so the difference is empty for a reason that has nothing to
-    do with the library, and the ``Then`` step asserts the availability flag
-    before it reads the difference as proof.
+    Whether that comparison was made is recorded alongside it rather than
+    assumed. A reading that could not be taken is not an empty set of children,
+    so the ``Then`` step asserts the availability flag before it reads the
+    difference as proof.
 
     Returns
     -------
     HandleObservation
         The failure the spawn raised, the child PIDs that appeared while the
-        attempt ran, and whether the listing behind them was available.
+        attempt ran, and whether both readings behind them answered.
     """
 
     async def orchestrate() -> HandleObservation:
         """Carry out whatever failure the absent executable's spawn raises."""
-        listing_available = can_list_processes()
         before = live_child_pids()
         try:
             await _start_owned(command)
@@ -146,14 +166,16 @@ def _observe_failed_start(command: SafeCmd) -> HandleObservation:
             # Carried out rather than handled: which failure reaches the caller
             # is the scenario's subject, so it must not be absorbed here. The
             # set is the spawn failures a missing executable can produce.
+            spawned, available = _new_children_since(before)
             return HandleObservation(
                 error=failure,
-                spawned_children=live_child_pids() - before,
-                child_listing_available=listing_available,
+                spawned_children=spawned,
+                child_listing_available=available,
             )
+        spawned, available = _new_children_since(before)
         return HandleObservation(
-            spawned_children=live_child_pids() - before,
-            child_listing_available=listing_available,
+            spawned_children=spawned,
+            child_listing_available=available,
         )
 
     return asyncio.run(orchestrate())

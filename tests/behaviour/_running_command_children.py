@@ -141,11 +141,13 @@ class HandleObservation:
         PID for a start that failed gives its own fields no way to witness a
         leak, so this reads the system instead.
     child_listing_available : bool
-        Whether the two listings behind :attr:`spawned_children` came from a
-        host that can actually enumerate this process's children. Recorded
-        because the difference of two empty listings is empty on a host that
-        cannot list them, so the empty set alone cannot distinguish "no child
-        leaked" from "this host could not answer".
+        Whether the two listings behind :attr:`spawned_children` were actually
+        read. Recorded because a reading that could not be taken is not an
+        empty set of children, so the empty difference alone cannot distinguish
+        "no child leaked" from "this host could not answer". Derived from the
+        readings themselves rather than from a capability probe taken before
+        them, which would report a host as able to answer even where the
+        enumeration itself then failed.
     """
 
     result: CommandResult | None = None
@@ -347,7 +349,7 @@ async def _reaped(pid: int | None, timeout: float = _READY_TIMEOUT) -> bool:
     return await _poll_until(lambda: not process_is_running(pid), timeout)
 
 
-def live_child_pids() -> frozenset[int]:
+def live_child_pids() -> frozenset[int] | None:
     """Return the PIDs this process currently has as direct children.
 
     A start that fails before a child exists reports no PID, so the handle's
@@ -360,21 +362,25 @@ def live_child_pids() -> frozenset[int]:
 
     Returns
     -------
-    frozenset[int]
-        The direct child PIDs, empty on a host that cannot enumerate them.
-        A caller comparing two readings must first ask
-        :func:`tests.helpers.process_state.can_list_processes`, because an
-        empty reading on such a host is the host's silence rather than an
-        empty set of children.
+    frozenset[int] | None
+        The direct child PIDs, or ``None`` when this host could not answer the
+        question at all. ``None`` rather than an empty set because those are
+        different facts: an empty set records that this process has no
+        children, while ``None`` records that nothing was read. A caller
+        comparing two readings has to tell them apart, or a scan that failed
+        would present as an empty difference that proves nothing. Both ways a
+        reading can go unanswered — a host that cannot enumerate procfs, and
+        an enumeration that raises — report ``None``, so the caller reads the
+        scans themselves rather than a capability probe that preceded them.
     """
     if not can_list_processes():
-        return frozenset()
+        return None
     own_pid = os.getpid()
     children: set[int] = set()
     try:
         entries = tuple(pathlib.Path("/proc").iterdir())
     except OSError:
-        return frozenset()
+        return None
     for entry in entries:
         if not entry.name.isdigit():
             continue
