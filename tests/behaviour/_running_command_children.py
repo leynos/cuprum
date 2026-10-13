@@ -20,14 +20,17 @@ import asyncio
 import dataclasses as dc
 import os
 import pathlib
-import sys
 import typing as typ
 
 from cuprum import sh
 from cuprum.catalogue import ProgramCatalogue
 from cuprum.program import Program
 from tests.helpers.catalogue import python_catalogue
-from tests.helpers.process_state import parent_pid_from_stat, process_state
+from tests.helpers.process_state import (
+    can_list_processes,
+    parent_pid_from_stat,
+    process_state,
+)
 from tests.helpers.timeouts import (
     CHILD_STDOUT,
     child_argv,
@@ -137,6 +140,12 @@ class HandleObservation:
         spawn must not happen asserts this is empty; a handle that reports no
         PID for a start that failed gives its own fields no way to witness a
         leak, so this reads the system instead.
+    child_listing_available : bool
+        Whether the two listings behind :attr:`spawned_children` came from a
+        host that can actually enumerate this process's children. Recorded
+        because the difference of two empty listings is empty on a host that
+        cannot list them, so the empty set alone cannot distinguish "no child
+        leaked" from "this host could not answer".
     """
 
     result: CommandResult | None = None
@@ -148,6 +157,7 @@ class HandleObservation:
     child_was_live: bool = False
     child_reaped: bool = False
     spawned_children: frozenset[int] = frozenset()
+    child_listing_available: bool = False
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -351,11 +361,13 @@ def live_child_pids() -> frozenset[int]:
     Returns
     -------
     frozenset[int]
-        The direct child PIDs, empty on a host without procfs — where the
-        comparison is then vacuous and the behaviour tests are already
-        Linux-scoped.
+        The direct child PIDs, empty on a host that cannot enumerate them.
+        A caller comparing two readings must first ask
+        :func:`tests.helpers.process_state.can_list_processes`, because an
+        empty reading on such a host is the host's silence rather than an
+        empty set of children.
     """
-    if sys.platform != "linux":
+    if not can_list_processes():
         return frozenset()
     own_pid = os.getpid()
     children: set[int] = set()

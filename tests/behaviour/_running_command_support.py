@@ -35,7 +35,7 @@ from tests.behaviour._running_command_children import (
     _wait_until_exited,
     live_child_pids,
 )
-from tests.helpers.process_state import process_state
+from tests.helpers.process_state import can_list_processes, process_state
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import RunningCommand, SafeCmd
@@ -123,15 +123,22 @@ def _observe_failed_start(command: SafeCmd) -> HandleObservation:
     the attempt and again after, and a spawn that leaked would leave the before
     set a strict subset of the after set.
 
+    Whether that comparison was available is recorded alongside it rather than
+    assumed. A host that cannot enumerate the listing returns an empty set for
+    both readings, so the difference is empty for a reason that has nothing to
+    do with the library, and the ``Then`` step asserts the availability flag
+    before it reads the difference as proof.
+
     Returns
     -------
     HandleObservation
-        The failure the spawn raised, and the child PIDs that appeared while
-        the attempt ran.
+        The failure the spawn raised, the child PIDs that appeared while the
+        attempt ran, and whether the listing behind them was available.
     """
 
     async def orchestrate() -> HandleObservation:
         """Carry out whatever failure the absent executable's spawn raises."""
+        listing_available = can_list_processes()
         before = live_child_pids()
         try:
             await _start_owned(command)
@@ -142,8 +149,12 @@ def _observe_failed_start(command: SafeCmd) -> HandleObservation:
             return HandleObservation(
                 error=failure,
                 spawned_children=live_child_pids() - before,
+                child_listing_available=listing_available,
             )
-        return HandleObservation(spawned_children=live_child_pids() - before)
+        return HandleObservation(
+            spawned_children=live_child_pids() - before,
+            child_listing_available=listing_available,
+        )
 
     return asyncio.run(orchestrate())
 

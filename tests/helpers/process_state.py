@@ -6,8 +6,19 @@ consumers of these helpers are stall rules that must not invent a verdict, so
 "this host cannot answer" and "the answer is nothing" are both spelled as no
 evidence: a rule that needs a parent writer to fire is not satisfied by an empty
 writer tuple, and a rule that needs queued bytes is not satisfied by an
-unreadable count. An availability flag would therefore carry a distinction no
-rule acts on.
+unreadable count. The four probes below keep that spelling, because no stall
+rule acts on the difference.
+
+:func:`can_list_processes` is the one exception, and it is spelled as its own
+predicate rather than folded into a probe because its caller *does* act on the
+distinction. A scenario that compares two enumerations of this process's
+children to prove no child leaked cannot read two empty sets as proof: on a
+host that cannot list them, the empty difference records the host's silence
+rather than the library's behaviour. Such a caller has to ask whether the
+comparison was available before it reads it, which is what this predicate
+answers. It asks a strictly stronger question than
+:func:`_procfs_available`: that one covers reading a single known PID's files,
+while this one covers listing the directory and reaching each entry.
 
 The three degradations are distinct and each is spelled the way its consumer
 already reads:
@@ -36,6 +47,7 @@ import sys
 __all__ = [
     "ChildPipe",
     "ProcessState",
+    "can_list_processes",
     "child_pipes",
     "parent_pid_from_stat",
     "parent_read_fds",
@@ -77,8 +89,24 @@ class ChildPipe:
 
 
 def _procfs_available() -> bool:
-    """Return whether this host provides the Linux procfs interface."""
-    return sys.platform == "linux" and pathlib.Path("/proc").is_dir()
+    """Return whether this host provides a readable Linux procfs interface.
+
+    This is the single-process question: a caller asking about one PID needs
+    only to open that PID's own files, which takes read permission on the
+    mount. :func:`can_list_processes` is a strictly stronger check, and the two
+    are kept apart because a caller can pass this one and still be unable to
+    enumerate.
+
+    Returns
+    -------
+    bool
+        Whether procfs is mounted and readable, so a probe for one known PID
+        can consult it.
+    """
+    if sys.platform != "linux":
+        return False
+    procfs = pathlib.Path("/proc")
+    return procfs.is_dir() and os.access(procfs, os.R_OK)
 
 
 def _unavailable_process(pid: int) -> ProcessState:
@@ -129,6 +157,36 @@ def parent_pid_from_stat(stat: str) -> int | None:
         return None
     parent_pid = fields[_PARENT_PID_INDEX]
     return int(parent_pid) if parent_pid.isdigit() else None
+
+
+def can_list_processes() -> bool:
+    """Return whether this host can enumerate the processes it has as children.
+
+    A caller that compares two listings has to know the comparison means
+    something before it reads them. Where this returns ``False`` the listings
+    are both empty and their difference is empty for a reason that has nothing
+    to do with the behaviour under test, so such a caller must report the
+    scenario as not applicable rather than assert the empty difference — an
+    unsupported scan would otherwise be reported as a passed check.
+
+    Enumerating asks strictly more of the mount than reading one known PID
+    does. Listing ``/proc`` needs search permission on it, and so does reaching
+    each entry's own ``stat`` file; a mount that is merely readable answers
+    :func:`_procfs_available` while ``iterdir`` returns nothing. The check is
+    therefore against ``X_OK`` rather than ``R_OK``: it has to fail on exactly
+    the hosts whose listings would come back empty, because those are the hosts
+    where an empty difference proves nothing.
+
+    Returns
+    -------
+    bool
+        Whether procfs is mounted, readable and searchable, so an enumeration
+        of it answers the question it was asked.
+    """
+    if sys.platform != "linux":
+        return False
+    procfs = pathlib.Path("/proc")
+    return procfs.is_dir() and os.access(procfs, os.R_OK | os.X_OK)
 
 
 def _read_wchan(pid: int) -> str | None:

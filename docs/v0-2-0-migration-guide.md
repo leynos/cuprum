@@ -215,6 +215,41 @@ therefore not emitted as a line event. See the
 [line-level output section in the users' guide](users-guide.md#line-level-output)
 for ordering, timestamps, teardown, and capture/echo details.
 
+## Owned running-command handle
+
+Cuprum 0.2.0 adds `SafeCmd.start()` and the `RunningCommand` handle it returns.
+The addition is opt-in: `run()`, `run_sync()`, and `lines()` keep owning their
+child from start to finish, and no existing caller is forced to migrate.
+
+`start()` spawns the child and hands back an owned `RunningCommand` rather than
+a `CommandResult`. The handle owns the child's lifetime. Leaving the handle's
+`async with` block settles the run on every exit and stops a still-running
+child down the same `SIGTERM`, cancel-grace, and `SIGKILL` path a cancelled
+`run()` takes. Capture is always on for a handle, so a stopped child still
+reports the output it produced. A `timeout` passed to `start()` is the default
+deadline for each `wait()` on that handle rather than a limit on the child's
+life, because the clock a timeout is measured against starts at the wait that
+asks for one.
+
+The handle exposes `wait()`, `signal()`, `terminate()`, and `kill()`. `wait()`
+awaits the outcome, which is also readable from `result` once the handle has
+settled. `terminate()` stops the child with `SIGTERM` and the cancel grace
+before `SIGKILL`; `kill()` compels it with `SIGKILL` alone; both are no-ops on
+an already-exited child. `signal()` delivers one POSIX signal without settling
+the run. Every caller shares the one settlement, so a later `wait()` reports
+the same recorded result rather than starting the run again.
+
+`signal()` has two refusals, because the remedy differs:
+
+- `SignalAfterExitError` means the child has already exited: treat the
+  recorded outcome as the command's ending.
+- `UnsupportedSignalError` means the platform has no route to a caller-named
+  signal; use `terminate()` or `kill()`, which use the platform's own signals.
+
+For a worked example, the wait deadline, and both refusals, see
+[hold a running child](users-guide.md#hold-a-running-child-and-decide-when-to-stop-it)
+in the users' guide.
+
 ## Structured execution observers handle terminal settlement
 
 `ExecPhase` now includes `settled`. Update exhaustive observe-hook matches to

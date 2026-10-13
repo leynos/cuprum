@@ -36,6 +36,7 @@ from tests.behaviour._running_command_children import (
     DELAYED_WRITER_MARKER,
     HandleObservation,
 )
+from tests.helpers.process_state import can_list_processes
 from tests.helpers.timeouts import CHILD_STDOUT
 
 pytestmark = pytest.mark.skipif(
@@ -74,8 +75,25 @@ def test_wait_returns_outcome() -> None:
     "../features/running_command.feature",
     "Startup failure is owned by start",
 )
+@pytest.mark.skipif(
+    not can_list_processes(),
+    reason=(
+        "The orphan check compares this process's child listings, which a host "
+        "without a readable procfs cannot provide."
+    ),
+)
 def test_startup_failure_is_owned() -> None:
-    """Behavioural coverage for a spawn that cannot start."""
+    """Behavioural coverage for a spawn that cannot start.
+
+    The scenario's second assertion is the orphan check, and it reads the
+    children this test process has before and after the attempt. That reading
+    is only available where procfs can be enumerated, so the scenario is gated
+    on the capability rather than left to pass vacuously on a host that
+    reports two empty listings for an unrelated reason. The module mark skips
+    Windows for the handle's POSIX signal semantics; this mark narrows the one
+    scenario whose oracle is a process listing, leaving the rest of the module
+    to run wherever the signals do.
+    """
 
 
 @scenario(
@@ -167,7 +185,18 @@ def then_failed_start_leaves_no_child(observation: HandleObservation) -> None:
     the library does. What the step reads instead is the test process's own
     children, compared across the attempt — a spawn that leaked would appear
     there, and a start that never reached its spawn would not.
+
+    The comparison is only an oracle where the listing was available, so that
+    is asserted before the empty difference is read as proof. An unsupported
+    scan returns an empty set for both readings, and the difference of two
+    empty sets is empty whatever the library did; treating it as a passing
+    check is the one way this step could report success for a leaking child.
     """
+    assert observation.child_listing_available, (
+        "the orphan check compares two listings of this process's children, "
+        "so both readings must have come from a host that can enumerate them; "
+        "an unavailable scan produces an empty difference that proves nothing"
+    )
     assert not observation.spawned_children, (
         "a start that failed before its child existed must leave no process "
         f"behind, got child PIDs {sorted(observation.spawned_children)}"

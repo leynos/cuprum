@@ -6806,6 +6806,162 @@ its `finally` — ever runs, so that `finally` cannot reconcile the pumps. On th
 timeout route, `_reconcile_pipe_tasks` cancels and drains the pump tasks
 instead.
 
+### Command preparation, and the owned running-command handle
+
+The boundaries above carry a single command or a pipeline through to its result.
+`SafeCmd.start()` is the entry point that does not: it hands the spawned child
+back to the caller as a `RunningCommand`, so the caller decides when, and
+whether, the run ends. The handle is a second way to own a `run()`, not a
+second implementation of one, and the boundaries below are what keeps it that
+way.
+
+`cuprum/_command_prepare.py` is the shared preparation seam between `run()` and
+`start()`. `_prepare_owned_command(cmd, state)` opens the run's
+presentation-sink session, prepares its observation, emits the `plan` event,
+runs the `before` hooks, and builds the execution bundle, returning a
+`_PreparedCommand` that carries the bundle and the tracking together — neither
+is usable without the other, because the tracking owns the session the bundle
+was opened from and the pending tasks the run's finalization drains. Keeping
+that prefix in one place is what stops the two entry points drifting apart: a
+change to the plan event's tags, or to the order the bracket opens in, lands
+for both. The prefix owns its own failure handling, because a plan observer or a
+`before` hook can raise before any child exists and the session it opened
+still has to be closed.
+
+`SafeCmd.run()` and `run_bytes()` reach the seam through
+`_run_prepared_command` in `cuprum/_command_internals.py`; pipeline execution
+does not use this seam at all, and emits its own per-stage `plan` events and
+runs each stage's `before` hooks in `cuprum/_pipeline_observation.py`, where
+`_emit_plan_events_and_run_before_hooks` is the pipeline's counterpart of the
+same prefix. A pipeline opens its session in `_pipeline_config.py` instead, so
+the shared prefix covers the two single-command entry points and nothing else.
+The three helpers `_command_prepare` borrows from `_command_internals` are
+imported inside the function rather than at module scope, because
+`_command_internals` imports `_prepare_owned_command` back for the `run()` path.
+
+`cuprum/_process_handle/` owns the handle itself, split by question:
+
+Table 1: owned running-command handle modules
+
+| Module                                  | Responsibility                                                                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_process_handle/state.py`       | Holds `RunningCommand`: the owned record and the public operations, each of which delegates the question of how the run ends rather than answering it locally. |
+| `cuprum/_process_handle/settlement.py`  | States the one-settlement rule every operation goes through, the outcome that settlement recorded, and the rule deciding which caller hears about a deadline.  |
+| `cuprum/_process_handle/tasks.py`       | Owns the record a run is held by — `_HandleRun` — and the spawn and task wiring that builds it.                                                                |
+| `cuprum/_process_handle/control.py`     | Delivers signals, escalates from `SIGTERM` to `SIGKILL`, and holds the ordering of the platform and child-state checks.                                        |
+| `cuprum/_process_handle/coordinator.py` | Waits, reconciles the run's tasks, assembles the `CommandResult`, and emits the exit event — the one convergence point every route to the end passes through.  |
+| `cuprum/_process_handle_errors.py`      | Owns the handle's two signal-delivery refusals and the platform predicate, beside the error that reports when it declines.                                     |
+| `cuprum/_process_handle/owned_start.py` | Contributes `SafeCmd.start()` — the run inputs it resolves, capture forced on, and the spawn behind it — through the `_OwnedStart` mixin.                      |
+
+`_process_handle_errors` is the one module of the handle that lives outside the
+package, because `cuprum.sh` re-exports both refusals: the facade needs them
+importable without reaching into the handle's internals.
+
+Four claims are worth knowing before changing the handle: settlement,
+caller-owned deadlines, cancellation-safe teardown, and what the control
+operations promise.
+
+**Settlement happens once.** The handle holds the single task that drives a run
+to its end, and every operation that needs an outcome awaits that same task
+rather than starting a second. That is what makes concurrent waits one
+settlement with several readers, and it is also what keeps `terminate()` from
+racing a wait: stopping the child first unblocks the shared task, which then
+completes normally and hands every waiter the result. Because it is a task
+rather than a lock held across the wait, a cancelled caller leaves the
+settlement running, and the next caller awaits the same task and gets the same
+outcome. There is deliberately one assembly path: `terminate()` and `kill()` do
+not build a result of their own — they stop the child, and the ordinary wait
+that follows observes the death and reports the signal that caused it. A second
+assembly path would be a second place for the exit code, the exit event, and
+the relay diagnostics to be read at different moments.
+
+**A deadline belongs to the caller that named it.** The settlement task carries
+no deadline at all, and the wait under `coordinator.py` is unbounded: the
+child's own end is the only thing that stops it. The handle spawns from a
+bundle with its standing timeout stripped, so nothing on that path can act on
+one; the resolved value travels on `_HandleRun.default_timeout` instead, where
+`RunningCommand.wait` consults it when the caller supplies no deadline of their
+own. What `settlement.py` applies is therefore a deadline on *that caller's*
+await of the shared task: a caller that names a deadline and runs out of time
+stops the child, records the outcome that stop produced, and raises its own
+`TimeoutExpired` built from its own deadline and the drained output, while
+every other caller — the one that named none, the one that named a longer one,
+the one that arrived afterwards — simply reads the one recorded outcome.
+Keeping the caller's clock out of the shared wait is what stops one caller's
+deadline being imposed on another's wait.
+
+**Teardown is cancellation-safe, and reconciliation always runs after the
+process is gone.** Every stop and teardown path runs shielded, through
+`_shielded_cleanup` or its reporting variant `_run_shielded_step`, so a
+cancellation arriving mid-grace cannot leave a child running with nobody
+holding it; the caller's cancellation is re-raised afterwards. The order
+matters as much as the shield: cancelling a stream consumer while the child is
+still writing would turn a clean shutdown into a broken pipe, and a
+cancellation landing mid-drain would leave consumers nobody holds. Leaving an
+`async with` block runs stop and settle as two separately guarded steps, and
+neither is skipped when the other fails — reaping without settling would leave
+a handle whose `result` stays `None` forever. Escalations are serialized on the
+run's `stop_lock`, which is what stops a second stop racing the first one's
+grace period and delivering the forced signals twice; the settlement shares the
+*outcome* a stop produced, while this one lock shares the escalation itself.
+
+**Control operations are ordered by how much they ask of the child.**
+`signal()` asks for exactly the number named and takes no view on how the child
+responds, so it does not settle the run: a child it has not ended is still the
+caller's to wait on or stop. `signal()` is the one operation the operating
+system can refuse in ways the caller must act on, so its two refusals have
+types of their own — a child that has already exited is an ordinary racing
+outcome reported with the exit code the handle recorded, while a platform that
+cannot deliver a caller-named signal is a limitation no retry can fix.
+`terminate()` is the cooperative stop — `SIGTERM`, the grace period, then
+`SIGKILL` if the child is still there, with the grace defaulting to the
+execution context's `cancel_grace`. `kill()` skips the request entirely, which
+is why it is a separate path rather than the escalation with a zero grace: a
+zero-grace escalation still sends `SIGTERM` first, so a child that dies from it
+reports `-15` rather than the `-9` the caller asked for.
+
+`cuprum/_process_handle/tasks.py` owns the other half of ownership, the run
+record itself. `_HandleRun` holds the process, the bundle it was spawned from,
+the tracking that owns its sink bracket and observe-hook tasks, and the task
+ownership that reconciles its stdin writer and stream consumers; every handle
+owns one, including a handle whose streams went to `DEVNULL`, so the handle has
+one reconciliation path and one teardown path rather than a capture-dependent
+fork in each. `_start_handle_run` samples both clocks before the spawn, emits
+the child's `start` event, and attaches the tasks that will drive the run.
+Announcing and attaching are both inside its guard, because a child nobody has
+been told about, and a child whose streams nobody attached, are alike in being
+a child nobody would reap; either failure reclaims the child through
+`control.py` before it propagates. The idle monitor is armed when the handle
+starts waiting rather than at spawn, so the time a caller spends holding a
+handle without waiting is not counted as the child's silence, and it is
+deliberately not detached from the bundle, because the monitor's presence is
+what decides whether the child's streams are piped at all.
+
+The handle reuses the exit and resource paths described above rather than
+reimplementing them. Every route to the end converges on `_settle_handle_run`,
+which waits through `_await_process_exit` in `cuprum/_process_exit.py` — the
+same helper the three subprocess exit-wait paths use, which accepts an
+already-published `returncode` and otherwise races `process.wait()` against the
+backoff poll that closes the asyncio lost-wakeup race. The state checks reuse
+the non-reaping `waitid` probes from that module too: `_deliver_signal` reads a
+zombie's ending through `_observed_exit_code` rather than trusting a
+`returncode` its owner has not published yet, so a delivery into a child that
+has already exited is refused instead of reported as delivered. Child-resource
+accounting comes from `cuprum/_wait4_process.py`: the handle's child is spawned
+through `_spawn_subprocess`, which routes through `spawn_direct_process`, so on
+the `wait4` backend this one reaper owns the reap and the one-reaper rule above
+applies unchanged — `_Wait4Process.send_signal` still calls `os.kill` directly,
+and the guard and the kill still sit together under the settlement lock. A
+handle therefore reports the same resource figures `run()` reports for the same
+command: `_build_handle_result` calls `resource_usage_for(run.process, None)`
+with no before-spawn snapshot, which selects the child's own figure and leaves
+the aggregate fallback unreachable rather than measuring it late.
+
+See [Cuprum design](cuprum-design.md) §13.10 for the accepted rationale, and
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) — including its
+addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
+private-import compatibility rules the handle's split preserves.
+
 ## Subprocess timeout observability
 
 Subprocess timeouts surface through the existing `ExecEvent` / `sh.observe()`
