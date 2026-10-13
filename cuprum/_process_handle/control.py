@@ -38,7 +38,11 @@ from cuprum._process_handle_errors import (
     UnsupportedSignalError,
     _arbitrary_signals_supported,
 )
-from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process_with_wait
+from cuprum._process_lifecycle import (
+    _shielded_cleanup,
+    _terminate_process_with_wait,
+    _TerminationOutcome,
+)
 from cuprum._subprocess_timeout import _get_exit_code
 
 if typ.TYPE_CHECKING:
@@ -51,6 +55,25 @@ __all__ = [
     "_kill_shielded",
     "_terminate_shielded",
 ]
+
+_NO_STOP = _TerminationOutcome(
+    delivered=False,
+    escalated=False,
+    waiter_completed=False,
+)
+"""What this module reports when a stop delivered nothing and waited for nothing.
+
+Named rather than repeated positionally so the three facts stay readable at
+the call site: a reader checking whether a stop escalated should not have to
+count arguments to find the ``escalated`` slot.
+"""
+
+_KILLED_AND_REAPED = _TerminationOutcome(
+    delivered=True,
+    escalated=False,
+    waiter_completed=True,
+)
+"""A forced signal that reached the child and whose exit this helper then waited for."""
 
 
 def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
@@ -126,7 +149,7 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
 async def _terminate_shielded(
     process: asyncio.subprocess.Process,
     grace: float,
-) -> None:
+) -> _TerminationOutcome:
     """Escalate from ``SIGTERM`` to ``SIGKILL`` where cancellation cannot interrupt.
 
     The shield is what makes teardown a guarantee rather than a best effort: a
@@ -134,8 +157,20 @@ async def _terminate_shielded(
     owns the handle, say — must not leave the child running with nobody
     holding it. The helper waits through the cancellation and the caller's
     cancellation is re-raised afterwards.
+
+    The outcome is returned rather than discarded so an observing caller can
+    tell a child that stopped when asked from one that had to be compelled.
+    The shield does not swallow it: ``_shielded_cleanup`` re-raises the
+    caller's cancellation after the stop completes, and that cancellation
+    still wins over the outcome here.
+
+    Returns
+    -------
+    _TerminationOutcome
+        What the escalation did to the child, and how the wait for its exit
+        ended.
     """
-    await _shielded_cleanup(
+    return await _shielded_cleanup(
         _terminate_process_with_wait(
             process,
             grace_period=grace,
@@ -145,7 +180,7 @@ async def _terminate_shielded(
     )
 
 
-async def _kill_shielded(process: asyncio.subprocess.Process) -> None:
+async def _kill_shielded(process: asyncio.subprocess.Process) -> _TerminationOutcome:
     """Compel the child to exit, and reap it, where cancellation cannot interrupt.
 
     The delivery tolerates a child that died between the liveness check and the
@@ -154,13 +189,25 @@ async def _kill_shielded(process: asyncio.subprocess.Process) -> None:
     still has to be reaped. Only a process the transport no longer knows about
     short-circuits, and there is nothing left for the wait to observe in that
     case either.
+
+    A forced stop never escalates: it *is* the forced signal, so there is no
+    grace window for it to run out of. An outcome that had to report
+    ``escalated`` here would describe a stop that sent ``SIGTERM`` first, which
+    is the operation this one exists to avoid.
+
+    Returns
+    -------
+    _TerminationOutcome
+        Whether the forced signal reached the child, whether a grace window was
+        exhausted, and whether this caller waited for the exit.
     """
     if process.returncode is not None:
-        return
+        return _NO_STOP
     try:
         process.kill()
     except (ProcessLookupError, OSError):
         # Gone already. Its exit code is recorded by whoever reaped it; this
         # helper only guarantees the child is not still running.
-        return
+        return _NO_STOP
     await _shielded_cleanup(_await_process_exit(process))
+    return _KILLED_AND_REAPED

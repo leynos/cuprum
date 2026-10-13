@@ -4404,7 +4404,85 @@ sequenceDiagram
     Handle-->>Caller: the same CommandResult, nothing redelivered
 ```
 
-#### 13.10.6 Module boundaries
+#### 13.10.6 Observing control operations
+
+A control operation's outcome does not survive in the settled `CommandResult`,
+which reports how the child *ended* rather than what was *done* to end it. A
+`-15` exit code is the same whether the child took the first `SIGTERM` or
+needed the forced signal after its grace window ran out, and a stop refused
+because the child was already gone leaves no trace at all. Control observation
+exists to say which of those happened.
+
+Because the outcome is a fact about one child and one run, it travels on the
+event. `ControlEvent` carries the closed `operation` and `outcome`, the measured
+`duration_s`, and a `ControlTarget` naming the run's `exec_id`, the
+`signal_number` where one was asked for, and the child's `pid` where the handle
+had one. A caller registers a `ControlHook` through `observe_control`, which
+returns a context-local registration handle; with no hook registered, starting
+a measurement returns immediately, so an unobserved run pays no clock read and
+allocates nothing.
+
+Emission is fail-open, and that is the load-bearing property rather than a
+courtesy. A control operation has a job to do — the child has to be signalled
+or stopped — and an observer that raises must not be able to prevent it, nor to
+replace the refusal the caller is owed with an observer's own error. A raising
+hook is reported at `WARNING` and the remaining hooks continue; a hook that
+returns a value rather than `None` is reported the same way, and an accidental
+coroutine is closed so an incorrectly declared async hook cannot leak a
+never-awaited warning. Neither can interrupt the cleanup the operation is
+performing.
+
+The same reasoning that closed `ExecPhase` to pump routing
+([ADR-008](adr-008-rust-pump-observation-channel.md)) closes it here. The
+channel is separate because `ExecEvent` consumers match their phases
+exhaustively and their hook exceptions propagate, so a new phase would start
+raising inside code that was correct when it was written. A caller who does not
+register a control hook sees no behavioural change at all.
+
+The span needs no new channel, and must not get one. A control operation is
+part of its run's story rather than a run of its own, so it is recorded as a
+span *event* on the execution span the run's `TracingHook` has already opened,
+keyed by the run's `exec_id`. That is why the join is a recorder function
+rather than a control span: the span's lifetime is the execution's, and an
+operation can complete after the run has settled — a `kill()` on a child that
+had already exited, or a stop whose reaping outlives the run's own span — so a
+self-owned control span would either outlive the execution it describes and
+report a duration the run never had, or have to be parented across two channels
+to be placed correctly. Those are the same two objections
+[ADR-010](adr-010-rust-pump-hop-span.md) raised for executor-hop spans, and
+they resolve the same way.
+`TracingHook.record_event_on(exec_id, name, attributes)` is the seam;
+`record_control_events(hook)` is the join. Two registrations are needed and
+both are explicit. The projection itself — the bounded attribute set, and the
+drop for an unknown or settled token — lives in
+`cuprum/adapters/_tracing_control_join.py`, alongside the sibling `_tracing_*`
+modules that `TracingHook` mixes in; `cuprum/adapters/tracing_adapter.py`
+re-exports the join.
+
+Bounded metrics are projected separately by `ControlMetricsHook`.
+`cuprum_control_operations_total` and
+`cuprum_control_operation_duration_seconds` carry exactly the closed
+`operation` and `outcome` labels, and `cuprum_control_refusals_total` carries
+only `operation`, so a stop the handle never delivered is countable on its own.
+The label set is re-validated against the enums at emission rather than trusted
+from the annotation, because `ControlEvent` is dataclass-constructible with any
+string in either field. The PID is the one field that reaches the event and the
+span event but never a label: its domain is unbounded, and a recycled PID would
+fold two unrelated children into one series.
+
+Refusal is a first-class outcome rather than an inference from a missing
+delivery. The two refuse for opposite reasons — a platform with no route to a
+caller-named signal is a limitation no retry can fix, while a child that has
+already exited is an ordinary racing outcome — so `ControlOutcome` distinguishes
+`REFUSED_UNSUPPORTED` from `REFUSED_EXITED`, and each is paired with the
+public error the caller receives. `_TerminationOutcome` carries a fourth fact,
+`refused`, which the stop helpers in `cuprum/_process_lifecycle.py` never set:
+they cannot tell a delivery the platform would not make from a child that had
+already gone, because both reach them as the same `ProcessLookupError`. Only
+the child's own status separates them, and the handle reads that — one caller
+that can weigh the two against each other rewrites it.
+
+#### 13.10.7 Module boundaries
 
 The handle is a package rather than a single module, split by responsibility
 the way the subprocess execution path is split by lifecycle concern:

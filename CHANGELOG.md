@@ -313,6 +313,34 @@
 - **`UnsupportedSignalError`:** Raised when the platform cannot deliver a
   caller-named signal, carrying the signal that was asked for and the platform
   that declined it ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **Control observation:** What a control operation *did* to its child is now
+  reportable, which the exit code alone cannot express — a `-15` is the same
+  whether the child took the first `SIGTERM` or needed `SIGKILL` after its
+  grace window ran out, and a stop refused because the child had already gone
+  leaves no trace at all. `observe_control` registers a `ControlHook` on a
+  context-local channel and returns a registration handle; every completed
+  `signal()`, `terminate()`, and `kill()` then reports one `ControlEvent`
+  carrying the closed `ControlOperation` and `ControlOutcome`, the measured
+  `duration_s`, and a `ControlTarget` naming the run's `exec_id`, the
+  `signal_number` where one was asked for, and the child's `pid` where the
+  handle had one. Refusal is a first-class outcome rather than an inference
+  from a missing delivery: `REFUSED_UNSUPPORTED` is a platform limitation no
+  retry can fix, `REFUSED_EXITED` is an ordinary racing outcome, and each is
+  paired with the public error the caller receives. Emission is fail-open, so
+  an observer that raises cannot replace the refusal the caller is owed or
+  interrupt the child cleanup the operation is performing; a raising hook, and
+  one that returns a value rather than `None`, are reported at `WARNING` and
+  the remaining hooks continue. A caller who registers nothing pays no clock
+  read and allocates nothing. `record_control_events(hook)` joins the channel
+  to tracing by recording each event on the execution span the run's
+  `TracingHook` has already opened, keyed by `exec_id`, so an operation can
+  complete after the run settles without needing a span of its own; and
+  `ControlMetricsHook` projects bounded counters and a duration histogram whose
+  only labels are the closed `operation` and `outcome`, re-validated against
+  the enums at emission. PID reaches the event and the span event but never a
+  label, because its domain is unbounded and a recycled PID would fold two
+  unrelated children into one series
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
 
 - **Per-command echo-fallback diagnostics:** Every `CommandResult` — including
   each pipeline stage's result — now carries `relay_fallbacks`, a defaulted

@@ -59,6 +59,16 @@ from cuprum.context import (
     resolve_env,
     scoped,
 )
+from cuprum.control_events import (
+    ControlEvent,
+    ControlHook,
+    ControlOperation,
+    ControlOutcome,
+)
+from cuprum.control_observation import (
+    ControlHookRegistration,
+    observe_control,
+)
 from cuprum.echo_events import (
     BrokenPipePolicy,
     EchoErrorCategory,
@@ -136,6 +146,11 @@ __all__ = [
     "CommandResult",
     "ConcurrentConfig",
     "ConcurrentResult",
+    "ControlEvent",
+    "ControlHook",
+    "ControlHookRegistration",
+    "ControlOperation",
+    "ControlOutcome",
     "CuprumContext",
     "EchoErrorCategory",
     "EchoEvent",
@@ -197,6 +212,7 @@ __all__ = [
     "merge_env_overlays",
     "merge_executable_bindings",
     "observe",
+    "observe_control",
     "observe_echo",
     "observe_line_stream",
     "observe_pump",

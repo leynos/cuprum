@@ -12,6 +12,12 @@ stopped, and settled. The package is split so each question lives in one place.
   spawn and task wiring that builds it.
 - :mod:`cuprum._process_handle.control` delivers signals and escalates from
   ``SIGTERM`` to ``SIGKILL``.
+- :mod:`cuprum._process_handle.settle` keeps a stop and its settle together, so
+  a cancellation arriving mid-stop cannot reap the child and leave the handle
+  unsettled.
+- :mod:`cuprum._process_handle.reporting` classifies what a control operation
+  is reported as, so the observation channel's closed vocabulary is applied in
+  one place.
 - :mod:`cuprum._process_handle.coordinator` waits, reconciles the run's tasks,
   assembles the ``CommandResult``, and emits the exit event.
 

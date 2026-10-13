@@ -29,14 +29,26 @@ from cuprum._process_handle.control import (
     _kill_shielded,
     _terminate_shielded,
 )
+from cuprum._process_handle.reporting import _refusal_outcome, _weighted_stop
+from cuprum._process_handle.settle import (
+    _settle_after_stop,
+    _settle_teardown,
+)
 from cuprum._process_handle.settlement import _Settlement
-from cuprum._process_lifecycle import _run_shielded_step
+from cuprum.control_events import ControlOperation, ControlOutcome
+from cuprum.control_observation import (
+    _complete_control,
+    _ControlMeasurement,
+    _ControlTarget,
+    _start_control,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import types
 
     from cuprum._process_handle.tasks import _HandleRun
+    from cuprum._process_lifecycle import _TerminationOutcome
     from cuprum.events import ExecId
     from cuprum.sh import CommandResult
 
@@ -191,7 +203,41 @@ class RunningCommand:
         UnsupportedSignalError
             If the platform cannot deliver a caller-named signal.
         """  # ruff: ignore[docstring-extraneous-exception] - both refusals are raised by the delivery helper
-        _deliver_signal(self._run, signal_number)
+        measurement = self._start_control(ControlOperation.SIGNAL, signal_number)
+        try:
+            _deliver_signal(self._run, signal_number)
+        except Exception as exc:
+            # A refusal is an outcome of the control operation, not a failure
+            # of the telemetry, so it is completed and then re-raised exactly
+            # as delivered. ``_refusal_outcome`` reports nothing for an error
+            # outside that vocabulary, and such an error propagates unobserved.
+            outcome = _refusal_outcome(exc)
+            if outcome is not None:
+                _complete_control(measurement, outcome)
+            raise
+        _complete_control(measurement, ControlOutcome.DELIVERED)
+
+    def _start_control(
+        self,
+        operation: ControlOperation,
+        signal_number: int | None = None,
+    ) -> _ControlMeasurement | None:
+        """Begin observing one control operation on this handle.
+
+        Returns
+        -------
+        _ControlMeasurement | None
+            The measurement to complete, or ``None`` when no observer is
+            registered, so an unobserved run pays no clock read.
+        """
+        return _start_control(
+            operation,
+            target=_ControlTarget(
+                exec_id=self.exec_id,
+                signal_number=signal_number,
+                pid=self.pid,
+            ),
+        )
 
     async def terminate(self, *, grace: float | None = None) -> CommandResult:
         """Stop the command gracefully, escalating if it does not comply.
@@ -219,7 +265,7 @@ class RunningCommand:
         CommandResult
             The ended command's outcome.
         """
-        return await self._stop_and_settle(self._stop(grace))
+        return await self._observed_stop(ControlOperation.TERMINATE, self._stop(grace))
 
     async def kill(self) -> CommandResult:
         """Stop the command immediately, without a grace period.
@@ -236,7 +282,57 @@ class RunningCommand:
         CommandResult
             The ended command's outcome.
         """
-        return await self._stop_and_settle(_kill_shielded(self._run.process))
+        return await self._observed_stop(
+            ControlOperation.KILL,
+            _kill_shielded(self._run.process),
+        )
+
+    async def _observed_stop(
+        self,
+        operation: ControlOperation,
+        stop: cabc.Awaitable[_TerminationOutcome],
+    ) -> CommandResult:
+        """Run one stop under a control measurement, then settle the run.
+
+        The measurement spans the stop and not the settle. The settle reports
+        the run's outcome, which every ``wait`` caller also receives and which
+        the ``settled`` event already describes; what the control event adds is
+        what the stop itself did, so it is completed as soon as the stop
+        returns rather than being held across the settle's own deadline.
+
+        Returns
+        -------
+        CommandResult
+            The ended command's outcome, once the stop has run and the run has
+            settled however that stop ended.
+        """
+        return await _settle_after_stop(
+            self._measured_stop(operation, stop),
+            self._settlement.outcome,
+        )
+
+    async def _measured_stop(
+        self,
+        operation: ControlOperation,
+        stop: cabc.Awaitable[_TerminationOutcome],
+    ) -> tuple[_ControlMeasurement | None, _TerminationOutcome]:
+        """Start the control measurement around ``stop`` and return both.
+
+        The measurement travels back beside the outcome rather than being
+        completed here, so it survives whichever way the surrounding shielded
+        step ends — including the cancellation that would otherwise discard it.
+        The outcome is weighted before it leaves, so a stop that never reached
+        its child is reported as the refusal it is; see
+        :func:`~cuprum._process_handle.reporting._weighted_stop`.
+
+        Returns
+        -------
+        tuple[_ControlMeasurement | None, _TerminationOutcome]
+            The measurement to complete — ``None`` when no observer is
+            registered — paired with what the stop did to the child.
+        """
+        measurement = self._start_control(operation)
+        return measurement, _weighted_stop(await stop, self._run.process)
 
     async def __aenter__(self) -> RunningCommand:
         """Return self, so ``async with`` owns the child for the block."""
@@ -251,47 +347,19 @@ class RunningCommand:
         """Settle the child on every exit from the ``async with`` block.
 
         Never suppresses: the block's own exception reaches the caller
-        unchanged. A teardown failure is reported only when the block itself
-        succeeded — otherwise it would replace the error that caused the exit.
+        unchanged, and a teardown failure is reported only when the block
+        itself succeeded. The child is settled even when the stop did not
+        complete cleanly, because reaping without settling is the half-owned
+        state this method exists to prevent.
 
-        Cancellation is the exception to that rule, and the reason is not
-        stylistic. ``_shielded_cleanup`` finishes the teardown and then
-        re-raises the ``CancelledError`` it absorbed, so holding it as an
-        ordinary teardown failure and swallowing it because the block already
-        failed would lose the cancel request: the caller handles its own error
-        and keeps going, while the task that was told to stop never sees the
-        cancellation. From 3.11 on it stays marked cancelled with no matching
-        ``CancelledError``, and an enclosing ``asyncio.timeout`` or task-group
-        shutdown then waits on, or misreports, a task that was never actually
-        cancelled. So cancellation always propagates; only ordinary teardown
-        failures defer to the block's error.
-
-        Settlement is attempted even when the stop did not complete cleanly,
-        and that ordering is deliberate. The two steps are separate guarded
-        steps rather than one, because a cancellation arriving during the
-        stop would otherwise skip the settle entirely: the child would be
-        reaped but no result recorded, leaving a handle whose :attr:`result`
-        stays ``None`` forever. Reaping without settling is half-ownership,
-        which is the state this method exists to prevent.
-
-        Each step reports how it ended so this method can weigh the two
-        together, which is why the per-step bookkeeping — signalling a
-        cancellation, recording an ordinary failure, and letting the stop's
-        failure outrank the settle's — lives here rather than in the helper
-        that runs a step. Neither error is ever re-raised unexamined: both are
-        held while the remaining step runs, because abandoning the settle
-        would leave exactly the half-owned handle described above.
+        The weighing of the two steps — which error outranks which, and why
+        cancellation always propagates — is stated once in
+        :func:`~cuprum._process_handle.settle._settle_teardown`, which this
+        delegates to rather than reimplementing.
         """
-        stop = await _run_shielded_step(self._stop(None))
-        settle = await _run_shielded_step(self._settlement.outcome())
-        cancellation = stop.cancellation or settle.cancellation
-        stop_error = stop.failure if stop.failure is not None else settle.failure
-        if cancellation is not None:
-            raise cancellation
-        if stop_error is not None and exc is None:
-            raise stop_error
+        await _settle_teardown(self._stop(None), self._settlement.outcome, exc)
 
-    async def _stop(self, grace: float | None) -> None:
+    async def _stop(self, grace: float | None) -> _TerminationOutcome:
         """Escalate the child to a stop; idempotent, and never waits to settle.
 
         The escalation is serialized on the run's :attr:`stop_lock`, because
@@ -307,56 +375,15 @@ class RunningCommand:
         elsewhere, because a caller cancelled while waiting is waiting for a
         stop it asked for, and the stop it is waiting for is still being
         driven to completion by the holder.
-        """
-        async with self._run.stop_lock:
-            await _terminate_shielded(
-                self._run.process,
-                self._run.execution.ctx.cancel_grace if grace is None else grace,
-            )
-
-    async def _stop_and_settle(self, stop: cabc.Awaitable[None]) -> CommandResult:
-        """Settle the run however the stop that preceded it ended.
-
-        A stop and a settle are two steps because a cancellation arriving
-        during the first must not skip the second. ``_shielded_cleanup``
-        finishes the teardown and then re-raises the caller's cancellation, so
-        awaiting a stop and settling on the following line leaves a handle
-        whose child was reaped but whose :attr:`result` stays ``None`` forever
-        — reaping without settling is the half-owned state the handle exists
-        to prevent, and every later ``wait``, ``terminate``, or ``kill`` would
-        report it.
-
-        :meth:`__aexit__` already runs these two steps separately for exactly
-        this reason. The public stop operations need the same ordering, so the
-        rule is stated once here rather than repeated on each of them.
-
-        The stop's failure outranks the settle's, because the stop is what the
-        caller asked for while the settle is what this method does on its way
-        out. A cancellation outranks both, so a cancelled caller sees its own
-        cancellation rather than a teardown error it never asked about.
-
-        The outcome the two steps reported is re-read from the settlement for
-        the return, because a step report carries a value that may be absent
-        while the caller is owed a settled result.
 
         Returns
         -------
-        CommandResult
-            The settled outcome, whether the stop completed cleanly or not.
+        _TerminationOutcome
+            What the escalation did to the child, and how the wait for its exit
+            ended.
         """
-        stop_step = await _run_shielded_step(stop)
-        settle_step = await _run_shielded_step(self._settlement.outcome())
-        cancellation = stop_step.cancellation or settle_step.cancellation
-        stop_error = (
-            stop_step.failure if stop_step.failure is not None else settle_step.failure
-        )
-        if cancellation is not None:
-            raise cancellation
-        if stop_error is not None:
-            raise stop_error
-        # Both steps completed cleanly, so the settle just run has recorded its
-        # outcome. This reads that record rather than waiting again — the
-        # settlement hands back its cached result immediately — and is the one
-        # route back that is typed as the non-optional outcome the caller is
-        # owed, since the step report carries a value that may be absent.
-        return await self._settlement.outcome()
+        async with self._run.stop_lock:
+            return await _terminate_shielded(
+                self._run.process,
+                self._run.execution.ctx.cancel_grace if grace is None else grace,
+            )

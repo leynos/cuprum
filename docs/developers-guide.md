@@ -6815,6 +6815,25 @@ whether, the run ends. The handle is a second way to own a `run()`, not a
 second implementation of one, and the boundaries below are what keeps it that
 way.
 
+`cuprum/_process_handle/reporting.py` owns the handle's half of the control
+observation channel: which `ControlOutcome` a control operation is reported as.
+The classification has three arms — the refusal named by the error a delivery
+helper raised, a stop that delivered nothing against a still-live child, and a
+delivery or escalation read off the outcome directly — and it is stated once
+there rather than inline at each public verb, so `signal`, `terminate`, and
+`kill` cannot drift apart as they change. A fourth situation is not an arm:
+with no observer registered the measurement is `None` and nothing is reported
+at all, which is why every function in the module tolerates `None`.
+
+`cuprum/adapters/_tracing_control_join.py` owns the adapter's half: how one
+control event is projected onto the execution span its run already opened. It
+is a sibling of `_tracing_fields.py`, `_tracing_line_stream.py`, and
+`_tracing_native_pump_cleanup.py` under the same convention — a mixin
+`TracingHook` inherits, so `record_event_on` is a method of the hook while its
+implementation lives beside the other projections.
+`cuprum/adapters/tracing_adapter.py` re-exports `record_control_events`, so the
+join stays importable from the module callers already import.
+
 `cuprum/_command_prepare.py` is the shared preparation seam between `run()` and
 `start()`. `_prepare_owned_command(cmd, state)` opens the run's
 presentation-sink session, prepares its observation, emits the `plan` event,
