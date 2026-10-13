@@ -271,7 +271,7 @@ class TestFailOpen:
         [asyncio.CancelledError, KeyboardInterrupt, SystemExit],
         ids=("cancellation", "interrupt", "exit"),
     )
-    def test_an_observer_raising_aboves_exception_is_contained(
+    def test_an_observer_raising_above_exception_is_contained(
         self,
         raised: type[BaseException],
     ) -> None:
