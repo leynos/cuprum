@@ -31,6 +31,11 @@ from cuprum.echo_events import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        CapturedPair,
+    )
+
 _BROKEN_PIPE = "closed presentation destination"
 
 
@@ -352,7 +357,7 @@ def test_best_effort_propagates_non_broken_pipe_os_errors() -> None:
 def test_flush_after_broken_pipe_does_not_reattempt_the_write() -> None:
     """A disabled echo never re-attempts the final decoder flush write."""
 
-    async def run_case() -> tuple[str | None, _BrokenPipeSink]:
+    async def run_case() -> CapturedPair[_BrokenPipeSink]:
         """Break the pipe on the payload, then cancel holding a partial char."""
         reader = asyncio.StreamReader()
         reader.feed_data(b"hello ")
@@ -382,7 +387,7 @@ def test_broken_pipe_on_the_final_decoder_flush_is_recovered() -> None:
     """A pipe that breaks first on the end-of-stream flush is still handled."""
     sink = _BrokenPipeSink()
 
-    async def run_case() -> str | None:
+    async def run_case() -> CapturedOrNone:
         """Hold a split multibyte character back so the flush carries text."""
         reader = asyncio.StreamReader()
         reader.feed_data(b"\xc3")

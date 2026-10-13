@@ -105,7 +105,19 @@ def _base_stage_tags(
     echo_stdout: bool,
     echo_stderr: bool,
 ) -> dict[str, object]:
-    """Build the base observation tags for one command stage."""
+    """Build the base observation tags for one command stage.
+
+    The capture *mode* is deliberately absent, unlike ``capture`` itself: it
+    travels as the trusted ``capture_mode`` field on the event, for the reason
+    ``env_mode`` does. A caller may shadow any tag key, and the adapters project
+    the typed field rather than reading tags, so a tag here would add a second,
+    forgeable spelling of a fact that already has a reliable one.
+
+    Returns
+    -------
+    dict[str, object]
+        The project, capture, and echo tags every stage starts from.
+    """
     return {
         "project": cmd.project.name,
         "capture": capture,

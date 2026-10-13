@@ -106,6 +106,21 @@ class ResourceUsageMode(enum.StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+# The stable ``capture_mode`` values, naming what a run's captures hold.
+class CaptureMode(enum.StrEnum):
+    """How a run's captured output is reported by the telemetry adapters.
+
+    A closed set, like :class:`ResourceUsageMode`: the mode is a metric label
+    and a log extra operators filter on, so a typo at a new call site would miss
+    their filters rather than raise. It rides each event as a trusted field
+    rather than an observation tag, for the reason ``env_mode`` does: a caller
+    may shadow any tag key, and a mode a consumer cannot rely on is pointless.
+    """
+
+    TEXT = "text"
+    BYTES = "bytes"
+
+
 def new_exec_id() -> ExecId:
     """Return a fresh, process-unique execution correlation token.
 
@@ -299,21 +314,26 @@ class ExecEvent:
         to infer one from another. The path is a string rather than a
         resolved file identity, so a replaced binary is not detected; see the
         TOCTOU note in ``cuprum.executable_binding``.
+    capture_mode:
+        The mode this run reports its captures in, carried on every phase for
+        the reason ``env_mode`` is: it is decided before the child spawns and
+        describes the whole execution rather than one measurement. Without it a
+        byte-exact run and a text run of the same command emit the same
+        counters and span attributes, so a timeout, teardown failure, or
+        terminal failure cannot be attributed to the mode that hit it.
+        ``None`` only on legacy or hand-built events; see
+        :data:`~cuprum.events.CaptureMode`.
 
-    What preserves an existing positional slot is that no new field is
-    inserted *ahead* of it, so a positional argument in existing caller code
-    keeps binding the field it always bound. Inserting one ahead of ``exec_id``
-    would silently rebind such an argument, handing the correlation token to
-    the new field and leaving ``exec_id=None`` — which consumers such as
-    ``TracingHook`` treat as uncorrelatable and drop.
-
-    Being appended after some earlier slot is not by itself enough, because
-    every field declared after the insertion point also moves. Since
-    ``terminal_outcome`` is pinned as the declaration tail by
-    ``test_terminal_outcome_public_api`` but already holds a positional slot of
-    its own, a later field cannot be declared ahead of it without shifting it.
-    Such a field is therefore declared ``kw_only``, which keeps the declaration
-    tail intact while leaving every pre-existing positional slot untouched.
+    A field appended to this declaration preserves an existing positional slot
+    only if nothing is inserted *ahead* of that slot: inserting one ahead of
+    ``exec_id`` would silently rebind existing positional arguments, handing
+    the correlation token to the new field and leaving ``exec_id=None`` — which
+    consumers such as ``TracingHook`` treat as uncorrelatable and drop. Nor is
+    appending enough by itself, because declaration follows insertion:
+    ``terminal_outcome`` is pinned as the tail by ``test_terminal_outcome_public_api``
+    yet holds a positional slot of its own, so a later field is declared
+    ``kw_only`` and inserted immediately before it. That keeps both the pinned
+    tail and every pre-existing slot exactly where they were.
 
     """
 
@@ -355,6 +375,10 @@ class ExecEvent:
     # caller's positional argument. ``kw_only`` keeps the tail without moving
     # any pre-existing slot; see the class docstring.
     resolved_path: str | None = dc.field(default=None, kw_only=True)
+    # ``kw_only`` for the same reason ``resolved_path`` is: the mode is known on
+    # every phase, and declaring it positionally ahead of ``terminal_outcome``
+    # would shift that pinned field's slot; see the class docstring.
+    capture_mode: CaptureMode | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
 
 
@@ -362,6 +386,7 @@ type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
 
 
 __all__ = [
+    "CaptureMode",
     "ExecEvent",
     "ExecHook",
     "ExecId",

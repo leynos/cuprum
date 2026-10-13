@@ -21,6 +21,13 @@
       "rules": [
         { "name": "Code Duplication", "weight": 0.0 }
       ]
+    },
+    {
+      "matching_content_path": "cuprum/sh/results.py",
+      "matching_content_path_doc": "PipelineResult and BytesPipelineResult are two parallel public result records, and the records ARE the contract: issue #444 asks for statically distinguishable bytes results, and cuprum/unittests/test_public_api.py pins each accessor's annotation on its own class with typing.get_type_hints (PipelineResult.stdout -> str | None, BytesPipelineResult.stdout -> bytes | None, .final -> the matching stage class). Because final and failure reverse to the stage class, no shared storage can make those annotations precise - a generic base erases them, and each class must therefore declare the accessor it wants the caller to see. The near-identical bodies are what tells a caller which mode it holds, so this is deliberately parallel code rather than incidental duplication; extracting it would delete the static distinction the byte-exact entry points exist to provide. Scoped to this exact file.",
+      "rules": [
+        { "name": "Code Duplication", "weight": 0.0 }
+      ]
     }
   ]
 }

@@ -249,6 +249,96 @@ independent. `RunOutputOptions.on_line` observes decoded lines even when
 capture and echo are off. Its callback runs synchronously and should return
 promptly; line order is guaranteed within each stream, not across streams.
 
+### Binary output
+
+Capture decodes by default, so `stdout` and `stderr` are strings and bytes the
+child wrote that are not valid UTF-8 arrive with each offending byte replaced by
+`U+FFFD`. That is the right answer for text and the wrong one for anything
+else: a decoded capture cannot be turned back into the bytes the child wrote,
+so a caller who needs the original would have to pick a surrogate encoding and
+undo it afterwards.
+
+`SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
+counterparts, are the same runs as `run()` and `run_sync()` with capture left
+undecoded. They take the same `output`, `timeout`, `context`, and (for a single
+command) `stdin` arguments, and return `BytesCommandResult` or
+`BytesPipelineResult` instead of their text-mode counterparts. Those two
+classes declare the same fields as `CommandResult` and `PipelineResult`,
+including the full set of measurements (`pid`, `started_at`, `duration`,
+`max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
+`relay_fallbacks`), so a caller that needs the byte-exact value does not lose
+the diagnostics. The output fields of a `BytesCommandResult` are
+`bytes | None`, and each stage of a `BytesPipelineResult` is a
+`BytesCommandResult`.
+
+Text remains the default, and the mode is explicit: `run()` never returns bytes
+and `run_bytes()` never returns text, so a mismatch is a bug rather than a
+runtime surprise. Everything the text-mode entry points promise still holds —
+timeout partial output is carried through in the same field, `capture=False`
+still yields `None` rather than `b""`, and an external cancellation still
+re-raises `asyncio.CancelledError` instead of being reported as a timeout.
+
+Binary mode covers capture. A run that asks for `on_line` cannot be given one:
+the capture it returns is byte-exact, so a callback carrying decoded text would
+be a second, contradictory contract for the same stream.
+`run_bytes(output=RunOutputOptions(on_line=lines.append))` is rejected with
+`ValueError` before the child is spawned. Echoing, sinks, and idle heartbeats
+are unaffected, since they mirror output rather than report it; a sink that
+cannot encode the child's bytes records a `relay_fallback` exactly as it does
+in text mode.
+
+The refusal applies only to a caller-supplied `on_line`. Structured observation
+registered with `sh.observe()` still fires in byte mode: those hooks receive
+decoded lines, so undecodable bytes are replaced in the _event_ while the
+captured payload keeps the child's own bytes. The two travel on separate
+channels, and neither is a substitute for the other.
+
+A refused call never reaches the spawn, so it emits no execution event; the
+rejection is recorded as a warning on the `cuprum._bytes_run` logger naming the
+mode that was turned away. Without that record the only trace of a byte-exact
+run the caller asked for and did not get would be the exception the caller saw.
+The warning names the refused callback no more than the exception does —
+neither renders the callback object itself.
+
+Every run also reports which mode it used through its structured telemetry: the
+`cuprum_capture_mode` log extra, the `cuprum.capture_mode` span attribute, and
+the `capture_mode` label on `cuprum_executions_total` and
+`cuprum_failures_total`. The label carries only the mode, never the captured
+payload, so a byte-exact run stays distinguishable from a text one in
+dashboards without any captured output entering the metrics series.
+
+That replacement is scoped to byte mode. `ExecutionContext.errors` keeps its
+meaning everywhere else: a text-mode run with `errors="strict"` still raises
+`UnicodeDecodeError` from line observation and from echo on undecodable bytes,
+exactly as it did before the byte-exact mode existed. A byte-exact run instead
+returns the child's own bytes for the caller to validate — the run cannot both
+promise bytes nobody decoded and let a decode decide its outcome.
+
+For a pipeline, the same rule applies to each stage: only the final stage's
+stdout is captured, interior stdout feeds the next stage and is reported as
+`None`, and each stage reports its own `stderr`.
+
+<!-- tested-example: binary-output -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="binary-output")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+result = python(
+    "-c", f"import sys; sys.stdout.buffer.write({payload!r})"
+).run_bytes_sync()
+assert result.ok
+assert result.stdout == payload
+```
+
+The same command through `run_sync()` reports `stdout` as text: a `str` of the
+same length whose invalid bytes have each become `U+FFFD`, which is why the
+comparison above can only pass in binary mode.
+
 ### Line-level output
 
 <!-- tested-example: output -->
@@ -278,6 +368,12 @@ stream with `async with cmd.lines() as stream:` or `await stream.aclose()` to
 guarantee teardown. Pipelines have no `lines()` method; `on_line` on a pipeline
 run observes final-stage stdout and every stage's stderr. Interior stdout feeds
 the next stage instead.
+
+Line observation decodes for display, so an undecodable byte in text mode
+raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
+[byte-exact mode](#binary-output)
+is the one place observation replaces such bytes instead, so that the bytes
+returned to the caller are not decided by a decode the caller never asked for.
 
 Echo normally limits each mirrored line to 64 KiB, including its truncation
 marker and terminator; captured output remains complete. Set
@@ -997,6 +1093,14 @@ same name is reserved for the same reason: a caller-supplied `env_mode` tag is
 stripped when the observation tags are built, and a replacement run's trusted
 value is grafted in its place.
 
+It also carries the run's capture mode as `cuprum_capture_mode` (`text` or
+`bytes`), projected from the typed `ExecEvent.capture_mode` field under the
+same trust rule. The mode names how the run reports its captures, never their
+contents, so the extra holds no output, argument vector, or other unbounded
+value. Without it a byte-exact run and a text run of the same command are
+identical in every record and counter, and a timeout or teardown failure cannot
+be attributed to the mode that hit it.
+
 ### Present output in GitHub Actions
 
 On GitHub Actions, Cuprum can frame a run's echoed output in a collapsible log
@@ -1299,6 +1403,16 @@ because it is known before the child is spawned and describes the whole
 execution rather than one measurement. The value is `None` only on legacy or
 manually constructed events; the execution paths always resolve a mode.
 
+`capture_mode` travels the same way and for the same reason. It is
+`CaptureMode.TEXT` for a decoded run and `CaptureMode.BYTES` for one started
+with `run_bytes()` or `run_bytes_sync()`, and every phase of an execution
+carries the mode that execution resolved. A byte-exact run and a text run of
+the same command otherwise emit the same counters and span attributes, so
+without the field a timeout, teardown failure, or terminal failure could not be
+attributed to the mode that hit it. Like `env_mode` it is a trusted field on
+the typed event rather than an observation tag, because a caller may shadow any
+tag key; `None` appears only on legacy or hand-built events.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
@@ -1439,18 +1553,19 @@ All metrics carry `program` and `project` labels; missing, empty, or explicit
 
 `cuprum_executions_total` and `cuprum_failures_total` additionally carry an
 `env_mode` label holding the execution's effective policy — `inherit`,
-`overlay`, or `replace`. It is a bounded label by construction (`EnvMode` is a
-closed three-value enum resolved by Cuprum, never by caller input), so it
-cannot give the series unbounded cardinality, and it is applied only to those
-two metrics: the per-line stream counters omit it, because a line's environment
-says nothing that its execution's mode does not already carry.
+`overlay`, or `replace` — and a `capture_mode` label holding `text` or `bytes`.
+Both are bounded by construction (`EnvMode` and `CaptureMode` are closed enums
+resolved by Cuprum, never by caller input), so neither can give the series
+unbounded cardinality, and both are applied only to those two metrics: the
+per-line stream counters omit them, because a line's environment and capture
+mode say nothing that its execution's mode does not already carry.
 
 A spawn failure has no `start` or `exit` event, because no child ran, but it
 does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
 therefore increments `cuprum_terminal_outcomes_total` and
 `cuprum_failures_total`; the failure counter carries the execution's `env_mode`
-label when that policy is known. The `pid` and `exit_code` fields remain absent
-because there is no child status to report.
+and `capture_mode` labels when those are known. The `pid` and `exit_code`
+fields remain absent because there is no child status to report.
 
 The four resource metrics also carry a low-cardinality `resource_usage_mode`
 label naming how the measurement was obtained: `wait4_child`,
@@ -1497,6 +1612,8 @@ The hook creates spans with these attributes:
 - `cuprum.project`: Project name from tags
 - `cuprum.env_mode`: The execution's effective environment policy
   (`inherit`, `overlay`, or `replace`), set on spans for every phase
+- `cuprum.capture_mode`: The run's capture mode (`text` or `bytes`), set on
+  spans for every phase for the same reason as `cuprum.env_mode`
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,

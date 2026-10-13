@@ -33,6 +33,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent
+    from cuprum.unittests._stream_drain_support import CapturedOrNone, ConsumerTask
 
 
 class _CleanupGate:
@@ -183,14 +184,14 @@ class TestSingleCommandRun:
 
         gate = _CleanupGate()
         real_drain = _subprocess_wait._drain_stream_consumers
-        observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
+        observed: dict[str, tuple[ConsumerTask, ...]] = {}
 
         # Keep the test double at the drain boundary, including its context
         # object, so it observes the run's actual cleanup call shape.
         async def gated_drain(
-            consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+            consumers: tuple[ConsumerTask, ConsumerTask],
             context: _subprocess_wait._DrainContext,
-        ) -> tuple[str | None, str | None]:
+        ) -> tuple[CapturedOrNone, CapturedOrNone]:
             """Announce that the drain started, wait to be released, then drain."""
             observed["consumers"] = consumers
             gate.entered.set()
@@ -326,11 +327,11 @@ class TestSuccessPath:
         python = sh.make(python_program, catalogue=catalogue)
         cmd = python("-c", "print('hi')")
 
-        spawned: dict[str, asyncio.Task[str | None]] = {}
+        spawned: dict[str, ConsumerTask] = {}
 
         def failing_consumers(
             *_args: object, **_kwargs: object
-        ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+        ) -> tuple[ConsumerTask, ConsumerTask]:
             """Return one consumer that fails and one that blocks indefinitely."""
 
             async def boom() -> str | None:

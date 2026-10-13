@@ -37,12 +37,14 @@ from cuprum._process_lifecycle import (
     _shielded_cleanup,
     _terminate_timed_out_stages,
 )
+from cuprum._result_assembly import _require_bytes, _require_text
 
 if typ.TYPE_CHECKING:
     import types
 
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
     from cuprum.sh import SafeCmd
 
@@ -110,8 +112,19 @@ async def _await_pipeline_wait_result(
 
 async def _gather_pipeline_outputs(
     spawn: _PipelineSpawnResult,
-) -> tuple[tuple[str | None, ...], str | None]:
-    """Gather stderr by stage and final stdout from spawn tasks."""
+) -> tuple[tuple[_StreamPayload | None, ...], _StreamPayload | None]:
+    """Gather stderr by stage and final stdout from spawn tasks.
+
+    Each payload arrives in the pipeline's mode: text in the ordinary one, the
+    child's bytes untouched in the byte-exact one. Nothing here inspects the
+    type; the mode is read once, where each result is built.
+
+    Returns
+    -------
+    tuple[tuple[_StreamPayload | None, ...], _StreamPayload | None]
+        Each stage's stderr in stage order, then the final stage's stdout, or
+        ``None`` where the spawn attached no such consumer.
+    """
     stderr_by_stage = await _gather_optional_text_tasks(spawn.stderr_tasks)
     final_stdout = None if spawn.stdout_task is None else await spawn.stdout_task
     return stderr_by_stage, final_stdout
@@ -149,15 +162,62 @@ def _stage_relay_fallbacks(
     return tuple(stage_tuples)
 
 
+def _join_stage_stderr(
+    stderr_by_stage: tuple[_StreamPayload | None, ...],
+    *,
+    capture_bytes: bool,
+) -> _StreamPayload:
+    """Join each stage's stderr in stage order, in the pipeline's mode.
+
+    Only called for a capturing run, so every chunk is present in the mode the
+    config carried. The join cannot be shared across modes: ``bytes.join`` and
+    ``str.join`` are different methods, and narrowing a generator to match a
+    dynamically chosen empty value is not something a type checker can follow.
+    Each branch therefore stays separate, and each narrows the chunks it joins,
+    because a stage payload in the wrong mode is an internal contradiction —
+    the helpers that say so are the same ones the result builders use.
+
+    Returns
+    -------
+    _StreamPayload
+        The concatenated stderr. An all-empty byte-exact run is ``b""``, not
+        ``None``: ``b""`` is itself a valid join result, and the distinction
+        between it and ``None`` is the one the capture flag draws everywhere.
+    """
+    if capture_bytes:
+        return b"".join(
+            _require_bytes(chunk, "stderr") or b"" for chunk in stderr_by_stage
+        )
+    return "".join(_require_text(chunk, "stderr") or "" for chunk in stderr_by_stage)
+
+
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
     outputs: _PipelineOutputs,
 ) -> BaseException:
-    """Construct a TimeoutExpired exception with captured outputs."""
-    stderr_text = None
+    """Construct a TimeoutExpired exception with captured outputs.
+
+    The stage stderr streams are joined in stage order, and the join has to
+    be built in the pipeline's mode: a byte-exact pipeline concatenates its
+    bytes under ``b""``, because joining bytes under a text separator would
+    raise rather than report the partial output. ``b""`` is itself a valid
+    join result, so an all-empty byte-exact run reports an empty byte string
+    rather than ``None`` — the same distinction the capture flag draws on
+    the success path.
+
+    Returns
+    -------
+    BaseException
+        The ``TimeoutExpired`` to raise, carrying whatever partial output the
+        terminated stages had produced.
+    """
+    stderr_text: _StreamPayload | None = None
     if outputs.capture:
-        stderr_text = "".join(text or "" for text in outputs.stderr_by_stage)
+        stderr_text = _join_stage_stderr(
+            outputs.stderr_by_stage,
+            capture_bytes=outputs.capture_bytes,
+        )
     output = outputs.final_stdout if outputs.capture else None
     return _sh_module().TimeoutExpired(
         cmd=tuple(cmd.argv_with_program for cmd in parts),
@@ -202,6 +262,7 @@ async def _collect_pipeline_inputs(
             stderr_by_stage=stderr_by_stage,
             final_stdout=final_stdout,
             capture=config.capture,
+            capture_bytes=config.capture_bytes,
             relay_fallbacks_by_stage=relay_fallbacks_by_stage,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
