@@ -43,10 +43,15 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 #: Backoff for the fallback reap, whose wait becomes a poll because collecting
-#: is the only way such a platform can observe the child. Bounds match the exit
-#: observer's, which answers the same question.
+#: is the only way such a platform can observe the child. The cap is set far
+#: lower than the exit observer's, and deliberately: that observer only
+#: recovers a lost wake-up, since it races the real waiter, whereas this poll
+#: *is* the exit detection on such a platform. The cap therefore bounds how
+#: late an exit is noticed, and so how much it inflates ``exited_at``,
+#: ``duration``, and the latency a caller sees. Each attempt is one
+#: non-blocking syscall made off the event loop, so a tight cap is cheap.
 _REAP_POLL_INITIAL_INTERVAL = 0.01
-_REAP_POLL_MAX_INTERVAL = 1.0
+_REAP_POLL_MAX_INTERVAL = 0.05
 
 
 @dc.dataclass(frozen=True, slots=True)
