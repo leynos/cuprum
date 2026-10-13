@@ -487,7 +487,6 @@ def test_a_deadline_reads_the_kernel_not_the_published_code() -> None:
     than the deadline: the case is about the reading the branch takes while the
     two disagree, and a publication that landed first would answer it for both.
     """
-
     hook_calls: list[int] = []
 
     class _UnreapedExitedProcess(_StubProcess):
@@ -519,6 +518,12 @@ def test_a_deadline_reads_the_kernel_not_the_published_code() -> None:
             branch is entered: what matters is that the attribute is still
             unset every time it is read. Announcing the entry first is what
             stops the case from passing on a reaper that never ran at all.
+
+            Returns
+            -------
+            int
+                The code the case staged for this double, which is what a real
+                reaper would have collected from the kernel.
             """
             await self.exited.wait()
             self.collection_started.set()

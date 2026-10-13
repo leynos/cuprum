@@ -124,7 +124,7 @@ class _StubProcess:
         self.exited.set()
 
 
-def _probe_of(process: _StubProcess) -> typ.Callable[[object], int | None]:
+def _probe_of(process: _StubProcess) -> cabc.Callable[[object], int | None]:
     """Return a stand-in for the non-reaping exit probe over *process*.
 
     The production probe asks the kernel about a PID, which a double does not
@@ -135,7 +135,7 @@ def _probe_of(process: _StubProcess) -> typ.Callable[[object], int | None]:
 
     Returns
     -------
-    typ.Callable[[object], int | None]
+    cabc.Callable[[object], int | None]
         A replacement for the process-reading probe, ignoring its argument.
     """
 
