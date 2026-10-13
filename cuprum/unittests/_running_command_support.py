@@ -35,6 +35,7 @@ from tests.helpers.catalogue import python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, SafeCmd
 
 __all__ = [
@@ -48,7 +49,9 @@ __all__ = [
     "_StubProcess",
     "_StubRunConfig",
     "_handle",
+    "_observe",
     "_probe_of",
+    "_settled_event",
 ]
 
 #: Grace a teardown is given before it escalates. Short, because the
@@ -122,6 +125,34 @@ class _StubProcess:
         if self.returncode is None:
             self.returncode = code
         self.exited.set()
+
+
+def _observe() -> tuple[list[ExecEvent], cabc.Callable[[ExecEvent], None]]:
+    """Return an event log and the observer that fills it."""
+    events: list[ExecEvent] = []
+
+    def record(event: ExecEvent) -> None:
+        """Record each lifecycle event the run publishes."""
+        events.append(event)
+
+    return events, record
+
+
+def _settled_event(events: list[ExecEvent]) -> ExecEvent:
+    """Return the run's terminal event, asserting it settled the run.
+
+    Returns
+    -------
+    ExecEvent
+        The run's ``settled`` event, whose ``terminal_outcome`` is what an
+        event-reading case asserts on.
+    """
+    assert events, "the run must publish events for this case to read"
+    settled = events[-1]
+    assert settled.phase == "settled", (
+        f"the terminal event must settle the run, got {settled.phase}"
+    )
+    return settled
 
 
 def _probe_of(process: _StubProcess) -> cabc.Callable[[object], int | None]:
