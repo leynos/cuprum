@@ -44,7 +44,16 @@ __all__ = ["Pipeline"]
 
 @dc.dataclass(frozen=True, slots=True)
 class Pipeline:
-    """A sequence of SafeCmd stages connected via stdout/stdin piping."""
+    """A sequence of SafeCmd stages connected via stdout/stdin piping.
+
+    Attributes
+    ----------
+    parts : tuple[SafeCmd, ...]
+        The stages in execution order. The first stage's stdin is the
+        pipeline's stdin and the last stage's stdout is its stdout; each
+        intervening stage feeds the next. Always at least
+        ``_MIN_PIPELINE_STAGES`` long, as :meth:`__post_init__` enforces.
+    """
 
     parts: "tuple[SafeCmd, ...]"
 
@@ -55,7 +64,18 @@ class Pipeline:
             raise ValueError(msg)
 
     def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
-        """Compose pipelines, appending stages in left-to-right order."""
+        """Compose this pipeline with another stage.
+
+        Parameters
+        ----------
+        other : SafeCmd | Pipeline
+            The stage, or sequence of stages, appended after this pipeline's.
+
+        Returns
+        -------
+        Pipeline
+            A pipeline whose stages are this one's followed by *other*'s.
+        """
         return Pipeline.concat(self, other)
 
     @classmethod
@@ -78,9 +98,15 @@ class Pipeline:
         Pipeline
             A pipeline whose stages are *left*'s followed by *right*'s.
         """
-        left_parts = left.parts if isinstance(left, Pipeline) else (left,)
-        right_parts = right.parts if isinstance(right, Pipeline) else (right,)
-        return cls((*left_parts, *right_parts))
+        match left, right:
+            case Pipeline(parts=left_parts), Pipeline(parts=right_parts):
+                return cls((*left_parts, *right_parts))
+            case Pipeline(parts=left_parts), _:
+                return cls((*left_parts, right))
+            case _, Pipeline(parts=right_parts):
+                return cls((left, *right_parts))
+            case _:
+                return cls((left, right))
 
     async def run(
         self,

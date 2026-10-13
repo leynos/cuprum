@@ -5,13 +5,17 @@ about timing, waiting, and result assembly while this one owns the one step
 that creates a child: the execution bundle that decides how it is wired, the
 spawn itself, and the announcement of its PID.
 
-``_spawn_subprocess`` is reached by both the direct run and the line-stream
-coordinator, and tests that need to refuse a spawn patch it, so it lives apart
-from the result-assembly path rather than beside it. Nothing here waits for a
-child, reconciles its tasks, or reads a clock: ``_start_owned_process`` takes
-the start reference it stamps from its caller, because *when* that reading is
-taken is what its meaning depends on and each caller takes it at a different
-point.
+``_spawn_subprocess`` is reached by three entry points, and tests that need to
+refuse a spawn patch it, so it lives apart from the result-assembly path rather
+than beside it. ``_start_owned_process`` below serves the direct run, which is
+the only path that announces its child here; the line-stream coordinator and
+the owned-handle start each call ``_spawn_subprocess`` directly and emit their
+own ``start`` event, because both need the process in hand before announcing it
+— the coordinator to attach its consumers, the handle to attach the tasks that
+will drive and settle the run. Nothing here waits for a child, reconciles its
+tasks, or reads a clock: ``_start_owned_process`` takes the start reference it
+stamps from its caller, because *when* that reading is taken is what its
+meaning depends on and each caller takes it at a different point.
 """
 
 from __future__ import annotations

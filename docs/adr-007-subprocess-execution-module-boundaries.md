@@ -568,6 +568,7 @@ The 2026-10-11 addendum's `SafeCmdBuilder` half still stands.
 `cuprum/sh/__init__.py` continues to re-export both classes unchanged, so
 `cuprum.sh.Pipeline` is the same object as `cuprum.sh.pipeline.Pipeline` and
 importers of the facade see no difference.
+
 ## Addendum (2026-10-11): split the spawn seam into `cuprum/_subprocess_spawn.py`
 
 `cuprum/_subprocess_execution.py` had grown past the repository's 400-line
@@ -575,7 +576,16 @@ module ceiling. Rather than compress the comments that explain the timing
 invariants, the spawn step moved into its own module, taking with it the three
 names that describe it: `_SubprocessExecution`, the bundle that decides how a
 child is wired; `_spawn_subprocess`, the seam that creates it; and
-`_start_owned_process`, the only place a child is announced.
+`_start_owned_process`, which spawns and announces a child for the direct run.
+
+Announcing is not owned by this module. `_start_owned_process` is the only
+place _it_ announces a child, and the direct run is its only caller. The other
+two entry points call `_spawn_subprocess` directly and emit their own `start`
+event, because each needs the process in hand before announcing it: the
+line-stream coordinator to attach its consumers, and the owned-handle start to
+attach the tasks that will drive and settle the run. That deviation is
+deliberate rather than an oversight of the split — the seam is shared, the
+announcement is not.
 
 These belong together because the spawn is what the bundle describes. A test
 that needs to refuse a spawn patches `_spawn_subprocess`, and keeping the
@@ -601,6 +611,7 @@ samples the clocks, waits, and assembles the result. The one invariant the
 split must not disturb is the pre-spawn sampling order, which is why
 `_start_owned_process` still takes `started_at` as an argument instead of
 reading a clock itself — the callers keep owning _when_ their reading is taken.
+
 ## Addendum (2026-10-13): `SafeCmd.start` moves to `cuprum/_process_handle/owned_start.py`
 
 The spawn-seam split above was prepared for `SafeCmd.start()`, and once the

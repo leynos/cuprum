@@ -6454,10 +6454,19 @@ shaped one was withdrawn.
 `cuprum/_subprocess_spawn.py` owns the one step that creates a child. It holds
 `_SubprocessExecution` — the bundle that decides how a child is wired —
 `_spawn_subprocess`, the spawn seam every entry point resolves through, and
-`_start_owned_process`, the only place a spawned child is announced. The two
-live together because the spawn is what the bundle describes: a caller that has
-to refuse a spawn patches the seam, and a caller that patches the seam would
-otherwise be reaching for a name on the result-assembly path.
+`_start_owned_process`, which spawns and announces a child for the direct run.
+The two live together because the spawn is what the bundle describes: a caller
+that has to refuse a spawn patches the seam, and a caller that patches the seam
+would otherwise be reaching for a name on the result-assembly path.
+
+`_start_owned_process` is not the only announcement site, and the split does
+not pretend it is. `_spawn_subprocess` has three callers; the direct run
+reaches it through `_start_owned_process`, while
+`cuprum/_line_stream/coordinator.py` and `cuprum/_process_handle/tasks.py` call
+it directly and emit their own `start` event. Each announces its own child
+because each needs the process in hand first: the coordinator to attach its
+stream consumers, the handle to attach the tasks that will drive and settle the
+run. The seam is shared; the announcement is not.
 
 `_start_owned_process` takes the already-sampled `started_at` as an argument
 rather than reading a clock, because *when* that reading is taken is what its
