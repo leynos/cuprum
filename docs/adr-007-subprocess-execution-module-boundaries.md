@@ -613,15 +613,15 @@ an ordinary bound method and `typing.get_type_hints` still resolves its
 the class that annotation names is imported.
 
 The move is by responsibility rather than by size. `start` resolves a different
-set of run inputs from `run()`: capture is forced on, because a handle exists so
-its caller can inspect the child after the fact, and an explicit deadline
+set of run inputs from `run()`: capture is forced on, because a handle exists
+so its caller can inspect the child after the fact, and an explicit deadline
 becomes the default for every `wait()` on the handle rather than a limit on the
 child's life. Keeping that resolution in `_process_handle` means the package
 that owns the handle owns the whole answer to "what does a handle start from?"
 instead of borrowing half of it from the command module.
 
 `_OwnedStart` is deliberately not a dataclass, and declares `__slots__ = ()`.
-`dataclasses.dataclass` refuses a base that already declares `__slots__`, and an
-un-slotted mixin would donate a `__dict__` to the slotted dataclass that
+`dataclasses.dataclass` refuses a base that already declares `__slots__`, and
+an un-slotted mixin would donate a `__dict__` to the slotted dataclass that
 inherits it, so the empty declaration is what keeps `SafeCmd` a slotted
 dataclass with the field set its callers already rely on.
