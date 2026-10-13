@@ -6773,15 +6773,21 @@ passing `return_exceptions=True`.
 `_run_shielded_step` in the same module is the *reporting* variant, for a
 caller that must run two cleanup steps and weigh them against each other before
 it can say what the caller is owed. It shields the step identically and returns
-a `_ShieldedStepFailure(cancellation, failure)` rather than raising: a step
-that absorbs a cancellation reports it separately from a step that raises an
-ordinary failure, because the two are owed different treatment.
-`RunningCommand.__aexit__` (`cuprum/_process_handle/state.py`) is the caller,
-and it needs the separation for both of its rules — the stop's failure has to
-be known before the settle's failure can be ranked against it, and the
-cancellation has to be re-raised even when the block itself is already failing.
-Absorbing either inside the helper would decide too early; raising would
-abandon the settle and leave a handle whose `result` stays `None`.
+a `_ShieldedStepFailure(cancellation, failure, value)` rather than raising: a
+step that absorbs a cancellation reports it separately from a step that raises
+an ordinary failure because the two are owed different treatment. The third
+field carries the step's own outcome, which stays meaningful even when the step
+was cancelled — a stop that successfully stopped the child and *then* had its
+caller cancelled still stopped the child, so the control event describing it
+reads its outcome from `value` rather than discarding it alongside the
+cancellation. `_settle_teardown` and `_settle_after_stop`
+(`cuprum/_process_handle/settle.py`) are the callers, serving
+`RunningCommand.__aexit__`, `terminate()` and `kill()`; they need the
+separation for both of their rules — the stop's failure has to be known before
+the settle's failure can be ranked against it, and the cancellation has to be
+re-raised even when the block itself is already failing. Absorbing either
+inside the helper would decide too early; raising would abandon the settle and
+leave a handle whose `result` stays `None`.
 
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure

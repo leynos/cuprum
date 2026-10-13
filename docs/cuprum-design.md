@@ -4418,12 +4418,12 @@ to say which of those happened.
 
 Because the outcome is a fact about one child and one run, it travels on the
 event. `ControlEvent` carries the closed `operation` and `outcome`, the measured
-`duration_s`, and a `ControlTarget` naming the run's `exec_id`, the
-`signal_number` where one was asked for, and the child's `pid` where the handle
-had one. A caller registers a `ControlHook` through `observe_control`, which
-returns a context-local registration handle; with no hook registered, starting
-a measurement returns immediately, so an unobserved run pays no clock read and
-allocates nothing.
+`duration_s`, and the run's `exec_id` where the handle safely provides one, the
+`signal_number` where one was asked for, and the child's `pid` where the
+handle had one. A caller registers a `ControlHook` through `observe_control`,
+which returns a context-local registration handle; with no hook registered,
+starting a measurement returns immediately, so an unobserved run pays no clock
+read and allocates nothing.
 
 Emission is fail-open, and that is the load-bearing property rather than a
 courtesy. A control operation has a job to do — the child has to be signalled

@@ -71,6 +71,27 @@ def test_or_operator_composes_pipeline() -> None:
     assert pipeline.parts == (first, second)
 
 
+@pytest.mark.parametrize(
+    "non_stage_side",
+    ["left", "right", "both"],
+    ids=["left-is-not-a-stage", "right-is-not-a-stage", "neither-is-a-stage"],
+)
+def test_concat_rejects_a_non_stage_operand(non_stage_side: str) -> None:
+    """``concat`` raises rather than falling out of its ``match``.
+
+    Structural matching cannot express exhaustiveness, so a non-stage operand
+    used to return ``None`` from a ``-> Pipeline`` function, deferring the
+    failure far from the composition that caused it. The unaffected side keeps
+    a genuine ``SafeCmd``, making the bad operand the sole cause.
+    """
+    stage = sh.make(ECHO)("-n", "x")
+    left = "grep" if non_stage_side in {"left", "both"} else stage
+    right = "sed" if non_stage_side in {"right", "both"} else stage
+    # The non-stage operand is the point: the wrong type is deliberate.
+    with pytest.raises(TypeError, match="must be SafeCmd or Pipeline"):
+        Pipeline.concat(left, right)  # ty: ignore[invalid-argument-type]
+
+
 @settings(max_examples=100, deadline=None)
 @given(shape=_association_trees())
 def test_or_operator_flattens_any_association(

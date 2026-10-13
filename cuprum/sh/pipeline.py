@@ -97,6 +97,15 @@ class Pipeline:
         -------
         Pipeline
             A pipeline whose stages are *left*'s followed by *right*'s.
+
+        Raises
+        ------
+        TypeError
+            If either operand is neither a :class:`SafeCmd` nor a
+            :class:`Pipeline`. Structural matching cannot express
+            exhaustiveness, so an unhandled operand would otherwise fall out
+            of the ``match`` and return ``None`` from a function that promises
+            a pipeline, deferring the failure to a distant attribute access.
         """
         match left, right:
             case Pipeline(parts=left_parts), Pipeline(parts=right_parts):
@@ -107,6 +116,12 @@ class Pipeline:
                 return cls((left_stage, *right_parts))
             case SafeCmd() as left_stage, SafeCmd() as right_stage:
                 return cls((left_stage, right_stage))
+            case _:
+                msg = (
+                    "pipeline stages must be SafeCmd or Pipeline, got "
+                    f"{type(left).__name__} and {type(right).__name__}"
+                )
+                raise TypeError(msg)
 
     async def run(
         self,

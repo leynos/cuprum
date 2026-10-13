@@ -9,9 +9,10 @@ compelled — and that difference is invisible once the run has settled.
 The types here are a closed set on purpose. A control event is consumed by
 adapters that turn it into metrics, and a metric label taken from an open field
 is an unbounded series; a closed enum is what keeps the label set finite. The
-handle's own correlation token travels alongside so a control event can be
-joined to the run it belongs to, but no PID, command line, or free-form error
-text does: those are unbounded and would put caller data into a label.
+handle's own correlation token and the child's PID travel alongside so a
+control event can be joined to the run and the process it acted on, but neither
+becomes a metric label, and no command line or free-form error text travels at
+all: those are unbounded and would put caller data into a label.
 
 This module is the event vocabulary only. :mod:`cuprum.control_observation`
 owns registration and emission, and :mod:`cuprum.adapters.control_metrics`

@@ -321,8 +321,8 @@
   context-local channel and returns a registration handle; every completed
   `signal()`, `terminate()`, and `kill()` then reports one `ControlEvent`
   carrying the closed `ControlOperation` and `ControlOutcome`, the measured
-  `duration_s`, and a `ControlTarget` naming the run's `exec_id`, the
-  `signal_number` where one was asked for, and the child's `pid` where the
+  `duration_s`, and the run's `exec_id` where the handle safely provides one,
+  the `signal_number` where one was asked for, and the child's `pid` where the
   handle had one. Refusal is a first-class outcome rather than an inference
   from a missing delivery: `REFUSED_UNSUPPORTED` is a platform limitation no
   retry can fix, `REFUSED_EXITED` is an ordinary racing outcome, and each is
