@@ -1970,10 +1970,11 @@ the result is being built for, raising `_ExecutionInvariantError` on a mismatch.
 plus `_validate_bytes_output`, which rejects a caller-supplied
 `RunOutputOptions.on_line` before anything spawns.
 
-The resolved mode reaches observance as a typed event field, not a tag.
-`_StageObservation` accepts the command path's `capture_bytes` and the pipeline
-path's `process_config.capture_bytes`, and each builder resolves it to a
-`CaptureMode` member on the observation; every emitted `ExecEvent` therefore
+The resolved mode reaches observation as a typed event field, not a tag.
+`_prepare_execution_observation` reads `_ExecutionState.capture_bytes` and
+`_build_pipeline_observations` reads `_PipelineRunConfig.capture_bytes`; each
+builder resolves the flag to a `CaptureMode` member on
+`_StageObservation.capture_mode`, and every emitted `ExecEvent` therefore
 carries `capture_mode` on every phase, exactly as `env_mode` does and for the
 same reason. It must stay a trusted field: the adapters assert that
 `cuprum_tags` never reaches their extras, so a mode travelling as a tag would
@@ -2152,9 +2153,9 @@ intermediate `await` before that chunk write finishes.
 Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
 cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
 `config.capture_output` is true and `config.discard_on_cancel` is unset, the
-bytes captured so far are decoded and returned; when the discard event is set
-(or output is not being captured), those bytes are discarded and cancellation
-propagates.
+bytes captured so far are rendered in the run's mode and returned — decoded for
+a text run, raw for a byte-exact one; when the discard event is set (or output
+is not being captured), those bytes are discarded and cancellation propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
@@ -6480,12 +6481,12 @@ optional stdin-writer task with the stdout and stderr consumer tasks,
 `discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)` cancels
 stdin before settling both consumers. The reconciliation is one unit for
 shielded cleanup. A capturing context gives readers the bounded EOF-grace
-window and decodes absent output as text, while a non-capturing context settles
-promptly and discards output. `_await_capture_eof_grace` uses an injected
-waiter when supplied and otherwise delegates to the bounded `_await_eof_grace`;
-`_settle_consumers` is the single optional settlement boundary that sets the
-discard event before cancelling pending readers.
-`_build_stream_config(execution, discard_on_cancel)` (in
+window and renders absent output as the mode's empty value, while a
+non-capturing context settles promptly and discards output.
+`_await_capture_eof_grace` uses an injected waiter when supplied and otherwise
+delegates to the bounded `_await_eof_grace`; `_settle_consumers` is the single
+optional settlement boundary that sets the discard event before cancelling
+pending readers. `_build_stream_config(execution, discard_on_cancel)` (in
 `cuprum/_subprocess_streams.py`) passes that shared event into each stream's
 `_StreamConfig`, so timeout capture can retain buffered text while cancellation
 and failure cleanup can discard it. It was split out of `_subprocess_execution`

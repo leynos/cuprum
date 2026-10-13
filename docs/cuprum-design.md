@@ -545,6 +545,73 @@ Contract notes:
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
 
+#### 6.1.6 Byte-exact results
+
+`SafeCmd.run_bytes` / `run_bytes_sync` and the matching `Pipeline` methods
+report the same execution through a second, parallel pair of result classes
+rather than by widening the text ones:
+
+```python
+@dataclass(frozen=True, slots=True)
+class BytesCommandResult:
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    stdout: bytes | None  # captured bytes, b"" when empty, None when uncaptured
+    stderr: bytes | None
+
+
+@dataclass(frozen=True, slots=True)
+class BytesPipelineResult:
+    stages: tuple[BytesCommandResult, ...]
+    failure_index: int | None
+
+    @property
+    def final(self) -> BytesCommandResult: ...
+
+    @property
+    def stdout(self) -> bytes | None: ...
+```
+
+The fields, defaults, and helpers mirror `CommandResult` and `PipelineResult`
+exactly; only the captured-output fields differ, so a caller that switches
+entry point switches the static type of what it reads rather than the shape of
+the record. Both are exported from `cuprum` and `cuprum.sh`. A byte run is not
+a separate runner: it is an ordinary run carrying `capture_bytes` on its
+resolved state, and it recomputes no measurement. Text mode remains the
+default, and text results are byte-for-byte what they were before byte mode
+existed.
+
+The two classes rather than one generic result is a deliberate trade. A single
+`CommandResult[str | bytes]` would make every consumer of an ordinary text run
+narrow a payload that can only be text, and it would let a mode/payload
+mismatch reach a caller as a replacement character instead of an error. The
+separation instead puts the guarantee in the type, and
+`cuprum._result_assembly._require_bytes` / `_require_text` re-take it at the
+one seam where a shared drain widens the payload.
+
+Byte mode preserves the child's bytes exactly, so no encoding applies to a
+capture. The invariants that follow from that:
+
+- Captured output is the child's bytes untouched; invalid UTF-8 and embedded
+  NUL survive the round trip.
+- A captured but empty stream is `b""`, and `None` still means capture was
+  disabled — the same distinction text mode draws with `""` and `None`.
+- Timeout and cancellation partial output is byte-preserving: the bytes read
+  before the deadline are returned rather than decoded under a possibly wrong
+  encoding.
+- `on_line` observes decoded text, so a caller-supplied callback is refused
+  before anything spawns rather than silently half-honoured. Observer and echo
+  views still receive replacement-decoded text, because a view must not end the
+  run it observes.
+- `stdin`, sink handling, and registered `sh.observe()` hooks behave exactly as
+  they do in text mode.
+
+`ExecEvent.capture_mode` names which of the two a run used, so telemetry can
+distinguish them; see [execution events](#71-execution-events) below and
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+
 ### 6.2 `cuprum.sh` – Safe Facade
 
 The `sh` facade provides the main entry point for safe usage.
@@ -1826,11 +1893,11 @@ preserving the `SafeCmd.run()` execution contract:
   and `_spawn_stream_consumers` to act on that decision.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
-  consumers exactly once, and returning their captured text and settled relay
-  diagnostics. `_StreamConsumerSpawnContext` carries the stream configuration,
-  process identifier, and per-stream collectors into the consumer tasks;
-  `_RunTaskOwnership` retains those consumers and collectors until the one
-  success or teardown reconciliation point.
+  consumers exactly once, and returning their captured payloads and settled
+  relay diagnostics. `_StreamConsumerSpawnContext` carries the stream
+  configuration, process identifier, and per-stream collectors into the
+  consumer tasks; `_RunTaskOwnership` retains those consumers and collectors
+  until the one success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
   *construction* and *routing*: `_resolve_stream_sink` chooses the destination
   for each mirrored stream — a live presentation-sink session's log, the
@@ -1877,10 +1944,11 @@ preserving the `SafeCmd.run()` execution contract:
   `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
   consumers as one shielded cleanup unit. A capturing drain gives readers a
   bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
-  maps an absent reader result to an empty string, and therefore keeps captured
-  timeout output deterministic; non-capturing drains skip the window and retain
-  `None` for absent text. Split out of `_subprocess_execution` so that module
-  stays about orchestration — spawning, wiring streams, assembling the result.
+  maps an absent reader result to the empty value of the run's capture mode,
+  and therefore keeps captured timeout output deterministic; non-capturing
+  drains skip the window and retain `None`. Split out of
+  `_subprocess_execution` so that module stays about orchestration — spawning,
+  wiring streams, assembling the result.
 - When that window expires with readers still pending, `_subprocess_wait` uses
   `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
   `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
@@ -1894,7 +1962,7 @@ preserving the `SafeCmd.run()` execution contract:
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
 period. The wait logic asks consumers to read chunks; if EOF arrives within
-grace, captured text is returned. If grace expires while readers remain
+grace, the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
@@ -1912,7 +1980,7 @@ sequenceDiagram
     Consumers->>Reader: read(_READ_SIZE)
     alt EOF observed within grace
         Reader-->>Consumers: empty chunk
-        Consumers-->>Wait: captured text
+        Consumers-->>Wait: captured payload
     else grace expires with readers pending
         Wait->>Telemetry: _report_capture_eof_grace_expiry(...)
         Wait->>Consumers: _settle_consumers(consumers, discard_on_cancel)
