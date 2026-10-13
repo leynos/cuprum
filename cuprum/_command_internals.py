@@ -54,11 +54,7 @@ from cuprum.events import TerminalOutcome
 
 if typ.TYPE_CHECKING:
     from cuprum._result_types import _AnyCommandResult
-    from cuprum.sh import (
-        ExecutionContext,
-        RunOutputOptions,
-        SafeCmd,
-    )
+    from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmd
     from cuprum.sinks import base as sinks
 
 __all__ = [
@@ -91,10 +87,8 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
-    # Whether the captured streams are reported as bytes rather than decoded
-    # text. Defaulted rather than required because the text-mode entry point
-    # is the one the whole codebase calls; the binary entry points are the
-    # only callers that set it.
+    # Whether captured streams are reported as bytes rather than decoded text;
+    # defaulted because only the binary entry points set it.
     capture_bytes: bool = False
 
 
@@ -211,8 +205,7 @@ async def _execute_with_hooks(
     Returns
     -------
     CommandResult | BytesCommandResult
-        The completed command's result after every observe-hook task drains,
-        in whichever mode the run asked for.
+        The completed command's result after every observe-hook task drains.
     """
     result: _AnyCommandResult | None = None
     try:
@@ -362,8 +355,7 @@ async def _run_prepared_command(
     Returns
     -------
     CommandResult | BytesCommandResult
-        The completed command's result, byte-exact when the run asked for
-        bytes.
+        The completed command's result, byte-exact when bytes were asked for.
     """
     output = state.output
     # The bracket owns the session for the whole run: a plan observer, a
