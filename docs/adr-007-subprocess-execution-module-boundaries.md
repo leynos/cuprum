@@ -436,22 +436,6 @@ package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
 
-## Addendum (2026-10-11): typed `sh.make` argument contract
-
-The 2026-09-25 addendum's inventory is historical for two entries.
-`cuprum/sh/argv.py` no longer owns the private `_ArgValue`; it owns `ArgValue`,
-the public alias naming the domain a builder accepts
-(`str | int | float | bool | pathlib.Path | os.PathLike[str]`).
-`SafeCmdBuilder` has moved out of `cuprum/sh/safe_cmd.py` into
-`cuprum/sh/builder.py`, where it is a `typing.Protocol` describing the callable
-`sh.make` returns. `SafeCmd` and `Pipeline` remain in `cuprum/sh/safe_cmd.py`,
-and the rest of that addendum still stands.
-
-Publishing the alias is what lets callers annotate their own wrappers with the
-same domain the builders enforce, without repeating the union or reaching for
-`object`. The contract itself, including which values are rejected at run time,
-is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
-
 ## Addendum (2026-10-01): byte-exact runs share the execution seams
 
 Byte-exact runs (issue #444) are not a second execution path.
@@ -544,6 +528,22 @@ platform-specific `_probe` defined once per arm stays legal, while two
 definitions in one arm — or two methods in one class body — are reported. The
 rule is deliberately structural and said so in its own docstring, so a future
 reader can tell which redefinitions it refuses and which it permits.
+
+## Addendum (2026-10-11): typed `sh.make` argument contract
+
+The 2026-09-25 addendum's inventory is historical for two entries.
+`cuprum/sh/argv.py` no longer owns the private `_ArgValue`; it owns `ArgValue`,
+the public alias naming the domain a builder accepts
+(`str | int | float | bool | pathlib.Path | os.PathLike[str]`).
+`SafeCmdBuilder` has moved out of `cuprum/sh/safe_cmd.py` into
+`cuprum/sh/builder.py`, where it is a `typing.Protocol` describing the callable
+`sh.make` returns. `SafeCmd` and `Pipeline` remain in `cuprum/sh/safe_cmd.py`,
+and the rest of that addendum still stands.
+
+Publishing the alias is what lets callers annotate their own wrappers with the
+same domain the builders enforce, without repeating the union or reaching for
+`object`. The contract itself, including which values are rejected at run time,
+is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
 
 ## Addendum (2026-10-12): `Pipeline` moves to its own module
 
