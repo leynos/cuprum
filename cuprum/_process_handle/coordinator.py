@@ -45,6 +45,7 @@ import typing as typ
 from cuprum import _wait4_process
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._result_assembly import _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
@@ -98,7 +99,7 @@ async def _finalize_settled_run(
     tuple[str | None, str | None]
         The decoded stdout and stderr; both ``None`` when *capture* is false.
     """
-    return await _shielded_cleanup(
+    drained = await _shielded_cleanup(
         _reconcile_run_tasks(
             run.ownership,
             _DrainContext(
@@ -109,6 +110,11 @@ async def _finalize_settled_run(
             ),
         ),
     )
+    # A handle always runs in text mode: ``start()`` forces capture on and never
+    # offers the byte-exact entry points, so the drain's widened payload is
+    # text here. Narrowing through ``_require_text`` re-establishes that
+    # guarantee and reports a contradiction rather than asserting it away.
+    return _require_text(drained[0], "stdout"), _require_text(drained[1], "stderr")
 
 
 async def _settle_handle_run(run: _HandleRun) -> CommandResult:

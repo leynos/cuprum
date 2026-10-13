@@ -31,7 +31,7 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.lines import LineEvent
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import BytesCommandResult, CommandResult, SafeCmd
 
 
 class _HookRefusalError(RuntimeError):
@@ -91,7 +91,7 @@ def test_a_refusing_after_hook_settles_the_run_as_its_error() -> None:
     """
     events, observe = _observe()
 
-    def refuse(_cmd: SafeCmd, _result: CommandResult) -> None:
+    def refuse(_cmd: SafeCmd, _result: CommandResult | BytesCommandResult) -> None:
         """Refuse the outcome the way an auditing hook with a bug would."""
         raise _HookRefusalError
 

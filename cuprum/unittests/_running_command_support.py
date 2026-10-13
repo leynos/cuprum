@@ -35,8 +35,8 @@ from tests.helpers.catalogue import python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.context import AfterHook
     from cuprum.events import ExecEvent
-    from cuprum.sh import CommandResult, SafeCmd
 
 __all__ = [
     "_EARLY_EXIT",
@@ -283,7 +283,7 @@ class _StubRunConfig(typ.NamedTuple):
 
     grace: float = _ESCALATION_GRACE
     default_timeout: float | None = None
-    after_hooks: tuple[cabc.Callable[[SafeCmd, CommandResult], None], ...] = ()
+    after_hooks: tuple[AfterHook, ...] = ()
     drain_delay: float = 0.0
 
 

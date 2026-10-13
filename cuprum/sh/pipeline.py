@@ -101,12 +101,12 @@ class Pipeline:
         match left, right:
             case Pipeline(parts=left_parts), Pipeline(parts=right_parts):
                 return cls((*left_parts, *right_parts))
-            case Pipeline(parts=left_parts), _:
-                return cls((*left_parts, right))
-            case _, Pipeline(parts=right_parts):
-                return cls((left, *right_parts))
-            case _:
-                return cls((left, right))
+            case Pipeline(parts=left_parts), SafeCmd() as right_stage:
+                return cls((*left_parts, right_stage))
+            case SafeCmd() as left_stage, Pipeline(parts=right_parts):
+                return cls((left_stage, *right_parts))
+            case SafeCmd() as left_stage, SafeCmd() as right_stage:
+                return cls((left_stage, right_stage))
 
     async def run(
         self,
@@ -322,10 +322,11 @@ class Pipeline:
 # Imported at the foot of the module, after ``Pipeline`` exists, to break the
 # mutual dependency with ``cuprum.sh.safe_cmd``: that module imports this one
 # for ``Pipeline``, so importing it at the head would leave it reading a
-# half-built module. The annotations above name ``SafeCmd`` in strings and so
-# cost nothing at class-creation time, but ``typing.get_type_hints`` resolves
-# them from this module's globals, which is what makes the name a genuine
-# runtime import rather than a ``TYPE_CHECKING`` one.
+# half-built module. The annotations above name ``SafeCmd`` in strings, but
+# ``typing.get_type_hints`` resolves them from this module's globals, and the
+# ``concat`` match arms use the name at run time to match a stage operand —
+# both of which make this a genuine runtime import rather than a
+# ``TYPE_CHECKING`` one.
 from cuprum.sh.safe_cmd import (  # ruff: ignore[module-import-not-at-top-of-file]  # deferred to break the cuprum.sh.safe_cmd dependency cycle
-    SafeCmd,  # ruff: ignore[typing-only-first-party-import]  # mutual dependency with cuprum.sh.safe_cmd; resolved eagerly by get_type_hints
+    SafeCmd,
 )
