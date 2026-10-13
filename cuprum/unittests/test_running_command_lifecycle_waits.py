@@ -24,6 +24,8 @@ import asyncio
 
 import pytest
 
+from cuprum.control_events import ControlEvent, ControlOperation, ControlOutcome
+from cuprum.control_observation import observe_control
 from cuprum.sh import TimeoutExpired
 from cuprum.unittests._running_command_support import (
     _TERMINATED,
@@ -286,6 +288,57 @@ def test_cancellation_survives_a_failing_block() -> None:
         )
         assert handle.result is not None, (
             "a cancelled teardown must still settle the handle"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_a_cancelled_stop_still_reports_what_it_did() -> None:
+    """A stop cancelled inside its grace still emits the control event it earned.
+
+    The stop reached the child, so an operator reading the run afterwards is
+    owed the fact. Emitting that event is driven by the value the shielded step
+    produced, and dropping the value whenever the caller was cancelled lost it:
+    the child was left stopped with nothing recorded saying who stopped it, and
+    the refusal-versus-escalation distinction this channel exists to draw went
+    with it.
+
+    The cancellation is still the caller's own to see. The claim under test is
+    narrower than "the stop succeeded" — it is that a cancellation *around* a
+    completed stop does not erase the stop's record.
+    """
+
+    async def run_case() -> None:
+        """Cancel a stop mid-grace and inspect the emitted control events."""
+        process = _SigtermImmuneProcess()
+        handle = _handle(process, _StubRunConfig(grace=0.5))
+        emitted: list[ControlEvent] = []
+        with observe_control(emitted.append):
+            stopping = asyncio.ensure_future(handle.terminate())
+            # Wait for the grace window itself rather than a sleep, so the
+            # cancellation lands inside the stop rather than before it started.
+            await process.signalled.wait()
+            stopping.cancel()
+            raised: BaseException | None = None
+            try:
+                await stopping
+            except BaseException as failure:  # ruff: ignore[blind-except] - carried out: which error reaches the caller is what this case asserts
+                raised = failure
+
+        assert isinstance(raised, asyncio.CancelledError), (
+            f"the cancellation must reach the caller; got {raised!r}"
+        )
+        assert process.kill_calls == 1, (
+            "the escalation must complete before the cancellation propagates, "
+            f"got {process.kill_calls} kills"
+        )
+        assert [event.operation for event in emitted] == [ControlOperation.TERMINATE], (
+            "the completed stop must still be reported on the control channel"
+        )
+        (event,) = emitted
+        assert event.outcome is ControlOutcome.ESCALATED, (
+            "a stop that had to compel the child reports the escalation, "
+            f"got {event.outcome}"
         )
 
     asyncio.run(run_case())

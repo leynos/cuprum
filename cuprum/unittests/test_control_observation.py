@@ -9,10 +9,13 @@ observer failure can escape the guard that invokes it.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import logging
 import typing as typ
 import warnings
+
+import pytest
 
 from cuprum.control_events import ControlOperation, ControlOutcome
 from cuprum.control_observation import (
@@ -262,3 +265,51 @@ class TestFailOpen:
         assert len(coroutines) == 1, "the hook produced one coroutine"
         assert coroutines[0].cr_frame is None, "the guard closed it"
         assert collected == [], "no never-awaited warning is raised later"
+
+    @pytest.mark.parametrize(
+        "raised",
+        [asyncio.CancelledError, KeyboardInterrupt, SystemExit],
+        ids=("cancellation", "interrupt", "exit"),
+    )
+    def test_an_observer_raising_aboves_exception_is_contained(
+        self,
+        raised: type[BaseException],
+    ) -> None:
+        """Contain a ``BaseException`` an observer raises, and report it.
+
+        ``asyncio.CancelledError`` derives from ``BaseException``, so a guard
+        catching only ``Exception`` lets it past — into the control path,
+        where an escape abandons the settle or replaces a refusal the caller
+        is owed. ``KeyboardInterrupt`` and ``SystemExit`` reach the same place
+        by the same route: a hook is a bounded synchronous call inside the
+        operation, not a place an interpreter-level exit belongs.
+
+        The point of the case is the hook that comes *after* the failing one.
+        Containment is only observable through it: if the exception escapes,
+        the later hook never runs and the operation never completes.
+        """
+        events, recording = _collector()
+
+        def refusing(event: ControlEvent) -> None:
+            """Refuse every event, the way a broken observer does."""
+            raise raised
+
+        with capturing_logger(_LOGGER_NAME) as captured:
+            with observe_control(refusing), observe_control(recording):
+                measurement = _start_control(ControlOperation.SIGNAL)
+                _complete_control(measurement, ControlOutcome.DELIVERED)
+            records = captured.records
+
+        assert len(events) == 1, "the later hook still received the event"
+        assert events[0].operation is ControlOperation.SIGNAL, (
+            "and received the operation that was being reported"
+        )
+        actions = [
+            record.__dict__.get("cuprum_action")
+            for record in records
+            if record.levelno == logging.WARNING
+        ]
+        assert actions == ["control_observer_failed"], "the failure is reported"
+        assert records[0].__dict__.get("cuprum_error_type") == raised.__name__, (
+            "the report names the exception that was raised"
+        )
