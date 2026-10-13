@@ -2055,9 +2055,12 @@ stream. This preserves multibyte characters that span read chunks.
 runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
 loop, while text runs keep `config.errors`, so a strict text run still raises
-from echo exactly as it did before byte mode existed. The capture decodes its
-own untouched buffer and still honours `config.errors`; see
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+from echo exactly as it did before byte mode existed. See
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md), and
+`cuprum._stream_drain_finish._captured_payload` renders the capture from the
+drain's own untouched buffer per its config: a text run decodes under
+`config.errors`, while a byte-exact run returns `bytes(buffer)` and never
+consults that policy.
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw
 read, before decoding, echoing, truncation, and line callbacks. This is the
@@ -6305,10 +6308,10 @@ lifecycle records.
 
 Line observation is independent of capture and echo. Enabling either line
 interface keeps the relevant subprocess streams consumed even when
-`capture=False` and `echo=False`; capture still controls whether text is kept
-on the result, and echo still controls whether text is mirrored to the
-configured sinks. This is why a line-only result can have `stdout` and `stderr`
-set to `None` while its callers receive every line.
+`capture=False` and `echo=False`; capture still controls whether the drain's
+bytes are kept on the result, and echo still controls whether text is mirrored
+to the configured sinks. This is why a line-only result can have `stdout` and
+`stderr` set to `None` while its callers receive every line.
 
 `SafeCmd.lines()` uses a finite, bounded queue between the stream consumers and
 the iterator. Its line sink awaits `queue.put`, and the consumer awaits that
@@ -6488,9 +6491,10 @@ delegates to the bounded `_await_eof_grace`; `_settle_consumers` is the single
 optional settlement boundary that sets the discard event before cancelling
 pending readers. `_build_stream_config(execution, discard_on_cancel)` (in
 `cuprum/_subprocess_streams.py`) passes that shared event into each stream's
-`_StreamConfig`, so timeout capture can retain buffered text while cancellation
-and failure cleanup can discard it. It was split out of `_subprocess_execution`
-so that module stays about orchestration; termination routes through
+`_StreamConfig`, so timeout capture can hand back the bytes buffered so far —
+decoded for a text run, raw for a byte-exact one — while cancellation and
+failure cleanup can discard it. It was split out of `_subprocess_execution` so
+that module stays about orchestration; termination routes through
 `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
 cancelling during the grace period cannot skip the `SIGKILL` escalation.
 
