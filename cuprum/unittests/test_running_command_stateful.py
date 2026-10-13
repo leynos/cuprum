@@ -25,11 +25,36 @@ from hypothesis.stateful import (
     rule,
 )
 
-from cuprum.sh import SignalAfterExitError, TimeoutExpired
-from cuprum.unittests._running_command_settlement_harness_support import (
+# Caller-named signals to deliver, none of them a stop: those settle the run.
+# Sourced by name so this module imports on any platform; a name the host does
+# not define is simply not drawn, rather than raising while pytest collects.
+_SIGNAL_NAMES = ("SIGHUP", "SIGUSR1", "SIGCONT")
+
+# The platform question is asked here, above the imports that need answering it,
+# because those imports cannot be reached on a host that fails it.
+# ``_running_command_support`` models a forced stop with ``-SIGKILL`` as it is
+# imported, and ``_signal_statuses`` guards that chain — but a guard reached
+# *through* the support has already entered it, and entering it is the failure
+# this module has to avoid. Naming ``SIGKILL`` here as well is what stops the
+# chain at the door instead of one module inside it; the other three are this
+# module's own rules, which draw them directly.
+_REQUIRED_SIGNALS = ("SIGKILL", *_SIGNAL_NAMES)
+if not all(hasattr(signal, name) for name in _REQUIRED_SIGNALS):
+    pytest.skip(
+        "these POSIX signals are not defined on this platform",
+        allow_module_level=True,
+    )
+
+from cuprum.sh import (  # ruff: ignore[module-import-not-at-top-of-file] - the guard above must resolve the platform question before these are reached
+    SignalAfterExitError,
+    TimeoutExpired,
+)
+from cuprum.unittests._running_command_settlement_harness_support import (  # ruff: ignore[module-import-not-at-top-of-file]
+    # - the guard above must resolve the platform question before these are reached
     _SettlementHarness,
 )
-from cuprum.unittests._running_command_support import (
+from cuprum.unittests._running_command_support import (  # ruff: ignore[module-import-not-at-top-of-file]
+    # - the guard above must resolve the platform question before these are reached
     _EARLY_EXIT,
     _ESCALATION_GRACE,
     _WAITERS,
@@ -38,15 +63,6 @@ from cuprum.unittests._running_command_support import (
 )
 
 _DEADLINE = 0.02  # Long enough to be a real wait, short enough to expire.
-# Caller-named signals to deliver, none of them a stop: those settle the run.
-# Sourced by name so this module imports on any platform; a name the host does
-# not define is simply not drawn, rather than raising while pytest collects.
-_SIGNAL_NAMES = ("SIGHUP", "SIGUSR1", "SIGCONT")
-if not all(hasattr(signal, name) for name in _SIGNAL_NAMES):
-    pytest.skip(
-        "these POSIX signals are not defined on this platform",
-        allow_module_level=True,
-    )
 _SIGNAL_NUMBERS = tuple(getattr(signal, name) for name in _SIGNAL_NAMES)
 
 
