@@ -16,7 +16,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum.events import ExecEvent, TerminalOutcome
-from cuprum.unittests._running_command_support import _KILLED, _TERMINATED
+from cuprum.unittests._signal_statuses import _KILLED, _TERMINATED
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult

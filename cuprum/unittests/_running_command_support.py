@@ -17,7 +17,6 @@ the paths under test are the production ones and only the child is a double.
 from __future__ import annotations
 
 import asyncio
-import signal
 import time
 import typing as typ
 
@@ -30,6 +29,7 @@ from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_spawn import _SubprocessExecution
 from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.sh import ExecutionContext
+from cuprum.unittests._signal_statuses import _KILLED, _TERMINATED
 from tests.helpers.catalogue import python_builder
 
 if typ.TYPE_CHECKING:
@@ -57,10 +57,6 @@ __all__ = [
 #: Grace a teardown is given before it escalates. Short, because the
 #: cancellation is timed against the signal landing rather than the clock.
 _ESCALATION_GRACE = 0.3
-
-#: Status a graceful stop leaves behind, and the one an escalation leaves.
-_TERMINATED = -signal.SIGTERM
-_KILLED = -signal.SIGKILL
 
 #: Status the already-exited double chose for itself.
 _EARLY_EXIT = 3
