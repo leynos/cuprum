@@ -14,11 +14,16 @@ assembly path would be a second place for the exit code, the exit event, and
 the relay diagnostics to be read at different moments.
 
 The exit event and the result are built together, so a consumer reading the
-observation stream sees the exit code the caller's result carries instead of
-having to correlate two records. The exit event deliberately reports no
-resource usage: the wait here can begin after the child has already been
-reaped, so a figure measured then would describe a different window than the
-one it claims. Leaving it unmeasured is honest; measuring it late is not.
+observation stream sees the exit code and the resource figures the caller's
+result carries instead of having to correlate two records. Only the child's
+own ``wait4`` measurement is reported, and holding the handle does not change
+it: that figure is attributed to the PID by the kernel whenever the wait
+began, so it describes the child rather than a window this path chose. The
+aggregate ``RUSAGE_CHILDREN`` delta is deliberately *not* reported here, and
+the reason is the one the old comment got right about a different case: it is
+a window measurement, this path takes no before-spawn snapshot, and a figure
+measured late would describe a different window than the one it claims.
+Leaving that variant unmeasured is honest; measuring it late is not.
 
 A deadline is applied by the caller, not here. The wait under this module is
 unbounded — the child's end is the only thing that stops it — and
@@ -37,6 +42,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from cuprum import _wait4_process
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_context import _sh_module
@@ -187,9 +193,20 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
     -------
     CommandResult
         The command's outcome, carrying the captured streams, the exit code,
-        and the relay-diagnostic fields the run recorded.
+        the resource measurements the child's own reap produced, and the
+        relay-diagnostic fields the run recorded.
     """
     execution = run.execution
+    # The ``None`` before-snapshot is deliberate rather than an omission: it
+    # selects the child's own ``wait4`` figure, which the kernel attributes to
+    # this PID whenever the wait began, and it makes the aggregate
+    # ``RUSAGE_CHILDREN`` delta unreachable — that variant needs a before-spawn
+    # snapshot this path has no honest way to take, so it yields ``None``
+    # instead of a figure measuring a window that would not be the child's.
+    # Reporting nothing at all was the wrong default for the backend that can
+    # answer: it left ``max_rss_bytes`` unavailable on a handle result while
+    # ``run()`` reported it for the same command.
+    rusage = _wait4_process.resource_usage_for(run.process, None)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(
@@ -197,11 +214,7 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
             exit_code=outcome.exit_code,
             started_at=run.started_at,
             exited_at=outcome.exited_at,
-            # Deliberately left unmeasured. On this path the wait can begin
-            # after the child was already reaped, so any figure read now would
-            # describe a different window than the one it claims. The event
-            # says ``unavailable`` rather than reporting zeros that would read
-            # as a child that consumed nothing.
+            resource_usage=rusage,
         ),
     )
     return _sh_module().CommandResult(
@@ -213,6 +226,12 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
         stderr=outcome.stderr_text,
         started_at=run.wall_clock_started_at,
         duration=max(0.0, outcome.exited_at - run.started_at),
+        # The same figures the exit event above carries, so the caller's result
+        # and the observed event agree rather than one having to be correlated
+        # with the other.
+        max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
+        user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
+        system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
         # Carried through from the observation for the same reason ``run()``
         # carries it: the handle spawns the bound executable, so a result that
         # reported ``None`` here would claim no binding applied while the
