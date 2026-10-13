@@ -23,6 +23,7 @@ from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.adapters.tracing_memory import InMemoryTracer
 from cuprum.context import EnvMode
 from cuprum.events import (
+    CaptureMode,
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
@@ -191,6 +192,14 @@ class TestAdapterProjection:
             # that follows. A snapshot recorded with a path here would pin a
             # wire shape Cuprum never emits.
             resolved_path=None if is_fail_fast else "/opt/tools/echo",
+            # Present on every phase for the same reason ``env_mode`` is, and
+            # for the same reason this fixture pins it as ``bytes`` rather than
+            # as the default: the snapshot pins the exact spelling each adapter
+            # publishes a byte-exact run under, which a text-mode fixture would
+            # leave unobserved. Unlike ``resolved_path`` there is no fail-fast
+            # exception — the decision event describes no stage's execution,
+            # but the mode is the pipeline's own, decided before it started.
+            capture_mode=CaptureMode.BYTES,
         )
 
     @staticmethod

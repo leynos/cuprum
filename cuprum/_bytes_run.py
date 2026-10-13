@@ -33,7 +33,10 @@ package facade that those modules belong to.
 
 from __future__ import annotations
 
+import logging
 import typing as typ
+
+from cuprum.events import CaptureMode
 
 # Sourced from ``cuprum.sh.output`` rather than ``cuprum.sh``: the facade
 # imports ``cuprum.sh.safe_cmd`` and ``cuprum.sh.pipeline``, both of which
@@ -49,6 +52,8 @@ from cuprum.sh.results import (
 
 if typ.TYPE_CHECKING:
     from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _require_command_result(result: _AnyCommandResult) -> CommandResult:
@@ -183,6 +188,11 @@ def _validate_bytes_output(options: RunOutputOptions) -> None:
     learns about it from a ``ValueError`` rather than from a child that ran
     to completion and reported nothing.
 
+    A refused call emits no execution event, so the rejection is also recorded
+    here: without this record the only telemetry for a byte-exact run that was
+    turned away is an exception the caller saw and nothing the operator can.
+    The callback object itself is never rendered.
+
     Raises
     ------
     ValueError
@@ -190,6 +200,10 @@ def _validate_bytes_output(options: RunOutputOptions) -> None:
 
     """
     if options.on_line is not None:
+        _LOGGER.warning(
+            "byte-exact run refused a line observer: capture_mode=%s",
+            CaptureMode.BYTES,
+        )
         msg = (
             "on_line observes decoded text and cannot be combined with byte-exact "
             "capture; drop on_line, or use the text-mode entry point"

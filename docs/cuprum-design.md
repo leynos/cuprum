@@ -1049,6 +1049,8 @@ class ExecEvent:
     system_cpu_seconds: float | None  # exit: child system CPU seconds
     resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
     env_mode: EnvMode | None  # effective policy; on every phase
+    resolved_path: str | None  # bound executable; absent for fail-fast
+    capture_mode: CaptureMode | None  # text or bytes; on every phase
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1620,6 +1622,26 @@ implemented with the following decisions:
   failure counters with the effective mode. The typed policy and its
   composition rules are specified in
   [ADR-018](adr-018-typed-environment-policies.md).
+- **Capture mode:** every event carries `ExecEvent.capture_mode`, naming how the
+  execution reports its captures: `CaptureMode.TEXT` for a decoded run and
+  `CaptureMode.BYTES` for one started with `run_bytes()` or `run_bytes_sync()`.
+  It follows `env_mode` in shape and in justification. It is present on every
+  phase — including `plan`, `pipeline_fail_fast`, and the ancillary diagnostics
+  — because it is resolved before the child is spawned and describes the whole
+  execution rather than one measurement, and it is `None` only on legacy or
+  hand-built events. It rides the typed event rather than an observation tag,
+  because a caller may shadow any tag key and a mode a consumer cannot rely on
+  would not serve its purpose; unlike `env_mode` it reserves no tag key, so
+  nothing is stripped or grafted for it. The mode names how output is
+  *reported* and never its contents, so it adds no unbounded value to any
+  surface: the logging adapter emits `cuprum_capture_mode`, the tracing adapter
+  `cuprum.capture_mode`, and the metrics adapter a `capture_mode` label on
+  `cuprum_executions_total` and `cuprum_failures_total`. The label matters
+  because a byte-exact run and a text run of the same command are otherwise
+  identical in every counter and span attribute, leaving a timeout or teardown
+  failure unattributable to the mode that hit it. The byte-preserving capture
+  path the mode names is the addendum of 2026-10-01 in
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.

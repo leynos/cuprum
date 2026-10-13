@@ -38,7 +38,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_types import _StageObservation
     from cuprum.context.env_overlay import EnvMode, EnvOverlay
-    from cuprum.events import ExecId
+    from cuprum.events import CaptureMode, ExecId
     from cuprum.program import Program
 
 
@@ -110,6 +110,12 @@ class _LineEventEmitter:
         resolution happens once, before the child is spawned, so a line event
         that omitted it would disagree with the ``plan`` and ``exit`` events
         around it about which executable ran.
+    capture_mode:
+        Whether this execution's captured streams are reported as text or as
+        the child's own bytes. Invariant per stage observation for the same
+        reason as ``env_mode``: it is decided before the child is spawned, so a
+        line event that omitted it would report a different mode from the
+        events around it.
     pid:
         Subprocess identifier, ``None`` before spawn.
     stream:
@@ -135,6 +141,7 @@ class _LineEventEmitter:
     env: EnvOverlay | None
     env_mode: EnvMode | None
     resolved_path: str | None
+    capture_mode: CaptureMode | None
     pid: int | None
     stream: LineStreamName
     tags: cabc.Mapping[str, object]
@@ -154,6 +161,7 @@ class _LineEventEmitter:
                 env=self.env,
                 env_mode=self.env_mode,
                 resolved_path=self.resolved_path,
+                capture_mode=self.capture_mode,
                 pid=self.pid,
                 timestamp=self.wall_clock(),
                 line=line,
@@ -197,6 +205,7 @@ def _line_event_emitter(
         env=observation.env_overlay,
         env_mode=observation.env_mode,
         resolved_path=observation.resolved_path,
+        capture_mode=observation.capture_mode,
         pid=context.pid,
         stream=context.stream,
         tags=observation.tags,

@@ -14,6 +14,7 @@ from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.context import EnvMode
 from cuprum.events import (
+    CaptureMode,
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
@@ -36,6 +37,7 @@ _OPTIONAL_FIELDS = (
     "env_mode",
     "terminal_outcome",
     "resolved_path",
+    "capture_mode",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 
@@ -79,6 +81,10 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         # one verbatim field that names the executed binary, so it must travel
         # unchanged and must not be stringified the way ``cwd`` is.
         resolved_path=draw(st.none() | st.just("/opt/tools/echo")),
+        # Drawn alongside ``env_mode``: both are bounded policy enums a run
+        # resolves before spawning, so the projection must render each of them
+        # and must do so independently of whether the other is present.
+        capture_mode=draw(st.none() | st.sampled_from(CaptureMode)),
     )
 
 
@@ -185,6 +191,7 @@ class TestAdapterProjectionProperties:
             "eof_grace_s",
             "pending_readers",
             "env_mode",
+            "capture_mode",
         )
         return {"program"} | {
             field for field in trusted_fields if getattr(event, field) is not None

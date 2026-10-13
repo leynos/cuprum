@@ -16,6 +16,7 @@ import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
 from cuprum.events import (
+    CaptureMode,
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
@@ -131,6 +132,12 @@ class _StageObservation:
     # program was unbound and runs under its catalogued name, which
     # ``argv0`` turns into ``str(cmd.program)``.
     resolved_path: str | None = None
+    # Whether this stage's captured streams are reported as text or as the
+    # child's own bytes. Like ``env_mode`` it is a trusted typed field rather
+    # than a tag, because a caller may shadow any tag key and a consumer of the
+    # capture mode must be able to rely on it. ``None`` only for a hand-built
+    # observation; both builders resolve it.
+    capture_mode: CaptureMode | None = None
 
     @property
     def argv0(self) -> str:
@@ -197,6 +204,7 @@ class _StageObservation:
             resource_usage_mode=details.resource_usage_mode,
             env_mode=self.env_mode,
             resolved_path=self.resolved_path,
+            capture_mode=self.capture_mode,
         )
         self._emit_event(event)
 
@@ -257,6 +265,10 @@ class _StageObservation:
             # needs it: whether the failing stage ran under a replacement
             # boundary is the first thing that explains a missing ``PATH``.
             env_mode=self.env_mode,
+            # Carried for the same reason as ``env_mode``: it is a bounded
+            # policy name with no caller data, and whether the failing stage
+            # was collecting bytes is part of explaining its teardown.
+            capture_mode=self.capture_mode,
             # Deliberately unset: this sanitized decision event describes no
             # stage's execution, and the failing stage reports its own path on
             # the ``exit`` event that follows. Carrying one here would invite a

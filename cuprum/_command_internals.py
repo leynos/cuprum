@@ -50,7 +50,7 @@ from cuprum._subprocess_execution import (
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum._timeout_reporting import _safe_emit_terminal
 from cuprum.context import EnvMode, current_context
-from cuprum.events import TerminalOutcome
+from cuprum.events import CaptureMode, TerminalOutcome
 
 if typ.TYPE_CHECKING:
     from cuprum._result_types import _AnyCommandResult
@@ -87,18 +87,19 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
-    # Whether captured streams are reported as bytes rather than decoded text;
-    # defaulted because only the binary entry points set it.
+    # Whether captures are reported as bytes rather than decoded text, carried
+    # to both the drain and the event's ``capture_mode``.
     capture_bytes: bool = False
 
 
 def _prepare_execution_observation(
     cmd: SafeCmd,
-    context: ExecutionContext,
+    state: _ExecutionState,
     tracking: _ExecutionTracking,
-    output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
+    context = state.context
+    output = state.output
     cwd = _event_cwd(context.cwd)
     env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
     # Resolved here, after the caller's allowlist check, so the resolver runs
@@ -124,6 +125,7 @@ def _prepare_execution_observation(
         wall_clock=time.time,
         env_mode=env_mode,
         resolved_path=resolved_path,
+        capture_mode=CaptureMode.BYTES if state.capture_bytes else CaptureMode.TEXT,
     )
 
 
@@ -170,19 +172,16 @@ def _build_subprocess_execution(
         on_line=state.output.on_line,
         capture_bytes=state.capture_bytes,
         # Built here, during the parent's own preparation, but armed by the run
-        # itself, once the child is actually running: everything that precedes
-        # the spawn is the parent's work, and must not read as the child's
-        # silence.
+        # itself, once the child is actually running: everything preceding the
+        # spawn is the parent's work, and must not read as the child's silence.
         idle=_build_idle_monitor(
             state.output.idle_after,
             state.output.on_idle,
             _idle_subject(str(cmd.program)),
             # Resolved the way the stderr drain resolves its own sink — the
-            # same session, the same configured sink, the same last resort —
-            # because the keepalive shares that stream's incomplete-line
-            # state. An active session frames the mirrored streams, so a
-            # keepalive written anywhere else would land outside the group the
-            # run is claiming.
+            # same session, sink, and last resort — because the keepalive
+            # shares that stream's incomplete-line state, so writing it
+            # elsewhere would land outside the group an active session claims.
             _resolve_stream_sink(
                 sink_session,
                 state.context.stderr_sink,
@@ -375,9 +374,8 @@ async def _run_prepared_command(
     try:
         observation = _prepare_execution_observation(
             cmd,
-            state.context,
+            state,
             tracking,
-            output,
         )
         observation.emit("plan", _EventDetails(pid=None))
         for hook in tracking.execution_hooks.before_hooks:

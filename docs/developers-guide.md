@@ -1970,9 +1970,32 @@ the result is being built for, raising `_ExecutionInvariantError` on a mismatch.
 plus `_validate_bytes_output`, which rejects a caller-supplied
 `RunOutputOptions.on_line` before anything spawns.
 
+The resolved mode reaches observance as a typed event field, not a tag.
+`_StageObservation` accepts the command path's `capture_bytes` and the pipeline
+path's `process_config.capture_bytes`, and each builder resolves it to a
+`CaptureMode` member on the observation; every emitted `ExecEvent` therefore
+carries `capture_mode` on every phase, exactly as `env_mode` does and for the
+same reason. It must stay a trusted field: the adapters assert that
+`cuprum_tags` never reaches their extras, so a mode travelling as a tag would
+never be projected at all. `_event_common_fields` in `cuprum.adapters._support`
+renders it once for both the `cuprum_` and `cuprum.` prefixes;
+`cuprum.adapters._metrics_operations` adds the `capture_mode` label to
+`cuprum_executions_total` and `cuprum_failures_total` through
+`_execution_mode_labels`, the one place both execution-mode labels are composed.
+
+Two diagnostics sit on the mode boundaries and neither may render a captured
+payload: `_validate_bytes_output` in `cuprum._bytes_run` warns on the pre-spawn
+`on_line` refusal — a rejection emits no execution event, so the warning is the
+only record an operator can see — and `_require_mode_payload` in
+`cuprum._result_assembly` logs the mode, stream, expected type, and actual type
+on a mode/payload invariant mismatch before raising. Both must keep to bounded
+fields; the callback object and the payload stay out.
+
 Re-use policy: a new narrowed result class must go through both seams rather
 than asserting a payload's type away with a cast, and any new consume variant
-must keep the buffer raw so byte mode stays available to it. The `on_line`
+must keep the buffer raw so byte mode stays available to it. A new mode value
+must be added to `CaptureMode` rather than spelled as a literal, since the
+value is a metric label and a log field that operators filter on. The `on_line`
 rejection is policy, not capability — the drain itself honours the combination;
 see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
 boundaries it belongs to, and the

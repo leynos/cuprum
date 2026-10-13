@@ -27,14 +27,18 @@ differ only in what could actually be measured.
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import typing as typ
 
 from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum.events import CaptureMode
 
 if typ.TYPE_CHECKING:
     from cuprum._rusage import ChildResourceUsage, _ChildRusageSnapshot
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _RunMeasurementsKwargs(typ.TypedDict):
@@ -103,8 +107,13 @@ class _RunMeasurements:
         }
 
 
-def _require_bytes(payload: _StreamPayload | None, stream: str) -> bytes | None:
-    """Narrow a captured payload the run's mode says is byte-exact.
+def _require_mode_payload[T: (str, bytes)](
+    payload: _StreamPayload | None,
+    stream: str,
+    expected: type[T],
+    mode: CaptureMode,
+) -> T | None:
+    """Narrow a captured payload to the type *mode* promises for *stream*.
 
     The widening that lets one drain serve both modes loses the guarantee that
     the payload's type matches the mode the result is being built for, so the
@@ -113,41 +122,59 @@ def _require_bytes(payload: _StreamPayload | None, stream: str) -> bytes | None:
     byte-exact config — and saying so is more useful than reporting a
     replacement character as the child's output.
 
+    The mismatch is also logged before it is raised. The exception reaches a
+    caller who may well be catching broadly, while a mode/type contradiction
+    means one of the two is wrong for every run down that path, which is exactly
+    what an operator needs in the record rather than only in a caught traceback.
+
     Returns
     -------
-    bytes | None
+    T | None
         The payload, unchanged.
 
     Raises
     ------
     _ExecutionInvariantError
-        If a byte-exact run produced a decoded payload.
+        If the payload's type contradicts the run's capture mode.
     """
-    if isinstance(payload, str):
-        msg = f"byte-exact run produced text for {stream}"
+    if payload is not None and not isinstance(payload, expected):
+        actual = type(payload).__name__
+        # A mode is named ``text``/``bytes``; the sentence below reads "text
+        # mode", and the log field keeps the operator's exact filter value.
+        _LOGGER.error(
+            "capture mode contradicts the captured payload: "
+            "capture_mode=%s stream=%s expected=%s actual=%s",
+            mode,
+            stream,
+            expected.__name__,
+            actual,
+        )
+        msg = f"{mode} mode run produced {actual} for {stream}"
         raise _ExecutionInvariantError(msg)
+
     return payload
+
+
+def _require_bytes(payload: _StreamPayload | None, stream: str) -> bytes | None:
+    """Narrow a captured payload the run's mode says is byte-exact.
+
+    Returns
+    -------
+    bytes | None
+        The payload, unchanged.
+    """
+    return _require_mode_payload(payload, stream, bytes, CaptureMode.BYTES)
 
 
 def _require_text(payload: _StreamPayload | None, stream: str) -> str | None:
     """Narrow a captured payload the run's mode says is text.
 
-    The counterpart of :func:`_require_bytes`, for the ordinary result class.
-
     Returns
     -------
     str | None
         The payload, unchanged.
-
-    Raises
-    ------
-    _ExecutionInvariantError
-        If a text-mode run produced bytes.
     """
-    if isinstance(payload, bytes):
-        msg = f"text-mode run produced bytes for {stream}"
-        raise _ExecutionInvariantError(msg)
-    return payload
+    return _require_mode_payload(payload, stream, str, CaptureMode.TEXT)
 
 
 __all__ = [

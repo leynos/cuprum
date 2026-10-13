@@ -326,18 +326,19 @@ class SafeCmd:
             # required field satisfied.
             sink_bracket=_SinkBracket(None),
         )
-        observation = _prepare_execution_observation(self, ctx, tracking, out)
+        state = _ExecutionState(
+            context=ctx,
+            output=out,
+            stdin_data=stdin_data,
+            timeout=effective_timeout,
+        )
+        observation = _prepare_execution_observation(self, state, tracking)
 
         return LineStream(
             _iter_line_events(
                 _build_subprocess_execution(
                     self,
-                    _ExecutionState(
-                        context=ctx,
-                        output=out,
-                        stdin_data=stdin_data,
-                        timeout=effective_timeout,
-                    ),
+                    state,
                     observation=observation,
                 ),
                 tracking,

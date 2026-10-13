@@ -29,6 +29,7 @@ from cuprum._observability import (
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._subprocess_context import _event_cwd, _execution_cwd
 from cuprum.context import EnvMode, current_context
+from cuprum.events import CaptureMode
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -80,6 +81,9 @@ def _build_pipeline_observations(
             wall_clock=time.time,
             env_mode=env_mode,
             resolved_path=resolved_path,
+            capture_mode=(
+                CaptureMode.BYTES if config.capture_bytes else CaptureMode.TEXT
+            ),
         )
         for idx, (cmd, hooks, resolved_path) in enumerate(
             zip(parts, hooks_by_stage, resolved_paths, strict=True)

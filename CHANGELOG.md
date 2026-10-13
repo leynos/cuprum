@@ -425,7 +425,24 @@
   bytes.
 
   An external cancellation re-raises `asyncio.CancelledError` rather than being
-  reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
+  reported as a timeout.
+
+  The mode an execution used is observable. `ExecEvent` carries a
+  `capture_mode` field on every phase — `CaptureMode.TEXT` or
+  `CaptureMode.BYTES` — for the reason `env_mode` is carried: the mode is
+  resolved before the child spawns and describes the whole execution rather
+  than one measurement, and without it a byte-exact run and a text run of the
+  same command are identical in every counter and span attribute, leaving a
+  timeout or teardown failure unattributable to the mode that hit it. It is a
+  trusted typed field rather than an observation tag, since a caller may shadow
+  any tag key. The logging adapter projects it as `cuprum_capture_mode`, the
+  tracing adapter as `cuprum.capture_mode`, and the metrics adapter as a
+  `capture_mode` label on `cuprum_executions_total` and
+  `cuprum_failures_total`. Only the mode travels; no captured payload, argument
+  vector, or other unbounded value joins it. Two mode-boundary diagnostics are
+  recorded without rendering their inputs: a refused `on_line` logs the mode it
+  turned away, and a mode/payload invariant mismatch logs the mode, stream, and
+  the two types ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 
