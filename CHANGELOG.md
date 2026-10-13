@@ -516,10 +516,10 @@
   unaffected and stays in `cuprum/sh/builder.py`, where it already lived.
   `cuprum.sh.Pipeline`, `cuprum.Pipeline`, and the `|` operator all still work
   as before. Two differences are observable: `Pipeline.__module__` now names
-  the new module, and `typing.get_type_hints(SafeCmd.__or__)` no longer
-  resolves `Pipeline`, because `safe_cmd.py` imports it only where it is
-  needed rather than at module scope. The split is what keeps `safe_cmd.py`
-  under the 400-line module ceiling once `SafeCmd.start()` joins it. See the
+  the new module, and `typing.get_type_hints(SafeCmd.__or__)` no longer resolves
+  `Pipeline`, because `safe_cmd.py` imports it only where it is needed rather
+  than at module scope. The split is what keeps `safe_cmd.py` under the
+  400-line module ceiling once `SafeCmd.start()` joins it. See the
   [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-10-11 for the deferred-import direction the two classes now take.
 

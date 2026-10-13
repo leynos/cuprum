@@ -3976,8 +3976,8 @@ the relay diagnostics to be read at different moments.
 The exit event and the result report one resource source and deliberately not
 the other. The child's own `wait4` measurement is reported: the kernel
 attributes it to the PID whenever the wait began, so it describes the child
-rather than a window this path chose, and holding the handle does not change
-it. `run()` reports that same figure for the same command, so a handle that
+rather than a window this path chose, and holding the handle does not change it.
+`run()` reports that same figure for the same command, so a handle that
 reported nothing would make a resource measurement depend on which entry point
 the caller happened to use. The aggregate `RUSAGE_CHILDREN` delta is the one
 left unmeasured, and the reason is singular to this path: that figure is a

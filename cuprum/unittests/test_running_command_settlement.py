@@ -45,9 +45,9 @@ from cuprum._process_handle import settlement
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import RunOutputOptions, TimeoutExpired
 from cuprum.unittests._running_command_support import (
-    _probe_of,
     _TERMINATED,
     _handle,
+    _probe_of,
     _StubProcess,
     _StubRunConfig,
 )
