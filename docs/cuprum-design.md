@@ -4407,11 +4407,14 @@ sequenceDiagram
 #### 13.10.6 Observing control operations
 
 A control operation's outcome does not survive in the settled `CommandResult`,
-which reports how the child *ended* rather than what was *done* to end it. A
-`-15` exit code is the same whether the child took the first `SIGTERM` or
-needed the forced signal after its grace window ran out, and a stop refused
-because the child was already gone leaves no trace at all. Control observation
-exists to say which of those happened.
+which reports how the child *ended* rather than what was *done* to end it. The
+code narrows the question but does not answer it: a graceful stop reports `-15`
+where a forced escalation reports `-9`, so the child's own end can be read,
+while everything *around* that end stays invisible. A stop refused because the
+child was already gone leaves a status indistinguishable from one the child
+chose for itself, and nothing in the code says how long the stop took or
+whether the grace window was exhausted to get there. Control observation exists
+to say which of those happened.
 
 Because the outcome is a fact about one child and one run, it travels on the
 event. `ControlEvent` carries the closed `operation` and `outcome`, the measured
@@ -4437,7 +4440,8 @@ The same reasoning that closed `ExecPhase` to pump routing
 channel is separate because `ExecEvent` consumers match their phases
 exhaustively and their hook exceptions propagate, so a new phase would start
 raising inside code that was correct when it was written. A caller who does not
-register a control hook sees no behavioural change at all.
+register a control hook sees no behavioural change at all. The decision itself
+is recorded in [ADR-019](adr-019-control-observation-channel.md).
 
 The span needs no new channel, and must not get one. A control operation is
 part of its run's story rather than a run of its own, so it is recorded as a

@@ -19,9 +19,13 @@ the immediate one. Each operation has an outcome an operator needs afterwards �
 was the child asked to stop and did it comply, did the handle have to compel
 it, or was the request refused because the child was already gone — and none of
 that survives in the settled `CommandResult`, which reports how the child
-*ended* rather than what was *done* to end it. A `-15` exit code is the same
-whether the child took the first `SIGTERM` or needed the forced signal after
-its grace window ran out.
+*ended* rather than what was *done* to end it. The code narrows the question
+but does not answer it: a graceful stop reports `-15` where a forced escalation
+reports `-9`, so the child's own end can be read, while everything *around*
+that end stays invisible. A stop refused because the child was already gone
+leaves a status indistinguishable from one the child chose for itself, and
+nothing in the code says how long the stop took or whether the grace window was
+exhausted to get there.
 
 The obvious route — a new `ExecPhase` member consumed by the existing
 observation hooks — is closed for the same reasons
