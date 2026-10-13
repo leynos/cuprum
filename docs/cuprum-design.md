@@ -3973,11 +3973,20 @@ follows observes the death and reports the signal that caused it. A second
 assembly path would be a second place for the exit code, the exit event, and
 the relay diagnostics to be read at different moments.
 
-The exit event deliberately reports no resource usage. On this path the wait
-can begin after the child has already been reaped, so a figure measured then
-would describe a different window than the one it claims; the event says
-`unavailable` rather than reporting zeros that would read as a child that
-consumed nothing.
+The exit event and the result report one resource source and deliberately not
+the other. The child's own `wait4` measurement is reported: the kernel
+attributes it to the PID whenever the wait began, so it describes the child
+rather than a window this path chose, and holding the handle does not change
+it. `run()` reports that same figure for the same command, so a handle that
+reported nothing would make a resource measurement depend on which entry point
+the caller happened to use. The aggregate `RUSAGE_CHILDREN` delta is the one
+left unmeasured, and the reason is singular to this path: that figure is a
+window measurement, and measuring it late would describe a different window
+than the one it claims. `resource_usage_for` is therefore called with no
+before-spawn snapshot, which selects the child's own figure and leaves the
+fallback unreachable. Where no direct figure exists the event and the result
+both say `unavailable` rather than reporting zeros that would read as a child
+that consumed nothing.
 
 #### 13.10.2 Settlement
 
