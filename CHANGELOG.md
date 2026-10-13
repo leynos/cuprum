@@ -564,13 +564,13 @@
   `cuprum.sh.Pipeline`, `cuprum.Pipeline`, the `|` operator, and type
   resolution all still work as before. The one observable difference is
   `Pipeline.__module__`, which now names the new module rather than
-  `cuprum.sh.safe_cmd`. Each of the two modules imports the other at the foot of
-  its file, after the class it defines exists, so `typing.get_type_hints` still
-  resolves the names in their quoted annotations. The split is what made room
-  for `SafeCmd.start()`, which this release adds: with `Pipeline` in its own
-  module, `safe_cmd.py` had 257 lines, so the 84 that `start` then contributed
-  left it at 341 rather than carrying it past the repository's 400-line module
-  ceiling. See the
+  `cuprum.sh.safe_cmd`. Each of the two modules imports the other at the foot
+  of its file, after the class it defines exists, so `typing.get_type_hints`
+  still resolves the names in their quoted annotations. The split is what made
+  room for `SafeCmd.start()`, which this release adds: with `Pipeline` in its
+  own module, `safe_cmd.py` had 257 lines, so the 84 that `start` then
+  contributed left it at 341 rather than carrying it past the repository's
+  400-line module ceiling. See the
   [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-10-12 for the deferred-import direction the two classes now take.
 
