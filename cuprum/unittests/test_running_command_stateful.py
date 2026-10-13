@@ -139,9 +139,7 @@ class _RunningCommandSettlementMachine(RuleBasedStateMachine):
         if timed_out:
             report = "timeout"
         elif self._in_flight() or self._recorded is not None:
-            if self._recorded is not None:
-                assert self._handle.result is self._recorded, "a run keeps its outcome"
-                assert not moved, "a settled handle is not signalled again"
+            self._check_repeat(moved=moved)
             return
         elif moved:
             report = "killed" if self._step_forced > forced else "terminated"
@@ -154,6 +152,17 @@ class _RunningCommandSettlementMachine(RuleBasedStateMachine):
         assert result is not None, f"a {report} step must record an outcome"
         self._recorded = result
         self._assert_ending(report, result, graceful)
+
+    def _check_repeat(self, *, moved: bool) -> None:
+        """Check a step folded over an outcome the model already holds.
+
+        A run settles once, so a step arriving after that point must not have
+        moved the child again — and whatever the handle records now is the
+        very outcome the model recorded when the run first settled.
+        """
+        if self._recorded is not None:
+            assert self._handle.result is self._recorded, "a run keeps its outcome"
+            assert not moved, "a settled handle is not signalled again"
 
     def _assert_ending(
         self,

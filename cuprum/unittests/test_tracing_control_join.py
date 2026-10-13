@@ -59,13 +59,26 @@ _BOUNDED_ATTRIBUTES = frozenset({
 })
 
 
+def _on(
+    exec_id: ExecId | None,
+    *,
+    signal_number: int | None = _SIGNAL_NUMBER,
+    pid: int | None = _PID,
+) -> _ControlTarget:
+    """Aim at the run *exec_id* names, naming this suite's usual child.
+
+    The token is required because every case below has to say what it is
+    correlating on: a case that means "no token at all" passes ``None``
+    explicitly rather than leaving the target to a default.
+    """
+    return _ControlTarget(exec_id=exec_id, signal_number=signal_number, pid=pid)
+
+
 def _perform_control(
     operation: ControlOperation,
     outcome: ControlOutcome,
     *,
-    exec_id: ExecId | None = None,
-    signal_number: int | None = _SIGNAL_NUMBER,
-    pid: int | None = _PID,
+    target: _ControlTarget,
 ) -> ControlEvent | None:
     """Run one control operation through the channel and return what it emitted.
 
@@ -77,14 +90,7 @@ def _perform_control(
     """
     events: list[ControlEvent] = []
     with observe_control(events.append):
-        measurement = _start_control(
-            operation,
-            target=_ControlTarget(
-                exec_id=exec_id,
-                signal_number=signal_number,
-                pid=pid,
-            ),
-        )
+        measurement = _start_control(operation, target=target)
         _complete_control(measurement, outcome)
     return events[0] if events else None
 
@@ -123,7 +129,7 @@ class TestSpanJoin:
 
         with record_control_events(tracing_hook.hook):
             _perform_control(
-                ControlOperation.SIGNAL, ControlOutcome.DELIVERED, exec_id=exec_id
+                ControlOperation.SIGNAL, ControlOutcome.DELIVERED, target=_on(exec_id)
             )
 
         assert [name for name, _a in _span_events(tracing_hook)] == [
@@ -149,7 +155,7 @@ class TestSpanJoin:
         exec_id = _open_span(tracing_hook)
 
         with record_control_events(tracing_hook.hook):
-            _perform_control(operation, outcome, exec_id=exec_id)
+            _perform_control(operation, outcome, target=_on(exec_id))
 
         assert [name for name, _a in _span_events(tracing_hook)] == [
             f"cuprum.control.{operation}"
@@ -161,7 +167,7 @@ class TestSpanJoin:
 
         with record_control_events(tracing_hook.hook):
             _perform_control(
-                ControlOperation.SIGNAL, ControlOutcome.DELIVERED, exec_id=exec_id
+                ControlOperation.SIGNAL, ControlOutcome.DELIVERED, target=_on(exec_id)
             )
 
         (_name, attributes) = _span_events(tracing_hook)[0]
@@ -185,9 +191,7 @@ class TestSpanJoin:
             _perform_control(
                 ControlOperation.TERMINATE,
                 ControlOutcome.DELIVERED,
-                exec_id=exec_id,
-                signal_number=None,
-                pid=None,
+                target=_on(exec_id, signal_number=None, pid=None),
             )
 
         (_name, attributes) = _span_events(tracing_hook)[0]
@@ -210,8 +214,7 @@ class TestSpanJoin:
             _perform_control(
                 ControlOperation.SIGNAL,
                 ControlOutcome.DELIVERED,
-                exec_id=exec_id,
-                signal_number=signal_number,
+                target=_on(exec_id, signal_number=signal_number),
             )
 
         recorded = _span_events(tracing_hook)[0][1]["cuprum.signal_number"]
@@ -227,7 +230,7 @@ class TestSpanJoin:
 
         with record_control_events(hook):
             _perform_control(
-                ControlOperation.KILL, ControlOutcome.DELIVERED, exec_id=second
+                ControlOperation.KILL, ControlOutcome.DELIVERED, target=_on(second)
             )
 
         first_span, second_span = tracer.spans
@@ -245,10 +248,10 @@ class TestSpanJoin:
 
         with record_control_events(tracing_hook.hook):
             _perform_control(
-                ControlOperation.TERMINATE, ControlOutcome.DELIVERED, exec_id=exec_id
+                ControlOperation.TERMINATE, ControlOutcome.DELIVERED, target=_on(exec_id)
             )
             _perform_control(
-                ControlOperation.KILL, ControlOutcome.ESCALATED, exec_id=exec_id
+                ControlOperation.KILL, ControlOutcome.ESCALATED, target=_on(exec_id)
             )
 
         assert [name for name, _a in _span_events(tracing_hook)] == [
@@ -270,7 +273,7 @@ class TestDroppedEvents:
 
         with record_control_events(tracing_hook.hook):
             _perform_control(
-                ControlOperation.KILL, ControlOutcome.DELIVERED, exec_id=exec_id
+                ControlOperation.KILL, ControlOutcome.DELIVERED, target=_on(exec_id)
             )
 
         assert not _span_events(tracing_hook), "a settled span receives no events"
@@ -284,7 +287,7 @@ class TestDroppedEvents:
             _perform_control(
                 ControlOperation.SIGNAL,
                 ControlOutcome.DELIVERED,
-                exec_id=None,
+                target=_on(None),
             )
 
         assert not _span_events(tracing_hook), "an uncorrelated event is dropped"
@@ -300,7 +303,7 @@ class TestDroppedEvents:
             _perform_control(
                 ControlOperation.SIGNAL,
                 ControlOutcome.DELIVERED,
-                exec_id=new_exec_id(),
+                target=_on(new_exec_id()),
             )
 
         assert not _span_events(tracing_hook), "nothing was recorded"
@@ -311,7 +314,7 @@ def test_the_join_is_a_separate_registration(tracing_hook: Traced) -> None:
     """Leave an unjoined run's span free of control events."""
     exec_id = _open_span(tracing_hook)
 
-    _perform_control(ControlOperation.KILL, ControlOutcome.DELIVERED, exec_id=exec_id)
+    _perform_control(ControlOperation.KILL, ControlOutcome.DELIVERED, target=_on(exec_id))
 
     assert not _span_events(tracing_hook), (
         "a caller who never registered the join sees no control events"
@@ -332,7 +335,7 @@ def test_the_emitted_event_is_the_one_the_join_recorded(
         _perform_control(
             ControlOperation.KILL,
             ControlOutcome.REFUSED_EXITED,
-            exec_id=exec_id,
+            target=_on(exec_id),
         )
 
     assert len(emitted) == 1, "the channel emitted exactly one event"
