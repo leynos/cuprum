@@ -137,6 +137,54 @@ def test_concurrent_waits_share_one_settlement() -> None:
     asyncio.run(run_case())
 
 
+def test_two_stops_escalate_the_child_once_between_them() -> None:
+    """Concurrent stops are serialized, so one child is escalated once.
+
+    The settlement shares the *outcome* of a stop and not the *stop*, so it is
+    not enough on its own: two callers entering together would both read a live
+    child and both escalate, and a child with its own ``SIGTERM`` handler that
+    is slow to die would take the forced signals once per caller. The lock that
+    prevents that has to live on the child's own record, because a handle's
+    ``terminate`` and a teardown are different routes to the same child and a
+    lock each of them held a separate copy of would exclude nothing.
+
+    The child ignores ``SIGTERM``, so the first caller is inside its grace
+    window when the second arrives — which is exactly the overlap under test.
+    The signal announcement orders the second call against the *opening* of
+    that window rather than against a clock, so the case does not depend on how
+    the loop happens to schedule the two.
+    """
+
+    async def run_case() -> None:
+        """Stop one child from two places at once, then count the escalation."""
+        process = _SigtermImmuneProcess()
+        handle = _handle(process, _StubRunConfig(grace=0.5))
+
+        first = asyncio.ensure_future(handle.terminate())
+        await process.signalled.wait()
+        # The first caller is now holding the stop across its grace window. A
+        # second stop arriving here must wait rather than start an escalation
+        # of its own, so the two callers send one SIGTERM and one SIGKILL.
+        second = asyncio.ensure_future(handle.terminate())
+        results = await asyncio.gather(first, second)
+
+        assert process.terminate_calls == 1, (
+            "the child must be asked to stop once between the two callers, got "
+            f"{process.terminate_calls} SIGTERMs; a second means the callers "
+            "escalated the same child independently"
+        )
+        assert process.kill_calls == 1, (
+            "the escalation must be delivered once between the two callers, "
+            f"got {process.kill_calls} SIGKILLs"
+        )
+        assert [result.exit_code for result in results] == [_KILLED, _KILLED], (
+            "both callers must report the one outcome the stop produced, got "
+            f"{[result.exit_code for result in results]}"
+        )
+
+    asyncio.run(run_case())
+
+
 def test_teardown_cancelled_mid_grace_still_settles() -> None:
     """A cancellation inside teardown reaps the child *and* records its outcome.
 

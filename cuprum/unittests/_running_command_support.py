@@ -48,6 +48,7 @@ __all__ = [
     "_StubProcess",
     "_StubRunConfig",
     "_handle",
+    "_probe_of",
 ]
 
 #: Grace a teardown is given before it escalates. Short, because the
@@ -79,10 +80,23 @@ class _StubProcess:
         """Start unexited, recording nothing delivered."""
         self.pid = pid
         self.returncode: int | None = None
+        #: How the *kernel* would report this child, which is a different
+        #: question from ``returncode`` and the one the non-reaping exit probe
+        #: asks. They diverge in exactly the window the probe exists for: a
+        #: child that has exited and not been reaped is a zombie, so the kernel
+        #: answers while the attribute, published by the owner's reaper, still
+        #: reads ``None``. A double answers it here because it has no real PID
+        #: for the production probe to look up.
+        self.kernel_exit_code: int | None = None
         self.terminate_calls = 0
         self.kill_calls = 0
         self.signals: list[int] = []
         self.exited = asyncio.Event()
+        #: Set by a reaper that has begun collecting, for the cases that have to
+        #: hold the publication open: a double that never reached this answered
+        #: no question at all, and the case would pass without witnessing the
+        #: window between the kernel's answer and the published code.
+        self.collection_started = asyncio.Event()
 
     def terminate(self) -> None:
         """Deliver ``SIGTERM``, which this double takes the default way."""
@@ -108,6 +122,28 @@ class _StubProcess:
         if self.returncode is None:
             self.returncode = code
         self.exited.set()
+
+
+def _probe_of(process: _StubProcess) -> typ.Callable[[object], int | None]:
+    """Return a stand-in for the non-reaping exit probe over *process*.
+
+    The production probe asks the kernel about a PID, which a double does not
+    have. This answers the same question from the double's own
+    :attr:`_StubProcess.kernel_exit_code`, so a case can express the one state
+    a double cannot otherwise reach: ended on the kernel's view, with the exit
+    code still unpublished.
+
+    Returns
+    -------
+    typ.Callable[[object], int | None]
+        A replacement for the process-reading probe, ignoring its argument.
+    """
+
+    def probe(_process: object) -> int | None:
+        """Report how the kernel sees the double, if it has ended at all."""
+        return process.kernel_exit_code
+
+    return probe
 
 
 class _ConcurrentlyReapedProcess(_StubProcess):
