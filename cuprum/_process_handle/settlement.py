@@ -48,6 +48,7 @@ from cuprum._command_internals import (
     _finalize_command_run_failure,
     _finalize_command_run_success,
 )
+from cuprum._process_exit import _observed_exit_code
 from cuprum._process_handle.control import _terminate_shielded
 from cuprum._process_handle.coordinator import _settle_handle_run
 from cuprum._subprocess_context import _sh_module
@@ -243,6 +244,17 @@ class _Settlement:
         is exempt from the exemption and still expires deterministically, as
         the documented contract for an already-elapsed deadline requires.
 
+        That question is asked of the kernel through
+        :func:`_observed_exit_code`, not of ``returncode``. The attribute is
+        published by the owner's reaper, which for the ``wait4`` backend reaps
+        from an executor thread, so it stays ``None`` for as long as that
+        thread waits for a slot. A deadline landing in that window would find
+        a child that has already finished still reading as running, record a
+        timeout, signal the zombie, and raise an expiry for a command that met
+        its deadline. The probe answers the same question from the child's own
+        state, and it leaves the uncollected status where it is, so the reaper
+        still publishes the code and the resource usage it is owed.
+
         Returns
         -------
         CommandResult
@@ -262,7 +274,7 @@ class _Settlement:
             settled = self._result
             if settled is not None:
                 return settled
-            exited_first = deadline > 0 and run.process.returncode is not None
+            exited_first = deadline > 0 and _observed_exit_code(run.process) is not None
             if not exited_first:
                 self._record_deadline(deadline)
             settling = self._task
@@ -274,7 +286,8 @@ class _Settlement:
             # the task is the only thing that reaps the child and drains its
             # streams, so walking away here would strand both.
             return await self._await_settlement()
-        await _terminate_shielded(run.process, run.execution.ctx.cancel_grace)
+        async with run.stop_lock:
+            await _terminate_shielded(run.process, run.execution.ctx.cancel_grace)
         # Unbounded: the child is already stopping, and the task is the only
         # thing that reaps it, so waiting here is what guarantees the child
         # this caller gave up on does not outlive the error it is owed.

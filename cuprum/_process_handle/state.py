@@ -59,10 +59,13 @@ class RunningCommand:
     stop it.
 
     Every operation that settles is idempotent and safe to repeat, and none of
-    them suppresses the exception of an enclosing block. Once the child has
-    exited, :attr:`result` holds the same ``CommandResult`` a ``run()`` call
-    would have returned, and further waits or terminations report that outcome
-    rather than failing.
+    them suppresses the exception of an enclosing block. Repeating is safe on
+    both halves of the operation: the outcome the settlement records is shared,
+    and the stop that produces it is serialized, so two callers stopping the
+    same child escalate it once between them however they interleave. Once the
+    child has exited, :attr:`result` holds the same ``CommandResult`` a
+    ``run()`` call would have returned, and further waits or terminations
+    report that outcome rather than failing.
 
     A deadline is the one exception, and it is raised once. The wait whose
     clock ran out reports :class:`~cuprum.sh.TimeoutExpired` after stopping and
@@ -289,11 +292,27 @@ class RunningCommand:
             raise stop_error
 
     async def _stop(self, grace: float | None) -> None:
-        """Escalate the child to a stop; idempotent, and never waits to settle."""
-        await _terminate_shielded(
-            self._run.process,
-            self._run.execution.ctx.cancel_grace if grace is None else grace,
-        )
+        """Escalate the child to a stop; idempotent, and never waits to settle.
+
+        The escalation is serialized on the run's :attr:`stop_lock`, because
+        the settlement below it shares the *outcome* of a stop and not the
+        *stop*. Two callers entering together would otherwise both find a live
+        child and both escalate, so a child with its own ``SIGTERM`` handler
+        that is slow to die takes the forced signals once per caller.
+
+        Holding the lock across the grace period is the point rather than a
+        cost: the second caller's escalation would begin *inside* the first
+        caller's grace window, which is exactly the overlap the lock removes.
+        It is an ordinary ``asyncio.Lock`` and not the shielded path used
+        elsewhere, because a caller cancelled while waiting is waiting for a
+        stop it asked for, and the stop it is waiting for is still being
+        driven to completion by the holder.
+        """
+        async with self._run.stop_lock:
+            await _terminate_shielded(
+                self._run.process,
+                self._run.execution.ctx.cancel_grace if grace is None else grace,
+            )
 
     async def _stop_and_settle(self, stop: cabc.Awaitable[None]) -> CommandResult:
         """Settle the run however the stop that preceded it ended.

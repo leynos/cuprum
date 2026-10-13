@@ -81,6 +81,20 @@ class _HandleRun:
     argument, the execution context, and the scoped default, held here because
     the bundle cannot hold it without the spawn path acting on it. Every
     ``wait()`` that supplies no deadline of its own uses it.
+
+    ``stop_lock`` serializes the stops, which the settlement does not: that
+    shares the *outcome*, while this shares the *escalation* that produces it.
+    It lives on the child's own record because every route that escalates must
+    take the same lock for any of them to be excluded — a handle's
+    ``terminate``, a teardown, and the settlement's own ``_expire`` are three
+    routes to one child, so a lock each of them held a different copy of would
+    exclude nothing. Two concurrent escalations of one child are what must not
+    happen: a child with its own ``SIGTERM`` handler that is slow to die is
+    escalated to ``SIGKILL`` by the first stop, and a second stop racing that
+    grace period would deliver the forced signals a second time.
+
+    It is off by default so a hand-built record — a test double that holds no
+    child — needs no event loop at construction.
     """
 
     process: asyncio.subprocess.Process
@@ -90,6 +104,7 @@ class _HandleRun:
     tracking: _ExecutionTracking
     ownership: _RunTaskOwnership
     default_timeout: float | None = None
+    stop_lock: asyncio.Lock = dc.field(default_factory=asyncio.Lock)
 
 
 def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecution:
