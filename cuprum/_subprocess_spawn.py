@@ -25,8 +25,8 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum import _wait4_process
+from cuprum._context_policy import _merge_env
 from cuprum._pipeline_types import _EventDetails
-from cuprum._process_lifecycle import _merge_env
 from cuprum._subprocess_context import _cwd_arg
 
 # Imported at runtime, not under ``TYPE_CHECKING``: the policy is this

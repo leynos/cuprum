@@ -13,6 +13,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum._backend import _check_rust_available, set_rust_availability_for_testing
+from cuprum._context_policy import _merge_env
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
@@ -28,10 +29,7 @@ from cuprum._pipeline_streams import (
 )
 from cuprum._pipeline_types import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
-from cuprum._process_lifecycle import (
-    _merge_env,
-    _terminate_process,
-)
+from cuprum._process_lifecycle import _terminate_process
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 from cuprum._streams import (
     _READ_SIZE,

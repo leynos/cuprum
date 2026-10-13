@@ -33,9 +33,6 @@ import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
-from cuprum.context import current_context
-from cuprum.context._policy import _resolve_env_policy
-from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -156,20 +153,32 @@ async def _terminate_process_with_wait(
     return _TERMINATED_IN_GRACE
 
 
+async def _settle_shielded[T](task: asyncio.Task[T]) -> T | None:
+    """Wait out a shielded task after cancellation; report what it produced.
+
+    Retrieving the outcome here keeps a task failure from surfacing later as an
+    unretrieved task exception.
+
+    Returns
+    -------
+    T | None
+        What the task produced, or ``None`` when it produced nothing.
+    """
+    while not task.done():
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.shield(task)
+    if task.cancelled() or task.exception() is not None:
+        return None
+    return task.result()
+
+
 async def _shielded_cleanup[T](cleanup: cabc.Awaitable[T]) -> T:
     """Complete cleanup before re-raising any caller cancellation."""
     task = asyncio.ensure_future(cleanup)
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        while not task.done():
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.shield(task)
-        if not task.cancelled():
-            # Retrieve the outcome so a cleanup failure is not reported as an
-            # unretrieved task exception. The caller's cancellation still wins:
-            # it is the error the run is ending on.
-            task.exception()
+        await _settle_shielded(task)
         raise
 
 
@@ -215,10 +224,15 @@ async def _run_shielded_step[T](
         raised, or neither — together with whatever the step produced. The
         value is absent only when the step failed or was cancelled.
     """
+    task = asyncio.ensure_future(cleanup)
     try:
-        value = await _shielded_cleanup(cleanup)
+        value = await asyncio.shield(task)
     except asyncio.CancelledError as cancelled:
-        return _ShieldedStepFailure(cancelled, None, None)
+        # The step's own value survives the cancellation rather than being
+        # dropped: a stop that delivered its signal and was cancelled while the
+        # delivery was finishing has still stopped the child, and the control
+        # event describing it has to be emitted.
+        return _ShieldedStepFailure(cancelled, None, await _settle_shielded(task))
     except BaseException as failed:  # ruff: ignore[blind-except] - reported, not handled: the caller weighs it against a later step's failure
         return _ShieldedStepFailure(None, failed, None)
     return _ShieldedStepFailure(None, None, value)
@@ -256,25 +270,6 @@ async def _cleanup_pipeline_on_error(
     # owned by the caller (``_run_pipeline``), not by this helper.
     await _terminate_all_shielded(processes, cancel_grace)
     return await _reconcile_pipe_tasks(pipe_tasks)
-
-
-def _merge_env(
-    extra: EnvOverlay | None,
-    env_mode: EnvMode = EnvMode.OVERLAY,
-    *,
-    include_context_overlay: bool = True,
-) -> dict[str, str] | None:
-    """Render the ambient and per-call environment policies for a child."""
-    context = current_context()
-    parent_overlay = context.env_overlay if include_context_overlay else None
-    parent_mode = context.env_mode if include_context_overlay else EnvMode.OVERLAY
-    overlay, mode = _resolve_env_policy(
-        parent_overlay,
-        parent_mode,
-        extra,
-        env_mode,
-    )
-    return render_env(overlay, mode)
 
 
 async def _terminate_process_via_wait_task(

@@ -264,7 +264,7 @@ def test_replace_and_unset_policies_do_not_change_the_parent(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
     """Replacement omits parents, preserves empties, and honours ``UNSET``."""
-    from cuprum._process_lifecycle import _merge_env
+    from cuprum._context_policy import _merge_env
     from cuprum.sh import ExecutionContext
 
     _, execute = execution_strategy
