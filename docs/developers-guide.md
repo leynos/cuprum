@@ -4936,7 +4936,8 @@ root. It stays pointed at `.github/workflows` alone: actionlint parses every
 path it receives as a workflow, so a composite action, which has no `on:` or
 `jobs:` section, would fail its workflow schema. `.yamllint.yml` requires each
 linted file to start with `---`, permits GitHub's unquoted `on` trigger key,
-and requires quoted `'true'` and `'false'` values.
+and restricts unquoted booleans to `true` and `false`. Quoting a boolean is
+still accepted; it changes the value's YAML type from a boolean to a string.
 
 `-shellcheck=` disables actionlint's shellcheck integration, so no shellcheck
 binary is needed and the gate matches `lint-test`, which installs none. This is
