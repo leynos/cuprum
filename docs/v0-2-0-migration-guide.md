@@ -944,6 +944,112 @@ supplies a raw Windows handle; normal pipeline hops still fall back to the
 Python pump as before. Update dashboards and exhaustive outcome handling to
 include the new value.
 
+### Per-stream capture policies
+
+Capture was a single joint switch. `capture=True` retained both streams
+completely, in the parent's memory, for as long as the result was alive, and
+`capture=False` retained nothing. A command that produced more output than the
+caller wanted to hold had to choose between an unbounded result and no result
+at all.
+
+Cuprum 0.2.0 adds a per-stream policy. `capture_stdout` and `capture_stderr`
+accept a policy, and the `capture` shorthand still sets both at once, so
+existing applications need no change and a run that says nothing behaves as
+before:
+
+<!-- tested-example: migration-per-stream-capture -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="capture-policy")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij'); sys.stderr.write('kept')"
+)
+bounded = RunOutputOptions(
+    capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=True
+)
+result = command.run_sync(output=bounded)
+# stdout is the retained tail; stderr is untouched by the other stream's bound.
+assert result.stdout == "ghij"
+assert result.stderr == "kept"
+
+# Each stream is bounded on its own, so the two policies coexist in one run.
+by_stream = {record.stream: record for record in result.captures}
+assert by_stream["stdout"].policy == "bounded"
+assert by_stream["stdout"].dropped_bytes == 6
+assert by_stream["stderr"].policy == "full"
+assert by_stream["stderr"].dropped_bytes == 0
+
+# The default is unchanged: both streams are captured in full.
+default = command.run_sync(output=RunOutputOptions())
+assert default.stdout == "abcdefghij"
+assert default.stderr == "kept"
+```
+
+`BoundedCapture(max_bytes=N)` keeps the last `N` **bytes** in memory. The bound
+is a byte count rather than a character count, and it never splits a code
+point, so the tail it retains is always decodable and the count is what a
+caller can reason about without knowing the encoding. The run also reports what
+it dropped, on the new `captures` field of `CommandResult` and
+`PipelineResult`:
+
+<!-- tested-example: migration-capture-metadata -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="capture-metadata")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij')"
+)
+result = command.run_sync(
+    output=RunOutputOptions(
+        capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=False
+    )
+)
+(record,) = result.captures
+assert (record.stream, record.policy, record.storage) == ("stdout", "bounded", "memory")
+assert (record.total_bytes, record.dropped_bytes, record.truncated) == (10, 6, True)
+# An uncaptured stream contributes no record at all, rather than an empty one.
+assert [entry.stream for entry in result.captures] == ["stdout"]
+```
+
+A bound applies to what the result keeps. It does not shorten a pipeline
+stage's output on its way to the next stage — the relay is the child's own
+pipe, which the parent never reads — and it does not shorten the mirrored copy
+an echo sink receives. `max_echo_line_bytes` and a capture bound are separate
+limits on separate paths.
+
+`FileBackedCapture` is the policy for a stream too large to hold: it keeps the
+stream on the heap until `spill_threshold_bytes`, then moves it to a file. In
+text mode the payload for a spilled stream is `None` and the record names the
+file, because reading the file back would defeat the point of spilling it; in
+byte mode the file is read back, so byte mode does not carry the
+bounded-memory guarantee. The file is removed by the run before it returns
+unless `keep_file=True` is passed, on every exit route including a timeout and
+a cancellation. Set `keep_file=True` if the caller wants the file, and read
+`record.owned` to know which case applies.
+
+A failure to create or write the spill file does not fail the run: it is
+reported on the record as `storage_failed=True` and through a `CaptureEvent`,
+because a failure to *retain* output is not a failure of the command that
+produced it. If the file could not be created the stream stays in memory and is
+still reported complete; if an append failed the record holds what reached the
+file before the failure.
+
+`BoundedCapture` and `FileBackedCapture` are exported from
+`cuprum.capture_policy`. The full field list of a capture record is in
+[Control output](users-guide.md#control-output).
+
 ## For contributors: benchmark and profiling changes
 
 These two sections concern the harnesses in `benchmarks/`, not the `cuprum`

@@ -524,6 +524,7 @@ metadata alongside the final output:
 class PipelineResult:
     stages: tuple[CommandResult, ...]
     failure_index: int | None
+    captures: tuple[CapturedStream, ...] = ()
 
     @property
     def failure(self) -> CommandResult | None: ...
@@ -541,6 +542,12 @@ Contract notes:
   default), `PipelineResult.stdout` contains the final stage stdout.
 - When capture is disabled (`RunOutputOptions(capture=False)`),
   `PipelineResult.stdout` is `None`.
+- `captures` reports the policy each stream was captured under, together with
+  what that policy retained and dropped. Only the final stage's stdout is
+  reported for a pipeline, since interior stdout is streamed rather than
+  captured; every stage's stderr is captured and reported independently. The
+  policy for a stream therefore bounds what the *result* keeps and never what a
+  stage hands downstream.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
@@ -1374,8 +1381,65 @@ Users should be able to choose:
 
 Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
 shorthand independently, so a command can capture stdout silently while stderr
-still mirrors to the log. Capture stays a single joint switch — `capture=True`
-keeps both streams captured even when neither echoes.
+still mirrors to the log. Capture is per stream in the same way:
+`capture_stdout` and `capture_stderr` each take a policy, and the `capture`
+shorthand sets both. A per-stream field left at `None` inherits the shorthand
+and an explicit per-stream value wins for its own stream, which is exactly how
+`echo_stdout` and `echo_stderr` already resolve from `echo` — one rule for both
+options, so a caller who has learnt one has learnt the other. A value that is
+neither a policy nor a `bool` is rejected with `ValueError` before the spawn
+rather than at the drain, so a caller learns of a typo before a child runs
+rather than after it has captured something unintended.
+
+Three policies exist. `FullCapture` retains the stream completely in the
+parent's memory and is what `capture=True` and the default resolve to.
+`BoundedCapture(max_bytes=N)` retains the last `N` bytes in memory.
+`FileBackedCapture(spill_threshold_bytes=…, directory=…, keep_file=…)` retains
+the stream on the heap until it passes the threshold, then moves it to a file
+and appends there, so retention stops tracking the child's output.
+
+The bound is a **byte** count, applied at the drain's chunk boundary with the
+same incremental decoder/encoder walk `max_echo_line_bytes` uses, so a retained
+tail never ends mid-code-point and is always decodable on its own. A caller
+reasoning about memory pays for bytes; a caller reading the result sees text
+that is complete at its end.
+
+A capture policy governs what the *result* retains. It does not govern what a
+pipeline stage hands to the next stage: an interior stage's stdout is the
+child's own pipe, and the parent never reads it, which is why the relay's
+fidelity is a structural property rather than a property of the bound. Nor does
+a bound shorten the mirrored copy an echo sink receives, which
+`max_echo_line_bytes` bounds separately and on its own path.
+
+Every captured stream contributes one `CapturedStream` record to
+`CommandResult.captures` / `PipelineResult.captures`, in stdout-then-stderr
+order, and an uncaptured stream contributes none — so a record's presence is
+itself the statement that the stream was captured. The record carries
+`total_bytes` (what the child wrote) beside `dropped_bytes` (what the bound
+discarded) and a `truncated` property derived from the two, so a caller can
+always tell a short stream from a shortened one and the two counts cannot
+disagree. `storage` distinguishes memory from file, `path` names the spill,
+`owned` says whether the run still must remove it, and `storage_failed` says
+the file is incomplete rather than merely short.
+
+A storage failure is absorbed rather than raised: a failure to retain output is
+not a failure of the command that produced it, so the child is still reaped and
+the caller still receives a result. A failed *create* leaves the stream on the
+heap, where it is still reported complete; a failed *append* stops writing,
+keeps the prefix that reached the file, and reports `storage_failed`. Both emit
+a `CaptureEvent` and name the error's class rather than its message, because
+the event channel's consumers treat fields as low-cardinality labels.
+
+Spill cleanup is a pair of steps with one owner. The run's result-construction
+site closes the handle every settled drain reports, which removes the file
+before the result is returned — so a long-lived process cannot accumulate spill
+files across runs. Teardown reconciles the accumulators themselves as well,
+which is the only path that reaches a drain cancelled mid-await: such a drain
+re-raises without finalizing, so no result is built and the accumulator is the
+last reference to the file. `SpillHandle.close` is idempotent and both callers
+run it under `_shielded_cleanup`, so the two paths agree rather than racing.
+`keep_file=True` is the sole exception: the descriptor is closed and the file
+is left for the caller.
 
 `RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
 default is 64 KiB, and the bound includes retained child bytes, the encoded
