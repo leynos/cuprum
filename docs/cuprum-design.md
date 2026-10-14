@@ -1049,10 +1049,10 @@ ______________________________________________________________________
 
 [ADR-023](adr-023-opt-in-telemetry-redaction.md) defines an opt-in redaction
 policy at export boundaries. Raw execution observations remain available to
-trusted consumers; explicitly wrapped observers receive sanitized projections.
-Direct logging, tracing, and presentation-title configuration is planned under
-that decision. Execution inputs and captured results remain unchanged, and
-metric labels retain their bounded vocabulary.
+trusted consumers; configured logging, tracing, and explicitly wrapped
+observers receive sanitized projections. Presentation-title configuration is
+planned under that decision. Execution inputs and captured results remain
+unchanged, and metric labels retain their bounded vocabulary.
 
 Cuprum provides primitives to make command execution observable in a structured
 way.

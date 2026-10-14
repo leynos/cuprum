@@ -90,6 +90,7 @@ from cuprum.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
+    from cuprum.redaction import RedactionPolicy
 
 
 @dc.dataclass(slots=True)
@@ -127,24 +128,41 @@ class TracingHook(
         A :class:`Tracer` implementation for the target backend.
     record_output:
         If True, record stdout/stderr lines as span events. Default True.
+    redaction:
+        Optional policy applied to event copies before span projection.
+        Defaults to ``None``; raw observations and execution remain unchanged.
     """
 
     __slots__ = (
         "_active_spans",
         "_lock",
         "_record_output",
+        "_redaction",
         "_tracer",
     )
 
-    def __init__(self, tracer: Tracer, *, record_output: bool = True) -> None:
+    def __init__(
+        self,
+        tracer: Tracer,
+        *,
+        record_output: bool = True,
+        redaction: RedactionPolicy | None = None,
+    ) -> None:
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
+        self._redaction = redaction
         self._active_spans: dict[ExecId, _ActiveSpan] = {}
         self._lock = threading.Lock()
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
+        if self._redaction is not None:
+            event = self._redaction.redact_event(event)
+        self._handle_event(event)
+
+    def _handle_event(self, event: ExecEvent) -> None:
+        """Dispatch an event after applying the optional projection policy."""
         match event.phase:
             case "plan" | "stdin":
                 pass
@@ -334,7 +352,12 @@ class TracingHook(
         return attrs
 
 
-def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
+def tracing_hook(
+    tracer: Tracer,
+    *,
+    record_output: bool = True,
+    redaction: RedactionPolicy | None = None,
+) -> ExecHook:
     """Create a tracing observe hook for the given tracer.
 
     This is a convenience factory that returns a :class:`TracingHook` instance
@@ -346,6 +369,8 @@ def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
         A :class:`Tracer` implementation.
     record_output:
         If True, record stdout/stderr lines as span events. Default True.
+    redaction:
+        Optional policy applied before span projection. Defaults to ``None``.
 
     Returns
     -------
@@ -353,7 +378,7 @@ def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
         A hook suitable for use with ``sh.observe()``.
 
     """
-    return TracingHook(tracer, record_output=record_output)
+    return TracingHook(tracer, record_output=record_output, redaction=redaction)
 
 
 __all__ = [

@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted. The policy primitive and explicit observation wrapper are
-implemented. Direct adapter and sink configuration remains planned as part of
-issue #442.
+Accepted. The policy, observation wrapper, structured logging, tracing, and
+plain-text logging integrations are implemented. Direct GitHub Actions sink
+configuration remains planned as part of issue #442.
 
 ## Date
 
@@ -78,12 +78,12 @@ strings, compiled text patterns, and a replacement mask. The implemented
 sanitized copies. Structured logging and tracing can currently use that wrapper
 before registration with `observe()`.
 
-The selected follow-on integration will add policy configuration directly to
-structured logging, tracing, plain-text logging, and the GitHub Actions sink.
-Plain-text logging will apply it to the argv projection, and the presentation
-sink will apply it to the derived group title. Those direct configuration paths
-are planned, rather than implemented, at this milestone; plain-text logging and
-GitHub Actions titles currently remain unchanged.
+Structured logging, tracing, and plain-text logging accept the policy directly
+through a `redaction` keyword argument. Event adapters sanitize a copy before
+projection; plain-text logging applies the policy to its argv projection.
+Direct GitHub Actions sink configuration is planned at this milestone: that
+integration will apply the policy to the derived group title. GitHub Actions
+titles currently remain unchanged.
 
 Across both the implemented wrapper and planned integrations, the raw event,
 executed argv, child environment, and captured result remain unchanged.
