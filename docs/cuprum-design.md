@@ -1464,6 +1464,14 @@ Output hooks may be invoked on each line or chunk. Care must be taken to:
   service);
 - handle partial lines correctly.
 
+Opt-in bounded delivery moves sink writes and flushes to one run-owned daemon
+worker with a byte-bounded queue shared by stdout and stderr. Saturated chunks
+are dropped from presentation and reported; capture remains complete. The
+worker has a bounded shutdown drain and reports output left queued or in flight
+as undelivered if it must be abandoned. See
+[ADR-021](adr-021-bounded-output-delivery.md) for the delivery, ownership, and
+failure contract.
+
 Users should be able to choose:
 
 - `echo=True, capture=True` – tee behaviour;

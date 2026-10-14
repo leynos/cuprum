@@ -14,12 +14,37 @@ test-only scaffolding and never ships.
 from __future__ import annotations
 
 import io
+import threading
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sinks import OutputSession, SessionOutcome, SessionStart
+
+
+class BlockedSink(io.StringIO):
+    """A controllably blocked destination write for execution-loop tests."""
+
+    def __init__(self, *, wait_timeout_s: float = 10.0) -> None:
+        """Create events for observing and releasing the writer thread."""
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+        self.wait_timeout_s = wait_timeout_s
+        self.writer_thread_name: str | None = None
+
+    def write(self, text: str, /) -> int:
+        """Block until released, then record the text on this sink."""
+        self.writer_thread_name = threading.current_thread().name
+        self.started.set()
+        try:
+            if not self.release.wait(timeout=self.wait_timeout_s):
+                raise TimeoutError
+            return super().write(text)
+        finally:
+            self.finished.set()
 
 
 class RecordingSession:

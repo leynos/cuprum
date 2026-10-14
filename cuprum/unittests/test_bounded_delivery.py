@@ -18,23 +18,7 @@ from cuprum._bounded_delivery import (
 from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 from cuprum.sh import BoundedDelivery, RunOutputOptions
-
-
-class _BlockingSink(io.StringIO):
-    """Wait on one write so tests can fill the queue deterministically."""
-
-    def __init__(self) -> None:
-        """Prepare events that control and observe the blocked write."""
-        super().__init__()
-        self.started = threading.Event()
-        self.release = threading.Event()
-
-    def write(self, text: str, /) -> int:
-        """Hold one write until the test releases the destination."""
-        self.started.set()
-        if not self.release.wait(timeout=3):
-            raise RuntimeError
-        return super().write(text)
+from cuprum.unittests._sink_test_support import BlockedSink
 
 
 def _delivery_worker(
@@ -56,7 +40,7 @@ def _payload(value: str, source_bytes: int) -> _DeliveryPayload:
 
 def test_worker_bounds_queued_source_bytes_and_keeps_one_shared_fifo() -> None:
     """Queue saturation drops incoming data without changing stream order."""
-    sink = _BlockingSink()
+    sink = BlockedSink()
     worker = _delivery_worker(sink)
     try:
         assert (
@@ -155,7 +139,7 @@ def test_worker_disables_after_write_or_flush_failure(failure_site: str) -> None
 
 def test_close_abandons_a_blocked_daemon_after_the_drain_grace() -> None:
     """Shutdown reports active and queued bytes without joining indefinitely."""
-    sink = _BlockingSink()
+    sink = BlockedSink()
     worker = _delivery_worker(sink)
     assert (
         worker.enqueue(

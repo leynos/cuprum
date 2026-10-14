@@ -735,12 +735,13 @@ reset it, and its line is labelled `pipeline output idle`.
 
 `on_idle(elapsed_total, elapsed_idle)` replaces the built-in renderer rather
 than joining it. It is called synchronously on the run's own event loop, so it
-must not block. The sink the built-in renderer writes to is written and flushed
-on that same loop as well, so a blocking `write` or `flush` delays the parent's
-stream reads, timeout handling, and cancellation. Wrap a slow sink so that the
-write and flush hand off without blocking: run the blocking call in a worker
-thread or an executor, or use a genuinely non-blocking drain such as a queue
-fed with `put_nowait`.
+must not block. Without bounded delivery, the built-in renderer's sink write
+and flush run on that same loop, so a blocking operation delays stream reads,
+timeout handling, and cancellation. Setting `delivery=BoundedDelivery(...)` on
+`RunOutputOptions` is the supported built-in alternative to hand-rolling a
+queue for blocking output destinations. It applies to echoed child output and
+the built-in idle renderer; it does not move a caller's `on_idle` callback off
+the loop.
 
 <!-- tested-example: migration-queue-sink -->
 
@@ -768,11 +769,18 @@ sink.flush()
 assert pending.get_nowait() == "ready"
 ```
 
+This sketch remains useful when an application needs its own queue policy. For
+the common case, prefer the built-in mode, which supplies a byte bound,
+drop-and-report saturation, shared stdout/stderr ordering, and bounded shutdown
+handling without requiring each caller to implement those rules.
+
 A separate asyncio task is not enough because draining that queue still runs on
 the run's own loop. An ordinary exception from the callback, or a failed
-diagnostic write, disables further notifications for that run, emits one
-sanitized warning, and leaves the child's exit status and captured output
-untouched. `KeyboardInterrupt` and `SystemExit` are never suppressed.
+synchronous diagnostic write when bounded delivery is not selected, disables
+further notifications for that run, emits one sanitized warning, and leaves the
+child's exit status and captured output untouched. With bounded delivery, a
+worker write or flush failure is instead reported as `DELIVERY_ERROR`.
+`KeyboardInterrupt` and `SystemExit` are never suppressed.
 
 ### Opt-in presentation sink
 
