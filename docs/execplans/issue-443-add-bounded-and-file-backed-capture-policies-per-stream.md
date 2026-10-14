@@ -210,6 +210,14 @@ Thresholds that trigger escalation when breached.
   materialise results; cleanup on success/failure/timeout/cancellation;
   storage-failure handling.
 - [ ] Task 4: unit tests, BDD feature and behaviour tests, documentation
+  updates. Tests landed and green: `test_capture_cleanup.py`,
+  `test_capture_accumulator.py`, `test_capture_spill.py`,
+  `test_capture_spill_failure.py`, `test_capture_timeout.py`,
+  `test_bounded_capture_drain.py`, `tests/behaviour/test_bounded_capture.py`
+  with `tests/features/bounded_capture.feature`, and the runtime half of O9 in
+  `test_public_api.py`. Non-vacuity measured for each (see
+  `Surprises & discoveries`). Remaining: `test_maturin_build.py` snapshot
+  regeneration, and the `docs/cuprum-design.md`, migration-guide, and roadmap
   updates.
 - [ ] Push and open the draft pull request.
 
@@ -290,6 +298,52 @@ Thresholds that trigger escalation when breached.
   mirrors `output.py`'s namespace, but the `warnings` re-export became dead
   once the deprecated shim moved out and was removed with it rather than
   carried forward as a facade name with no reader.
+
+- Observation (non-vacuity, M3): the end-to-end spill-cleanup suite
+  (`cuprum/unittests/test_capture_spill_cleanup.py`) does **not** witness the
+  sink path in `cuprum/_capture_cleanup.py`. Mutating
+  `_FileAccumulator.cleanup` to `handle.close(remove=False)` — disabling the
+  sink step's removal entirely — left all 10 tests passing, because the
+  drain-result step removes the same file and either path alone is sufficient
+  on every route the suite covers. Disabling the drain-result step in
+  `_finalize_drain_handles` likewise left all 10 passing. Only disabling *both*
+  produced failures (7 of 10). The sink step's own contract is therefore
+  unwitnessed by that suite, and a regression that dropped it would have been
+  invisible until the specific route it exists for — a drain cancelled
+  mid-await — was exercised. Closed by adding
+  `cuprum/unittests/test_capture_cleanup.py`, whose
+  `test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle`
+  passes an empty drain tuple so the result step has nothing to act on and the
+  sink step is the only thing that can remove the file. Under the same
+  mutation that case and `test_cleanup_removes_the_file_a_spilled_sink_owns`
+  now fail (2 of 6). Date/Author: 2026-10-14, implementation agent.
+
+- Observation (M3, O9): the obligation's wording — "a run with no capture
+  configured still produces empty `captures` and complete `stdout`/`stderr`
+  text" — describes two different runs, not one. A default `RunOutputOptions()`
+  resolves both streams to `FullCapture` and reports two `full`/`memory`
+  records; it is `capture=False` that reports `captures == ()` with `stdout`
+  and `stderr` both `None`. The verification was split into two tests in
+  `cuprum/unittests/test_public_api.py` so each run's real shape is pinned:
+  `test_a_default_run_still_returns_complete_text_under_full_capture` and
+  `test_a_run_that_disables_capture_reports_neither_text_nor_records`. The
+  source plan's phrasing would have been satisfied by asserting either one
+  alone and would have been wrong about the other. Date/Author: 2026-10-14,
+  implementation agent.
+
+- Observation (M3, O8): partial output surviving a timeout is carried by the drain
+  *payloads* handed to `_handle_stream_timeout`
+  (`cuprum/_subprocess_stream_run.py:132` and `:306`), not by
+  `_finish_drain`'s non-EOF branch nor by `_finalize_capture_handles`. Two
+  mutations that a reading of the design would predict to bite did not:
+  replacing `_finish_drain`'s non-EOF branch with an empty capture, and
+  skipping both calls inside `_finalize_capture_handles`, each left all five
+  timeout cases passing. Passing `stdout_text=None, stderr_text=None` at both
+  `_handle_stream_timeout` call sites failed 4 of 5. This is recorded because
+  it locates the responsibility precisely: the readers reach EOF after the
+  child is signalled, so the payload arrives by the EOF path, and only the
+  handler's arguments decide whether it survives to the caller.
+  Date/Author: 2026-10-14, implementation agent.
 
 ## Decision log
 
@@ -415,6 +469,15 @@ Thresholds that trigger escalation when breached.
   the first split declined); moving `resolved_capture` out (the plan requires
   it "mirroring `resolved_echo`", which puts it beside its sibling).
   Date/Author: 2026-10-14, implementation agent.
+
+- Decision: `_cleanup_capture_sinks` propagates the first cleanup failure
+  rather than absorbing it. Rationale: it runs under the caller's
+  `_shielded_cleanup`, which is where a genuine teardown error belongs; the
+  established contract for the capture paths is that a *storage* failure is
+  absorbed into metadata (see `_capture_file.py`'s module docstring) while a
+  programming or dispatch error is not. A sink that fails to clean up is
+  reporting a broken filesystem, which the caller can act on and the metadata
+  cannot express. Date/Author: 2026-10-14, implementation agent.
 
 ## Outcomes & retrospective
 
