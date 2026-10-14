@@ -30,6 +30,7 @@ import time
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._scope_registration import _IdentityTupleRegistration
 from cuprum.control_events import (
     ControlEvent,
     ControlHook,
@@ -95,41 +96,19 @@ def current_control_hooks() -> tuple[ControlHook, ...]:
     return _control_hooks.get()
 
 
-class ControlHookRegistration:
-    """Registration handle for a control observation hook."""
+class ControlHookRegistration(_IdentityTupleRegistration["ControlHook"]):
+    """Registration handle for a control observation hook.
 
-    __slots__ = ("_detached", "_hook")
+    Detach removes only this handle's own hook by identity rather than
+    restoring a captured token, so detaching out of last-in-first-out order
+    cannot resurrect a hook someone already removed.
+    """
+
+    __slots__ = ()
 
     def __init__(self, hook: ControlHook) -> None:
         """Append ``hook`` to the current context's control hooks."""
-        self._detached = False
-        self._hook = hook
-        _control_hooks.set((*_control_hooks.get(), hook))
-
-    def detach(self) -> None:
-        """Remove this registration without restoring stale hook state."""
-        if self._detached:
-            return
-        hooks = list(_control_hooks.get())
-        for index in range(len(hooks) - 1, -1, -1):
-            if hooks[index] is self._hook:
-                del hooks[index]
-                break
-        _control_hooks.set(tuple(hooks))
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        super().__init__(_control_hooks, hook)
 
 
 def observe_control(hook: ControlHook) -> ControlHookRegistration:

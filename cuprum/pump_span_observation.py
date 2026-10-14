@@ -13,6 +13,7 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._scope_registration import _TokenTupleRegistration
 from cuprum.pump_span_events import (
     PUMP_HOP_OUTCOME_ATTRIBUTE,
     PUMP_HOP_SPAN_NAME,
@@ -38,15 +39,21 @@ _pump_span_tracers: ContextVar[tuple[Tracer, ...]] = ContextVar(
 )
 
 
-class PumpHopSpanRegistration:
+class PumpHopSpanRegistration(_TokenTupleRegistration["Tracer"]):
     """Registration handle for one Rust-pump hop tracer.
 
     The handle restores the precise preceding registration tuple when detached.
     It should therefore be detached in the :class:`~contextvars.Context` that
     created it and in last-in-first-out order when registrations nest.
+
+    Unlike the other registrations built on
+    :class:`~cuprum._scope_registration._TokenTupleRegistration`, this one
+    refuses an out-of-order detach rather than quietly discarding whatever a
+    later registration added: it keeps the tuple it installed so
+    :meth:`_release` can compare it against the live one first.
     """
 
-    __slots__ = ("_detached", "_registered", "_token", "_tracer")
+    __slots__ = ("_registered", "_tracer")
 
     def __init__(self, tracer: Tracer) -> None:
         """Append ``tracer`` to the current context's hop tracers."""
@@ -57,27 +64,11 @@ class PumpHopSpanRegistration:
             self._registered,
         )
 
-    def detach(self) -> None:
+    def _release(self) -> None:
         """Restore the tracers that preceded this registration."""
-        if self._detached:
-            return
         if _pump_span_tracers.get() is not self._registered:
             raise ValueError(_OUT_OF_ORDER_DETACH_MESSAGE)
         _pump_span_tracers.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the registration scope."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the tracer on scope exit."""
-        self.detach()
 
 
 @dc.dataclass(frozen=True, slots=True)
