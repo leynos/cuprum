@@ -195,6 +195,39 @@ def _read_pin_sites(root: pth.Path, tool: str, env_name: str) -> dict[str, str]:
     }
 
 
+def _read_nose_pin_sites(root: pth.Path) -> dict[str, str]:
+    """Read the nose detector's pin from all three sites that must agree.
+
+    nose is not a dev-group dependency, so its manifest pin lives under
+    ``[tool.nose] version`` rather than in the ``package==version`` list
+    :func:`_read_pyproject_pin` reads. Reading the three sites explicitly here
+    keeps this contract from silently narrowing to the two that happen to share
+    a reader: the workflow pin is the one a bump forgets, because bumping it
+    alone changes what CI installs while the Makefile and manifest still agree
+    with each other.
+
+    Returns
+    -------
+    dict[str, str]
+        The three site names mapped to the pin each one declares.
+    """
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    nose = pyproject.get("tool", {}).get("nose")
+    assert isinstance(nose, dict), "pyproject.toml must declare a [tool.nose] table"
+    manifest = nose.get("version")
+    assert isinstance(manifest, str), "[tool.nose] version must be a string"
+    return {
+        "Makefile": _read_makefile_pin(root, "NOSE_VERSION"),
+        "ci.yml": _read_workflow_env(root, "NOSE_VERSION"),
+        "pyproject.toml": manifest,
+    }
+
+
+def test_nose_detector_pin_is_synchronized_across_all_three_sites() -> None:
+    """The detector's pin agrees in the Makefile, ci.yml, and [tool.nose]."""
+    _assert_pins_agree(_read_nose_pin_sites(repo_root()), "nose")
+
+
 def _expanded_make_recipes(
     root: pth.Path,
     *,

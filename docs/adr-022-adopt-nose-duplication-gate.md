@@ -351,3 +351,66 @@ rather than a ranked prefix of them.
   prerequisite is added to a target that a contract test drives, the test needs
   a stub for the prerequisite as well as for the target, unless the test exists
   precisely to prove the prerequisite ran.
+
+## Addendum: pre-review re-adjudication (2026-10-14)
+
+An assessment of this branch against its ExecPlan found that one entry in
+`[tool.duplication_gate]` recorded an extraction as *outstanding* rather than
+done. That entry named `cuprum/_process_handle/settle.py`, where
+`_settle_teardown` and `_weigh` shared a six-line error arbitration differing
+by one clause, and its reason described the honest fix as "a shared helper
+taking the pending exception as an argument rather than a flag".
+
+The reason was accurate about the fix and wrong about the state. Recording a
+known-good extraction as outstanding is not adjudication — it defers the work
+while taking the green result — so the extraction was performed in this
+revision instead of the reason being reworded. The arbitration is now
+`cuprum._process_handle.settle._arbitrate`, which both callers invoke; the one
+difference between them is whether an ordinary failure is suppressed, which a
+teardown does when the block already failed and a public stop never does. That
+argument is passed as the presence of a pending exception rather than as a
+strategy flag, because the deferred case is expressing a fact about the
+caller's own state. Cancellation still outranks an ordinary failure and is
+still never suppressible, which is the rule the module docstring states and
+which the extraction leaves intact. The entry was removed, since it no longer
+describes anything.
+
+The removal moved the measured surface. Re-derived on this revision: 62
+families, all 62 allowed by reasoned exceptions, 0 blocking, 0 stale, under 50
+entries. Re-adjudicating the same report at `top = 30` emits 30 of the 62 and
+falsely reports 23 of the 50 entries as stale.
+
+The same assessment found a second scope-contract gap. `[tool.nose] min-size`
+was enforced as a floor (`min_size >= MINIMUM_SIZE_FLOOR`), which accepts any
+increase; raising it hides families below the new floor exactly as lowering it
+admits noise above it, and neither direction is visible in the gate's output
+because a family under the floor is never reported at all. The contract now
+requires equality, so changing the floor is a reviewed edit to the constant
+rather than a config change that passes the check unchanged.
+
+Two further consequences were recorded at the same time, both about the failure
+modes this gate can produce rather than about the detector:
+
+- A report whose `summary` disagrees with its own `families` array is now
+  refused. `summary.families` and `summary.shown` were previously compared only
+  against each other, so a report claiming one family while emitting none
+  satisfied the ordering check and handed the gate an empty surface to
+  adjudicate. All three counts must now agree.
+- The installer target refuses to report success unless the detector it leaves
+  in place reports the pinned version. The recipe previously ended on the
+  version print, so a failed or wrong-version install could exit zero over a
+  detector still at the old version, and the gate would then run a binary the
+  pin does not describe.
+
+One accepted statement in this ADR needs a correction it cannot carry in place.
+The Consequences section says `scripts/duplication_gate.py` "and its four
+sibling modules carry PEP 723 headers". Only the entry point does. The other
+four — `nose_schema.py`, `nose_detector.py`, `duplication_allowlist.py`, and
+`atomic_write.py` — are plain modules with no inline metadata, and they run in
+the environment the entry point's header declares, reached through
+`PYTHONPATH=.` and the `scripts` namespace package. The distinction matters for
+exactly the reason the original sentence was reaching for: the interpreter and
+dependency pins live in one file, so bumping them is a single edit, and a
+sibling cannot silently declare a different floor. The original sentence
+implied five declarations instead of one, which would suggest a sibling could
+drift.

@@ -252,6 +252,13 @@ def require_untruncated_surface(report: object) -> None:
     still present. Refusing is what keeps the gate's own stale-entry advice
     from becoming a wrong instruction.
 
+    The two counts are also checked against the array they claim to describe.
+    A report whose summary says one family was found and one shown, but whose
+    ``families`` array is empty, satisfies the ``shown >= families`` comparison
+    while handing the gate nothing to adjudicate; requiring all three to agree
+    is what makes the fail-closed claim above true of the counts rather than
+    only of their mutual ordering.
+
     Parameters
     ----------
     report : object
@@ -260,11 +267,13 @@ def require_untruncated_surface(report: object) -> None:
     Raises
     ------
     GateConfigError
-        If the report does not match the expected schema, or if ``summary``
-        shows the surface was capped.
+        If the report does not match the expected schema, if ``summary`` shows
+        the surface was capped, or if the declared counts disagree with the
+        emitted array.
     """
+    document = require_table(report, context="nose report")
     summary = require_table(
-        require_table(report, context="nose report").get("summary"),
+        document.get("summary"),
         context="nose report summary",
     )
     total = require_non_negative_int(
@@ -273,15 +282,35 @@ def require_untruncated_surface(report: object) -> None:
     shown = require_non_negative_int(
         summary.get("shown"), context="nose report summary.shown"
     )
+    emitted = _family_count(document.get("families"))
     if shown < total:
         msg = (
             f"nose reported {total} families but emitted only {shown}: "
             "`tool.nose.top` has saturated the ranked surface, so "
-            f"{total - shown} families were never adjudicated. Raise `top` "
-            f"above {total} (or remove it) and re-run; do not read any stale "
-            "allow entry as an instruction to delete it."
+            f"{total - shown} families were never adjudicated. Set "
+            "`tool.nose.top = 0` (nose's unbounded spelling) and re-run; do "
+            "not read any stale allow entry as an instruction to delete it. "
+            "Removing the setting is not a remedy: it restores nose's default "
+            "bound of 30 and re-creates exactly this failure."
         )
         raise GateConfigError(msg)
+    if shown != emitted or total != emitted:
+        msg = (
+            f"nose reported {total} families and {shown} shown, but the "
+            f"families array holds {emitted}: the summary does not describe "
+            "the surface it accompanies, so no count in it can be trusted. "
+            "Refusing rather than adjudicating a report whose own totals "
+            "disagree."
+        )
+        raise GateConfigError(msg)
+
+
+def _family_count(value: object) -> int:
+    """Count the families array, rejecting a non-array in the summary's place."""
+    if not isinstance(value, cabc.Sequence) or isinstance(value, (str, bytes)):
+        msg = "nose report families must be an array"
+        raise GateConfigError(msg)
+    return len(value)
 
 
 def normalize_findings(report: object) -> list[Finding]:

@@ -5486,8 +5486,24 @@ artefact and its own digest, so do not reuse either for a different platform.
 The gate re-verifies `nose --version` against `[tool.nose] version` before
 scanning and refuses to run on a mismatch, pointing at `make install-nose`; set
 `NOSE_BIN` to point the gate at another binary, as a path resolved against the
-repository root when relative. `cuprum/unittests/test_toolchain_pins.py`
-asserts that the Makefile pin, the CI pin, and `[tool.nose] version` agree.
+repository root when relative. The installer applies the same check in the
+other direction: after a reinstall it re-reads `nose --version` and fails the
+target unless the binary it just placed reports the pinned version, so a
+`cargo-binstall` that resolved a different revision cannot leave the gate
+running a detector the pin does not describe. A failed `cargo-binstall` also
+fails the target rather than being reported as a successful reinstall.
+`cuprum/unittests/test_toolchain_pins.py` asserts that the Makefile pin, the CI
+pin, and `[tool.nose] version` agree.
+
+The floor of 24 intermediate-language tokens is pinned by equality, not by a
+lower bound. Both directions of drift are scope changes: a lower floor admits
+families the reviewed surface excluded, a higher one hides families it
+included, and neither is visible in the gate's output, because a family under
+the floor is never reported at all. Widening or narrowing the floor is
+therefore an edit to `MINIMUM_SIZE_FLOOR` in
+`scripts/tests/test_nose_scope_contract.py` in the same commit as the
+`pyproject.toml` change, so the scope decision is reviewed rather than absorbed
+as configuration.
 
 A scan that finds no source files is a configuration error, not a pass. nose
 reports an empty scope with exit 0 and a summary of `families: 0, shown: 0` —
@@ -5511,10 +5527,17 @@ raised, because a positive bound does not merely narrow the view: the
 stale-entry report is computed from the families the scan returned, so any
 family hidden below the bound makes its allow entry look stale and the gate
 instructs the maintainer to delete a reasoned exception whose duplication is
-still present. The count moves in both directions: a refactor can pair up two
-windows that were previously distinct without duplicating anything on purpose,
-and it can equally drop a pair below the floor. The semantic channel reports
-only exact intermediate-language equivalence, so the gate blocks on a narrow,
+still present. Measured on 2026-10-14: 62 families, all allowed by 50 reasoned
+exceptions, with nothing stale and nothing blocking — while re-adjudicating
+that same report at `top = 30` emits 30 of the 62 and falsely reports 23 of
+those 50 entries as stale. A report whose `summary.families` is above its
+`summary.shown`, or whose `summary` disagrees with the `families` array it
+accompanies, is refused outright rather than adjudicated; that check is what
+makes the claim above structural instead of an observation about one run. The
+count moves in both directions: a refactor can pair up two windows that were
+previously distinct without duplicating anything on purpose, and it can equally
+drop a pair below the floor. The semantic channel reports only exact
+intermediate-language equivalence, so the gate blocks on a narrow,
 witness-backed subset of semantic duplication; broader Type-4 duplication
 remains a review concern.
 
@@ -5598,15 +5621,18 @@ environment of its own beyond the pinned binary. Its helper tests run through
 `make duplication-test` under the gate's own Python 3.14 interpreter, isolated
 from the application suite.
 
-The gate is isolated tooling: `scripts/duplication_gate.py` and its sibling
-modules carry PEP 723 headers declaring Python 3.14 and their own pinned
-dependencies, and run under `uv run --no-project`, so the gate needs neither
-the application virtualenv nor the compiled extension. Cuprum's application
-floor stays at 3.12, so `make typecheck` re-checks the tooling modules in a
-second pass at their real floor rather than weakening them or misdeclaring
-Cuprum's support. Invoke the gate as a *script path*, not `-m`: `uv run` reads
-the PEP 723 header only from a script named on the command line, so `-m` would
-silently resolve the gate's dependencies from the ambient environment.
+The gate is isolated tooling: `scripts/duplication_gate.py` carries a PEP 723
+header declaring Python 3.14 and its pinned dependencies, and runs under
+`uv run --no-project`; its four sibling modules have no header of their own and
+are imported into the environment that header supplies, so the interpreter and
+dependency pins live in one file rather than five. The gate therefore needs
+neither the application virtualenv nor the compiled extension. Cuprum's
+application floor stays at 3.12, so `make typecheck` re-checks the tooling
+modules in a second pass at their real floor rather than weakening them or
+misdeclaring Cuprum's support. Invoke the gate as a *script path*, not `-m`:
+`uv run` reads the PEP 723 header only from a script named on the command line,
+so `-m` would silently resolve the gate's dependencies from the ambient
+environment.
 
 Because `scripts/` has no `__init__.py`, it is a namespace package and CPython
 builds its search path from every `sys.path` entry holding a `scripts`

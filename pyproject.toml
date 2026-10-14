@@ -82,6 +82,7 @@ exclude = [
     "scripts/tests/test_make_install_nose.py",
     "scripts/tests/test_nose_binary.py",
     "scripts/tests/test_nose_detector.py",
+    "scripts/tests/test_nose_schema.py",
     "scripts/tests/test_nose_scope_contract.py",
     "scripts/tests/test_nose_settings.py",
 ]
@@ -598,10 +599,10 @@ reason = "Reached only by self-dispatch: _TupleRegistration.__init__ calls self.
 # from the families the scan returned, so a family hidden below the bound
 # leaves its allow entry matching nothing and the gate tells the maintainer to
 # *delete* a reasoned exception whose duplication is still present. Measured on
-# this tree: the full surface is 63 families covered by 52 entries with nothing
-# stale, while re-adjudicating that same report at `top = 30` falsely reports
-# 24 of those 52 entries as stale. `top = 0` is what removes the failure mode,
-# not a larger number. See ADR-021.
+# this tree: the full surface is 62 families covered by 50 entries with nothing
+# stale, while re-adjudicating that same report at `top = 30` emits 30 of the
+# 62 and falsely reports 23 of those 50 entries as stale. `top = 0` is what
+# removes the failure mode, not a larger number. See ADR-022.
 [tool.nose]
 version = "0.20.0"
 roots = ["cuprum"]
@@ -942,10 +943,6 @@ members = [
     "cuprum/sh/safe_cmd.py::run_sync",
 ]
 reason = "Two synchronous wrappers that are each one `asyncio.run(...)` over an async twin. The matched text is the public signature and its four keywords written out; a shared `_run_sync(awaitable)` would be a pure delegate that deletes the signatures the public API documents, the same shape the `__or__` entry above records."
-
-[[tool.duplication_gate.allow]]
-unit = "cuprum/_process_handle/settle.py"
-reason = "`_settle_teardown` and `_weigh` share a six-line error arbitration — a cancellation outranks both, a stop outranks a settle — that differs by one clause. The module docstring states the rule once, and the honest fix is a shared helper taking the pending exception as an argument rather than a flag; that refactor is recorded here as outstanding rather than done, because both call sites are on the process-teardown path where the deferral reasoning in `_settle_teardown`'s own docstring is load-bearing."
 
 [[tool.duplication_gate.allow]]
 members = [

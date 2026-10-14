@@ -76,14 +76,7 @@ def atomic_write(
     if options.create_parents:
         path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode if options.preserve_mode and path.exists() else None
-    with tempfile.NamedTemporaryFile(
-        delete=False, dir=path.parent, prefix=f".{path.name}."
-    ) as stream:
-        stream.write(content)
-        stream.flush()
-        if options.sync_file:
-            os.fsync(stream.fileno())
-        temporary = pathlib.Path(stream.name)
+    temporary = _filled_temporary(path, content, options)
     try:
         if mode is not None:
             temporary.chmod(mode)
@@ -93,3 +86,36 @@ def atomic_write(
                 os.fsync(descriptor)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _filled_temporary(
+    path: pathlib.Path,
+    content: bytes,
+    options: AtomicWriteOptions,
+) -> pathlib.Path:
+    """Write *content* to a closed temporary sibling and return its path.
+
+    The temporary is unlinked before any failure propagates, so the caller's
+    own cleanup guard only ever has to cover the replacement that follows.
+    Splitting the two intervals this way keeps the cleanup obligation with the
+    code that created the file: whoever unlinks it last is not also the code
+    that has to know how far the write got.
+
+    Returns
+    -------
+    pathlib.Path
+        The path of the written temporary, which the caller owns from here.
+    """
+    with tempfile.NamedTemporaryFile(
+        delete=False, dir=path.parent, prefix=f".{path.name}."
+    ) as stream:
+        temporary = pathlib.Path(stream.name)
+        try:
+            stream.write(content)
+            stream.flush()
+            if options.sync_file:
+                os.fsync(stream.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    return temporary

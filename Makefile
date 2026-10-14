@@ -339,6 +339,7 @@ DUPLICATION_TEST_SOURCES = scripts/tests/duplication_gate_test_support.py \
   scripts/tests/test_make_install_nose.py \
   scripts/tests/test_nose_binary.py \
   scripts/tests/test_nose_detector.py \
+  scripts/tests/test_nose_schema.py \
   scripts/tests/test_nose_scope_contract.py \
   scripts/tests/test_nose_settings.py
 # A script path, not `-m`: `uv run` only reads a PEP 723 header from a script
@@ -368,6 +369,7 @@ DUPLICATION_TEST_TARGETS ?= scripts/tests/test_atomic_write.py \
   scripts/tests/test_make_install_nose.py \
   scripts/tests/test_nose_binary.py \
   scripts/tests/test_nose_detector.py \
+  scripts/tests/test_nose_schema.py \
   scripts/tests/test_nose_scope_contract.py \
   scripts/tests/test_nose_settings.py
 # `git ls-files` covers tracked files and nonignored untracked files without
@@ -548,8 +550,14 @@ install-nose: ## Install the pinned nose duplication detector
 	  mkdir -p "$(NOSE_TOOLS_DIR)"; \
 	  $(CARGO_BINSTALL) --no-confirm --disable-strategies compile,quick-install \
 	    --install-path "$(NOSE_TOOLS_DIR)" \
-	    --git https://github.com/corca-ai/nose 'nose-cli@$(NOSE_VERSION)'; \
-	  "$(NOSE_BIN)" --version; \
+	    --git https://github.com/corca-ai/nose 'nose-cli@$(NOSE_VERSION)' || exit $$?; \
+	  installed=$$($(NOSE_BIN) --version 2>/dev/null) || exit $$?; \
+	  if [ "$$installed" != "nose $(NOSE_VERSION)" ]; then \
+	    printf "install-nose: expected 'nose %s', got '%s'\n" \
+	      "$(NOSE_VERSION)" "$$installed" >&2; \
+	    exit 1; \
+	  fi; \
+	  printf "Installed %s\n" "$$installed"; \
 	fi
 
 duplication: install-nose ## Run the blocking code-duplication gate

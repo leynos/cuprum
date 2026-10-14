@@ -67,18 +67,31 @@ def _stub_nose(directory: Path, version: str) -> Path:
     )
 
 
-def _stub_binstall(directory: Path, log: Path, detonator: Path) -> Path:
+def _stub_binstall(
+    directory: Path,
+    log: Path,
+    detonator: Path,
+    *,
+    exit_code: int = 0,
+) -> Path:
     """Write a stub installer that records its arguments and installs nose.
 
     cargo-binstall is invoked with ``--install-path <dir>`` before the crate
     spec, so the stub mirrors that shape: it logs its argv and copies the
-    already-written pinned detector into the requested install path.
+    already-written detector into the requested install path. A non-zero
+    ``exit_code`` models a failed install — the argv is still recorded, but
+    nothing is placed at the install path.
 
     Returns
     -------
     Path
         The executable stub.
     """
+    effect = (
+        f'cp "{detonator}" "$install_path/nose"\nchmod +x "$install_path/nose"\n'
+        if exit_code == 0
+        else f"exit {exit_code}\n"
+    )
     return _write_executable(
         directory / "cargo-binstall",
         "#!/bin/sh\n"
@@ -88,9 +101,7 @@ def _stub_binstall(directory: Path, log: Path, detonator: Path) -> Path:
         '    --install-path) install_path="$2"; shift 2 ;;\n'
         "    *) shift ;;\n"
         "  esac\n"
-        "done\n"
-        f'cp "{detonator}" "$install_path/nose"\n'
-        'chmod +x "$install_path/nose"\n',
+        "done\n" + effect,
     )
 
 
@@ -98,6 +109,8 @@ def _run_install_nose(
     tmp_path: Path,
     *,
     installed_version: str | None,
+    installed_after: str = NOSE_VERSION,
+    binstall_exit_code: int = 0,
 ) -> InstallerInvocation:
     """Run the real target against stubbed detector and installer binaries.
 
@@ -108,6 +121,12 @@ def _run_install_nose(
     installed_version : str | None
         The version the cached detector reports, or ``None`` to simulate a
         binary that is absent altogether.
+    installed_after : str
+        The version the stub installer places at the install path. A value
+        other than the pin models an installer that reported success but
+        delivered the wrong detector.
+    binstall_exit_code : int
+        The stub installer's exit status. Non-zero models a failed install.
 
     Returns
     -------
@@ -125,10 +144,12 @@ def _run_install_nose(
         _stub_nose(tools, installed_version)
 
     binstall_log = tmp_path / "binstall-arguments"
-    # The installer stub copies this template, so a reinstall necessarily
-    # leaves a detector at the pinned version.
-    detonator = _stub_nose(tmp_path / "payload", NOSE_VERSION)
-    binstall = _stub_binstall(tmp_path, binstall_log, detonator)
+    # The installer stub copies this template, so a successful reinstall
+    # normally leaves a detector at the pinned version.
+    detonator = _stub_nose(tmp_path / "payload", installed_after)
+    binstall = _stub_binstall(
+        tmp_path, binstall_log, detonator, exit_code=binstall_exit_code
+    )
 
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed target and stubbed tools.
         [
@@ -199,6 +220,13 @@ class TestMakeInstallNose:
         assert f"nose-cli@{NOSE_VERSION}" in invocation.binstall_arguments, (
             "Installation must request the pinned detector version."
         )
+        assert "--disable-strategies" in invocation.binstall_arguments, (
+            "The install must refuse the compile and quick-install strategies."
+        )
+        assert "compile,quick-install" in invocation.binstall_arguments, (
+            "Only the pre-built download strategies may be used; compiling the "
+            "detector from source defeats the point of the pin."
+        )
 
     def test_reinstall_leaves_a_detector_at_the_pinned_version(
         self, tmp_path: Path
@@ -221,4 +249,42 @@ class TestMakeInstallNose:
         )
         assert verified.stdout.strip() == f"nose {NOSE_VERSION}", (
             "The installed detector must report the pinned version."
+        )
+
+    def test_a_failed_install_fails_the_target(self, tmp_path: Path) -> None:
+        """An installer failure propagates instead of leaving a stale detector.
+
+        Without the explicit status check the recipe's last command decides the
+        shell's status. A failed install over a detector that is still present
+        at the old version would then report success while the gate goes on
+        running the stale binary.
+        """
+        invocation = _run_install_nose(
+            tmp_path, installed_version="0.19.0", binstall_exit_code=42
+        )
+
+        assert invocation.result.returncode != 0, (
+            "A failed install must fail `make install-nose`, not be reported as "
+            f"a successful reinstall. stdout: {invocation.result.stdout!r}"
+        )
+
+    def test_an_install_that_delivers_the_wrong_version_fails_the_target(
+        self, tmp_path: Path
+    ) -> None:
+        """A successful installer that placed the wrong detector is a failure.
+
+        cargo-binstall can exit zero having resolved a different revision than
+        the requested tag. Re-checking the installed binary is what binds the
+        version the gate will actually run to the pin the manifest declares.
+        """
+        invocation = _run_install_nose(
+            tmp_path, installed_version="0.19.0", installed_after="0.19.0"
+        )
+
+        assert invocation.result.returncode != 0, (
+            "An install that left the detector at the old version must fail the "
+            f"target. stdout: {invocation.result.stdout!r}"
+        )
+        assert "expected 'nose 0.20.0'" in invocation.result.stderr, (
+            "The target must name the pin and the version it actually found."
         )

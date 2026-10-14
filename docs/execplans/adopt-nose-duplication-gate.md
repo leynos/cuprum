@@ -38,7 +38,7 @@ repository rather than re-derived here.
 - Project the binary through a checksum-verified or pin-verified path with
   compilation fallback prohibited. A missing trusted binary is a provisioning
   failure, not permission to start a source build.
-- `make duplication-allow` must take `FIRST`, `SECOND` and `REASON` from the
+- `make duplication-allow` must take `FIRST`, `MEMBERS` and `REASON` from the
   Make command line only, and must pass them literally.
 - Every full commit gate run is delegated to `scrutineer`; gates run
   sequentially, never in parallel.
@@ -190,9 +190,12 @@ repository rather than re-derived here.
       coverage. Verified by running `cuprum/unittests`, `scripts/tests`, and
       `tests` with `NOSE_BIN=/nonexistent/nose`: 3824 passed, 91 skipped, 0
       failed.
-- [ ] Re-run the commit gates against the rebased head and update the draft
+- [x] Re-run the commit gates against the rebased head and update the draft
       pull request. The `ccccaa85` evidence above describes the pre-rebase
-      series and does not carry over to the rewritten commits.
+      series and does not carry over to the rewritten commits. Superseded by
+      the later replays recorded below: the branch was rebuilt on current
+      `main` and re-adjudicated twice more, and every gate claim in this plan
+      is scoped to the head named beside it.
 
 ### Rebuild on current main (2026-10-14)
 
@@ -543,6 +546,14 @@ Delivered as draft pull request
 `ccccaa85`, plus this finalization. The branch is pushed and the pull request
 is open, draft, and **not merged**.
 
+That commit count is the state at first delivery and stayed stale through two
+later rebuilds: the branch was replayed onto `b6bb9a99`, then rebuilt on current
+`main`, and stands at 16 commits over
+`8c78a5b77781654b8a92282f8f8dbde387966c36` as of 2026-10-14. The earlier figure
+is left in place rather than edited, because it describes the delivery it
+records; the current count is what a reader following this plan should measure
+against.
+
 The branch was then rebased onto `main` on 2026-10-02. The replay renumbered
 this plan's ADR to 019 (the identifier collision noted in the Decision Log),
 restored `main`'s ADR-003 addenda alongside this one in date order, and
@@ -611,16 +622,137 @@ reviewable import list for an invisible one. The two entries were therefore
 widened to the full membership the gate reported and a new entry recorded for
 the `_observability` pair, each with a reason naming the trigger. No import was
 added, removed, or reordered to make the gate pass, and neither the surface nor
-the token floor moved. The final state is 27 families covered by 25 reasoned
-entries, with `top = 30` still not binding. The measured movement is: findings
-26 → 27 (the one new `_observability` pairing), entries 24 → 25, and the two
-existing families 9 → 10 and 4 → 6 locations. In the first family
-`cuprum/context/registration.py` moved out to the second and
-`cuprum/_command_internals.py` and `cuprum/events.py` moved in; in the second,
-`cuprum/context/registration.py` and `cuprum/_line_callbacks.py` joined.
+the token floor moved. The state at that re-adjudication is 27 families covered
+by 25 reasoned entries, with `top = 30` still not binding. That "still not
+binding" reading did not survive later growth: it was falsified within the same
+branch when the surface passed 30, which is why the bound was removed rather
+than raised. The measured movement at this step is: findings 26 → 27 (the one
+new `_observability` pairing), entries 24 → 25, and the two existing families 9
+→ 10 and 4 → 6 locations. In the first family `cuprum/context/registration.py`
+moved out to the second and `cuprum/_command_internals.py` and
+`cuprum/events.py` moved in; in the second, `cuprum/context/registration.py` and
+`cuprum/_line_callbacks.py` joined.
 
 The §9 demonstration was re-run at the delivered head after `nose_detector.py`
 changed, so its evidence describes the shipped code: all four legs pass with
 the real pinned binary, and the checkout's manifest is unchanged across the
 run. No planted clone, temporary exception, or scratch artefact was left behind
 in the repository.
+
+### Pre-review re-adjudication against the assessment findings (2026-10-14)
+
+An ExecPlan completeness/correctness assessment returned six findings against
+the branch. All six were verified against source before repair, and all six
+were real rather than false positives. They fall into two groups.
+
+The first group is a scope gap. `[tool.nose] min-size` was enforced as
+`min_size >= MINIMUM_SIZE_FLOOR`, which the assessment correctly read as
+accepting an arbitrarily higher floor; the comment beside the constant stated
+the opposite protection. Raising a floor hides families below it exactly as
+lowering one admits them, and a family under the floor is never reported, so
+neither direction appears in the gate's output. The contract now requires
+equality, and the constant's comment records that changing it is a reviewed
+edit rather than a tuning knob.
+
+The second group is a set of correctness gaps in the guard machinery itself:
+
+- `require_untruncated_surface` compared `summary.shown` against
+  `summary.families` but never against the `families` array. A report claiming
+  one family while emitting none satisfied the ordering check and handed the
+  gate an empty surface. All three counts must now agree, and the refusal names
+  which of the two checks fired.
+- One allow entry recorded an extraction as *outstanding*. The entry's own
+  reason named the honest fix — "a shared helper taking the pending exception
+  as an argument rather than a flag" — so the fix was performed rather than the
+  reason reworded: `_arbitrate` now holds the cancellation-outranks-failure
+  rule once for both `_settle_teardown` and `_weigh`, differing only in whether
+  an ordinary failure is suppressed. The entry was removed, and ADR-022 carries
+  a dated addendum rather than edited accepted text.
+- `make install-nose` ended on the version print, so a failed `cargo-binstall`,
+  or one that exited zero having placed the wrong detector, left the target
+  reporting success over a stale binary. The recipe now propagates the
+  installer's status and re-reads the installed version, failing unless it
+  equals the pin.
+- The Makefile comment claiming the three pin sites were kept aligned by
+  `test_toolchain_pins.py` described a contract that did not exist: the test
+  read two of the three sites, and the workflow pin — the one a bump forgets —
+  was unwatched. `_read_nose_pin_sites` now reads the Makefile, `ci.yml`, and
+  `[tool.nose] version` explicitly.
+
+Every repair is covered by a test that was confirmed to fail without it, with
+one exception found by checking that claim rather than asserting it. The
+installer guards were mutation-checked twice: removing the version re-check
+alone does not fail the tests, because the installer-status guard independently
+catches the same scenario, and only removing both does. That is recorded
+because the weaker mutation result is a property of the two guards overlapping,
+not evidence that the version check is untested.
+
+The exception is the `settle.py` extraction itself. Deleting `_weigh`'s
+ordinary-failure clause and re-running `cuprum/unittests` left all 3,253 tests
+passing, and the same deletion applied to the *pre-extraction* file behaved
+identically — so this was a pre-existing gap in the coverage, not a regression
+introduced here. What made it worth closing rather than noting is that the
+module docstring already claimed the seam exists so "the weighing can be
+exercised without constructing a run", and nothing exercised it: the rule was
+stated once and pinned nowhere, on a file this branch rewrites.
+
+`cuprum/unittests/test_settle_arbitration.py` now drives `_settle_after_stop`
+and `_settle_teardown` directly, in the same shape as the sibling
+`test_shielded_cleanup.py`. Three mutations now fail that previously survived
+the whole suite: dropping `_weigh`'s failure clause, inverting the suppression
+polarity, and removing cancellation precedence. The gap was load-bearing rather
+than cosmetic, because the two callers of the shared arbitration differ only in
+the suppression flag — so a test that covered one caller would have proved
+nothing about the other, and there was no test for either.
+
+The surface moved with the `settle.py` extraction. Re-derived on this revision:
+62 families, 50 entries, 0 blocking, 0 stale; the same report re-adjudicated at
+`top = 30` emits 30 of the 62 and falsely reports 23 of the 50 entries as
+stale. These figures replace the 63/51/24 measurements recorded earlier in this
+log and in ADR-022.
+
+### Clearing the four gate findings the repairs left (2026-10-14)
+
+Those repairs passed `check-fmt`, `test`, `markdownlint`, and `nixie`, but left
+`make lint` and `make typecheck` red with four findings. All four were real and
+each was traced to the edit that introduced it.
+
+Two were in `scripts/tests/test_atomic_write.py`. The `NamedTemporaryFile` stub
+forwarded `**kwargs` as `object`, which matches no overload, so `ty` refused it
+(`no-matching-overload`); naming the keywords the helper actually passes fixes
+the type error and additionally pins the call surface the test depends on. The
+same stub allocated its descriptor across a bare `return` (R1732), so the real
+call is now owned by `with`. The C1803 on `spy.opened == []` was a genuine
+idiom slip.
+
+The other two were a single `too-many-lines` failure at
+`scripts/tests/test_nose_detector.py:1` (418/400). Its attribution mattered
+before the fix did, because the obvious remedy — split the file — is wrong if
+the cap does not bind on that path. `PYLINT_TEST_TARGETS` filters
+`scripts/tests` out of the strict pass' target list and the test pass disables
+`too-many-lines`, so on the target lists alone the cap appears not to apply.
+
+It does apply, and the reason is neither the reserved test-target split nor the
+`recursive` setting. A first explanation blamed `recursive = true`, and direct
+experiment falsified it: `--recursive=n` changes nothing here. The rule,
+reproduced on a synthetic tree, is that pylint stops descending at a directory
+that is a package whose child is not — `pkg/__init__.py` present beside a
+`sub/` holding no `__init__.py` yields one statement analysed, while a tree
+with no `__init__.py` anywhere yields both. That is the asymmetry in this
+repository: `cuprum` has an `__init__.py`, so `pylint cuprum` analyses 7,924
+statements and reports nothing for `cuprum/unittests`, while naming
+`cuprum/unittests` directly analyses 31,115 and flags 51 over-limit modules. The
+`benchmarks conftest.py cuprum scripts tests` list reaches `scripts/tests`
+because `scripts` has no `__init__.py`, so the walk descends into it. The cap
+is real for this path and the split is the honest fix; the test-target split is
+vestigial and must not be read as a scope statement, and neither must an
+assumption that a named directory expands to its children uniformly.
+
+The new module is `scripts/tests/test_nose_schema.py`, bounding the split by
+production module rather than line count: the untruncated-surface guard is
+defined in `scripts/nose_schema.py` and merely re-exported by the detector, so
+its tests now sit with the surface they cover. The split is registered in the
+three lists that would otherwise silently drop the module — the `ty` exclude
+set, `DUPLICATION_TEST_TARGETS`, and `DUPLICATION_TEST_SOURCES` — and a silent
+drop is exactly the failure mode here: 28 tests collect across the two files
+with no duplicate node IDs (21 in the detector module, 7 in the new one).

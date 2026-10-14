@@ -25,8 +25,12 @@ MAKEFILE_PIN_PATTERN = re.compile(r"^NOSE_VERSION\s*\?=\s*(\S+)\s*$", re.MULTILI
 #: The detection channels the gate may select, and must select in full.
 KNOWN_CHANNELS = ("syntax", "semantic", "near")
 
-#: The smallest unit size, in nose IL tokens, the gate may be pinned to. A
-#: lower floor hides small families rather than adjudicating them.
+#: The reviewed unit size, in nose IL tokens, that the gate is pinned to.
+#:
+#: Both directions of drift are scope changes. A lower floor admits families
+#: the reviewed surface excluded; a higher one hides families the reviewed
+#: surface included. Neither is visible in the gate's output, so the contract
+#: pins the value rather than bounding it.
 MINIMUM_SIZE_FLOOR = 24
 
 #: The surface name that admits every family, hidden ones included.
@@ -188,13 +192,22 @@ def test_mode_selects_every_known_channel() -> None:
 
 
 def test_size_floor_and_ranking_bound_adjudicate_the_whole_surface() -> None:
-    """The size floor is at least the minimum, and the ranking is unbounded."""
+    """The size floor is exactly the reviewed one, and the ranking is unbounded."""
     table = _nose_table()
     min_size = table.get("min-size")
     top = table.get("top")
     assert isinstance(min_size, int), "tool.nose.min-size must be an integer."
-    assert min_size >= MINIMUM_SIZE_FLOOR, (
-        f"tool.nose.min-size must be at least {MINIMUM_SIZE_FLOOR}."
+    # Equality rather than a floor comparison. The floor direction only guards
+    # against narrowing; it accepts any widening, and widening is the same
+    # defect mirrored — a raised floor hides small families below it exactly as
+    # a lowered one admits noise above it. Neither direction is adjudicated by
+    # the gate, because a family under the floor is never reported, so a silent
+    # change either way shrinks the surface the gate claims to enforce. An
+    # approved widening changes this constant in the same commit.
+    assert min_size == MINIMUM_SIZE_FLOOR, (
+        f"tool.nose.min-size must be exactly {MINIMUM_SIZE_FLOOR}; found "
+        f"{min_size!r}. Raising it hides families below the new floor without "
+        "adjudicating them, which is a scope change, not a tuning knob."
     )
     assert top == UNBOUNDED_TOP, (
         f"tool.nose.top must be {UNBOUNDED_TOP} to adjudicate the whole "
