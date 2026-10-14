@@ -278,8 +278,9 @@ class _FailingCloseStream(_RealTemporaryStream):
 class _InterruptedStream(_RealTemporaryStream):
     """A temporary stream whose first write fails, over a real file object."""
 
-    def write(self, _payload: bytes) -> int:
-        """Refuse the write."""
+    def write(self, payload: bytes) -> int:
+        """Refuse the write; the payload never reaches the file."""
+        del payload
         message = "write failed"
         raise OSError(message)
 
