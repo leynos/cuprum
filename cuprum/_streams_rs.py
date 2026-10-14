@@ -30,8 +30,8 @@ import typing as typ
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import (
+    _emit_native_pump_io_failure,
     _emit_rust_pump_handoff_outcome,
-    _emit_windows_raw_handle_rejected,
 )
 from cuprum.pump_span_events import NATIVE_PUMP_BUFFER_SIZE
 
@@ -344,10 +344,7 @@ def rust_pump_stream(
             )
         )
     except OSError:
-        if os.name == "nt":
-            _emit_windows_raw_handle_rejected(_LOGGER)
-        else:
-            _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+        _emit_native_pump_io_failure(_LOGGER, is_windows=os.name == "nt")
         raise
 
 

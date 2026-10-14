@@ -211,6 +211,18 @@ def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:
     _emit_rust_pump_handoff_outcome(outcome)
 
 
+def _emit_native_pump_io_failure(
+    logger: logging.Logger,
+    *,
+    is_windows: bool,
+) -> None:
+    """Record a native pump error using the platform-specific outcome."""
+    if is_windows:
+        _emit_windows_raw_handle_rejected(logger)
+    else:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+
+
 def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
     """Invoke one pump hook, reporting rather than propagating its failure."""
     try:
