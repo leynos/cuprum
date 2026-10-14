@@ -30,6 +30,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import (
     BrokenPipePolicy,
     EchoErrorCategory,
@@ -260,7 +261,7 @@ def _config(
 ) -> _StreamConfig:
     """Build a UTF-8 stream config that echoes into *sink* under *policy*."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         sink=sink,
         encoding="utf-8",
@@ -349,7 +350,7 @@ def test_echo_guard_stops_after_the_first_write_failure(
         captured, sink, fallbacks = asyncio.run(_drain_case(case, error, policy))
 
     context = f"chunks={chunks!r}, failing_write={failing_write!r}, mode={mode!r}"
-    assert captured == payload.decode("utf-8", errors="replace"), (
+    assert captured.payload == payload.decode("utf-8", errors="replace"), (
         f"capture must decode the complete payload for {context}"
     )
     assert sink.rejected_attempt is not None, (

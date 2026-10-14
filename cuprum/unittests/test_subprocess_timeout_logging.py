@@ -21,6 +21,7 @@ from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
+from cuprum.unittests._stream_drain_support import _NONE_CAPTURED
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
     _ExitedProcess,
@@ -158,7 +159,7 @@ def test_teardown_drain_failure_logs_diagnostic(
         await asyncio.sleep(0)
 
         await _drain_stream_consumers(
-            (consumer, completed), _DrainContext(capture=False, pid=5678)
+            (consumer, completed), _DrainContext(captures=_NONE_CAPTURED, pid=5678)
         )
 
     with caplog.at_level(logging.ERROR, logger=_TIMEOUT_LOGGER):

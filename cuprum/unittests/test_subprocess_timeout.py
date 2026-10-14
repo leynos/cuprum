@@ -15,6 +15,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessInvariantError,
@@ -24,6 +25,7 @@ from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
 )
+from cuprum.unittests._stream_drain_support import _NONE_CAPTURED, captured
 
 # A consumer either completes with captured text or fails with an exception.
 _CONSUMER_OUTCOME = st.one_of(
@@ -51,42 +53,43 @@ _DRAIN_CASE = st.builds(
 )
 
 
-async def _consumer(outcome: tuple[str, str | None], delay: int) -> str | None:
-    """Yield ``delay`` times, then either return text or fail."""
+async def _consumer(outcome: tuple[str, str | None], delay: int) -> _CapturedDrain:
+    """Yield ``delay`` times, then either report text or fail."""
     for _ in range(delay):
         await asyncio.sleep(0)
     kind, value = outcome
     if kind == "raise":
         msg = "consumer failed"
         raise ValueError(msg)
-    return value
+    return captured(value)
 
 
 def test_drain_stream_consumers_cancels_pending_and_decodes() -> None:
     """Draining cancels a still-pending consumer and preserves a completed one."""
 
-    async def block() -> str | None:
+    async def block() -> _CapturedDrain:
         """Remain pending until the drain cancels this task."""
         await asyncio.Event().wait()
+        return _CapturedDrain()
 
     async def run_case() -> None:
         """Drain a still-pending consumer alongside an already-completed one."""
         pending = asyncio.create_task(block())
-        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        completed = asyncio.create_task(asyncio.sleep(0, result=captured("stderr")))
         await completed  # the completed consumer must be genuinely done
 
         stdout_text, stderr_text = await _drain_stream_consumers(
-            (pending, completed), _DrainContext(capture=False)
+            (pending, completed), _DrainContext(captures=_NONE_CAPTURED)
         )
 
         assert pending.cancelled(), (
             "a consumer left pending at drain must be cancelled, "
             f"but pending.done()={pending.done()}"
         )
-        assert stdout_text is None, (
+        assert stdout_text.payload is None, (
             f"a cancelled consumer must decode to None, not {stdout_text!r}"
         )
-        assert stderr_text == "stderr", (
+        assert stderr_text.payload == "stderr", (
             f"a completed consumer's text must be preserved, got {stderr_text!r}"
         )
 
@@ -126,15 +129,27 @@ def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> No
             await asyncio.sleep(0)
 
         stdout_text, stderr_text = await _drain_stream_consumers(
-            consumers, _DrainContext(capture=False)
+            consumers, _DrainContext(captures=_NONE_CAPTURED)
         )
 
         assert all(task.done() for task in consumers), (
             "every consumer task must be drained before the helper returns"
         )
-        for label, task, captured, outcome, delay in (
-            ("stdout", consumers[0], stdout_text, case.stdout, case.stdout_delay),
-            ("stderr", consumers[1], stderr_text, case.stderr, case.stderr_delay),
+        for label, task, payload, outcome, delay in (
+            (
+                "stdout",
+                consumers[0],
+                stdout_text.payload,
+                case.stdout,
+                case.stdout_delay,
+            ),
+            (
+                "stderr",
+                consumers[1],
+                stderr_text.payload,
+                case.stderr,
+                case.stderr_delay,
+            ),
         ):
             kind, value = outcome
             if delay >= _SETTLE_TURNS:
@@ -149,9 +164,9 @@ def test_drain_stream_consumers_decodes_across_orderings(case: _DrainCase) -> No
                     "settling window rather than being cancelled"
                 )
                 expected = None if kind == "raise" else value
-            assert captured == expected, (
+            assert payload == expected, (
                 f"{label} capture must reflect its consumer outcome: "
-                f"expected {expected!r}, got {captured!r}"
+                f"expected {expected!r}, got {payload!r}"
             )
 
     asyncio.run(run_case())

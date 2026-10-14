@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
+from cuprum.capture_policy import FullCapture
 from tests.helpers.parity import (
     PropertyPipelineCase,
     build_property_pipeline_case,
@@ -94,7 +95,7 @@ async def _consume_at_read_size(
     reader.feed_data(payload)
     reader.feed_eof()
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -121,7 +122,7 @@ def test_capture_matches_whole_payload_decode_at_each_read_size(
     """Property: capture matches the whole-payload decode oracle."""
     captured = asyncio.run(_consume_at_read_size(payload, read_size=read_size))
 
-    assert captured == payload.decode("utf-8", errors="replace"), (
+    assert captured.payload == payload.decode("utf-8", errors="replace"), (
         "capture must match the independent whole-payload decoder for "
         f"read_size={read_size}, payload={payload!r}, captured={captured!r}"
     )
@@ -160,7 +161,7 @@ async def _consume_bytes_at_read_size(
     reader.feed_data(payload)
     reader.feed_eof()
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -169,7 +170,7 @@ async def _consume_bytes_at_read_size(
         capture_bytes=True,
     )
     captured = await _consume_stream(reader, config)
-    assert not isinstance(captured, str), (
+    assert not isinstance(captured.payload, str), (
         f"a byte-exact drain must not decode, got {captured!r}"
     )
     return captured
@@ -189,7 +190,9 @@ def test_byte_exact_capture_round_trips_every_byte_value(
     exercised rather than assumed away.
     """
     payload, read_size = case
-    captured = asyncio.run(_consume_bytes_at_read_size(payload, read_size=read_size))
+    captured = asyncio.run(
+        _consume_bytes_at_read_size(payload, read_size=read_size)
+    ).payload
 
     assert captured == payload, (
         "byte-exact capture must round-trip the payload unchanged for "
@@ -224,7 +227,7 @@ def test_line_emission_matches_splitlines_at_read_boundaries(
     lines: list[str] = []
     captured = asyncio.run(
         _consume_at_read_size(text.encode(), read_size=read_size, lines=lines),
-    )
+    ).payload
 
     assert captured == text, (
         "capture must preserve constructed text at "

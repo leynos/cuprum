@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._context_policy import (
     _collect_hooks as _collect_hooks,
 )
@@ -169,11 +170,22 @@ async def _run_spawned_pipeline(
     await _finalize_pipeline_execution(
         parts, observers, stage_results, config.sink_bracket
     )
-    return _build_pipeline_result(
+    result = _build_pipeline_result(
         stage_results,
         failure_index=inputs.wait_result.failure_index,
         capture_bytes=config.capture_bytes,
     )
+    # Last, and after the results are assembled: the drains' payloads have been
+    # copied into the stage results by this point, while the records those
+    # results carry name a spill file that is now gone, which is the lifetime
+    # every other capture path settles on. The accumulators go second so a
+    # consumer cancelled mid-drain — one that never finalized, and so
+    # contributed no drain here — still has its file removed.
+    await _finalize_capture_handles(
+        (*inputs.stderr_by_stage, inputs.final_stdout),
+        spawn.captures.sinks,
+    )
+    return result
 
 
 async def _run_pipeline(

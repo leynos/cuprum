@@ -45,8 +45,10 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
+from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -55,17 +57,16 @@ from cuprum._subprocess_wait import (
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._subprocess_wait_types import (
+    _DrainContext,
+    _DrainPair,
+    _RunTaskOwnership,
+)
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
-    from cuprum._streams import _RelayDiagnostics
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import (
-        _DrainContext,
-        _RunTaskOwnership,
-        _StreamPayload,
-        _StreamPayloadPair,
-    )
 
 
 async def _settle_owned_group_before_draining(
@@ -104,19 +105,20 @@ async def _reconcile_shielded(
     tasks: _RunTaskOwnership,
     pid: int | None,
     *,
-    capture: bool,
-) -> _StreamPayloadPair:
+    preserve: bool,
+) -> _DrainPair:
     """Reconcile every task the run owns under one shield."""
     # The shield is what makes the reconciliation a guarantee: a caller
     # cancelling now would otherwise abandon the consumers mid-drain and leak
-    # them. *capture* is the caller's, because the routes disagree about what
-    # the drained text is for — a capturing route hands it to the caller's
+    # them. *preserve* is the caller's, because the routes disagree about what
+    # the drained output is for — a preserving route hands it to the caller's
     # ``TimeoutExpired``, and a route re-raising some other error settles
-    # promptly rather than spending the capture grace on text nobody will read.
+    # promptly rather than spending the capture grace on output nobody will
+    # read.
     return await _shielded_cleanup(
         _reconcile_run_tasks(
             tasks,
-            _drain_context(execution, tasks, pid, capture=capture),
+            _drain_context(execution, tasks, pid, preserve=preserve),
         )
     )
 
@@ -137,16 +139,16 @@ async def _wait_for_streamed_process_exit(
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_text, stderr_text = await _reconcile_shielded(
+        stdout_drain, stderr_drain = await _reconcile_shielded(
             execution,
             tasks,
             pid,
-            capture=execution.capture,
+            preserve=True,
         )
         _handle_stream_timeout(
             exc,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
+            stdout_text=stdout_drain.payload,
+            stderr_text=stderr_drain.payload,
             timeout=execution.timeout,
         )
     except BaseException:
@@ -154,7 +156,7 @@ async def _wait_for_streamed_process_exit(
         # while terminating, say — need the same reconciliation. Do not capture
         # stream text while another error propagates, but settle every task
         # before re-raising the original failure unchanged.
-        await _reconcile_shielded(execution, tasks, pid, capture=False)
+        await _reconcile_shielded(execution, tasks, pid, preserve=False)
         raise
 
 
@@ -221,7 +223,7 @@ async def _settle_group_and_reconcile_consumers(
     execution: _SubprocessExecution,
     tasks: _RunTaskOwnership,
     context: _DrainContext,
-) -> _StreamPayloadPair:
+) -> _DrainPair:
     """Settle an owned group, then reconcile every task the run still owns.
 
     The leader has exited but its group may not have, so the group is settled
@@ -247,7 +249,7 @@ async def _settle_group_and_reconcile_consumers(
     *context* is the caller's, built by :func:`_drain_context`, because the two
     routes disagree about what the drained text is for. The deadline's expiry
     becomes a ``TimeoutExpired`` the caller receives, so a capturing run asks for
-    ``execution.capture`` and hands the drained text on. A route re-raising some
+    the run's capture policies and hands the drained text on. A route re-raising some
     other error asks for ``False``, settling promptly rather than spending the
     capture grace on text nobody will read.
 
@@ -260,11 +262,11 @@ async def _settle_group_and_reconcile_consumers(
 
     Returns
     -------
-    _StreamPayloadPair
-        The drained stdout and stderr payloads.
+    _DrainPair
+        The drained stdout and stderr results, records included.
     """
 
-    async def settle_then_reconcile() -> _StreamPayloadPair:
+    async def settle_then_reconcile() -> _DrainPair:
         """Settle the group, then reconcile every run task, as one unit."""
         await _settle_owned_group_before_draining(process, execution)
         return await _reconcile_run_tasks(tasks, context)
@@ -277,7 +279,7 @@ async def _collect_stream_output(
     execution: _SubprocessExecution,
     tasks: _RunTaskOwnership,
     pid: int | None,
-) -> _StreamPayloadPair:
+) -> _DrainPair:
     """Collect the stream consumers, settling the run's group if that fails.
 
     The three awaits below form one boundary *and* share one deadline; the
@@ -294,28 +296,28 @@ async def _collect_stream_output(
 
     Returns
     -------
-    _StreamPayloadPair
-        The stdout and stderr payloads of the completed gather.
+    _DrainPair
+        The stdout and stderr results of the completed gather.
     """
     try:
         async with asyncio.timeout(_deadline_for_collection(execution)):
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
-            stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+            stdout_drain, stderr_drain = await asyncio.gather(*tasks.consumers)
     except TimeoutError as exc:
         # Capture-aware, matching the exit-wait route: a capturing run's text
         # is what the resulting ``TimeoutExpired`` reports, so discarding it
         # here would lose output the caller was explicitly promised.
-        stdout_text, stderr_text = await _settle_group_and_reconcile_consumers(
+        stdout_drain, stderr_drain = await _settle_group_and_reconcile_consumers(
             process,
             execution,
             tasks,
-            _drain_context(execution, tasks, pid, capture=execution.capture),
+            _drain_context(execution, tasks, pid, preserve=True),
         )
         _handle_stream_timeout(
             exc,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
+            stdout_text=stdout_drain.payload,
+            stderr_text=stderr_drain.payload,
             timeout=execution.timeout,
         )
     except BaseException:
@@ -323,12 +325,12 @@ async def _collect_stream_output(
             process,
             execution,
             tasks,
-            _drain_context(execution, tasks, pid, capture=False),
+            _drain_context(execution, tasks, pid, preserve=False),
         )
         raise
     for diagnostics in tasks.relay_diagnostics:
         diagnostics.settle()
-    return stdout_text, stderr_text
+    return stdout_drain, stderr_drain
 
 
 async def _run_subprocess_with_streams(
@@ -339,18 +341,19 @@ async def _run_subprocess_with_streams(
 ) -> tuple[
     int,
     float,
-    _StreamPayload | None,
-    _StreamPayload | None,
+    _CapturedDrain,
+    _CapturedDrain,
     tuple[_RelayDiagnostics, _RelayDiagnostics],
 ]:
     """Run subprocess with stream capture, timeout handling, and diagnostics.
 
     Returns
     -------
-    Tuple of the exit code, exit timestamp, captured stdout, captured stderr,
-    and the per-stream relay diagnostics collectors (stdout first, stderr
-    second) settled by the run's reconciliation. The payloads are ``str`` or
-    ``bytes`` according to the run's mode.
+    Tuple of the exit code, exit timestamp, the stdout and stderr drain
+    results, and the per-stream relay diagnostics collectors (stdout first,
+    stderr second) settled by the run's reconciliation. Each drain result
+    carries its payload — ``str`` or ``bytes`` according to the run's mode —
+    together with the record describing how its policy retained it.
     """
     # Imported here to avoid the orchestration module importing this one at
     # module load time (they reference each other's helpers).
@@ -366,7 +369,9 @@ async def _run_subprocess_with_streams(
         execution.idle.launch()
     # The spawn context is a value snapshot, not an ownership hand-off: the
     # run keeps retaining the same collector tuple on _RunTaskOwnership so
-    # its single reconciliation point settles them exactly once.
+    # its single reconciliation point settles them exactly once. The helper
+    # resolves both stream configs, which is what makes each stream's capture
+    # accumulator reachable from that same point.
     spawn = _prepare_stream_spawn(execution, pid)
     tasks = _build_run_task_ownership(process, execution, spawn)
     exit_code, exited_at = await _wait_for_streamed_process_exit(
@@ -375,13 +380,22 @@ async def _run_subprocess_with_streams(
         tasks,
         pid,
     )
-    stdout_text, stderr_text = await _collect_stream_output(
+    stdout_drain, stderr_drain = await _collect_stream_output(
         process,
         execution,
         tasks,
         pid,
     )
-    return exit_code, exited_at, stdout_text, stderr_text, spawn.relay_diagnostics
+    # The success path's half of the cleanup contract. The teardown routes all
+    # reach this through ``_reconcile_run_tasks``, and the pipeline's result
+    # path calls it beside its own assembly; a run that simply reaches EOF owns
+    # a file too, and without this it would return a record reporting
+    # ``owned=True`` for a file nothing was ever going to remove.
+    await _finalize_capture_handles(
+        (stdout_drain, stderr_drain),
+        typ.cast("tuple[object, object]", tasks.captures),
+    )
+    return exit_code, exited_at, stdout_drain, stderr_drain, spawn.relay_diagnostics
 
 
 __all__ = [

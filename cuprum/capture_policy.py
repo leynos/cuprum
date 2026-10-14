@@ -12,7 +12,7 @@ and stays the default. :class:`BoundedCapture` retains a byte tail — the most
 recent ``max_bytes`` of the stream — and reports exactly how much it dropped.
 :class:`FileBackedCapture` keeps the stream on the parent heap until it passes
 a threshold and then spills it to a temporary file, so a caller can hold a
-complete artifact without the parent's memory tracking the child's output.
+complete artefact without the parent's memory tracking the child's output.
 
 Two boundaries are load-bearing.
 
@@ -90,7 +90,7 @@ class BoundedCapture:
     bounded by ``max_bytes`` however much the child writes. The retained tail
     is a suffix of the child's output, trimmed forwards to a code-point
     boundary before decoding, and the drop count is reported exactly on the
-    finalised :class:`CapturedStream`.
+    finalized :class:`CapturedStream`.
 
     The bound is on bytes, not characters: a caller bounding at 4096 gets at
     most 4096 bytes of text, which is between 4096 and 1024 characters
@@ -136,8 +136,8 @@ class FileBackedCapture:
     ``spill_threshold_bytes``; past that point the bytes that have already
     arrived are written to a file and every later chunk is appended there, so
     retention stops growing with the child's output. A stream that never
-    crosses the threshold is finalised exactly as :class:`FullCapture` would
-    have finalised it — decoded text on the result, ``storage`` reported as
+    crosses the threshold is finalized exactly as :class:`FullCapture` would
+    have finalized it — decoded text on the result, ``storage`` reported as
     ``"memory"`` — so raising the threshold is a pure memory decision and
     never changes what the caller reads.
 
@@ -237,10 +237,11 @@ class CapturedStream:
         unreadable path — one under a directory since removed, say — is not
         detected here.
     owned:
-        Whether cuprum created this file for this run, and so is responsible
-        for removing it. ``keep_file`` suspends that removal and hands the
-        file to the caller, so an owned file may outlive the run by design.
-        Always ``False`` for a memory-backed capture.
+        Whether cuprum still owns this file, and so will remove it. A
+        ``keep_file`` policy hands the file to the caller instead, which
+        reports ``owned`` as ``False``: the path is given out either way, so
+        what this field answers is who must clean up. Always ``False`` for a
+        memory-backed capture.
     storage_failed:
         Whether a write or flush to the spill file failed. The run still
         completes, the child is still reaped, and the file holds whatever

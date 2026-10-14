@@ -21,8 +21,15 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import _drain_stream_consumers, _DrainContext
+from cuprum.capture_policy import FullCapture
+from cuprum.unittests._stream_drain_support import (
+    _BOTH_CAPTURED,
+    _NONE_CAPTURED,
+    captured,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.unittests._stream_drain_support import (
@@ -94,7 +101,7 @@ def _payload_and_chunks(draw: st.DrawFn) -> tuple[bytes, tuple[bytes, ...]]:
 def _capturing_config() -> _StreamConfig:
     """Build a capturing stream config that writes to memory without echoing."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -102,7 +109,7 @@ def _capturing_config() -> _StreamConfig:
     )
 
 
-async def _partial_capture(text: str) -> CapturedOrNone:
+async def _partial_capture(text: str) -> _CapturedDrain:
     """Run the real capturing drain over a pipe holding ``text`` and no EOF."""
     config = _capturing_config()
     reader = asyncio.StreamReader()
@@ -110,7 +117,7 @@ async def _partial_capture(text: str) -> CapturedOrNone:
     return await _drain(reader, config)
 
 
-async def _make_consumer(kind: str, text: str) -> CapturedOrNone:
+async def _make_consumer(kind: str, text: str) -> _CapturedDrain:
     """Behave as a stream consumer of the requested ``kind``.
 
     ``completed`` and ``failing`` yield once before settling: a task the loop
@@ -121,12 +128,13 @@ async def _make_consumer(kind: str, text: str) -> CapturedOrNone:
 
     Returns
     -------
-    CapturedOrNone
+    _CapturedDrain
         What this consumer leaves behind: the ``text`` it was given for
         ``completed`` and ``pending`` (the latter is cancelled, so its return
-        is never observed), and the real drain's captured payload — text or
-        the child's bytes — for ``partial``. ``None`` only if a capturing
-        ``partial`` drain reports no capture at all.
+        is never observed), and the real drain's result — text or the child's
+        bytes — for ``partial``. The record is taken from the real drain only,
+        since a double that invented one would answer a question the test is
+        not asking.
 
     Raises
     ------
@@ -138,10 +146,10 @@ async def _make_consumer(kind: str, text: str) -> CapturedOrNone:
     match kind:
         case "completed":
             await asyncio.sleep(0)
-            return text
+            return captured(text)
         case "pending":
             await asyncio.Event().wait()
-            return text
+            return captured(text)
         case "failing":
             await asyncio.sleep(0)
             raise _ConsumerFailureError
@@ -172,7 +180,7 @@ async def _drain_while_raising(
     try:
         raise primary
     finally:
-        await _drain_stream_consumers(consumers, _DrainContext(capture=False))
+        await _drain_stream_consumers(consumers, _DrainContext(captures=_NONE_CAPTURED))
 
 
 def _cancellation_propagates(scenario: _DrainScenario) -> bool:
@@ -200,7 +208,7 @@ async def _run_drain_scenario(scenario: _DrainScenario) -> CapturedOrNone:
     _payload, chunks = scenario.payload_and_chunks
     discard_event = asyncio.Event() if scenario.discard_on_cancel else None
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -284,18 +292,18 @@ class TestConsumerDrainProperties:
             # consumers have settled so "completed" means what it says.
             for _ in range(4):
                 await asyncio.sleep(0)
-            stdout_text, stderr_text = await _drain_stream_consumers(
-                consumers, _DrainContext(capture=False)
+            stdout_drain, stderr_drain = await _drain_stream_consumers(
+                consumers, _DrainContext(captures=_NONE_CAPTURED)
             )
 
-            for task, kind, value in (
-                (consumers[0], stdout_kind, stdout_text),
-                (consumers[1], stderr_kind, stderr_text),
+            for task, kind, drained in (
+                (consumers[0], stdout_kind, stdout_drain),
+                (consumers[1], stderr_kind, stderr_drain),
             ):
                 assert task.done(), f"the {kind} consumer was left pending"
-                expected = text if kind == "completed" else None
-                assert value == expected, (
-                    f"a {kind} consumer must decode to {expected!r}, got {value!r}"
+                expected = captured(text) if kind == "completed" else _CapturedDrain()
+                assert drained == expected, (
+                    f"a {kind} consumer must decode to {expected!r}, got {drained!r}"
                 )
 
         asyncio.run(run_case())
@@ -325,7 +333,10 @@ class TestConsumerDrainProperties:
             with pytest.raises(UnicodeDecodeError):
                 asyncio.run(_run_drain_scenario(scenario))
             return
-        assert asyncio.run(_run_drain_scenario(scenario)) == expected
+        drained = asyncio.run(_run_drain_scenario(scenario))
+        assert drained.payload == expected, (
+            f"the drain must report its decoded payload; got {drained!r}"
+        )
 
     @settings(deadline=None, max_examples=_EXAMPLES)
     @given(
@@ -353,13 +364,13 @@ class TestConsumerDrainProperties:
             )
             for _ in range(4):
                 await asyncio.sleep(0)
-            stdout_text, stderr_text = await _drain_stream_consumers(
-                consumers, _DrainContext(capture=True)
+            stdout_drain, stderr_drain = await _drain_stream_consumers(
+                consumers, _DrainContext(captures=_BOTH_CAPTURED)
             )
 
             for task, kind, value in (
-                (consumers[0], stdout_kind, stdout_text),
-                (consumers[1], stderr_kind, stderr_text),
+                (consumers[0], stdout_kind, stdout_drain.payload),
+                (consumers[1], stderr_kind, stderr_drain.payload),
             ):
                 assert task.done(), f"the {kind} consumer was left pending"
                 assert value is not None, (

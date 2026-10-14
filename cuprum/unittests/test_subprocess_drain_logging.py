@@ -18,6 +18,10 @@ from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
 )
+from cuprum.unittests._stream_drain_support import (
+    _BOTH_CAPTURED,
+    _NONE_CAPTURED,
+)
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -75,7 +79,7 @@ def test_a_failed_reader_is_recorded_before_it_is_discarded(
         )
         for _ in range(4):
             await asyncio.sleep(0)
-        await _drain_stream_consumers(consumers, _DrainContext(capture=True))
+        await _drain_stream_consumers(consumers, _DrainContext(captures=_BOTH_CAPTURED))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())
@@ -115,7 +119,7 @@ def test_a_cancelled_reader_is_not_recorded_as_a_failure(
             asyncio.create_task(_never_reaches_eof()),
             asyncio.create_task(_never_reaches_eof()),
         )
-        await _drain_stream_consumers(consumers, _DrainContext(capture=False))
+        await _drain_stream_consumers(consumers, _DrainContext(captures=_NONE_CAPTURED))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())
@@ -153,7 +157,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
 
         await _drain_stream_consumers(
             consumers,
-            _DrainContext(capture=True, eof_grace_waiter=expire_immediately),
+            _DrainContext(captures=_BOTH_CAPTURED, eof_grace_waiter=expire_immediately),
         )
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
@@ -187,7 +191,7 @@ def test_readers_that_all_reach_eof_leave_the_window_unrecorded(
             asyncio.create_task(_completes("out")),
             asyncio.create_task(_completes("err")),
         )
-        await _drain_stream_consumers(consumers, _DrainContext(capture=True))
+        await _drain_stream_consumers(consumers, _DrainContext(captures=_BOTH_CAPTURED))
 
     with caplog.at_level(logging.DEBUG, logger=_DRAIN_LOGGER):
         asyncio.run(run_case())

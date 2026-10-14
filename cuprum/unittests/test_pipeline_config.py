@@ -9,6 +9,7 @@ import pytest
 
 from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._sink_lifecycle import _SinkBracket
+from cuprum.capture_policy import FullCapture
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
@@ -46,7 +47,8 @@ def test_stream_config_uses_requested_stream_settings(
     context = ExecutionContext(encoding="latin-1", errors="ignore")
     config = _PipelineRunConfig(
         ctx=context,
-        capture=True,
+        capture_stdout=FullCapture(),
+        capture_stderr=FullCapture(),
         echo_stdout=True,
         echo_stderr=False,
         max_echo_line_bytes=123,
@@ -67,7 +69,7 @@ def test_stream_config_uses_requested_stream_settings(
     assert stream_config.sink is expected_sink, (
         f"{stream} must retain its configured output sink"
     )
-    assert stream_config.capture_output is True, (
+    assert stream_config.capture == FullCapture(), (
         "capture must be shared by both streams"
     )
     assert stream_config.echo_max_line_bytes == 123, (

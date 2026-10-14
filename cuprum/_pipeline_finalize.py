@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._capture_cleanup import _cleanup_capture_sinks
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -121,12 +122,19 @@ async def _reconcile_pipeline_run_failure(
     stream tasks and the observe-hook tasks are all owned by the pipeline, and
     a cancellation arriving between two separately shielded steps would leave
     the second set pending.
+
+    The capture cleanup runs last, after the cancels have been awaited. A
+    cancelled consumer is what this path exists for, and it never finalizes, so
+    its accumulator is the only remaining owner of the spill file; closing that
+    file before the cancel has landed would race a reader that is still
+    appending.
     """
     await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
     after_process_cleanup()
     await _drain_tasks_during_cleanup(
         pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
     )
+    await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_pipeline_run_failure(
@@ -181,6 +189,10 @@ async def _finalize_pipeline_timeout(
             message=_PIPELINE_FINALIZATION_ERROR,
         )
     )
+    # The expiry is built from the drained outputs before this point, and the
+    # error it raises carries text rather than handles: this run's result is
+    # never constructed, so nothing downstream will close these files.
+    await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_pipeline_stage_result_failure(
@@ -207,6 +219,10 @@ async def _finalize_pipeline_stage_result_failure(
             message=_PIPELINE_FINALIZATION_ERROR,
         )
     )
+    # The drains this run gathered carried spill handles into the assembly that
+    # has just failed. No result is built from them now, so the accumulators —
+    # which own the same files, and close idempotently — are what removes them.
+    await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 __all__ = [

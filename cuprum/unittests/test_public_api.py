@@ -514,8 +514,7 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
     )
     assert hints["stdout"] == str | None
     assert hints["captures"] == tuple[c.CapturedStream, ...], (
-        "the annotation must resolve to the public record, got "
-        f"{hints['captures']!r}"
+        f"the annotation must resolve to the public record, got {hints['captures']!r}"
     )
 
 

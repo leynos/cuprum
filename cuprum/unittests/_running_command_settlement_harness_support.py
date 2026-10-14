@@ -233,9 +233,9 @@ class _SettlementHarness:
         # collected under the value-blind task type: the waiters carry a
         # ``CommandResult`` and the stream consumers carry a payload, and
         # ``Task`` is invariant in its result type.
-        tasks: list[asyncio.Task[typ.Any]] = [] if self._waiter is None else [
-            self._waiter
-        ]
+        tasks: list[asyncio.Task[typ.Any]] = (
+            [] if self._waiter is None else [self._waiter]
+        )
         # A run owns consumer tasks, and one abandoned mid-drain still holds
         # them: collected here so nothing is reported unawaited at close. The
         # settlement task is read from every handle for the same reason, and not
@@ -256,4 +256,3 @@ class _SettlementHarness:
         # Leave the thread as the rules found it: no loop installed, so a later
         # test's ``asyncio.run`` never inherits this machine's closed loop.
         asyncio.set_event_loop(None)
-# weave: run 'weave explain cuprum/unittests/_running_command_settlement_harness_support.py' for per-hunk detail, 'weave check' to verify your resolution

@@ -111,7 +111,7 @@ def _prepare_execution_observation(
     tags = _merge_tags(
         _base_stage_tags(
             cmd,
-            capture=output.capture,
+            capture=output.captures_any_stream,
             echo_stdout=output.resolved_echo[0],
             echo_stderr=output.resolved_echo[1],
         ),
@@ -168,7 +168,8 @@ def _build_subprocess_execution(
     return _SubprocessExecution(
         cmd=cmd,
         ctx=state.context,
-        capture=state.output.capture,
+        capture_stdout=state.output.resolved_capture[0],
+        capture_stderr=state.output.resolved_capture[1],
         echo_stdout=state.output.resolved_echo[0],
         echo_stderr=state.output.resolved_echo[1],
         max_echo_line_bytes=state.output.max_echo_line_bytes,

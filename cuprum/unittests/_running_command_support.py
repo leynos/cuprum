@@ -28,13 +28,16 @@ from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_spawn import _SubprocessExecution
 from cuprum._subprocess_wait_types import _RunTaskOwnership
+from cuprum.capture_policy import FullCapture
 from cuprum.sh import ExecutionContext
 from cuprum.unittests._signal_statuses import _KILLED, _TERMINATED
+from cuprum.unittests._stream_drain_support import captured
 from tests.helpers.catalogue import python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum.context import AfterHook
     from cuprum.events import ExecEvent
 
@@ -245,7 +248,7 @@ class _SigtermImmuneProcess(_StubProcess):
         self.signalled.set()
 
 
-async def _consumer(text: str | None, delay: float = 0.0) -> str | None:
+async def _consumer(text: str | None, delay: float = 0.0) -> _CapturedDrain:
     """Stand in for a stream consumer that has already drained its pipe.
 
     It yields once before returning, because a consumer that never suspends
@@ -257,11 +260,13 @@ async def _consumer(text: str | None, delay: float = 0.0) -> str | None:
 
     Returns
     -------
-    str | None
-        The text the real consumer would have captured.
+    _CapturedDrain
+        The text the real consumer would have captured, reported in the shape
+        a settled reader hands back so the settlement paths under test read the
+        same record they would from a real drain.
     """
     await asyncio.sleep(max(0, delay))
-    return text
+    return captured(text)
 
 
 class _StubRunConfig(typ.NamedTuple):
@@ -317,7 +322,8 @@ def _handle(
     execution = _SubprocessExecution(
         cmd=command,
         ctx=ExecutionContext(cancel_grace=config.grace),
-        capture=True,
+        capture_stdout=FullCapture(),
+        capture_stderr=FullCapture(),
         echo_stdout=False,
         echo_stderr=False,
         max_echo_line_bytes=None,
