@@ -46,9 +46,9 @@ open each document.
 - [ADR-002: Additional Rust components](adr-002-additional-rust-components.md) -
   accepted decision for extending Rust coverage beyond the initial stream
   backend.
-- [ADR-003: Six-stage Python lint architecture][adr-003] -
-  accepted decision for Ruff and PyPy-backed Pylint, with an addendum covering
-  the later `interrogate`, DF12, Ambrleaks, and Skylos lint stages.
+- [ADR-003: Seven-stage Python lint architecture][adr-003] -
+  accepted decision for Ruff and PyPy-backed Pylint, with addenda covering the
+  later `interrogate`, DF12, Ambrleaks, Skylos, and nose duplication stages.
 - [ADR-004: Interrogate docstring-coverage gate][adr-004] - accepted decision
   to enforce 100% docstring coverage through `interrogate`.
 - [ADR-005: Unified Rust availability probe][adr-005] - accepted decision to
@@ -94,6 +94,10 @@ open each document.
 - [ADR-021: Opt-in process-group ownership][adr-021] - accepted decision to
   give callers opt-in ownership of a child's process group, with POSIX group
   teardown and an explicit Windows refusal.
+- [ADR-022: Adopt a nose code-duplication gate][adr-022] - accepted decision to
+  block `make lint` on the pinned nose detector with reasoned location-keyed
+  exceptions, adopting an already-benchmarked tool choice by reference rather
+  than rerunning the comparison here.
 
 ## Requests for comments
 
@@ -150,6 +154,7 @@ open each document.
 [adr-019]: adr-019-control-observation-channel.md
 [adr-020]: adr-020-typed-argument-contract-for-sh-make.md
 [adr-021]: adr-021-process-group-ownership.md
+[adr-022]: adr-022-adopt-nose-duplication-gate.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md
