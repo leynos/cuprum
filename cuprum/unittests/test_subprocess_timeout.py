@@ -15,14 +15,14 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum._subprocess_drain import (
-    _drain_stream_consumers,
-    _DrainContext,
-)
 from cuprum._subprocess_timeout import (
     _handle_stream_timeout,
     _SubprocessInvariantError,
     _SubprocessTimeoutError,
+)
+from cuprum._subprocess_wait import (
+    _drain_stream_consumers,
+    _DrainContext,
 )
 
 # A consumer either completes with captured text or fails with an exception.

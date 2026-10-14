@@ -21,13 +21,13 @@ from cuprum._line_stream.line_queue import (
 )
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_drain import _RunTaskOwnership
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_streams import (
     _build_stream_config,
     _spawn_stream_consumers,
     _StreamConsumerSpawnContext,
 )
+from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
 

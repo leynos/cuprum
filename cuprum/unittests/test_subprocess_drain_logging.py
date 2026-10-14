@@ -13,7 +13,7 @@ import asyncio
 import logging
 import typing as typ
 
-from cuprum._subprocess_drain import (
+from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
     _DrainContext,
@@ -22,7 +22,13 @@ from cuprum._subprocess_drain import (
 if typ.TYPE_CHECKING:
     import pytest
 
-_DRAIN_LOGGER = "cuprum._subprocess_drain"
+    from cuprum.unittests._stream_drain_support import ConsumerTask
+
+# The drain moved to ``cuprum._stream_drain``, but its logger name did not:
+# ``_stream_drain`` still logs under ``cuprum._subprocess_wait`` so existing log
+# routing keeps matching. Capturing the module path instead would leave these
+# assertions watching a logger nothing emits to.
+_DRAIN_LOGGER = "cuprum._subprocess_wait"
 
 
 def _field(record: logging.LogRecord, name: str) -> object:
@@ -141,7 +147,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
         )
 
         async def expire_immediately(
-            _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+            _consumers: tuple[ConsumerTask, ConsumerTask],
         ) -> None:
             """Close the test grace window without elapsed wall-clock time."""
 

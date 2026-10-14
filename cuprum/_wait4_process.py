@@ -10,66 +10,43 @@ concurrent resource figures cannot be attributed to individual stages.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import dataclasses as dc
 import functools
 import os
 import signal
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated path owns wait4 reaping.
+import threading
+import time
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
-from cuprum._pipeline_types import _ExecutionInvariantError
-from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._process_exit import (
+    _NON_REAPING_PROBE_AVAILABLE,
+    _await_child_waitable,
+    _child_was_collected,
+)
 from cuprum._rusage import (
     ChildResourceUsage,
-    _ChildRusageSnapshot,
-    capture_child_rusage,
-    child_rusage_delta,
+    _Wait4Usage,
     resource_usage_from_wait4,
-    wait4_resource_measurement_available,
 )
-from cuprum._teardown_policy import _TeardownPolicy
+from cuprum._wait4_process_errors import (
+    _DeliveryRefusedError,
+    _Wait4InvariantError,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    import subprocess
 
 
-class _Wait4InvariantError(_ExecutionInvariantError):
-    """Raised when ``wait4`` reports a child this owner did not spawn.
-
-    A mismatch means some other code reaped this child, so the resource usage
-    the direct path is about to publish belongs to a different process. Both
-    identifiers are exposed as attributes so a caller can tell this failure
-    apart from the other invariant failures without parsing the message.
-    """
-
-    def __init__(self, expected_pid: int, reaped_pid: int) -> None:
-        """Record the two identifiers and build the preserved diagnostic."""
-        msg = f"wait4 reaped unexpected child {reaped_pid}, expected {expected_pid}"
-        super().__init__(msg)
-        self.expected_pid = expected_pid
-        self.reaped_pid = reaped_pid
-
-
-@dc.dataclass(frozen=True, slots=True)
-class DirectProcessConfig:
-    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths.
-
-    ``start_new_session`` is carried here rather than passed to
-    :func:`spawn_direct_process` as a keyword because both downstream spawn
-    routes — :func:`_spawn_popen` and ``asyncio.create_subprocess_exec`` —
-    accept it, and a single field keeps the two routes from drifting apart on
-    the ownership policy.
-    """
-
-    argv: tuple[str, ...]
-    stdin: int | None
-    stdout: int | None
-    stderr: int | None
-    env: cabc.Mapping[str, str] | None
-    cwd: str | None
-    start_new_session: bool = False
+#: Backoff for the fallback reap, whose wait becomes a poll because collecting
+#: is the only way such a platform can observe the child. The cap is set far
+#: lower than the exit observer's, and deliberately: that observer only
+#: recovers a lost wake-up, since it races the real waiter, whereas this poll
+#: *is* the exit detection on such a platform. The cap therefore bounds how
+#: late an exit is noticed, and so how much it inflates ``exited_at``,
+#: ``duration``, and the latency a caller sees. Each attempt is one
+#: non-blocking syscall made off the event loop, so a tight cap is cheap.
+_REAP_POLL_INITIAL_INTERVAL = 0.01
+_REAP_POLL_MAX_INTERVAL = 0.05
 
 
 def _close_waiter(
@@ -119,6 +96,11 @@ class _Wait4Process(asyncio.subprocess.Process):
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
         self._pipe_transports: list[asyncio.BaseTransport] = []
+        # Serializes the collection-and-publication against signal delivery,
+        # and nothing else. It is held only from a confirmed zombie to the
+        # recorded status, never across the child's lifetime, so a delivery to
+        # a healthy child is never made to wait on a reap.
+        self._settlement_lock = threading.Lock()
         self.pid = popen.pid
         self.stdin: asyncio.StreamWriter | None = None
         self.stdout: asyncio.StreamReader | None = None
@@ -171,32 +153,65 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Signal the child directly, leaving reaping to this owner alone.
 
         ``Popen.send_signal`` polls before signalling, and that poll is a
-        ``waitpid``: when the child is dead but not yet reaped it claims the
-        zombie, after which this class's own ``os.wait4`` fails with
-        ``ChildProcessError`` and the child's resource usage is lost — along
-        with whichever exception the caller was unwinding. Sending directly
-        keeps :meth:`_reap` the only reaper, as the module docstring promises.
+        ``waitpid``: it claims a zombie, after which this class's own
+        ``os.wait4`` fails and the child's resource usage is lost. Sending
+        directly keeps :meth:`_reap` the only reaper.
 
-        The guard on ``_returncode`` covers the case ``Popen`` polls for, that
-        the child is already gone and its PID reusable. It cannot be a poll
-        here without reintroducing the reap above, and it reads one loop-thread
-        hop behind the kernel: between ``os.wait4`` returning in its worker
-        thread and :meth:`_reap` recording the code, the child is reaped while
-        ``_returncode`` is still ``None``, so a signal landing in that window
-        is sent by number. A child that exits *after* the guard still owns its
-        PID as a zombie and discards the signal harmlessly; only a caller
-        signalling inside that single hop could reach a recycled PID, and
-        ``Popen`` documents the same race between its own check and its
-        ``os.kill`` (bpo-38630).
+        The guard, the refusal, and the kill are taken together under
+        :attr:`_settlement_lock`, so the window in which ``wait4`` has
+        collected a status that ``returncode`` has not yet recorded is
+        unreachable rather than merely narrow. :meth:`_delivery_is_refused`
+        states what the guard asks.
 
-        ``ProcessLookupError`` means the child exited between the caller's
-        liveness check and this call, the same race ``Popen`` absorbs, so it
-        stays suppressed.
+        ``ProcessLookupError`` is deliberately **not** suppressed, unlike
+        ``Popen.send_signal`` (bpo-40550). It reports to a handle that must
+        tell its caller *how* the child ended, and swallowing the error would
+        make that handle report a successful delivery to a process that no
+        longer exists. The absorption belongs to the caller that can weigh it:
+        ``_process_handle.control._deliver_signal`` catches it and re-reads the
+        child's status.
+
+        Raises
+        ------
+        _DeliveryRefusedError
+            If this owner has already published the child's exit code, or if
+            the kernel reports no process at its PID.
+        """
+        with self._settlement_lock:
+            if self._delivery_is_refused():
+                raise _DeliveryRefusedError(self.pid)
+            os.kill(self.pid, signal)
+
+    def _delivery_is_refused(self) -> bool:
+        """Report whether a delivery is refused, collecting a status to tell.
+
+        The caller holds :attr:`_settlement_lock`, which is what lets the
+        probe-less route collect: the collection cannot block, and a delivery
+        arriving while it runs waits for the publication instead of racing it.
+        A child that has exited is collected there because on that route the
+        collection is the only reading that can report how it ended, and the
+        reading happens once: the code is published before the lock is
+        released, so every later delivery refuses on the first question.
+
+        Returns
+        -------
+        bool
+            ``True`` when the delivery must be refused: the exit code is
+            already published, or the kernel reports no waitable child at this
+            owner's PID. ``False`` when a live child remains reachable.
         """
         if self._returncode is not None:
-            return
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(self.pid, signal)
+            return True
+        if _NON_REAPING_PROBE_AVAILABLE:
+            return _child_was_collected(self.pid)
+        try:
+            return self._collect_when_waitable() is not None
+        except ChildProcessError:
+            # No waitable child of this process remains at the pid. That is
+            # the same state a collection by this owner leaves behind, and it
+            # is reported as a refusal rather than allowed out as itself: the
+            # delivery's contract is a ProcessLookupError, which this is not.
+            return True
 
     @typ.override
     def terminate(self) -> None:
@@ -208,130 +223,77 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Compel the child to exit without reaping it."""
         self.send_signal(signal.SIGKILL)
 
-    async def _reap(self) -> int:
-        """Perform the one blocking child reap in an executor thread."""
-        pid, status, usage = await asyncio.to_thread(os.wait4, self.pid, 0)
+    def _publish(self, status: int, usage: _Wait4Usage) -> int:
+        """Record a collected status and its usage, returning the exit code."""
+        code = os.waitstatus_to_exitcode(status)
+        self._returncode = code
+        self._popen.returncode = code
+        self._resource_usage = resource_usage_from_wait4(usage)
+        return code
+
+    def _collect_and_publish(self) -> int:
+        """Collect the child's status, check the owner, and record it."""
+        # The caller guarantees the child is waitable, so this does not block.
+        # The check runs before any assignment, so nothing of a stranger's is
+        # attributed to this command.
+        pid, status, usage = os.wait4(self.pid, 0)
         if pid != self.pid:
             raise _Wait4InvariantError(self.pid, pid)
-        self._returncode = os.waitstatus_to_exitcode(status)
-        self._popen.returncode = self._returncode
-        self._resource_usage = resource_usage_from_wait4(usage)
-        return self._returncode
+        return self._publish(status, usage)
 
+    def _collect_when_waitable(self) -> int | None:
+        """Collect the child if it is waitable, collecting nothing otherwise."""
+        # WNOHANG is what makes this safe under _settlement_lock: a collection
+        # that could block would hold the lock for the child's whole lifetime.
+        pid, status, usage = os.wait4(self.pid, os.WNOHANG)
+        if pid == 0:
+            return None
+        if pid != self.pid:
+            raise _Wait4InvariantError(self.pid, pid)
+        return self._publish(status, usage)
 
-def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
-    """Spawn the validated command synchronously before connecting its pipes."""
-    # ruff: ignore[subprocess-without-shell-equals-true] - argv validated; shell=False.
-    return subprocess.Popen(
-        config.argv,
-        stdin=config.stdin,
-        stdout=config.stdout,
-        stderr=config.stderr,
-        env=config.env,
-        cwd=config.cwd,
-        start_new_session=config.start_new_session,
-        shell=False,
-    )
+    def _reap_without_a_probe(self) -> int:
+        """Collect under the lock, polling without ever waiting under it."""
+        # The lock is released between attempts, so it never spans the child's
+        # lifetime. That is safe: an uncollected child is running or a zombie,
+        # and neither has its PID reused — only the collection frees it, and
+        # the collection publishes before the lock is released.
+        interval = _REAP_POLL_INITIAL_INTERVAL
+        while True:
+            with self._settlement_lock:
+                # The published code is read under the lock, and before the
+                # collection rather than after it. A delivery's guard collects
+                # on this route too, so a child it already reaped would be
+                # collected a second time here — which the kernel refuses,
+                # since no waitable child survives the first collection. Both
+                # publish under this lock, so seeing no code means none exists
+                # and the poll is free to take one of its own.
+                code = self._returncode
+                if code is None:
+                    code = self._collect_when_waitable()
+                if code is not None:
+                    return code
+            time.sleep(interval)
+            interval = min(interval * 2, _REAP_POLL_MAX_INTERVAL)
 
+    def _reap_blocking(self) -> int:
+        """Wait for the child, then collect and publish it under the lock."""
+        # The wait and the collection sit on opposite sides of the lock, so
+        # the locked section is entered only once wait4 has nothing left to
+        # wait for. Recording stays in the reaping thread: an event-loop hop
+        # between collection and publication would reopen the window the lock
+        # exists to close, and a lock cannot cover a gap across a thread
+        # boundary. Where the platform cannot say whether the child is
+        # waitable, the collection moves inside the lock and stops blocking,
+        # rather than the lock being abandoned there. That route's delivery
+        # guard collects too, and both callers take the lock first, so the two
+        # can never collect the same child: whichever arrives second finds the
+        # code already published.
+        if _await_child_waitable(self.pid):
+            with self._settlement_lock:
+                return self._collect_and_publish()
+        return self._reap_without_a_probe()
 
-async def spawn_wait4_process(
-    config: DirectProcessConfig,
-) -> asyncio.subprocess.Process:
-    """Spawn a direct POSIX child that owns its ``wait4`` resource usage.
-
-    The child exists before its pipes do, so an attachment failure has to clean
-    up whatever was already started. That cleanup goes through the run's shared
-    teardown rather than a bare ``kill``, for two reasons the previous direct
-    call could not cover: the child may lead a group that already holds
-    descendants — a shell that forked before the attachment failed — which a
-    signal aimed at the leader alone would leave running, and the escalation
-    must survive a cancellation arriving on it, or the child is left
-    un-reaped with the resource usage this path exists to measure.
-
-    ``start_new_session`` is not merely a spawn flag here: it is the same
-    ownership fact ``ProcessGroupPolicy.OWN_GROUP`` selects, so reading it is
-    what keeps the spawn and its cleanup from disagreeing about whose group is
-    being torn down.
-
-    Returns
-    -------
-    asyncio.subprocess.Process
-        The spawned child, with its pipes attached.
-    """
-    loop = asyncio.get_running_loop()
-    process = _Wait4Process(_spawn_popen(config), loop)
-    try:
-        await process.connect_pipes()
-    except BaseException:
-        await _settle_spawned_child(
-            process,
-            owns_group=config.start_new_session,
-        )
-        raise
-    return process
-
-
-# A spawn that never completed has no in-flight work left to finish: the child
-# was created milliseconds ago and its streams were never attached. The cleanup
-# therefore escalates at once, which is what the pre-ownership ``process.kill``
-# did. Only the reach of that signal and its shielding change.
-_SPAWN_FAILURE_GRACE_S = 0.0
-
-
-async def _settle_spawned_child(
-    process: asyncio.subprocess.Process,
-    *,
-    owns_group: bool,
-) -> None:
-    """Terminate and reap a child whose pipe attachment failed.
-
-    The shared teardown signals the child's target — the group when this run
-    owns one — escalates, and awaits the direct child's exit, so reaping stays
-    with this path's single ``wait4`` owner rather than being left to whatever
-    collects a zombie later.
-    """
-    await _terminate_all_shielded(
-        (process,),
-        _TeardownPolicy(_SPAWN_FAILURE_GRACE_S, owns_group=owns_group),
-    )
-
-
-async def spawn_direct_process(
-    config: DirectProcessConfig,
-) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
-    if wait4_resource_measurement_available():
-        return await spawn_wait4_process(config)
-    return await asyncio.create_subprocess_exec(
-        *config.argv,
-        stdin=config.stdin,
-        stdout=config.stdout,
-        stderr=config.stderr,
-        env=config.env,
-        cwd=config.cwd,
-        start_new_session=config.start_new_session,
-    )
-
-
-def capture_resource_before_spawn() -> _ChildRusageSnapshot | None:
-    """Capture aggregate fallback usage only when ``wait4`` is unavailable."""
-    return None if wait4_resource_measurement_available() else capture_child_rusage()
-
-
-def resource_usage_for(
-    process: asyncio.subprocess.Process,
-    before: _ChildRusageSnapshot | None,
-) -> ChildResourceUsage | None:
-    """Return owned ``wait4`` usage or the aggregate CPU-only fallback delta."""
-    direct_usage = (
-        process.resource_usage if isinstance(process, _Wait4Process) else None
-    )
-    return direct_usage or child_rusage_delta(before, capture_child_rusage())
-
-
-__all__ = [
-    "DirectProcessConfig",
-    "capture_resource_before_spawn",
-    "resource_usage_for",
-    "spawn_direct_process",
-]
+    async def _reap(self) -> int:
+        """Perform the one blocking child reap in an executor thread."""
+        return await asyncio.to_thread(self._reap_blocking)

@@ -63,6 +63,7 @@ class _RecordedRun:
     """
 
     def __init__(self, workspace: Path) -> None:
+        """Record the workspace under test and start with no calls."""
         self.workspace = workspace
         self.calls: list[tuple[str, tuple[str, ...]]] = []
 

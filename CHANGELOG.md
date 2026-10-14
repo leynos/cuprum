@@ -88,6 +88,41 @@
 
 ### Added
 
+- **Scoped executable bindings:**
+  `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
+  catalogued program to the executable it should run inside the enclosing
+  scope, so a pinned absolute path, a virtual-environment interpreter, or a
+  controlled test replacement no longer has to become the program's catalogue
+  identity. The logical `Program` still governs the allowlist, project
+  metadata, and telemetry, while the binding decides only what a *permitted*
+  program executes; resolution therefore happens strictly after allowlist
+  enforcement, and a refused program never calls its resolver. `ExecutablePath`
+  and `ExecutableBinding` are the value types, `resolve_binding` the pure
+  resolution helper, `InvalidExecutableBindingError` the rejection, and
+  `merge_executable_bindings` the overlay-only composition rule.
+  `CuprumContext.resolve_executable()` inspects the effective binding without
+  running anything. The path argument accepts any `os.PathLike`, not only
+  `pathlib.Path`, so a `PurePosixPath` binds the way `executable_path()`
+  already accepted it; a value that is neither path-like nor callable is
+  rejected with `TypeError` instead of being stored as a resolver that fails at
+  spawn time. A resolver must return a `str`, so a resolver returning `None`
+  cannot be mistaken for "no binding" and silently run the catalogued name
+  instead. `resolve_binding()` raises `TypeError` for any other result; every
+  execution instead reports a wrong return type, or a resolver that raises, as
+  `ExecutableResolutionError`, naming the logical program and chaining the
+  original exception. `ExecEvent` and `CommandResult` gain `resolved_path`,
+  carrying the executed executable or `None` when nothing was bound; the
+  logging adapter projects it as `cuprum_resolved_path` and the tracing adapter
+  as `cuprum.resolved_path`, and it is deliberately absent from the metrics
+  labels, which stay low-cardinality. `ExecEvent.cwd` keeps the caller's own
+  spelling for a relative `ExecutionContext.cwd`; only a relative *binding* is
+  anchored at the execution's directory, and that anchoring is not reflected
+  back onto the event. Path validation is advisory: construction rejects an
+  empty path, a relative path unless `allow_relative=True`, and NUL or `..`
+  segments, but it cannot close the window between the check and the `exec`, so
+  filesystem ownership, permissions, and read-only deployment remain the
+  operator's responsibility
+  ([#440](https://github.com/leynos/cuprum/issues/440)).
 - **Opt-in process-group ownership:** `ExecutionContext(process_group=…)`
   accepts a `ProcessGroupPolicy`. `INHERIT` remains the default and tears down
   only the direct child, exactly as before. `OWN_GROUP` spawns the child as its
@@ -117,7 +152,7 @@
   adapter projects that event to `cuprum_group_teardowns_total{outcome}` and,
   on the settlement timeout alone, a `cuprum_group_settle_seconds` histogram,
   so a teardown that left a process alive is a countable series. See
-  [ADR-019](docs/adr-019-process-group-ownership.md)
+  [ADR-021](docs/adr-021-process-group-ownership.md)
   ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state
@@ -259,6 +294,84 @@
 - **`RunOutputOptions.on_line`:** Register a synchronous line callback that
   receives the same `LineEvent` values while `run()` executes. Independent of
   `capture` and `echo`; registering it keeps the stream on the Python pathway.
+- **`SafeCmd.start()`:** Start a command and hold it. The child is spawned and
+  its PID announced before the call returns, so the caller decides what happens
+  next, and an owned `RunningCommand` is returned rather than a
+  `CommandResult`. A spawn that cannot start belongs to `start()` itself: it
+  raises the failure the spawn produced — `FileNotFoundError` for an absent
+  executable, for instance — and returns no handle, so there is no orphaned
+  child to own and nothing for the caller to clean up. Await its `wait()` for
+  the outcome — with an optional deadline, whose expiry stops the child exactly
+  as a timed-out `run()` does and raises `TimeoutExpired` carrying the output
+  captured before it, while the outcome of the child it stopped is recorded for
+  every later `wait()`, `terminate()`, `kill()`, or teardown on the same handle
+  — or read the settled outcome from `result`. Deliver a POSIX signal with
+  `signal()` without settling the run; stop the child gracefully with
+  `terminate()` (`SIGTERM`, the cancel grace, then `SIGKILL` if it is still
+  there); or compel it with `kill()`, which sends `SIGKILL` without asking so
+  the recorded outcome reports the forced signal rather than whichever one
+  happened to end the child. Signals are never the caller's race to lose: a
+  child that has already exited raises `SignalAfterExitError`, and a platform
+  with no route to a caller-named signal raises `UnsupportedSignalError`. The
+  refusal holds for every collection the handle's own reap performs: where the
+  platform can be asked, the delivery is checked against the kernel as well as
+  the published exit code; where it cannot be asked, the check collects the
+  exited child instead, so the refusal still names how the child ended rather
+  than a placeholder. On every platform the check is taken together with the
+  kill under the reaper's own lock, so the handle's own reap cannot free a PID
+  between them — whether the reap waits for the child and collects once, or
+  polls to collect it because the platform cannot say when it is waitable, and
+  whether the collection happens in the reap or in the delivery's own guard. A
+  collection the handle does not own is a separate matter: it belongs to code
+  the library cannot serialize against, and a refusal cannot always name the
+  code for one. Where nothing was published, it reports `-1` rather than
+  inventing an exit status. Using the handle as an `async with` block settles
+  the run on every exit — a child still running is torn down the same way a
+  cancelled `run()` does, `SIGTERM`, the cancel grace wait, then `SIGKILL` —
+  and never suppresses the block's own error. Every control operation is
+  idempotent: a repeated or concurrent wait reports the one settlement rather
+  than building a second result, and no child is left unreaped. Capture is
+  forced on, so a stopped child still reports the output it produced
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`RunningCommand`:** The owned handle `SafeCmd.start()` returns, exposing
+  `pid`, `exec_id`, the settled `result`, and the `wait()`, `signal()`,
+  `terminate()`, and `kill()` control operations
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`SignalAfterExitError`:** Raised when a signal is requested for a child
+  that has already exited. A `ProcessLookupError` subclass carrying the child's
+  exit code and the PID it belonged to
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **`UnsupportedSignalError`:** Raised when the platform cannot deliver a
+  caller-named signal, carrying the signal that was asked for and the platform
+  that declined it ([#437](https://github.com/leynos/cuprum/issues/437)).
+- **Control observation:** What a control operation *did* to its child is now
+  reportable, which the exit code alone cannot express — a `-15` is the same
+  whether the child took the first `SIGTERM` or needed `SIGKILL` after its
+  grace window ran out, and a stop refused because the child had already gone
+  leaves no trace at all. `observe_control` registers a `ControlHook` on a
+  context-local channel and returns a registration handle; every completed
+  `signal()`, `terminate()`, and `kill()` then reports one `ControlEvent`
+  carrying the closed `ControlOperation` and `ControlOutcome`, the measured
+  `duration_s`, and the run's `exec_id` where the handle safely provides one,
+  the `signal_number` where one was asked for, and the child's `pid` where the
+  handle had one. Refusal is a first-class outcome rather than an inference
+  from a missing delivery: `REFUSED_UNSUPPORTED` is a platform limitation no
+  retry can fix, `REFUSED_EXITED` is an ordinary racing outcome, and each is
+  paired with the public error the caller receives. Emission is fail-open, so
+  an observer that raises cannot replace the refusal the caller is owed or
+  interrupt the child cleanup the operation is performing; a raising hook, and
+  one that returns a value rather than `None`, are reported at `WARNING` and
+  the remaining hooks continue. A caller who registers nothing pays no clock
+  read and allocates nothing. `record_control_events(hook)` joins the channel
+  to tracing by recording each event on the execution span the run's
+  `TracingHook` has already opened, keyed by `exec_id`, so an operation can
+  complete after the run settles without needing a span of its own; and
+  `ControlMetricsHook` projects bounded counters and a duration histogram whose
+  only labels are the closed `operation` and `outcome`, re-validated against
+  the enums at emission. PID reaches the event and the span event but never a
+  label, because its domain is unbounded and a recycled PID would fold two
+  unrelated children into one series
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
 
 - **Per-command echo-fallback diagnostics:** Every `CommandResult` — including
   each pipeline stage's result — now carries `relay_fallbacks`, a defaulted
@@ -392,6 +505,53 @@
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above
   ([#375](https://github.com/leynos/cuprum/issues/375)).
+- **Byte-exact result mode:** `SafeCmd.run_bytes()` / `run_bytes_sync()` and
+  `Pipeline.run_bytes()` / `run_bytes_sync()` return a subprocess's output as
+  the child's own bytes, through `BytesCommandResult` and
+  `BytesPipelineResult`. The new classes declare the same fields as
+  `CommandResult` and `PipelineResult` — measurements included — except that
+  `stdout` and `stderr` are `bytes | None`, so a binary payload survives the
+  round trip instead of being decoded with a lossy error handler. Capture is
+  the only thing the mode changes: text stays the default, `run()` never
+  returns bytes and `run_bytes()` never returns text, echo sinks and idle
+  heartbeats behave as they do in text mode, and a timeout still carries
+  partial output in the same field. A caller-supplied
+  `RunOutputOptions.on_line` is refused with `ValueError` before the child
+  spawns, because a decoded-text callback beside a byte-exact capture would be
+  a second, contradictory contract for one stream; structured observation
+  registered with `sh.observe()` is unaffected and still receives decoded
+  lines, since capture and line emission travel on separate channels. That
+  holds even under `ExecutionContext(errors="strict")`: a byte-exact run's
+  observation and echo render a *view* of the child's bytes and replace
+  undecodable input, so an ambient hook cannot raise from the read loop and
+  cost the byte-exact run the bytes it had already captured.
+
+  The replacement view is scoped to byte mode, so text mode is unchanged. A
+  strict text run still raises from the line reader and from echo, exactly as
+  it did before the byte-exact mode existed; its views decode under
+  `ExecutionContext.errors` in step with the capture. Only a byte-exact run
+  gets the non-aborting view, and only where the capture is the child's own
+  bytes.
+
+  An external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout.
+
+  The mode an execution used is observable. `ExecEvent` carries a
+  `capture_mode` field on every phase — `CaptureMode.TEXT` or
+  `CaptureMode.BYTES` — for the reason `env_mode` is carried: the mode is
+  resolved before the child spawns and describes the whole execution rather
+  than one measurement, and without it a byte-exact run and a text run of the
+  same command are identical in every counter and span attribute, leaving a
+  timeout or teardown failure unattributable to the mode that hit it. It is a
+  trusted typed field rather than an observation tag, since a caller may shadow
+  any tag key. The logging adapter projects it as `cuprum_capture_mode`, the
+  tracing adapter as `cuprum.capture_mode`, and the metrics adapter as a
+  `capture_mode` label on `cuprum_executions_total` and
+  `cuprum_failures_total`. Only the mode travels; no captured payload, argument
+  vector, or other unbounded value joins it. Two mode-boundary diagnostics are
+  recorded without rendering their inputs: a refused `on_line` logs the mode it
+  turned away, and a mode/payload invariant mismatch logs the mode, stream, and
+  the two types ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 
@@ -456,6 +616,36 @@
   ([#514](https://github.com/leynos/cuprum/issues/514)).
 
 ### Changed
+
+- **`Pipeline` moves to `cuprum.sh.pipeline`:** The `Pipeline` class left
+  `cuprum/sh/safe_cmd.py`, which now holds only `SafeCmd`. `SafeCmdBuilder` is
+  unaffected and stays in `cuprum/sh/builder.py`, where it already lived.
+  `cuprum.sh.Pipeline`, `cuprum.Pipeline`, the `|` operator, and type
+  resolution all still work as before. The one observable difference is
+  `Pipeline.__module__`, which now names the new module rather than
+  `cuprum.sh.safe_cmd`. Each of the two modules imports the other at the foot
+  of its file, after the class it defines exists, so `typing.get_type_hints`
+  still resolves the names in their quoted annotations. The split is what made
+  room for `SafeCmd.start()`, which this release adds: with `Pipeline` in its
+  own module, `safe_cmd.py` had 257 lines, so the 84 that `start` then
+  contributed left it at 341 rather than carrying it past the repository's
+  400-line module ceiling. See the
+  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-10-12 for the deferred-import direction the two classes now take.
+
+- **The spawn seam moves to `cuprum._subprocess_spawn`:**
+  `_SubprocessExecution`, `_spawn_subprocess`, and `_start_owned_process` left
+  `cuprum/_subprocess_execution.py`, which had grown past the 400-line module
+  ceiling, and `cuprum._subprocess_execution` re-exports the bundle and the
+  stream-wiring names so existing importers are unaffected. `_spawn_subprocess`
+  is deliberately *not* re-exported: the name is resolved from its own module's
+  globals, so a patch applied to a copy would leave the real spawn running.
+  Code that refuses a spawn patches the module whose globals resolve the seam
+  for the path it is intercepting: `cuprum._subprocess_spawn` for `run()` and
+  `cuprum._line_stream.coordinator` for `lines()`, while `SafeCmd.start()`
+  resolves it through `cuprum._process_handle.tasks`. See the
+  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-10-11.
 
 - **`sh.make` resolves the active scoped catalogue:** The `catalogue` parameter
   now defaults to `None` and is resolved as an explicit argument, then the

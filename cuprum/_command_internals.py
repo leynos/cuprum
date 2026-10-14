@@ -17,7 +17,6 @@ import dataclasses as dc
 import sys
 import time
 import typing as typ
-from pathlib import Path
 
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._idle_diagnostic import _idle_subject
@@ -27,37 +26,32 @@ from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
+    _resolve_executable_for,
     _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
-from cuprum._pipeline_internals import _collect_hooks
 from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import (
-    _command_session_start,
     _outcome_for_error,
     _outcome_for_result,
-    _SinkBracket,
 )
+from cuprum._subprocess_context import _event_cwd, _execution_cwd
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum._timeout_reporting import _safe_emit_terminal
-from cuprum.context import EnvMode, current_context
-from cuprum.events import TerminalOutcome
+from cuprum.context import EnvMode
+from cuprum.events import CaptureMode, TerminalOutcome
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import (
-        CommandResult,
-        ExecutionContext,
-        RunOutputOptions,
-        SafeCmd,
-    )
+    from cuprum._result_types import _AnyCommandResult
+    from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmd
     from cuprum.sinks import base as sinks
 
 __all__ = [
@@ -65,6 +59,7 @@ __all__ = [
     "_ExecutionTracking",
     "_build_subprocess_execution",
     "_execute_with_hooks",
+    "_finalize_prepared_command_failure",
     "_prepare_execution_observation",
     "_run_prepared_command",
 ]
@@ -90,17 +85,24 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
+    # Whether captures are reported as bytes rather than decoded text, carried
+    # to both the drain and the event's ``capture_mode``.
+    capture_bytes: bool = False
 
 
 def _prepare_execution_observation(
     cmd: SafeCmd,
-    context: ExecutionContext,
+    state: _ExecutionState,
     tracking: _ExecutionTracking,
-    output: RunOutputOptions,
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
-    cwd = Path(context.cwd) if context.cwd is not None else None
+    context = state.context
+    output = state.output
+    cwd = _event_cwd(context.cwd)
     env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
+    # Resolved here, after the caller's allowlist check, so the resolver runs
+    # once for a command that is actually going to run.
+    resolved_path = _resolve_executable_for(cmd, cwd=_execution_cwd(context.cwd))
     tags = _merge_tags(
         _base_stage_tags(
             cmd,
@@ -122,6 +124,8 @@ def _prepare_execution_observation(
         wall_clock=time.time,
         monotonic_clock=time.perf_counter,
         env_mode=env_mode,
+        resolved_path=resolved_path,
+        capture_mode=CaptureMode.BYTES if state.capture_bytes else CaptureMode.TEXT,
     )
 
 
@@ -169,20 +173,18 @@ def _build_subprocess_execution(
         observation=observation,
         stdin_data=state.stdin_data,
         on_line=state.output.on_line,
+        capture_bytes=state.capture_bytes,
         # Built here, during the parent's own preparation, but armed by the run
-        # itself, once the child is actually running: everything that precedes
-        # the spawn is the parent's work, and must not read as the child's
-        # silence.
+        # itself, once the child is actually running: everything preceding the
+        # spawn is the parent's work, and must not read as the child's silence.
         idle=_build_idle_monitor(
             state.output.idle_after,
             state.output.on_idle,
             _idle_subject(str(cmd.program)),
             # Resolved the way the stderr drain resolves its own sink — the
-            # same session, the same configured sink, the same last resort —
-            # because the keepalive shares that stream's incomplete-line
-            # state. An active session frames the mirrored streams, so a
-            # keepalive written anywhere else would land outside the group the
-            # run is claiming.
+            # same session, sink, and last resort — because the keepalive
+            # shares that stream's incomplete-line state, so writing it
+            # elsewhere would land outside the group an active session claims.
             _resolve_stream_sink(
                 sink_session,
                 state.context.stderr_sink,
@@ -199,7 +201,7 @@ async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run the subprocess and hooks, then settle after all observers finish.
 
     Cleanup aggregates observer failures with the active error; success-path
@@ -207,10 +209,10 @@ async def _execute_with_hooks(
 
     Returns
     -------
-    CommandResult
+    CommandResult | BytesCommandResult
         The completed command's result after every observe-hook task drains.
     """
-    result: CommandResult | None = None
+    result: _AnyCommandResult | None = None
     try:
         result = await _execute_subprocess(execution)
         for hook in tracking.execution_hooks.after_hooks:
@@ -231,7 +233,7 @@ async def _execute_with_hooks(
 async def _finalize_command_run_failure(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-    result: CommandResult | None,
+    result: _AnyCommandResult | None,
     run_error: BaseException,
 ) -> None:
     """Settle and drain an observed command after execution or hook failure."""
@@ -259,7 +261,7 @@ async def _finalize_command_run_failure(
 def _failed_command_details(
     started_pid: int | None,
     outcome: TerminalOutcome,
-    result: CommandResult | None,
+    result: _AnyCommandResult | None,
 ) -> _EventDetails:
     """Retain only child details that remain valid after command failure."""
     duration_s = None if result is None else result.duration
@@ -275,7 +277,7 @@ def _failed_command_details(
 async def _finalize_command_run_success(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-    result: CommandResult,
+    result: _AnyCommandResult,
 ) -> None:
     """Settle a completed command, then drain every observe-hook task."""
     outcome = _outcome_for_result(result)
@@ -337,7 +339,7 @@ async def _finalize_prepared_command_failure(
 async def _run_prepared_command(
     cmd: SafeCmd,
     state: _ExecutionState,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run one validated command after its public inputs are resolved.
 
     ``SafeCmd.run`` remains the public entry point and keeps its signature; it
@@ -348,6 +350,12 @@ async def _run_prepared_command(
     on :class:`_ExecutionState` claims it is — one run's resolved inputs
     travelling as a unit — rather than a temporary built only to be unpacked.
 
+    The preparation prefix is shared with ``SafeCmd.start()`` and lives in
+    ``cuprum._command_prepare``, so the two entry points cannot drift apart.
+    It owns the failure handling for everything it does; what remains here is
+    executed under :func:`_execute_with_hooks`, which owns finalization for the
+    run itself.
+
     Parameters
     ----------
     cmd : SafeCmd
@@ -357,44 +365,16 @@ async def _run_prepared_command(
 
     Returns
     -------
-    CommandResult
-        The completed command's result.
+    CommandResult | BytesCommandResult
+        The completed command's result, byte-exact when bytes were asked for.
     """
-    output = state.output
-    # The bracket owns the session for the whole run: a plan observer, a
-    # before hook, or anything else that raises before execution starts
-    # still finalizes the adapter's framing rather than stranding an open
-    # group, and the guard below closes exactly what those paths leave.
-    sink_bracket = _SinkBracket.open(
-        output.sink,
-        _command_session_start(cmd),
+    # Imported here, not at module scope: ``cuprum._command_prepare`` borrows
+    # helpers from this module, so a module-level import would close the cycle.
+    from cuprum._command_prepare import _prepare_owned_command
+
+    prepared = await _prepare_owned_command(cmd, state)
+    return await _execute_with_hooks(
+        cmd,
+        prepared.execution,
+        prepared.tracking,
     )
-    tracking = _ExecutionTracking(
-        execution_hooks=_collect_hooks(current_context()),
-        pending_tasks=[],
-        sink_bracket=sink_bracket,
-    )
-    observation: _StageObservation | None = None
-    try:
-        observation = _prepare_execution_observation(
-            cmd,
-            state.context,
-            tracking,
-            output,
-        )
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(cmd)
-        return await _execute_with_hooks(
-            cmd,
-            _build_subprocess_execution(
-                cmd,
-                state,
-                observation=observation,
-                sink_session=tracking.sink_bracket.session,
-            ),
-            tracking,
-        )
-    except BaseException as run_error:
-        await _finalize_prepared_command_failure(tracking, observation, run_error)
-        raise

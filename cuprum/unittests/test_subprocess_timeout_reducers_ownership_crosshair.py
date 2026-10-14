@@ -1,6 +1,6 @@
 r"""CrossHair symbolic contracts for the ownership-aware fail-fast selection.
 
-`cuprum._process_lifecycle._stages_to_terminate` is the pure selection behind
+`cuprum._pipeline_teardown._stages_to_terminate` is the pure selection behind
 the fail-fast teardown: which stages a pipeline terminates after its first
 failure. `test_subprocess_timeout_reducers.py` drives it with Hypothesis, and
 `test_subprocess_timeout_reducers_crosshair.py` verifies the inherited rule
@@ -40,7 +40,7 @@ import typing as typ
 
 import pytest
 
-from cuprum._process_lifecycle import _stages_to_terminate
+from cuprum._pipeline_teardown import _stages_to_terminate
 from cuprum.unittests._crosshair_support import (
     _crosshair_unavailable_symbols,
     _warn_crosshair_unavailable,

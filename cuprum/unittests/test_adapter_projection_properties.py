@@ -14,6 +14,7 @@ from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.context import EnvMode
 from cuprum.events import (
+    CaptureMode,
     ExecEvent,
     ExecPhase,
     GroupTeardownOutcome,
@@ -36,6 +37,8 @@ _OPTIONAL_FIELDS = (
     "resource_usage_mode",
     "env_mode",
     "terminal_outcome",
+    "resolved_path",
+    "capture_mode",
 )
 # Deliberately absent from ``_OPTIONAL_FIELDS``: ``owns_group``,
 # ``group_outcome``, and ``settle_s`` are not common fields, so
@@ -143,6 +146,15 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
         env_mode=draw(st.none() | st.sampled_from(EnvMode)),
         terminal_outcome=draw(st.none() | st.sampled_from(TerminalOutcome)),
+        # An absolute path when present, so the projection carries a string
+        # rather than an object needing rendering. ``resolved_path`` is the
+        # one verbatim field that names the executed binary, so it must travel
+        # unchanged and must not be stringified the way ``cwd`` is.
+        resolved_path=draw(st.none() | st.just("/opt/tools/echo")),
+        # Drawn alongside ``env_mode``: both are bounded policy enums a run
+        # resolves before spawning, so the projection must render each of them
+        # and must do so independently of whether the other is present.
+        capture_mode=draw(st.none() | st.sampled_from(CaptureMode)),
         # Drawn independently of the phase, like every other optional field, so
         # the teardown branch is exercised both with and without each one. The
         # oracle checks faithful carriage only; outcome/duration coherence is a
@@ -276,6 +288,7 @@ class TestAdapterProjectionProperties:
                 "eof_grace_s",
                 "pending_readers",
                 "env_mode",
+                "capture_mode",
             )
             return {"program"} | {
                 field for field in trusted_fields if getattr(event, field) is not None

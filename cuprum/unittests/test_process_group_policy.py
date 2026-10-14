@@ -24,7 +24,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ECHO, _subprocess_context, _wait4_process, sh
+from cuprum import ECHO, _subprocess_context, _wait4_spawn, sh
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
 from cuprum.unittests._process_group_ownership_support import _posix_only
 
@@ -127,7 +127,7 @@ class _SpawnedArgv:
 def _recording_spawn(
     recorded: list[_SpawnedArgv],
 ) -> cabc.Callable[
-    [_wait4_process.DirectProcessConfig],
+    [_wait4_spawn.DirectProcessConfig],
     cabc.Awaitable[asyncio.subprocess.Process],
 ]:
     """Build a spawn double that records its inputs, then spawns for real.
@@ -140,13 +140,13 @@ def _recording_spawn(
     Returns
     -------
     cabc.Callable
-        A drop-in replacement for ``_wait4_process.spawn_direct_process``:
+        A drop-in replacement for ``_wait4_spawn.spawn_direct_process``:
         it takes the spawn config and awaits the spawned process.
     """
-    real_spawn = _wait4_process.spawn_direct_process
+    real_spawn = _wait4_spawn.spawn_direct_process
 
     async def recording_spawn(
-        config: _wait4_process.DirectProcessConfig,
+        config: _wait4_spawn.DirectProcessConfig,
     ) -> asyncio.subprocess.Process:
         """Record the spawn inputs, then spawn for real."""
         recorded.append(_SpawnedArgv(config.argv, config.start_new_session))
@@ -168,7 +168,7 @@ def test_owned_policy_spawns_the_child_as_a_session_leader(
     """
     recorded: list[_SpawnedArgv] = []
     monkeypatch.setattr(
-        _wait4_process, "spawn_direct_process", _recording_spawn(recorded)
+        _wait4_spawn, "spawn_direct_process", _recording_spawn(recorded)
     )
 
     async def run_case() -> None:
@@ -203,7 +203,7 @@ def test_the_lines_path_spawns_its_child_as_a_session_leader(
     """
     recorded: list[_SpawnedArgv] = []
     monkeypatch.setattr(
-        _wait4_process, "spawn_direct_process", _recording_spawn(recorded)
+        _wait4_spawn, "spawn_direct_process", _recording_spawn(recorded)
     )
 
     async def run_case() -> None:

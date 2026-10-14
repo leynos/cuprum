@@ -200,12 +200,13 @@ def _group_teardown_extra(event: ExecEvent) -> dict[str, object]:
 
 def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
     """Build bounded, trusted fields for a capture EOF-grace expiry."""
-    # ``env_mode`` earns its place on the same test this whitelist applies to
-    # every other field: it is a closed set of three values resolved by
-    # production code, so it carries no caller data, and it is rendered rather
-    # than passed through so the record holds the plain string operators key
-    # on rather than the member's ``repr``.
+    # ``env_mode`` and ``capture_mode`` earn their places on the same test this
+    # whitelist applies to every other field: each is a closed set of values
+    # resolved by production code, so neither carries caller data, and both are
+    # rendered rather than passed through so the record holds the plain string
+    # operators key on rather than the member's ``repr``.
     mode = None if event.env_mode is None else str(event.env_mode)
+    capture_mode = None if event.capture_mode is None else str(event.capture_mode)
     optional_fields = (
         ("cuprum_pid", event.pid),
         ("cuprum_project", event.project),
@@ -214,6 +215,7 @@ def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
         ("cuprum_eof_grace_s", event.eof_grace_s),
         ("cuprum_pending_readers", event.pending_readers),
         ("cuprum_env_mode", mode),
+        ("cuprum_capture_mode", capture_mode),
     )
     return {
         "cuprum_phase": event.phase,

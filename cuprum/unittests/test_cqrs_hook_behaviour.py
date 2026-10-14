@@ -29,10 +29,10 @@ from cuprum._pipeline_internals import (
     _PIPELINE_FINALIZATION_ERROR,
     _finalize_pipeline_execution,
 )
+from cuprum._pipeline_records import _PipelineObservers
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
-    _PipelineObservers,
     _StageObservation,
 )
 from cuprum._sink_lifecycle import _SinkBracket
@@ -131,7 +131,10 @@ async def _finalize_with_failing_after_hook(
         """Adapt the supplied awaitable for ``asyncio.create_task``."""
         await observe_task_factory()
 
-    def failing_after_hook(_cmd: sh.SafeCmd, _result: sh.CommandResult) -> None:
+    def failing_after_hook(
+        _cmd: sh.SafeCmd,
+        _result: sh.CommandResult | sh.BytesCommandResult,
+    ) -> None:
         """Raise while finalizing the pipeline stage."""
         raise _AfterHookError
 

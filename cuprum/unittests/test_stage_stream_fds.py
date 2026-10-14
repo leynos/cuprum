@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
-from cuprum._subprocess_context import _cwd_arg
+from cuprum._subprocess_context import _cwd_arg, _execution_cwd
 
 _PIPE = asyncio.subprocess.PIPE
 _DEVNULL = asyncio.subprocess.DEVNULL
@@ -151,4 +151,39 @@ def test_cwd_arg_conversion(cwd: str | Path | None, expected: str | None) -> Non
     """Example: ``_cwd_arg`` renders optional working directories uniformly."""
     assert _cwd_arg(cwd) == expected, (
         f"cwd conversion mismatch for cwd={cwd!r}, expected={expected!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cwd", "expected"),
+    [
+        (None, None),
+        ("/srv/data", Path("/srv/data")),
+        (Path("/srv/data"), Path("/srv/data")),
+        ("relative/dir", Path.cwd() / "relative/dir"),
+        ("", Path.cwd()),
+    ],
+)
+def test_execution_cwd_is_absolute(
+    cwd: str | Path | None, expected: Path | None
+) -> None:
+    """Example: ``_execution_cwd`` anchors a relative directory at the process's.
+
+    A relative binding composes onto this value, and a relative composition
+    would be re-anchored by the child against the directory it was already
+    placed in. So the property that matters is not which directory this returns
+    but that what it returns is absolute, for every spelling a caller can
+    supply.
+
+    The empty string is here for the same reason: it is a spelling a caller can
+    supply, and what the helper does with it is visible only at this level.
+    ``Path("")`` is ``Path(".")``, so it anchors at the process's own directory
+    like any other relative form — an answer no run ever observes, because the
+    spawn refuses that spelling first. Pinning it here records which of the two
+    behaviours a future change would be altering.
+    """
+    result = _execution_cwd(cwd)
+    assert result == expected, f"cwd anchoring mismatch for cwd={cwd!r}"
+    assert result is None or result.is_absolute(), (
+        f"a relative composition would be re-anchored by the child, got {result!r}"
     )

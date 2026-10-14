@@ -14,7 +14,8 @@ from cuprum.context import HookRegistration, after, before
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum._result_types import _AnyCommandResult
+    from cuprum.sh import SafeCmd
 
 
 @dc.dataclass(slots=True)
@@ -99,7 +100,7 @@ def _build_logging_hooks(
     exit_level: int,
 ) -> tuple[
     cabc.Callable[[SafeCmd], None],
-    cabc.Callable[[SafeCmd, CommandResult], None],
+    cabc.Callable[[SafeCmd, _AnyCommandResult], None],
 ]:
     """Create before/after hooks that log start and exit events."""
     start_times: WeakKeyDictionary[SafeCmd, float] = WeakKeyDictionary()
@@ -118,7 +119,7 @@ def _build_logging_hooks(
                 cmd.argv_with_program,
             )
 
-    def on_exit(cmd: SafeCmd, result: CommandResult) -> None:
+    def on_exit(cmd: SafeCmd, result: _AnyCommandResult) -> None:
         """Log the command exit event with its measured duration."""
         if not logger.isEnabledFor(exit_level):
             return

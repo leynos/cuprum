@@ -673,8 +673,8 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
 | `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
-| `extension-tests`           | 3.13   | none                           | 13 gated modules, then `make typecheck`  | **built** |
-| `extension-tests-windows`   | 3.13   | none                           | 13 gated modules                         | **built** |
+| `extension-tests`           | 3.13   | none                           | 16 gated modules, then `make typecheck`  | **built** |
+| `extension-tests-windows`   | 3.13   | none                           | 16 gated modules                         | **built** |
 
 The 3.15a leg is experimental: it may fail without failing the run, and its
 check, `Typecheck and test (Python 3.15a)`, is not a required context. On a
@@ -982,6 +982,11 @@ The `github-actions` stanza also lists a `shared-actions` group
 a shared-actions pin moves one commit SHA to another and has no semver level,
 so the typed catch-all never takes it; the group puts those bumps in one pull
 request instead of one per pinned action.
+
+The `uv` stanza lists a `pylint-astroid` group (`pylint` and `astroid`, no
+`update-types`) ahead of the catch-all. Pylint declares the Astroid range it
+supports, and `pyproject.toml` pins the two as one compatible pair, so a bump
+of either alone would break the other; the group moves them in one pull request.
 
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
@@ -2190,9 +2195,9 @@ relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
 read/echo/buffer loop behind both consume variants. It reads in that configured
-size, extends the capture buffer when capturing, echoes each chunk to the
-configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing:
+size, extends the capture buffer with the **raw** chunk when capturing, echoes
+each chunk to the configured sink when echoing, and hands the chunk to the
+optional `on_chunk` callback for variant-specific processing:
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -2213,6 +2218,70 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 `_override_read_size`, so every value supplied through `--read-sizes` reaches
 the consume and pipeline pump paths without changing public runtime
 configuration.
+
+### Byte-exact capture mode
+
+The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
+runners. A byte run is an ordinary run carrying one extra fact,
+`capture_bytes`, on its resolved `_SubprocessExecution` state. That fact flows
+to `_StreamConfig.capture_bytes`, and the single payload renderer,
+`cuprum._stream_drain_finish._captured_payload`, decides at the end of the
+drain whether to return `bytes(buffer)` or
+`buffer.decode(config.encoding, errors=config.errors)`.
+
+Capture and line emission are independent channels, which is what lets one
+drain serve both modes:
+
+- The drain's buffer always holds the child's raw bytes; it is never decoded in
+  place.
+- `_consume_stream_with_lines` decodes a *copy* through its own incremental
+  decoder to find line boundaries and publish lines.
+- The two therefore compose. A byte-exact run with a registered `sh.observe()`
+  hook returns the child's own bytes while its observers receive decoded lines.
+
+Narrowing happens on the way out, at one seam per result class:
+`_require_bytes` and `_require_text` in `cuprum._result_assembly` re-take the
+guarantee that a drain's widened `str | bytes | None` payload matches the mode
+the result is being built for, raising `_ExecutionInvariantError` on a mismatch.
+`cuprum._bytes_run` holds the equivalent narrowing for whole result objects,
+plus `_validate_bytes_output`, which rejects a caller-supplied
+`RunOutputOptions.on_line` before anything spawns.
+
+The resolved mode reaches observation as a typed event field, not a tag.
+`_prepare_execution_observation` reads `_ExecutionState.capture_bytes` and
+`_build_pipeline_observations` reads `_PipelineRunConfig.capture_bytes`; each
+builder resolves the flag to a `CaptureMode` member on
+`_StageObservation.capture_mode`, and every emitted `ExecEvent` therefore
+carries `capture_mode` on every phase, exactly as `env_mode` does and for the
+same reason. It must stay a trusted field: the adapters assert that
+`cuprum_tags` never reaches their extras, so a mode travelling as a tag would
+never be projected at all. `_event_common_fields` in `cuprum.adapters._support`
+renders it once for both the `cuprum_` and `cuprum.` prefixes;
+`cuprum.adapters._metrics_operations` adds the `capture_mode` label to
+`cuprum_executions_total` and `cuprum_failures_total` through
+`_execution_mode_labels`, the one place both execution-mode labels are composed.
+
+Two diagnostics sit on the mode boundaries and neither may render a captured
+payload: `_validate_bytes_output` in `cuprum._bytes_run` warns on the pre-spawn
+`on_line` refusal — a rejection emits no execution event, so the warning is the
+only record an operator can see — and `_require_mode_payload` in
+`cuprum._result_assembly` logs the mode, stream, expected type, and actual type
+on a mode/payload invariant mismatch before raising. Both must keep to bounded
+fields; the callback object and the payload stay out.
+
+Re-use policy: a new narrowed result class must go through both seams rather
+than asserting a payload's type away with a cast, and any new consume variant
+must keep the buffer raw so byte mode stays available to it. A new mode value
+must be added to `CaptureMode` rather than spelled as a literal, since the
+value is a metric label and a log field that operators filter on. The `on_line`
+rejection is policy, not capability — the drain itself honours the combination;
+see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
+boundaries it belongs to, and the
+[binary output section](users-guide.md#binary-output) of the users' guide.
+
+A stream that was never attached is the one payload the drain does not render:
+`_empty_capture` reports `b""` or `""` according to the mode, matching
+`_consume_stream_without_lines`.
 
 ### Aggregate Python stream-operation observation
 
@@ -2257,8 +2326,18 @@ arguments, exception text, and other unbounded values are not metric labels.
 
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
-`config.encoding` and `config.errors`, then flushes that decoder at end of
+`config.encoding` and `config.view_errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
+`_StreamConfig.view_errors` resolves the error policy for a view: byte-exact
+runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
+`config.errors` there would let a strict capture policy end a run from the read
+loop, while text runs keep `config.errors`, so a strict text run still raises
+from echo exactly as it did before byte mode existed. See
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md), and
+`cuprum._stream_drain_finish._captured_payload` renders the capture from the
+drain's own untouched buffer per its config: a text run decodes under
+`config.errors`, while a byte-exact run returns `bytes(buffer)` and never
+consults that policy.
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw
 read, before decoding, echoing, truncation, and line callbacks. This is the
@@ -2354,9 +2433,9 @@ intermediate `await` before that chunk write finishes.
 Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
 cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
 `config.capture_output` is true and `config.discard_on_cancel` is unset, the
-bytes captured so far are decoded and returned; when the discard event is set
-(or output is not being captured), those bytes are discarded and cancellation
-propagates.
+bytes captured so far are rendered in the run's mode and returned — decoded for
+a text run, raw for a byte-exact one; when the discard event is set (or output
+is not being captured), those bytes are discarded and cancellation propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
@@ -4140,8 +4219,11 @@ with `thiserror`:
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
 Conversion to a Python exception happens in exactly one place,
-`pump_error_to_py_err` in `rust/cuprum-rust/src/errors.rs` (called from
-`stream_pyfunctions.rs`). Every non-`Io` variant surfaces as a plain `OSError`
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs`, which the
+`?` operator and `map_err(PyErr::from)` both reach from
+`stream_pyfunctions.rs`. That impl splits the two error domains — argument
+failures become `ValueError`, and the `Stream` arm delegates to the private
+`pump_error_to_py_err`. Every non-`Io` variant surfaces as a plain `OSError`
 carrying the stable message from `PumpError::py_os_error_message`. The
 non-fatal write classification (broken pipe / connection reset) lives on the
 enum as `PumpError::is_nonfatal_write`, replacing the free function the splice
@@ -4266,11 +4348,17 @@ across normal return, error, or real unwind.
 
 The private `stream_pyfunctions::run_stream_operation` helper is limited to the
 two PyO3 stream exports. It owns their shared buffer validation, reader
-descriptor preparation, GIL release, and `PumpError` conversion; the pump
-export alone prepares its ownership-consuming writer and both exports supply
-their stream operation. Do not reuse it outside this FFI adapter boundary or
-move writer ownership into the helper, because that would blur the distinct
-borrow-versus-consume contract.
+descriptor preparation, GIL release, and the typed `RustStreamError`
+conversion; the pump export alone prepares its ownership-consuming writer and
+both exports supply their stream operation. The conversion itself is not
+written here: the helper wraps a stream failure as `RustStreamError::Stream`
+and reaches Python through `map_err(PyErr::from)`, so the classification a
+caller branches on is decided by the single `From<RustStreamError> for PyErr`
+impl in `rust/cuprum-rust/src/errors.rs`. The same impl answers the validator's
+`InvalidBufferSize` and `InvalidDescriptor` arms, so argument failures and
+stream failures are separated in one place rather than at the call sites. Do
+not reuse the helper outside this FFI adapter boundary or move writer ownership
+into it, because that would blur the distinct borrow-versus-consume contract.
 
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
@@ -4972,6 +5060,38 @@ steps, and a step's `run:` — so a misspelled key is a type error rather than a
 a second one drifts from the first, and then two suites disagree about what the
 same file says.
 
+The gated modules split across two test layers, and the split follows from the
+build rather than from taste. The integration crate is compiled with
+`pyo3/extension-module`, which deliberately leaves the Python symbols to be
+resolved by the host process, so no `cargo test` binary can link an
+interpreter. Rust tests therefore assert typed values — which variant a failure
+classifies as, which code an error retains — and anything asserting a `PyErr`
+or a Python exception class cannot live in them at all; it belongs in the
+extension-required Python suite, which runs against an installed extension and
+a real interpreter.
+
+The two layers also cover different code. `cuprum._streams_rs` is the Python
+shim in front of the native entry points, and its pump path validates
+`buffer_size` itself before delegating, so a writer is never handed to the
+native ownership boundary on a rejected size. One consequence is that a
+mutation in the *native* conversion for the pump path is invisible through the
+shim, which raises first: only a direct call to `cuprum._rust_backend_native`
+observes the native ordering, which is why
+`cuprum/unittests/test_rust_stream_native_order.py` imports the compiled module
+directly rather than going through the shim. The consume path is the other
+witness, because it has no writer to adopt and so no pre-adoption check in
+front of it. The shim's check is a resource-ownership guarantee; the native
+check is the typed-boundary guarantee. Both are wanted, and neither test stands
+in for the other.
+
+A newly gated module is not merely uncovered until it is wired up: the scan in
+`test_extension_build_contract.py` derives the gated modules from the test tree
+and fails until each is declared in `EXTENSION_TEST_TARGETS`, so a module added
+to the suite without a Makefile entry breaks the contract tests rather than
+passing unnoticed. The two properties that pin that list, and what each of them
+does and does not catch, are set out under
+[Shared workflow test support](#shared-workflow-test-support).
+
 ### Shared workflow test support
 
 The session-scoped `workflow_data` fixture parses the checked-in
@@ -5042,27 +5162,34 @@ follow-up once `#124` lands.
 
 Table 1: modules gated on the compiled extension
 
-| Module                                             | Covers                                                                                                                                                               |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_rust_streams.py`                             | the Rust-backed pump entry point                                                                                                                                     |
-| `test_rust_consume_stream.py`                      | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
-| `test_rust_streams_boundary_property.py`           | randomized payloads across the boundary                                                                                                                              |
-| `test_rust_extension.py`                           | extension availability and module surface                                                                                                                            |
-| `test_rust_splice.py`                              | the Linux `splice` fast path                                                                                                                                         |
-| `test_rust_errno.py`                               | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
-| `test_rust_errno_windows.py`                       | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
-| `test_backend.py`                                  | the extension-dependent backend-selection cases                                                                                                                      |
-| `test_loom_model_conformance.py`                   | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
-| `test_extension_requirement_guard.py`              | the fail-loud guard itself                                                                                                                                           |
-| `tests/behaviour/test_rust_streams_behaviour.py`   | the consumer-facing pump and consume scenarios                                                                                                                       |
-| `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module                                                                                                               |
-| `tests/behaviour/test_stream_backend_pipeline.py`  | pipelines dispatched through the Rust backend                                                                                                                        |
+| Module                                                  | Covers                                                                                                                                                               |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                     |
+| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
+| `test_rust_streams_boundary_property.py`                | the rejection boundary: invalid buffer sizes and descriptors                                                                                                         |
+| `test_rust_streams_roundtrip_property.py`               | randomized payloads over a real pipe, and that omitting `buffer_size` equals the explicit default                                                                    |
+| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                    |
+| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                            |
+| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                         |
+| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
+| `test_rust_errno_windows.py`                            | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
+| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                      |
+| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
+| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                           |
+| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                       |
+| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                   |
+| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                               |
+| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                        |
 
 The behavioural modules are listed for the same reason as the unit ones: their
 extension-dependent scenarios skip in the ordinary test jobs, so they were
 never boundary coverage there either. Confirm with `pytest -rs` against a
-virtual environment that has no extension — four scenarios report
-`Rust extension is not installed`.
+virtual environment that has no extension — ten scenarios report
+`Rust extension is not installed`: three in `test_rust_streams_behaviour.py`,
+four `Examples` rows in `test_rust_streams_errors_behaviour.py`, and three in
+`test_stream_backend_pipeline.py`. `test_rust_extension_availability` is the
+exception, and is listed here because it *asserts* the absent case rather than
+skipping it, so it passes with or without the extension.
 
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure
@@ -5289,6 +5416,18 @@ Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
+
+A `# pylint: disable=` pragma cannot silence a df12 message, and reaching for
+one costs a cycle rather than saving one. The classic PyPy-backed pass runs
+without the plugin, so it cannot resolve the message id and reports
+`W0012: unknown-option-value` at each site; the leaf then aborts with
+`Error 20` before the df12 pass the pragma was meant to satisfy ever runs. For
+`R9104` (`trivial-attribute-wrapper`) the plugin's own message names the
+repair: expose a property, or otherwise move the forwarding out of the
+function. Reusing a shape the rule tolerates is usually cheaper than the
+suppression would have been, because a double whose body does real work, or a
+clock shared from an existing helper, is clearer as well as unremarkable to the
+rule.
 
 ### Markdown linting
 
@@ -5928,18 +6067,22 @@ uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
 
 `rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
 `rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through
-`validate_buffer_size(i64) -> PyResult<BufferSize>`, which maps the message to
-`PyValueError`. `BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs`
-owns the validation and returns the validated size used by the stream loops.
-The contract is: reject non-positive values, values that overflow `usize` on
-the target platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) —
-the cap guards against absurd allocations while comfortably exceeding any
-realistic transfer buffer (the default is 64 KiB). The Rust boundary cases are
-property tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the
-Python-side error mapping is exercised in
-`cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
-`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
-guide aligned with this contract when the cap changes.
+`validate_buffer_size(i64) -> Result<BufferSize, RustStreamError>`. The
+validator returns a typed error rather than a `PyErr`, so the message reaches
+`PyValueError` through the boundary's single conversion point,
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs`.
+`BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs` owns the validation
+and returns the validated size used by the stream loops. The contract is:
+reject non-positive values, values that overflow `usize` on the target
+platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
+guards against absurd allocations while comfortably exceeding any realistic
+transfer buffer (the default is 64 KiB). The Rust boundary cases are property
+tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the Python-side error
+mapping is exercised in
+`cuprum/unittests/test_rust_streams_boundary_property.py`, and the accepted
+arguments in `cuprum/unittests/test_rust_streams_roundtrip_property.py`. Keep
+the `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
+users' guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 
@@ -6442,10 +6585,10 @@ lifecycle records.
 
 Line observation is independent of capture and echo. Enabling either line
 interface keeps the relevant subprocess streams consumed even when
-`capture=False` and `echo=False`; capture still controls whether text is kept
-on the result, and echo still controls whether text is mirrored to the
-configured sinks. This is why a line-only result can have `stdout` and `stderr`
-set to `None` while its callers receive every line.
+`capture=False` and `echo=False`; capture still controls whether the drain's
+bytes are kept on the result, and echo still controls whether text is mirrored
+to the configured sinks. This is why a line-only result can have `stdout` and
+`stderr` set to `None` while its callers receive every line.
 
 `SafeCmd.lines()` uses a finite, bounded queue between the stream consumers and
 the iterator. Its line sink awaits `queue.put`, and the consumer awaits that
@@ -6460,21 +6603,21 @@ The implementation boundaries are deliberately narrow:
 
 Table 1: Line-observation implementation boundaries
 
-| Module                                                                                             | Responsibility                                                                                                                                          |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cuprum/_line_stream/`                                                                             | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
-| `cuprum/_line_stream/coordinator.py`                                                               | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
-| `cuprum/_line_stream/telemetry.py`                                                                 | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
-| `cuprum/_line_stream/line_queue.py`                                                                | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
-| `cuprum/_line_stream/spawn.py`                                                                     | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
-| `cuprum/_line_stream/drain.py`                                                                     | Drains a line stream's settled consumers once the child has exited.                                                                                     |
-| `cuprum/_line_iteration.py`                                                                        | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
-| `cuprum/_line_callbacks.py`                                                                        | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
-| `cuprum/_subprocess_streams.py`                                                                    | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |
-| `cuprum/_execution_tracking.py`                                                                    | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                         |
-| `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_subprocess_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                 |
-| `cuprum/_process_lifecycle.py`                                                                     | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                       |
-| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py`                               | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                 |
+| Module                                                                                         | Responsibility                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_line_stream/`                                                                         | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
+| `cuprum/_line_stream/coordinator.py`                                                           | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
+| `cuprum/_line_stream/telemetry.py`                                                             | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
+| `cuprum/_line_stream/line_queue.py`                                                            | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
+| `cuprum/_line_stream/spawn.py`                                                                 | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
+| `cuprum/_line_stream/drain.py`                                                                 | Drains a line stream's settled consumers once the child has exited.                                                                                     |
+| `cuprum/_line_iteration.py`                                                                    | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
+| `cuprum/_line_callbacks.py`                                                                    | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
+| `cuprum/_subprocess_streams.py`                                                                | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |
+| `cuprum/_execution_tracking.py`                                                                | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                         |
+| `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                 |
+| `cuprum/_process_lifecycle.py`                                                                 | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                       |
+| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py`                           | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                 |
 
 Changes to line delivery should keep both public entry points on the shared
 consumer path. Changes to termination or task ownership belong in the shared
@@ -6549,7 +6692,7 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
 `cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
 `cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_wait.py`, and
-`cuprum/_subprocess_drain.py`. Pipeline startup has its own boundary in
+`cuprum/_stream_drain.py`. Pipeline startup has its own boundary in
 `cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
 spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
 `_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
@@ -6564,7 +6707,7 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline and
 terminating the process — belong in `_subprocess_wait`, while draining the
-stream consumers exactly once belongs in `_subprocess_drain`; choosing each
+stream consumers exactly once belongs in `_stream_drain`; choosing each
 mirrored stream's destination and single-command stream-consumer construction —
 the stdout `_StreamConfig`, the stderr config derived from it, and the consumer
 tasks that drain into it — belong in `_subprocess_streams`; orchestration that
@@ -6592,6 +6735,49 @@ idle-heartbeat wiring reaches into the stream configs; see the
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
 
+`cuprum/_subprocess_spawn.py` owns the one step that creates a child. It holds
+`_SubprocessExecution` — the bundle that decides how a child is wired —
+`_spawn_subprocess`, the spawn seam every entry point resolves through, and
+`_start_owned_process`, which spawns and announces a child for the direct run.
+The two live together because the spawn is what the bundle describes: a caller
+that has to refuse a spawn patches the seam, and a caller that patches the seam
+would otherwise be reaching for a name on the result-assembly path.
+
+`_start_owned_process` is not the only announcement site, and the split does
+not pretend it is. `_spawn_subprocess` has three callers; the direct run
+reaches it through `_start_owned_process`, while
+`cuprum/_line_stream/coordinator.py` and `cuprum/_process_handle/tasks.py` call
+it directly and emit their own `start` event. Each announces its own child
+because each needs the process in hand first: the coordinator to attach its
+stream consumers, the handle to attach the tasks that will drive and settle the
+run. The seam is shared; the announcement is not.
+
+`_start_owned_process` takes the already-sampled `started_at` as an argument
+rather than reading a clock, because *when* that reading is taken is what its
+meaning depends on: a run's published duration must include the time its own
+spawn blocked, so `_execute_subprocess` samples before it calls this helper,
+while `SafeCmd.lines()` samples after its spawn. Passing the value in keeps
+that per-caller ordering where it belongs and stops a clock read here from
+being reordered against the spawn await. Everything between the spawn and the
+`start` emission is synchronous, so no child is ever running without a
+`started_at`-stamped bundle and an announced PID to match it.
+
+`cuprum/_subprocess_execution.py` re-exports `_SubprocessExecution` and the
+stream-wiring names it no longer defines, so `cuprum._subprocess_execution`
+stays a module importers can reach them through. It deliberately does **not**
+re-export `_spawn_subprocess`. `_start_owned_process` resolves that name from
+`_subprocess_spawn`'s own globals, so a patch applied to a re-export rebinds a
+name nothing calls and silently no-ops — the test keeps passing while the real
+spawn runs. A spawn seam a test can refuse has to be patched where its caller
+looks it up, which is why the spawn-refusing tests patch a different module per
+entry point: `cuprum._subprocess_spawn` for `SafeCmd.run()`,
+`cuprum._line_stream.coordinator` for `SafeCmd.lines()`, and
+`cuprum._process_handle.tasks` for `SafeCmd.start()`, each of which binds
+`_spawn_subprocess` into its own globals. This is the same rule by which
+`cuprum._line_stream.coordinator` resolves its collaborators from its own
+globals, and is why its tests patch that module rather than the module that
+defines them.
+
 `cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
@@ -6616,26 +6802,26 @@ within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
 so callers and the tests that monkeypatch them by module path resolve the same
 names as before.
 
-`cuprum/_subprocess_wait.py` holds `_wait_for_exit_code` and
-`_wait_for_exit_code_within_timeout` (see the wait-path detail below). The
-drain half lives in `cuprum/_subprocess_drain.py`, which holds
-`_drain_stream_consumers`, `_cancel_pending_consumers`, `_reconcile_run_tasks`,
-`_await_capture_eof_grace`, and `_settle_consumers`. The drain interface is
-explicit: `_RunTaskOwnership` bundles the optional stdin-writer task with the
-stdout and stderr consumer tasks, `_DrainContext` carries capture,
-observability, and the optional `discard_on_cancel` event, and
-`_reconcile_run_tasks(tasks, context)` cancels stdin before settling both
-consumers. The reconciliation is one unit for shielded cleanup. A capturing
-context gives readers the bounded EOF-grace window and decodes absent output as
-text, while a non-capturing context settles promptly and discards output.
+`cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
+`_wait_for_exit_code_within_timeout`, `_drain_context`, and
+`_reconcile_run_tasks` (see the wait-path detail below); the drain half lives in
+`cuprum/_stream_drain.py`. The drain interface is explicit:
+`_RunTaskOwnership` bundles the optional stdin-writer task with the stdout and
+stderr consumer tasks, `_DrainContext` carries capture, observability, and the
+optional `discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)`
+cancels stdin before settling both consumers. The reconciliation is one unit
+for shielded cleanup. A capturing context gives readers the bounded EOF-grace
+window and renders absent output as the mode's empty value, while a
+non-capturing context settles promptly and discards output.
 `_await_capture_eof_grace` uses an injected waiter when supplied and otherwise
 delegates to the bounded `_await_eof_grace`; `_settle_consumers` is the single
 optional settlement boundary that sets the discard event before cancelling
 pending readers. `_build_stream_config(execution, discard_on_cancel)` (in
 `cuprum/_subprocess_streams.py`) passes that shared event into each stream's
-`_StreamConfig`, so timeout capture can retain buffered text while cancellation
-and failure cleanup can discard it. It was split out of `_subprocess_execution`
-so that module stays about orchestration; termination routes through
+`_StreamConfig`, so timeout capture can hand back the bytes buffered so far —
+decoded for a text run, raw for a byte-exact one — while cancellation and
+failure cleanup can discard it. It was split out of `_subprocess_execution` so
+that module stays about orchestration; termination routes through
 `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
 cancelling during the grace period cannot skip the `SIGKILL` escalation.
 
@@ -6670,8 +6856,19 @@ direct-command path on Linux and macOS instead uses `cuprum._wait4_process`: its
 child-reap owner calls `os.wait4` and returns usage for that specific child.
 The direct path must keep exactly one child reaper: do not add a second waiter,
 because a second reap would take the resource usage away from the owner that
-publishes it. The result builder uses that usage for user and system CPU time
-and maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
+publishes it. `_Wait4Process.send_signal` is bound by the same rule, which is
+why it calls `os.kill` directly instead of `Popen.send_signal`: that method
+polls before signalling and its `waitpid` would claim a zombie, leaving this
+owner's `os.wait4` to fail with `ChildProcessError` and the child's usage to be
+lost. The suppression must not creep back in either. A guard checking only the
+published `returncode` would let a delivery pass in the gap between `wait4`
+collecting a status and this instance recording it, so the guard also asks
+`_child_was_collected`, and a refusal raises `ProcessLookupError` rather than
+reporting a delivery that cannot be shown to have happened. The guard and the
+kill sit together under the settlement lock described above, so the handle's
+own reap cannot free a PID between them. The result builder uses that usage for
+user and system CPU time and maximum RSS, converting Linux KiB to bytes and
+preserving macOS bytes.
 
 The direct wait4 path never derives RSS by subtracting snapshots, because
 `ru_maxrss` is a process-global high-water mark rather than an accumulating
@@ -6828,6 +7025,59 @@ the asyncio lost-wakeup race where `returncode` has been published but the
 waiter remains pending. Keep the regression in
 `cuprum/unittests/test_process_exit.py` aligned with this contract.
 
+`cuprum/_process_exit.py` owns three further POSIX-only readings, all built on
+`waitid` with `WNOWAIT`, so none of them collects the status a reaper still has
+to record. `_observed_exit_code` reports *how* a child ended while leaving that
+status in place, and folds a still-running child and one whose status has been
+collected into the same `None`; it is what a terminal refusal reads before
+answering. `_child_was_collected` asks the narrower question a delivery needs —
+whether this process can still wait for a PID at all — and those folded answers
+must be told apart there, because a running child and an uncollected zombie are
+both still reachable while a collected PID is one the kernel may have reused.
+The two situations the kernel does *not* separate are a collected child and a
+PID that was never this process's child; both raise `ChildProcessError`, and
+the helper reports both as collected. That looseness is safe only because
+callers pass a PID they spawned, and it makes the answer err towards refusing a
+delivery rather than signalling a stranger. A platform without the probe answers
+`False`, so an unanswerable question is never read as evidence the child is
+gone.
+
+`_await_child_waitable` is the blocking counterpart of that last question, and
+it exists so the reaper can be uncontended for the one instant that matters.
+Dropping `WNOHANG` makes it wait for the child to become waitable; keeping
+`WNOWAIT` makes that wait consume nothing. When it returns, the collection the
+reaper is about to perform cannot block, which is what lets `_reap_blocking`
+take the settlement lock only *after* the wait and release it in a few
+instructions — a lock held across the child's lifetime would stall every
+delivery to a healthy child until that child happened to exit.
+
+On a platform without the probe it answers `False`, and the reaper has no such
+wait available: nothing can tell it when the child becomes collectable. The
+lock is *not* abandoned there — that would put the fallback outside the
+coordination the rest of the design provides, and it was the shape this route
+originally had. `_reap_without_a_probe` instead turns the wait into a poll:
+`_collect_when_waitable` performs the collection under the lock with `WNOHANG`,
+which cannot block, and a poll that finds nothing sleeps with the lock released
+and tries again after a capped backoff. The lock is still held for only one
+syscall plus the publication, so a delivery to a live child never waits on the
+reap, and a poll that collects publishes before releasing, so the PID cannot be
+reused in between.
+`test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap` is what
+fails if the poll is ever rewritten to hold the lock across its own sleep.
+macOS on Python 3.12 is this route in practice: CPython exposes `wait4` there
+while guarding `os.waitid` behind `!defined(__APPLE__)` until 3.13.
+
+The settlement lock is what makes the reap-to-publication window unreachable
+rather than narrow. `_collect_and_publish` runs under it and records
+`returncode` before releasing, and `send_signal` takes the same lock for its
+guard-and-kill pair, so no delivery can observe a status the kernel has already
+taken while `returncode` still reads `None`. Recording still happens in the
+reaping thread: an event-loop hop between the collection and the publication
+would reopen the window, and a lock cannot cover a gap that spans a thread
+boundary. A delivery that waits reads a published code and its refusal carries
+it; a child collected by code the library does not own leaves nothing to read,
+and that refusal reports `-1` because no code was ever established.
+
 ### Pipeline timeout and teardown
 
 A pipeline enforces one deadline for the whole run, rather than a separate
@@ -6882,6 +7132,25 @@ the cleanup's own failure when the caller was not cancelled; callers that must
 absorb failures do so themselves — `_await_teardown_shielded` does this by
 passing `return_exceptions=True`.
 
+`_run_shielded_step` in the same module is the *reporting* variant, for a
+caller that must run two cleanup steps and weigh them against each other before
+it can say what the caller is owed. It shields the step identically and returns
+a `_ShieldedStepFailure(cancellation, failure, value)` rather than raising: a
+step that absorbs a cancellation reports it separately from a step that raises
+an ordinary failure because the two are owed different treatment. The third
+field carries the step's own outcome, which stays meaningful even when the step
+was cancelled — a stop that successfully stopped the child and *then* had its
+caller cancelled still stopped the child, so the control event describing it
+reads its outcome from `value` rather than discarding it alongside the
+cancellation. `_settle_teardown` and `_settle_after_stop`
+(`cuprum/_process_handle/settle.py`) are the callers, serving
+`RunningCommand.__aexit__`, `terminate()` and `kill()`; they need the
+separation for both of their rules — the stop's failure has to be known before
+the settle's failure can be ranked against it, and the cancellation has to be
+re-raised even when the block itself is already failing. Absorbing either
+inside the helper would decide too early; raising would abandon the settle and
+leave a handle whose `result` stays `None`.
+
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
 cleanup paths in `_run_subprocess_with_streams`
@@ -6891,7 +7160,7 @@ run-failure paths, plus `_finalize_pipeline_execution`, in
 `cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in
 `cuprum/_command_internals.py`, which previously used a bare
 `await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
-shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_drain.py` cancels
+shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
 the stdin writer, then drains the stream consumers, and
 `_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
 the stream tasks, then drains the observe-hook tasks. Shielding the halves
@@ -6904,6 +7173,181 @@ timeout, and that cancels `_wait_for_pipeline` before its body — and therefore
 its `finally` — ever runs, so that `finally` cannot reconcile the pumps. On the
 timeout route, `_reconcile_pipe_tasks` cancels and drains the pump tasks
 instead.
+
+### Command preparation, and the owned running-command handle
+
+The boundaries above carry a single command or a pipeline through to its result.
+`SafeCmd.start()` is the entry point that does not: it hands the spawned child
+back to the caller as a `RunningCommand`, so the caller decides when, and
+whether, the run ends. The handle is a second way to own a `run()`, not a
+second implementation of one, and the boundaries below are what keeps it that
+way.
+
+`cuprum/_process_handle/reporting.py` owns the handle's half of the control
+observation channel: which `ControlOutcome` a control operation is reported as.
+The classification has three arms — the refusal named by the error a delivery
+helper raised, a stop that delivered nothing against a still-live child, and a
+delivery or escalation read off the outcome directly — and it is stated once
+there rather than inline at each public verb, so `signal`, `terminate`, and
+`kill` cannot drift apart as they change. A fourth situation is not an arm:
+with no observer registered the measurement is `None` and nothing is reported
+at all, which is why every function in the module tolerates `None`.
+
+`cuprum/adapters/_tracing_control_join.py` owns the adapter's half: how one
+control event is projected onto the execution span its run already opened. It
+is a sibling of `_tracing_fields.py`, `_tracing_line_stream.py`, and
+`_tracing_native_pump_cleanup.py` under the same convention — a mixin
+`TracingHook` inherits, so `record_event_on` is a method of the hook while its
+implementation lives beside the other projections.
+`cuprum/adapters/tracing_adapter.py` re-exports `record_control_events`, so the
+join stays importable from the module callers already import.
+
+`cuprum/_command_prepare.py` is the shared preparation seam between `run()` and
+`start()`. `_prepare_owned_command(cmd, state)` opens the run's
+presentation-sink session, prepares its observation, emits the `plan` event,
+runs the `before` hooks, and builds the execution bundle, returning a
+`_PreparedCommand` that carries the bundle and the tracking together — neither
+is usable without the other, because the tracking owns the session the bundle
+was opened from and the pending tasks the run's finalization drains. Keeping
+that prefix in one place is what stops the two entry points drifting apart: a
+change to the plan event's tags, or to the order the bracket opens in, lands
+for both. The prefix owns its own failure handling, because a plan observer or a
+`before` hook can raise before any child exists and the session it opened
+still has to be closed.
+
+`SafeCmd.run()` and `run_bytes()` reach the seam through
+`_run_prepared_command` in `cuprum/_command_internals.py`; pipeline execution
+does not use this seam at all, and emits its own per-stage `plan` events and
+runs each stage's `before` hooks in `cuprum/_pipeline_observation.py`, where
+`_emit_plan_events_and_run_before_hooks` is the pipeline's counterpart of the
+same prefix. A pipeline opens its session in `_pipeline_config.py` instead, so
+the shared prefix covers the two single-command entry points and nothing else.
+The three helpers `_command_prepare` borrows from `_command_internals` are
+imported inside the function rather than at module scope, because
+`_command_internals` imports `_prepare_owned_command` back for the `run()` path.
+
+`cuprum/_process_handle/` owns the handle itself, split by question:
+
+Table 1: owned running-command handle modules
+
+| Module                                  | Responsibility                                                                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_process_handle/state.py`       | Holds `RunningCommand`: the owned record and the public operations, each of which delegates the question of how the run ends rather than answering it locally. |
+| `cuprum/_process_handle/settlement.py`  | States the one-settlement rule every operation goes through, the outcome that settlement recorded, and the rule deciding which caller hears about a deadline.  |
+| `cuprum/_process_handle/tasks.py`       | Owns the record a run is held by — `_HandleRun` — and the spawn and task wiring that builds it.                                                                |
+| `cuprum/_process_handle/control.py`     | Delivers signals, escalates from `SIGTERM` to `SIGKILL`, and holds the ordering of the platform and child-state checks.                                        |
+| `cuprum/_process_handle/coordinator.py` | Waits, reconciles the run's tasks, assembles the `CommandResult`, and emits the exit event — the one convergence point every route to the end passes through.  |
+| `cuprum/_process_handle_errors.py`      | Owns the handle's two signal-delivery refusals and the platform predicate, beside the error that reports when it declines.                                     |
+| `cuprum/_process_handle/owned_start.py` | Contributes `SafeCmd.start()` — the run inputs it resolves, capture forced on, and the spawn behind it — through the `_OwnedStart` mixin.                      |
+
+`_process_handle_errors` is the one module of the handle that lives outside the
+package, because `cuprum.sh` re-exports both refusals: the facade needs them
+importable without reaching into the handle's internals.
+
+Four claims are worth knowing before changing the handle: settlement,
+caller-owned deadlines, cancellation-safe teardown, and what the control
+operations promise.
+
+**Settlement happens once.** The handle holds the single task that drives a run
+to its end, and every operation that needs an outcome awaits that same task
+rather than starting a second. That is what makes concurrent waits one
+settlement with several readers, and it is also what keeps `terminate()` from
+racing a wait: stopping the child first unblocks the shared task, which then
+completes normally and hands every waiter the result. Because it is a task
+rather than a lock held across the wait, a cancelled caller leaves the
+settlement running, and the next caller awaits the same task and gets the same
+outcome. There is deliberately one assembly path: `terminate()` and `kill()` do
+not build a result of their own — they stop the child, and the ordinary wait
+that follows observes the death and reports the signal that caused it. A second
+assembly path would be a second place for the exit code, the exit event, and
+the relay diagnostics to be read at different moments.
+
+**A deadline belongs to the caller that named it.** The settlement task carries
+no deadline at all, and the wait under `coordinator.py` is unbounded: the
+child's own end is the only thing that stops it. The handle spawns from a
+bundle with its standing timeout stripped, so nothing on that path can act on
+one; the resolved value travels on `_HandleRun.default_timeout` instead, where
+`RunningCommand.wait` consults it when the caller supplies no deadline of their
+own. What `settlement.py` applies is therefore a deadline on *that caller's*
+await of the shared task: a caller that names a deadline and runs out of time
+stops the child, records the outcome that stop produced, and raises its own
+`TimeoutExpired` built from its own deadline and the drained output, while
+every other caller — the one that named none, the one that named a longer one,
+the one that arrived afterwards — simply reads the one recorded outcome.
+Keeping the caller's clock out of the shared wait is what stops one caller's
+deadline being imposed on another's wait.
+
+**Teardown is cancellation-safe, and reconciliation always runs after the
+process is gone.** Every stop and teardown path runs shielded, through
+`_shielded_cleanup` or its reporting variant `_run_shielded_step`, so a
+cancellation arriving mid-grace cannot leave a child running with nobody
+holding it; the caller's cancellation is re-raised afterwards. The order
+matters as much as the shield: cancelling a stream consumer while the child is
+still writing would turn a clean shutdown into a broken pipe, and a
+cancellation landing mid-drain would leave consumers nobody holds. Leaving an
+`async with` block runs stop and settle as two separately guarded steps, and
+neither is skipped when the other fails — reaping without settling would leave
+a handle whose `result` stays `None` forever. Escalations are serialized on the
+run's `stop_lock`, which is what stops a second stop racing the first one's
+grace period and delivering the forced signals twice; the settlement shares the
+*outcome* a stop produced, while this one lock shares the escalation itself.
+
+**Control operations are ordered by how much they ask of the child.**
+`signal()` asks for exactly the number named and takes no view on how the child
+responds, so it does not settle the run: a child it has not ended is still the
+caller's to wait on or stop. `signal()` is the one operation the operating
+system can refuse in ways the caller must act on, so its two refusals have
+types of their own — a child that has already exited is an ordinary racing
+outcome reported with the exit code the handle recorded, while a platform that
+cannot deliver a caller-named signal is a limitation no retry can fix.
+`terminate()` is the cooperative stop — `SIGTERM`, the grace period, then
+`SIGKILL` if the child is still there, with the grace defaulting to the
+execution context's `cancel_grace`. `kill()` skips the request entirely, which
+is why it is a separate path rather than the escalation with a zero grace: a
+zero-grace escalation still sends `SIGTERM` first, so a child that dies from it
+reports `-15` rather than the `-9` the caller asked for.
+
+`cuprum/_process_handle/tasks.py` owns the other half of ownership, the run
+record itself. `_HandleRun` holds the process, the bundle it was spawned from,
+the tracking that owns its sink bracket and observe-hook tasks, and the task
+ownership that reconciles its stdin writer and stream consumers; every handle
+owns one, including a handle whose streams went to `DEVNULL`, so the handle has
+one reconciliation path and one teardown path rather than a capture-dependent
+fork in each. `_start_handle_run` samples both clocks before the spawn, emits
+the child's `start` event, and attaches the tasks that will drive the run.
+Announcing and attaching are both inside its guard, because a child nobody has
+been told about, and a child whose streams nobody attached, are alike in being
+a child nobody would reap; either failure reclaims the child through
+`control.py` before it propagates. The idle monitor is armed when the handle
+starts waiting rather than at spawn, so the time a caller spends holding a
+handle without waiting is not counted as the child's silence, and it is
+deliberately not detached from the bundle, because the monitor's presence is
+what decides whether the child's streams are piped at all.
+
+The handle reuses the exit and resource paths described above rather than
+reimplementing them. Every route to the end converges on `_settle_handle_run`,
+which waits through `_await_process_exit` in `cuprum/_process_exit.py` — the
+same helper the three subprocess exit-wait paths use, which accepts an
+already-published `returncode` and otherwise races `process.wait()` against the
+backoff poll that closes the asyncio lost-wakeup race. The state checks reuse
+the non-reaping `waitid` probes from that module too: `_deliver_signal` reads a
+zombie's ending through `_observed_exit_code` rather than trusting a
+`returncode` its owner has not published yet, so a delivery into a child that
+has already exited is refused instead of reported as delivered. Child-resource
+accounting comes from `cuprum/_wait4_process.py`: the handle's child is spawned
+through `_spawn_subprocess`, which routes through `spawn_direct_process`, so on
+the `wait4` backend this one reaper owns the reap and the one-reaper rule above
+applies unchanged — `_Wait4Process.send_signal` still calls `os.kill` directly,
+and the guard and the kill still sit together under the settlement lock. A
+handle therefore reports the same resource figures `run()` reports for the same
+command: `_build_handle_result` calls `resource_usage_for(run.process, None)`
+with no before-spawn snapshot, which selects the child's own figure and leaves
+the aggregate fallback unreachable rather than measuring it late.
+
+See [Cuprum design](cuprum-design.md) §13.10 for the accepted rationale, and
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) — including its
+addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
+private-import compatibility rules the handle's split preserves.
 
 ## Subprocess timeout observability
 
@@ -7037,3 +7481,97 @@ paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Native hand-off stall diagnostics
+
+`test_auto_backend_repeated_native_pipeline_hand_off` repeats a real two-stage
+native pipeline on Linux to catch an intermittent hand-off defect, so it cannot
+bound an attempt on elapsed time: a slow host and a stalled hand-off look
+identical to a wall-clock deadline. It bounds each attempt on *observed
+progress* instead, classifying a stall from evidence captured before the
+pipeline is cancelled.
+
+`tests/behaviour/_native_pipeline_liveness.py` holds the clock arithmetic, and
+`tests/behaviour/_native_pipeline_hand_off.py` the runner that applies it: an
+observe hook refreshes a progress clock on every `start`, `stdout`, `stderr`,
+and `exit` event, and a stall is captured once none arrives for
+`NO_PROGRESS_INTERVAL_S` (0.5 s). The 30 s
+`_REPEATED_NATIVE_PIPELINE_TIMEOUT_S` is a suite-safety backstop for the whole
+16-attempt loop, not a per-attempt bound: `expired` tests the quiet period
+first, so only a run still progressing when it is spent reaches it. A run that
+reaches it before an attempt starts skips unclassified through
+`pre_attempt_backstop_reached` — a plain deadline comparison, with no progress
+clock yet to tie-break on and no child state yet to classify.
+
+`_classify_stall` in `tests/behaviour/_native_pipeline_stall.py` tests every
+`HUNG_HANDOFF` rule before the starvation fallback, so starvation is reported
+only when no positive evidence of a missed close was captured. `HUNG_HANDOFF`
+fails the attempt; `HOST_STARVATION` skips it.
+
+Table 1: stall verdicts and the evidence that selects them
+
+| Evidence at the stall                                                             | Verdict           |
+| --------------------------------------------------------------------------------- | ----------------- |
+| A parent-held write end feeds a `pipe_read` child whose upstream stage has exited | `HUNG_HANDOFF`    |
+| Every tracked child has exited, but a parent read end still holds unread bytes    | `HUNG_HANDOFF`    |
+| Pending tasks outlive every child that is not `R` or `D`                          | `HUNG_HANDOFF`    |
+| A child is present and none of the above applies                                  | `HOST_STARVATION` |
+
+Two details are load-bearing. Rules compare stages by the
+`pipeline_stage_index` tag, which Cuprum attaches to every pipeline event; the
+typed `ExecEvent.stage_index` field is set only on `pipeline_fail_fast`, so
+reading that field would find nothing. And they read the upstream stage's
+*process* state rather than its `exit` event, because a pipeline emits `exit`
+for every stage in one batch once the whole run settles
+(`cuprum/_pipeline_results.py`), so a stalled run never emits one.
+
+`tests/helpers/process_state.py` holds the procfs and pipe probes the snapshot
+is built from: `process_state`, `child_pipes`, `parent_write_fds`,
+`parent_read_fds`, and `read_end_pending_bytes`. Every query degrades rather
+than raising, so one procfs race cannot hide the stall that triggered the
+diagnostic. A child's own descriptors leave `/proc/<pid>/fd` as soon as it
+exits, so bytes it never handed over are observable only on the *parent's* read
+end, which is why the snapshot pairs each child's stdout pipe target with the
+read descriptor this process still holds. The pipe target is therefore recorded
+when the child's `start` event arrives, not at stall time: read any later and
+the child is already gone, which is exactly how that check would fail to fire
+in the situation it exists for. The access mode is masked out of `F_GETFL`
+rather than read from `os.O_ACCMODE`, absent on some runtimes, where naming it
+would escape the helper's `OSError` guard as a traceback.
+
+The liveness policy is clock arithmetic, so it is exercised by moving a clock
+rather than by waiting on wall time: `quiet_for_s` and `LivenessBound` in
+`tests/behaviour/_native_pipeline_liveness.py`, and `_ProgressTracker` in
+`tests/behaviour/_native_pipeline_hand_off.py`, each accept an injectable clock
+defaulting to `time.monotonic`, so a test advances that clock instead of
+sleeping or measuring real elapsed time.
+`tests/helpers/native_pipeline_doubles.py` holds the doubles both liveness
+modules drive, and reuses `ControllableMonotonicClock` from
+`cuprum/unittests/_rust_pump_test_helpers.py` rather than carrying a second
+copy of it; each double is handed the clock to move, so a shared module-level
+clock does not couple the two modules. The clock is placed at an instant
+(`advance_to`) rather than nudged by a delta, so a fixture that resets one
+between tests and an attempt that moves one repeatedly both land on the value
+they named instead of accumulating.
+`tests/test_native_pipeline_liveness_runner.py` drives `_run_liveness_bounded`
+and `_NativePipelineHandOff.run_attempt` through a controllable pipeline double
+to both bounds: the quiet observation stream and the spent suite-safety
+backstop. `tests/test_native_pipeline_stall_diagnostic.py` pins the rendered
+`_format_stall` report with Syrupy snapshots, asserting it names the attempt,
+the process and pipe evidence, and the pending tasks.
+`tests/test_native_pipeline_stall_properties.py` generates snapshots for
+`_classify_stall` with Hypothesis, asserting that a positive verdict survives
+unrelated children and does not depend on the order evidence was captured in.
+
+The Makefile's `PYTEST_TARGETS` names
+`tests/test_native_pipeline_hand_off_support.py`,
+`tests/test_native_pipeline_liveness.py`,
+`tests/test_native_pipeline_liveness_runner.py`,
+`tests/test_native_pipeline_stall_diagnostic.py`,
+`tests/test_native_pipeline_stall_properties.py`,
+`tests/test_native_pipeline_stdout_capture.py`, and
+`tests/test_process_state_helper.py`, so `make test-python` runs them; the
+coverage job invokes pytest with no path targets and collects the repository
+root. The full reasoning, including the load evidence against host starvation,
+is in
+`docs/debugging/debugging-plan-2026-09-21-native-pipeline-handoff-stabilize.md`.

@@ -264,6 +264,94 @@ names to settings without mutating the catalogue. Property access is preferred;
 the former `visible_settings()` call remains a compatibility path during the
 next-minor migration and returns the same mapping.
 
+#### 5.1.2 Executable bindings
+
+A `Program` names a *logical* program. It is the catalogue's identity for the
+program, the key policy is written against, and the label telemetry carries —
+but it is also, by default, the string handed to the operating system as
+`argv[0]`. Those two roles coincide for a script that runs whatever `ls` the
+`PATH` resolves, and diverge as soon as a project needs to run a pinned
+absolute path, a virtual-environment executable, or a controlled replacement in
+a test.
+
+`bind_executable(program, path_or_resolver, *, allow_relative=False)` supplies
+the second role without disturbing the first. Inside the scope it opens, the
+logical `program` executes the bound executable; the identity used for
+allowlisting, project metadata, and telemetry stays the logical `Program`. The
+arguments may be a path (validated at construction) or a zero-argument
+resolver, evaluated once per execution at spawn time. Nesting composes: an
+inner binding for a program overrides the outer one for the inner scope alone,
+and bindings for other programs are left intact.
+
+Two authorities stay separate, and the separation is the design's point:
+
+- The **allowlist** decides which logical programs may run at all. A binding
+  never widens it. Binding an unlisted program and running it still raises
+  `ForbiddenProgramError`, and the binding's resolver is never called.
+- A **binding** decides only which executable a *permitted* program runs.
+  Resolution therefore happens strictly after allowlist enforcement, so a
+  refused command never starts a resolver that might have side effects.
+
+Because resolution happens after enforcement and once per execution, the
+resolved string is the same value the child was started with and the value
+published on the lifecycle events. `CommandResult.resolved_path` and
+`ExecEvent.resolved_path` are `None` for an unbound program, which is what lets
+a consumer distinguish "ran under its catalogued name" from "a binding named
+something else".
+
+##### What a resolver returns, and what it reports when it fails
+
+A resolver is typed as returning `str`, and that contract is enforced rather
+than assumed. `None` is the sentinel the execution layer reads as *unbound*, so
+a resolver returning it would send the child to the catalogued name instead — a
+different executable, and an accidental substitution indistinguishable from a
+deliberate fallback. Since every other substitution in this feature is
+deliberate, the accidental one must not be reachable: `resolve_binding` raises
+`TypeError` for any non-`str` result rather than passing it through.
+
+A resolver that raises is reported as `ExecutableResolutionError`, which names
+the logical program and chains the resolver's own exception as `__cause__`. A
+resolver generally consults state that may legitimately be absent — a virtual
+environment that was never created, a toolchain that is not installed — and
+each of those is a failure of the *binding*, so it is reported as one. Letting
+the underlying exception escape would present a path the caller never
+configured as though it were part of the contract, and would leave a caller
+filtering on `FileNotFoundError` unable to distinguish a missing bound tool
+from a missing system file. The error subclasses `RuntimeError`, and a resolver
+that raises `ExecutableResolutionError` itself is propagated unchanged rather
+than wrapped a second time.
+
+##### Resolution and its limits
+
+Validation of an `ExecutablePath` is **advisory**. Construction is purely
+syntactic: it checks the shape of the string (it is non-empty, absolute unless
+`allow_relative=True`, and carries no NUL or `..` segment) and consults the
+filesystem not at all, so a path may be validated and bound before the file it
+names exists. The optional filesystem probe is separate and opt-in: callers
+that want an early warning invoke `advisory_path_rejection`, which reports an
+obviously unusable path via an existence check, a regular-file test, and an
+`os.access` execute-bit probe. That probe is itself partial, skipping bare
+names (whose `PATH` resolution Cuprum does not replicate) and the whole check
+on Windows, where the execute bit is not part of a file's identity. No step,
+alone or combined with the other, guarantees that the file executed later is
+the file inspected:
+
+- the path may be replaced, renamed, or re-pointed by a symlink between the
+  check and the `exec`, a time-of-check-to-time-of-use (TOCTOU) window that no
+  amount of pre-checking closes;
+- the underlying file may be modified in place;
+- the `os.access` result reflects the *effective* user's permissions at the
+  moment it runs, which may differ from the child's if privileges change.
+
+Closing the window properly requires holding a descriptor across the spawn and
+`exec`-ing it directly (`O_PATH` plus `fexecve`), which the current async
+subprocess machinery does not expose. Cuprum therefore documents the boundary
+rather than claiming a guarantee it cannot make: filesystem ownership, write
+permissions on the bound path, and read-only deployment where binaries must not
+change are the **operator's responsibility**. A deployment that must be certain
+which bytes ran should make the bound path unwritable to the executing user and
+mount it read-only, rather than relying on the construction-time check.
+
 ### 5.2 Safe vs Dynamic Commands
 
 Cuprum distinguishes between:
@@ -456,6 +544,73 @@ Contract notes:
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
+
+#### 6.1.6 Byte-exact results
+
+`SafeCmd.run_bytes` / `run_bytes_sync` and the matching `Pipeline` methods
+report the same execution through a second, parallel pair of result classes
+rather than by widening the text ones:
+
+```python
+@dataclass(frozen=True, slots=True)
+class BytesCommandResult:
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    stdout: bytes | None  # captured bytes, b"" when empty, None when uncaptured
+    stderr: bytes | None
+
+
+@dataclass(frozen=True, slots=True)
+class BytesPipelineResult:
+    stages: tuple[BytesCommandResult, ...]
+    failure_index: int | None
+
+    @property
+    def final(self) -> BytesCommandResult: ...
+
+    @property
+    def stdout(self) -> bytes | None: ...
+```
+
+The fields, defaults, and helpers mirror `CommandResult` and `PipelineResult`
+exactly; only the captured-output fields differ, so a caller that switches
+entry point switches the static type of what it reads rather than the shape of
+the record. Both are exported from `cuprum` and `cuprum.sh`. A byte run is not
+a separate runner: it is an ordinary run carrying `capture_bytes` on its
+resolved state, and it recomputes no measurement. Text mode remains the
+default, and text results are byte-for-byte what they were before byte mode
+existed.
+
+The two classes rather than one generic result is a deliberate trade. A single
+`CommandResult[str | bytes]` would make every consumer of an ordinary text run
+narrow a payload that can only be text, and it would let a mode/payload
+mismatch reach a caller as a replacement character instead of an error. The
+separation instead puts the guarantee in the type, and
+`cuprum._result_assembly._require_bytes` / `_require_text` re-take it at the
+one seam where a shared drain widens the payload.
+
+Byte mode preserves the child's bytes exactly, so no encoding applies to a
+capture. The invariants that follow from that:
+
+- Captured output is the child's bytes untouched; invalid UTF-8 and embedded
+  NUL survive the round trip.
+- A captured but empty stream is `b""`, and `None` still means capture was
+  disabled — the same distinction text mode draws with `""` and `None`.
+- Timeout and cancellation partial output is byte-preserving: the bytes read
+  before the deadline are returned rather than decoded under a possibly wrong
+  encoding.
+- `on_line` observes decoded text, so a caller-supplied callback is refused
+  before anything spawns rather than silently half-honoured. Observer and echo
+  views still receive replacement-decoded text, because a view must not end the
+  run it observes.
+- `stdin`, sink handling, and registered `sh.observe()` hooks behave exactly as
+  they do in text mode.
+
+`ExecEvent.capture_mode` names which of the two a run used, so telemetry can
+distinguish them; see [execution events](#71-execution-events) below and
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -961,6 +1116,8 @@ class ExecEvent:
     system_cpu_seconds: float | None  # exit: child system CPU seconds
     resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
     env_mode: EnvMode | None  # effective policy; on every phase
+    resolved_path: str | None  # bound executable; absent for fail-fast
+    capture_mode: CaptureMode | None  # text or bytes; on every phase
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1532,6 +1689,26 @@ implemented with the following decisions:
   failure counters with the effective mode. The typed policy and its
   composition rules are specified in
   [ADR-018](adr-018-typed-environment-policies.md).
+- **Capture mode:** every event carries `ExecEvent.capture_mode`, naming how the
+  execution reports its captures: `CaptureMode.TEXT` for a decoded run and
+  `CaptureMode.BYTES` for one started with `run_bytes()` or `run_bytes_sync()`.
+  It follows `env_mode` in shape and in justification. It is present on every
+  phase — including `plan`, `pipeline_fail_fast`, and the ancillary diagnostics
+  — because it is resolved before the child is spawned and describes the whole
+  execution rather than one measurement, and it is `None` only on legacy or
+  hand-built events. It rides the typed event rather than an observation tag,
+  because a caller may shadow any tag key and a mode a consumer cannot rely on
+  would not serve its purpose; unlike `env_mode` it reserves no tag key, so
+  nothing is stripped or grafted for it. The mode names how output is
+  *reported* and never its contents, so it adds no unbounded value to any
+  surface: the logging adapter emits `cuprum_capture_mode`, the tracing adapter
+  `cuprum.capture_mode`, and the metrics adapter a `capture_mode` label on
+  `cuprum_executions_total` and `cuprum_failures_total`. The label matters
+  because a byte-exact run and a text run of the same command are otherwise
+  identical in every counter and span attribute, leaving a timeout or teardown
+  failure unattributable to the mode that hit it. The byte-preserving capture
+  path the mode names is the addendum of 2026-10-01 in
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
@@ -1716,11 +1893,11 @@ preserving the `SafeCmd.run()` execution contract:
   and `_spawn_stream_consumers` to act on that decision.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
-  consumers exactly once, and returning their captured text and settled relay
-  diagnostics. `_StreamConsumerSpawnContext` carries the stream configuration,
-  process identifier, and per-stream collectors into the consumer tasks;
-  `_RunTaskOwnership` retains those consumers and collectors until the one
-  success or teardown reconciliation point.
+  consumers exactly once, and returning their captured payloads and settled
+  relay diagnostics. `_StreamConsumerSpawnContext` carries the stream
+  configuration, process identifier, and per-stream collectors into the
+  consumer tasks; `_RunTaskOwnership` retains those consumers and collectors
+  until the one success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
   *construction* and *routing*: `_resolve_stream_sink` chooses the destination
   for each mirrored stream — a live presentation-sink session's log, the
@@ -1760,20 +1937,25 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_wait.py` owns the wait half of *ending* a run: applying
   the deadline and terminating the process (through `_terminate_all_shielded`,
   so a caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation). `cuprum/_subprocess_drain.py` owns the other half: draining the
-  stream consumers exactly once. Its explicit drain interface uses
-  `_RunTaskOwnership` to bundle the optional stdin-writer task with the stdout
-  and stderr consumer tasks, `_DrainContext` to carry capture and observability
-  settings, and `_reconcile_run_tasks(tasks, context)` to cancel stdin before
-  settling both consumers as one shielded cleanup unit. A capturing drain gives
-  readers a bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before
-  cancellation, maps an absent reader result to an empty string, and therefore
-  keeps captured timeout output deterministic; non-capturing drains skip the
-  window and retain `None` for absent text. Both were split out of
+  escalation). It keeps `_drain_context` beside `_reconcile_run_tasks`, its
+  only consumer, because the context exists to serve that one reconciliation
+  and reads its cancellation policy from the tasks it is given.
+  `cuprum/_stream_drain.py` owns the other half: draining the stream consumers
+  exactly once. Its explicit drain interface uses `_RunTaskOwnership` to bundle
+  the optional stdin-writer task with the stdout and stderr consumer tasks,
+  `_DrainContext` to carry capture and observability settings, and
+  `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
+  consumers as one shielded cleanup unit. The two shared types live in
+  `cuprum/_subprocess_wait_types.py`, which is what lets the wait module import
+  them without reaching into the drain. A capturing drain gives readers a
+  bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
+  maps an absent reader result to the empty value of the run's capture mode,
+  and therefore keeps captured timeout output deterministic; non-capturing
+  drains skip the window and retain `None`. Both were split out of
   `_subprocess_execution` so that module stays about orchestration — spawning,
   wiring streams, assembling the result.
 - When the `_CAPTURE_EOF_GRACE_S` window expires with readers still pending,
-  `_subprocess_drain` uses `_timeout_reporting` to emit one correlated
+  `_stream_drain` uses `_timeout_reporting` to emit one correlated
   `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
   `exec_id` and `pid`, `operation="drain"`, `eof_grace_s`, and
   `pending_readers`. `MetricsHook` projects it to
@@ -1784,8 +1966,8 @@ preserving the `SafeCmd.run()` execution contract:
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
-period. The wait logic asks consumers to read chunks; if EOF arrives within
-grace, captured text is returned. If grace expires while readers remain
+period. The drain asks consumers to read chunks; if EOF arrives within grace,
+the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
@@ -1793,7 +1975,7 @@ Figure 9: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
-    participant Drain as _subprocess_drain
+    participant Drain as _stream_drain
     participant Consumers as Stream consumers
     participant Reader as StreamReader
     participant Telemetry as Exec telemetry
@@ -1803,7 +1985,7 @@ sequenceDiagram
     Consumers->>Reader: read(_READ_SIZE)
     alt EOF observed within grace
         Reader-->>Consumers: empty chunk
-        Consumers-->>Drain: captured text
+        Consumers-->>Drain: captured payload
     else grace expires with readers pending
         Drain->>Telemetry: _report_capture_eof_grace_expiry(...)
         Drain->>Consumers: _settle_consumers(consumers, discard_on_cancel)
@@ -2662,7 +2844,10 @@ core functions affected are:
 - `_consume_stream_without_lines()` – reads subprocess output without line
   parsing, optionally teeing to sinks;
 - `_consume_stream_with_lines()` – handles line-by-line callbacks with
-  incremental decoding configured by `config.encoding` and `config.errors`.
+  incremental decoding configured by `config.encoding` and the mode-scoped view
+  policy: byte-exact runs replace undecodable bytes so an observer view cannot
+  end the run, text runs keep `config.errors` (see `OBSERVER_ERROR_POLICY`
+  below).
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
@@ -2676,11 +2861,24 @@ echoed text to a configured sink, and accumulating captured bytes. The
 line-emitting consume variant layers one incremental decoder per invocation on
 top of this loop by passing an `on_chunk` delivery hook; the hook itself does
 not own shared state. Fixes to read, echo, and capture behaviour belong in
-`_drain()`, so the capture-only and line-emitting paths cannot diverge. The
-line-emitting variant configures its incremental decoder from `config.encoding`
-and `config.errors`, and `_drain()` applies the same error policy when decoding
-captured bytes. New consume variants should reuse `_drain()` unless they
-deliberately replace the whole stream-consumption contract.
+`_drain()`, so the capture-only and line-emitting paths cannot diverge.
+
+Observation and echo both render a *view* of the child's bytes rather than the
+run's capture. In a byte-exact run the view must not end the run it observes:
+reading `config.errors` in the view decoder would let a registered
+`sh.observe()` hook, or the line feeder the idle partition attaches, raise
+`UnicodeDecodeError` from the read loop and kill a byte-exact run that would
+otherwise have returned the child's bytes intact. So byte-mode views decode
+under `cuprum._constants.OBSERVER_ERROR_POLICY` and replace undecodable input.
+A text run is untouched — its views and its capture both decode under
+`config.errors`, so a strict text run raises from the read loop exactly as it
+did before byte mode existed. `cuprum._streams._StreamConfig.view_errors`
+derives that choice once for both view decoders.
+`cuprum._stream_drain_finish._captured_payload` is the single place a capture
+becomes the run's payload: a text run decodes the buffer under `config.errors`,
+while a byte-exact run returns its bytes untouched and never consults that
+policy. New consume variants should reuse `_drain()` unless they deliberately
+replace the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw
@@ -3101,6 +3299,36 @@ after logging a warning. The cached resolver in
 `cuprum._backend._check_rust_available()` wraps this probe and feeds both
 `cuprum.rust.is_rust_available()` and — through the
 `_probe_rust_availability()` seam — `get_stream_backend()`.
+
+#### Native error classification
+
+The two exported stream entry points classify every failure through one
+crate-private enum, `RustStreamError`, in the crate root,
+`rust/cuprum-rust/src/lib.rs`. It has three variants: `InvalidBufferSize` and
+`InvalidDescriptor` carry the argument-validation messages, and
+`Stream(#[from] PumpError)` wraps the stream engine's own error. Unifying the
+two kinds in one type is what lets `stream_pyfunctions::run_stream_operation`
+be a single common boundary for both exports — validate the buffer size,
+convert the reader descriptor, prepare the operation — with one `map_err` at
+the end rather than a conversion at every call site.
+
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs` is the
+boundary's single conversion entry point: every fallible step builds a typed
+`Result`, and `run_stream_operation` converts it once through
+`map_err(PyErr::from)`, so the exception class a caller branches on is decided
+in exactly one place. The two argument variants become `ValueError`; `Stream`
+becomes `OSError` carrying the engine's own code, so callers branch on a number
+— `errno` on POSIX, `winerror` on Windows — rather than parsing English out of
+a message. Where an I/O failure carries no operating-system code, because Rust
+synthesized it rather than receiving it from a syscall, the conversion falls
+back to PyO3's `ErrorKind` mapping rather than fabricating one.
+
+`Stream` wraps `PumpError` rather than copying its variants into the boundary
+enum. That keeps `cuprum-streams` the single owner of the safe stream policy, as
+[ADR-011](adr-011-audited-rust-boundaries.md) requires, and avoids a parallel
+taxonomy that could drift from the engine's. Module-initialization and PyO3
+argument-extraction failures stay outside the conversion: they are not
+stream-domain failures, and PyO3 already maps them to the right classes.
 
 ### 13.4 Fallback Strategy
 
@@ -3840,3 +4068,492 @@ generation without invoking `hyperfine`, used by behavioural smoke tests.
 
 See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
 and alternatives considered.
+
+### 13.10 Owned running-command handle
+
+`SafeCmd.run` and `SafeCmd.lines` both own a child from start to finish: `run`
+awaits it, `lines` iterates it. Neither lets a caller hold a running child and
+decide later what to do with it. The workaround was to derive a PID from a
+public `start` event and signal it with `os.kill`, which hands the caller four
+races the library can see and they cannot: a child that exits before the first
+signal, a PID the operating system has already reused, a set of stream
+consumers nobody is draining, and a child left with no one holding it when the
+cancellation that should have stopped it goes astray. `SafeCmd.start()` and the
+`RunningCommand` handle it returns exist so those outcomes belong to the
+library rather than to a caller's signal handler.
+
+#### 13.10.1 Ownership
+
+`SafeCmd.start()` spawns the child and returns before it exits, so the caller
+decides what happens next. The handle owns everything that ownership implies:
+
+- the spawned process, reaped exactly once;
+- the execution bundle its streams and deadline came from, so a wait's deadline
+  is applied without mutating the bundle the child was spawned with;
+- the tracking that owns the run's sink bracket and observe-hook tasks;
+- the task ownership that reconciles the stdin writer and both stream
+  consumers.
+
+Output capture is forced on, because a handle exists so its caller can inspect
+the child after the fact and a child whose streams were routed to `DEVNULL`
+cannot be asked what it said. Echo and every other presentation decision remain
+the caller's. The handle runs the same sequence `run()` does — the `before`
+hooks, the presentation-sink session, and the `plan`/`start`/`settled` events —
+and runs the `after` hooks at settlement, because they take the result and
+there is no result until the run has one. `_prepare_owned_command` is the
+shared prefix for both, so the handle is a second way to own a `run()` rather
+than a second implementation of one.
+
+There is deliberately one assembly path. `terminate()` and `kill()` do not
+build a result of their own: they stop the child, and the ordinary wait that
+follows observes the death and reports the signal that caused it. A second
+assembly path would be a second place for the exit code, the exit event, and
+the relay diagnostics to be read at different moments.
+
+The exit event and the result report one resource source and deliberately not
+the other. The child's own `wait4` measurement is reported: the kernel
+attributes it to the PID whenever the wait began, so it describes the child
+rather than a window this path chose, and holding the handle does not change it.
+`run()` reports that same figure for the same command, so a handle that
+reported nothing would make a resource measurement depend on which entry point
+the caller happened to use. The aggregate `RUSAGE_CHILDREN` delta is the one
+left unmeasured, and the reason is singular to this path: that figure is a
+window measurement, and measuring it late would describe a different window
+than the one it claims. `resource_usage_for` is therefore called with no
+before-spawn snapshot, which selects the child's own figure and leaves the
+fallback unreachable. Where no direct figure exists the event and the result
+both say `unavailable` rather than reporting zeros that would read as a child
+that consumed nothing.
+
+#### 13.10.2 Settlement
+
+Settlement happens once. The handle holds the single task that drives a run to
+its end, and every operation that needs an outcome awaits that same task rather
+than starting a second one. That is what makes concurrent `wait` calls one
+settlement with several readers, and it is also what keeps `terminate` from
+racing a wait: stopping the child first unblocks the shared task, which then
+completes normally and hands every waiter the result.
+
+Because the task is a task rather than a lock held across the wait, a caller
+who is cancelled leaves the settlement running, and the next caller awaits the
+same task and gets the same outcome — whether that is a result or the error the
+first caller never saw. Nothing can deadlock a stop behind a wait with no
+deadline. `result` publishes what `wait` returned and never waits itself.
+
+The settlement task carries no deadline at all. It waits for the child, and the
+child only ends early because some caller stopped it, so what `wait` applies is
+a deadline on *its own* await of the shared task: `wait(timeout=...)` bounds
+one caller's wait, not the handle's. A caller whose deadline elapses stops the
+child through the same `SIGTERM`, cancel-grace, `SIGKILL` path a cancelled
+`run()` takes, and the shared task — unblocked by that stop — records the
+outcome it produced. No other caller is affected: one that named a longer
+deadline, or none, keeps waiting for the child it was always waiting for.
+
+The deadline is recorded on the settlement before the child is stopped, so the
+one settlement can tell that a clock rather than the child ended the run: the
+terminal outcome it publishes is `TIMEOUT`, matching the streamed path, while
+the exit code the recorded result carries is the real one the signal produced.
+The deadline-ran-out caller is then owed its own `TimeoutExpired`, built from
+its own deadline and the outcome the settlement drained, so the error reports
+the command, the deadline, and the output the child had written before it was
+stopped. It reaches the caller whose clock produced it and no other: every later
+`wait`, `terminate`, `kill`, or teardown reads the recorded outcome, and a
+caller arriving after the child is gone has nothing left for a fresh deadline
+to interrupt.
+
+Unlike the streamed `run()` path, no deadline is enforced while the handle is
+merely held: the clock a timeout is measured against starts at the `wait` that
+asks for one. `start(timeout=...)` is therefore the default deadline for every
+`wait()` on the handle rather than a limit on how long the child may live.
+Because the deadline is applied by the wait rather than carried into the
+settlement, it is translated on the one path that drains the run: the output
+captured before the deadline is drained exactly once and carried onto the raised
+`TimeoutExpired`, exactly as the streamed path does.
+
+A positive deadline that fires *after* the child has exited is not recorded and
+does not raise. The settlement can outlive the child, because the drain that
+follows the exit waits out an EOF grace that a grandchild holding an inherited
+pipe can extend, and a clock landing in that window would otherwise publish
+`TIMEOUT` — and skip the run's `after` hooks — for a child that ended on its
+own. The caller reads the child's own outcome instead, which is the same thing
+the streamed path's exit-wait deadline gives it. A non-positive deadline is
+exempt, because that value means "already elapsed" and is required to expire
+deterministically.
+
+#### 13.10.3 Control operations
+
+The three control operations are ordered by how much they ask of the child.
+
+- `signal(signal_number)` asks for exactly what was named and takes no view on
+  how the child should respond. It does not settle the run: a child sent
+  `SIGSTOP`, or sent a signal it ignores, is still the caller's to wait on or
+  stop. Delivery is synchronous because `send_signal` is, so there is nothing
+  to await.
+- `terminate(grace=None)` asks for the cooperative stop: `SIGTERM`, the grace
+  period, then `SIGKILL` if the child is still there. The grace defaults to the
+  execution context's `cancel_grace`, which is the same window a cancelled
+  `run()` allows.
+- `kill()` skips the request entirely and compels the child to go with
+  `SIGKILL`.
+
+Kill is a separate path rather than the escalation with a zero grace, because
+the two answer different questions. A zero-grace escalation still sends
+`SIGTERM` first, so a child that dies from it reports `-15` — the signal that
+happened to end the child, not the one the caller asked for. A caller who
+chooses `kill()` has already decided the child is not to be asked, so `-9` is
+what the outcome reports. Both paths reap the child before returning, and both
+are idempotent: a second call reports the recorded outcome and delivers
+nothing, so a stop coordinated from two places cannot reap the child twice or
+build a second result that disagrees with the first.
+
+Every path stops the process before the caller reconciles its stream tasks,
+never after. Cancelling a stream consumer while the child is still writing
+would turn a clean shutdown into a broken pipe, and a cancellation landing
+mid-drain would leave consumers nobody holds.
+
+#### 13.10.4 Cancellation and teardown guarantees
+
+Every control path runs shielded. The shield is what makes teardown a guarantee
+rather than a best effort: a cancellation arriving mid-grace — a task group
+tearing down the block that owns the handle, say — must not leave a child
+running with nobody holding it. The helper waits through the cancellation, and
+the caller's cancellation is re-raised afterwards.
+
+Leaving an `async with` block settles the handle on every exit, and never
+suppresses the block's own exception. Stopping and settling are separate
+guarded steps rather than one, because a cancellation arriving during the stop
+would otherwise skip the settle entirely: the child would be reaped while
+`result` stayed `None` forever, leaving a handle that reports nothing about a
+child it has already dealt with. Reaping without settling is half-ownership,
+which is the state this ordering exists to prevent. A teardown failure is
+raised only when the block itself succeeded, since otherwise it would replace
+the error that caused the exit; it is recorded on the run's event stream either
+way.
+
+Each step runs through `_run_shielded_step`, the refinement of
+`_shielded_cleanup` that *reports* how a shielded step ended instead of raising
+it. The distinction it preserves is the one the policy above depends on: a
+cancellation and an ordinary failure are owed different treatment, so a step
+returns which of the two it absorbed, and the handle weighs the stop's result
+against the settle's before deciding what the caller is owed. Deciding inside
+the helper would settle the question too early — the stop's outcome must be
+known before the settle's failure can be ranked against it — and raising there
+would abandon the settle, which is exactly the half-owned handle the ordering
+exists to prevent. A cancellation is taken from the first step that absorbed
+one, because the request that arrived is the one the caller is owed and a
+second is a repeat of it.
+
+Because capture is forced on and the drain is the same one `run()` uses, a
+terminated or killed child still reports what it wrote before it ended.
+
+#### 13.10.5 Signalling on an unsupported platform and after exit
+
+`signal()` distinguishes two refusals, because the caller's remedy differs.
+
+A platform that cannot deliver a caller-named signal is a limitation no retry
+can fix. The Windows proactor transport asyncio uses for subprocesses accepts
+only its own terminate and kill pairs, so a caller-named signal number has no
+route to the child; everywhere else `send_signal` is `os.kill`. That condition
+raises `UnsupportedSignalError`, carrying the signal that was asked for and the
+platform that declined it. A caller on such a platform has to reach for
+`terminate` or `kill`, which use the platform's own signals.
+
+A child that has already exited is an ordinary racing outcome rather than a
+misuse, because a caller coordinating several signals cannot avoid racing the
+child's own exit. That condition raises `SignalAfterExitError`, a
+`ProcessLookupError` subclass carrying the child's exit code and the PID it
+belonged to — and nothing is delivered. Subclassing `ProcessLookupError` is
+what keeps a caller who already tolerates a lost process working once the
+handle names the condition.
+
+The exit code that refusal carries is established two ways, and the handle
+needs both. A child that exited *before* the call is a zombie until its owner
+reaps it, so `returncode` still reads `None` while the status is right there to
+be observed — the handle reads it without collecting it, leaving the reap to
+the thread that owns it. A child reaped *concurrently* is the harder half: once
+the status has been collected the kernel has no child at that PID, so nothing
+can be observed about how it ended, and detection has to come from the delivery
+itself.
+
+Three mechanisms do that, and they cover different collectors. The first is the
+guard's kernel question: `send_signal` asks the kernel whether this owner still
+has a waitable child, so a refusal does not depend on the code having been
+published first. The second is that the guard and the kill are taken together
+under the same lock the reaper publishes under, which makes the window between
+the collection and the recorded status unreachable rather than narrow. The
+reaper reaches the lock having already waited for the child *outside* it, so
+the locked section is a few instructions long and never spans the child's
+lifetime. A delivery to a healthy child therefore takes the lock freely; only a
+delivery arriving while a collection is in flight waits, and what it waits for
+is the publication rather than the child.
+
+The third exists because the first cannot be asked everywhere. A platform
+without the non-reaping probe has no way to read a zombie's ending at all, so
+the guard collects instead: it calls the same non-blocking
+`wait4(..., WNOHANG)` the probe-less reap polls with, under the same lock, and
+a child that has exited is reaped and its code published *before* the refusal
+is raised. The refusal therefore still carries the child's own exit code, which
+is the promise that separates this refusal from a bare race — an unwaited child
+that exited while its handle was merely held is reported with how it ended, not
+with the `-1` placeholder. A child that is merely running answers `WNOHANG`
+with nothing collected, so the delivery proceeds and a live child is signalable
+as before. The collection also disarms the guard: the code is published before
+the lock is released, so every later delivery refuses without touching the
+kernel. Nothing can be collected twice, because both the guard and the reaper
+take the lock first and whichever arrives second finds the code already
+published.
+
+How the reaper waits for the child outside the lock depends on what the
+platform can say. Where a non-reaping probe exists — `os.waitid` with `WEXITED`
+and `WNOWAIT`, consuming nothing — the wait is a blocking call and the lock is
+entered exactly once, after the child is already a zombie. Where it does not,
+the reap becomes a poll: the child is collected with `wait4(..., WNOHANG)`
+*under* the lock, which cannot block, and a poll that finds nothing is retried
+after a capped backoff with the lock released between attempts. The guarantee
+is the same on both routes, and reaching it a different way does not weaken it:
+the lock is held for one non-blocking syscall plus the publication, never
+across the child's lifetime, so a delivery to a live child is never made to
+wait on a reap. Releasing the lock between polls is safe because a child that
+has not been collected is running or a zombie, and neither state frees its PID
+for reuse — only the collection does that, and the collection publishes before
+the lock is released.
+
+That second route is not hypothetical. CPython exposes `wait4` on macOS while
+guarding `os.waitid` behind `!defined(__APPLE__)` in 3.12, so a macOS host on
+Python 3.12 takes it; the exclusion is gone in 3.13. The route is therefore
+covered by its own tests against the same guarantees, driven by switching the
+platform question rather than by skipping: one proves the fallback still reaps
+the child and attributes its resource usage, one proves a delivery arriving
+during the fallback's collection waits for the publication and is then refused
+with the child's own code, and one proves a delivery to a live child is not
+made to wait on the fallback's reap. The last of these is what fails if the
+fallback is ever "simplified" into a lock held across its own waiting. The
+guard's own collection is covered the same way: a delivery to a child that
+exited before anything waited on it is asserted to report that child's exit
+code, and a delivery to a live child on that route is asserted to land and to
+be reaped with the signal's negation.
+
+That wait is also what the refusal reports. A delivery that waited reads a
+`returncode` the reaper has already written, so `SignalAfterExitError` carries
+the child's own exit code. A child collected outside the handle's
+synchronization — by a caller's own `wait`, or by a foreign reaper the backend
+cannot see — leaves nothing for the handle to read, and that is the one case
+where a refusal falls back to the `-1` placeholder: no code was ever
+established. The placeholder is a declared limitation rather than a silent one,
+and it is confined to refusals whose collection the handle did not own.
+
+What remains is the gap between the guard's question and the kill for a child
+collected by code the library does not control: that is the same irreducible
+race `Popen` documents between its own liveness check and its own kill. Within
+the handle's own reap the gap is closed, because the collector must take the
+lock the delivery holds; outside it, the library cannot serialize against code
+it does not own. The handle catches either refusal and reports the code the
+reaper published, which is why the backend does not suppress the error the way
+`Popen.send_signal` does. A backend that swallowed it would make the handle
+claim a delivery to a process that no longer exists.
+
+The platform is checked before the child's state, so a caller on a platform
+that cannot deliver the signal at all learns that, rather than being told the
+child happened to be gone. Only one of the two refusals is actionable: a caller
+told the child had exited gives up, while a caller told the platform cannot
+take the request knows to reach for `terminate` or `kill` instead.
+
+`terminate()` and `kill()` take the opposite view of an already-exited child:
+that is a no-op which reports the recorded outcome, because a caller stopping a
+child has no use for a refusal.
+
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.start()` handle. There is no separate creation state to observe: the
+handle exists because `start()` spawned the child, so the first state is the
+child already running. From there a signal leaves the handle running — it is
+delivered, or it is refused and nothing changes — while a wait starts the
+settlement that will end in a published `CommandResult`. `terminate()` and
+`kill()` stop the child directly, and the exit from an `async with` block and a
+cancellation converge on the same state; a timeout converges on it too, through
+the existing timeout termination path. Termination is the shared SIGTERM,
+cancel-grace, and SIGKILL sequence a cancelled `run()` uses — a child that
+obeys the SIGTERM ends the settlement there, while one that ignores it is
+killed once the grace expires — and both routes then publish the settled
+record. Once the run is reconciled and its result published, the handle is
+closed: no work it owns is outstanding, and every later wait or stop reports
+the recorded outcome rather than starting again.
+
+Figure 17: Lifecycle of a `SafeCmd.start()` handle from creation through
+waiting to completion, timeout, or control-driven termination
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running: SafeCmd.start() spawns the child
+    Running --> Running: signal(signal_number) delivered
+    Running --> Running: SignalAfterExitError or UnsupportedSignalError
+    Running --> Running: await wait() starts the settlement
+    Running --> Completed: the child exits on its own
+    Running --> Cancelling: terminate(), kill(), async with exit, or cancellation
+    Running --> TimedOut: a wait's deadline expires
+    Cancelling --> Terminated: the stop the caller asked for — SIGTERM then SIGKILL, or SIGKILL alone
+    TimedOut --> Terminated: existing timeout termination path
+    Terminated --> Completed: the settlement records how the child ended
+    Completed --> Closed: the run reconciled, CommandResult published
+    Closed --> [*]
+```
+
+For screen readers: The following sequence diagram shows one handle stopping
+and then settling a cooperative child. The caller starts the child, receives a
+handle, and leaves the child running for as long as it chooses. When the caller
+calls `terminate()`, the handle sends SIGTERM and arms a grace window: a child
+that obeys the signal ends the stop there, while one that ignores it is sent
+SIGKILL once the window expires, so termination is the escalation rather than
+the pairing of two separately requested signals. The wait that follows observes
+the death, and its result is handed back from `terminate()` itself as the
+handle's one `CommandResult`. Every later `wait()` on the same handle reports
+that same result rather than building another.
+
+Figure 18: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+through `terminate()` to the single published `CommandResult`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant Handle as RunningCommand
+    participant Settlement
+    participant Process as Child process
+
+    Caller->>SafeCmd: start(output, timeout, context, stdin)
+    SafeCmd->>Process: spawn subprocess
+    SafeCmd->>Handle: own the run
+    SafeCmd-->>Caller: RunningCommand
+    Note over Caller,Process: the caller keeps the child for as long as it needs
+    Caller->>Handle: terminate(grace=None)
+    Handle->>Process: SIGTERM
+    Note over Handle,Process: within the grace, then SIGKILL if it expired
+    Handle->>Settlement: await the wait that observes the death
+    Settlement->>Settlement: reconcile consumers, build one CommandResult
+    Settlement-->>Handle: publish result
+    Handle-->>Caller: CommandResult
+    Caller->>Handle: wait()
+    Handle-->>Caller: the same CommandResult, nothing redelivered
+```
+
+#### 13.10.6 Observing control operations
+
+A control operation's outcome does not survive in the settled `CommandResult`,
+which reports how the child *ended* rather than what was *done* to end it. The
+code narrows the question but does not answer it: a graceful stop reports `-15`
+where a forced escalation reports `-9`, so the child's own end can be read,
+while everything *around* that end stays invisible. A stop refused because the
+child was already gone leaves a status indistinguishable from one the child
+chose for itself, and nothing in the code says how long the stop took or
+whether the grace window was exhausted to get there. Control observation exists
+to say which of those happened.
+
+Because the outcome is a fact about one child and one run, it travels on the
+event. `ControlEvent` carries the closed `operation` and `outcome`, the measured
+`duration_s`, and the run's `exec_id` where the handle safely provides one, the
+`signal_number` where one was asked for, and the child's `pid` where the
+handle had one. A caller registers a `ControlHook` through `observe_control`,
+which returns a context-local registration handle; with no hook registered,
+starting a measurement returns immediately, so an unobserved run pays no clock
+read and allocates nothing.
+
+Emission is fail-open, and that is the load-bearing property rather than a
+courtesy. A control operation has a job to do — the child has to be signalled
+or stopped — and an observer that raises must not be able to prevent it, nor to
+replace the refusal the caller is owed with an observer's own error. A raising
+hook is reported at `WARNING` and the remaining hooks continue; a hook that
+returns a value rather than `None` is reported the same way, and an accidental
+coroutine is closed so an incorrectly declared async hook cannot leak a
+never-awaited warning. Neither can interrupt the cleanup the operation is
+performing.
+
+The same reasoning that closed `ExecPhase` to pump routing
+([ADR-008](adr-008-rust-pump-observation-channel.md)) closes it here. The
+channel is separate because `ExecEvent` consumers match their phases
+exhaustively and their hook exceptions propagate, so a new phase would start
+raising inside code that was correct when it was written. A caller who does not
+register a control hook sees no behavioural change at all. The decision itself
+is recorded in [ADR-019](adr-019-control-observation-channel.md).
+
+The span needs no new channel, and must not get one. A control operation is
+part of its run's story rather than a run of its own, so it is recorded as a
+span *event* on the execution span the run's `TracingHook` has already opened,
+keyed by the run's `exec_id`. That is why the join is a recorder function
+rather than a control span: the span's lifetime is the execution's, and an
+operation can complete after the run has settled — a `kill()` on a child that
+had already exited, or a stop whose reaping outlives the run's own span — so a
+self-owned control span would either outlive the execution it describes and
+report a duration the run never had, or have to be parented across two channels
+to be placed correctly. Those are the same two objections
+[ADR-010](adr-010-rust-pump-hop-span.md) raised for executor-hop spans, and
+they resolve the same way.
+`TracingHook.record_event_on(exec_id, name, attributes)` is the seam;
+`record_control_events(hook)` is the join. Two registrations are needed and
+both are explicit. The projection itself — the bounded attribute set, and the
+drop for an unknown or settled token — lives in
+`cuprum/adapters/_tracing_control_join.py`, alongside the sibling `_tracing_*`
+modules that `TracingHook` mixes in; `cuprum/adapters/tracing_adapter.py`
+re-exports the join.
+
+Bounded metrics are projected separately by `ControlMetricsHook`.
+`cuprum_control_operations_total` and
+`cuprum_control_operation_duration_seconds` carry exactly the closed
+`operation` and `outcome` labels, and `cuprum_control_refusals_total` carries
+only `operation`, so a stop the handle never delivered is countable on its own.
+The label set is re-validated against the enums at emission rather than trusted
+from the annotation, because `ControlEvent` is dataclass-constructible with any
+string in either field. The PID is the one field that reaches the event and the
+span event but never a label: its domain is unbounded, and a recycled PID would
+fold two unrelated children into one series.
+
+Refusal is a first-class outcome rather than an inference from a missing
+delivery. The two refuse for opposite reasons — a platform with no route to a
+caller-named signal is a limitation no retry can fix, while a child that has
+already exited is an ordinary racing outcome — so `ControlOutcome` distinguishes
+`REFUSED_UNSUPPORTED` from `REFUSED_EXITED`, and each is paired with the
+public error the caller receives. `_TerminationOutcome` carries a fourth fact,
+`refused`, which the stop helpers in `cuprum/_process_lifecycle.py` never set:
+they cannot tell a delivery the platform would not make from a child that had
+already gone, because both reach them as the same `ProcessLookupError`. Only
+the child's own status separates them, and the handle reads that — one caller
+that can weigh the two against each other rewrites it.
+
+#### 13.10.7 Module boundaries
+
+The handle is a package rather than a single module, split by responsibility
+the way the subprocess execution path is split by lifecycle concern:
+
+- `cuprum/_process_handle/state.py` owns `RunningCommand` itself: the owned
+  record and the public control operations, each of which delegates the
+  question of how the run ends rather than answering it locally.
+- `cuprum/_process_handle/settlement.py` owns the single settlement: the one
+  task that drives a run to its end, the record it produced, and the rule
+  deciding which caller hears about a deadline. It is held by the handle rather
+  than derived from it, because the state that matters — which task is driving
+  the run, what it produced, and whether it has run at all — is exactly the
+  state that must not be duplicated.
+- `cuprum/_process_handle/tasks.py` owns the spawn seam: `_HandleRun`, the
+  deadline-stripping `_build_handle_execution`, and `_start_handle_run`, which
+  spawns the child, emits its `start` event, attaches the run tasks, and
+  reclaims the child if either step raises. A `start` event whose synchronous
+  observe hook raises is the immediate hazard, since the child is already
+  running and the caller is about to be told the start failed; a failure while
+  the run tasks are attached is the quieter one, because it leaves a child
+  nobody is driving — no stdin writer, no consumers to drain its pipes — which
+  is why the attach sits inside the same guard rather than after it.
+  `_HandleRun.default_timeout` carries the deadline `start()` resolved, because
+  the bundle cannot hold it without the spawn path acting on it;
+  `RunningCommand.wait` consults it whenever the caller supplies no deadline of
+  their own.
+- `cuprum/_process_handle/control.py` owns signal delivery and termination, and
+  is where the ordering of the platform and child-state checks lives.
+- `cuprum/_process_handle/coordinator.py` owns waiting, settling, and result
+  assembly: the one convergence point every route to the end passes through.
+- `cuprum/_process_handle_errors.py` owns the two refusals and the platform
+  predicate, beside the error that reports when it declines.
+
+The idle monitor is armed when the handle starts waiting rather than at spawn,
+so the time a caller spends holding a handle without waiting is not counted as
+the child's silence. It is not detached from the execution bundle, and that is
+load-bearing in the other direction: the monitor's presence is what decides
+whether the child's streams are piped at all, so detaching it would change how
+the child is wired.

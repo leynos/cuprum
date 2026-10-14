@@ -125,6 +125,68 @@ does not list the program. Pass an explicit `catalogue=` argument where that is
 the intent. The two enforcement points are described under
 [Two enforcement points](users-guide.md#two-enforcement-points).
 
+## Executable bindings
+
+`bind_executable()` is opt-in and additive. A caller that binds nothing keeps
+running each catalogued program under its own name, and the new `resolved_path`
+field is `None` on every `ExecEvent` and `CommandResult`, so existing consumers
+read the same values they read before.
+
+The change is for the case where the executable and the identity must differ.
+Before, the only way to run a pinned path was to register the path *as* the
+program, which made that path the catalogue identity, the policy key, and the
+telemetry label. Now the binding is a scope and the identity is untouched:
+
+<!-- tested-example: migration-executable-bindings -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, bind_executable, scoped, sh
+
+PYTHON = Program("python")
+catalogue = ProgramCatalogue.from_programs(PYTHON, name="migration-bindings")
+python = sh.make(PYTHON, catalogue=catalogue)
+
+with (
+    scoped(ScopeConfig(allowlist=frozenset([PYTHON]))),
+    bind_executable(PYTHON, sys.executable),
+):
+    result = python("-c", "import sys; sys.stdout.write(sys.executable)").run_sync()
+    assert result.program == PYTHON, "the catalogue identity is preserved"
+    assert result.resolved_path == sys.executable, "the bound path ran instead"
+```
+
+A binding does not grant permission. If a caller's program is inside the
+allowlist it ran before and runs now; if it was outside, it is still refused
+with `ForbiddenProgramError`, and the binding's resolver is never called for
+it. Nested scopes override one program at a time and leave sibling bindings
+intact, so introducing a binding cannot silently change what a neighbouring
+scope runs.
+
+A resolver must return a `str`; anything else is rejected, which keeps `None`
+meaning only "no binding" rather than doubling as a resolver's answer. Where
+that rejection surfaces depends on the boundary: `resolve_binding()` called
+directly raises `TypeError` naming the type the resolver returned, whereas an
+execution reports it as `ExecutableResolutionError`. Any resolver failure at an
+execution boundary — a wrong return type, a virtual environment that was never
+created, a toolchain that is not installed — surfaces the same way, naming the
+logical program with the original exception chained as `__cause__`. That is a
+change for callers migrating a hand-rolled resolver: a `FileNotFoundError`
+raised inside one no longer escapes as itself, so catch
+`ExecutableResolutionError` (a `RuntimeError`) or inspect `__cause__`, and do
+not expect `TypeError` to catch a resolver that returned the wrong type.
+
+Two limits apply. Path validation is advisory — construction rejects malformed
+paths, but the file at the bound path may be replaced between the check and the
+`exec`, so filesystem ownership, write permissions, and read-only deployment
+remain the operator's responsibility. And `resolved_path` is a *string* the run
+reports, not a hash or a descriptor: it names the executable that was started,
+which is the same path the child received, but it does not attest to the bytes
+at that path. See
+[§5.1.2 of the design document](cuprum-design.md#512-executable-bindings) for
+the full boundary.
+
 ## Environment policies
 
 `EnvMode`, `UNSET`, and the `env_mode` fields on `ScopeConfig`,
@@ -152,6 +214,41 @@ stage's stderr. The stdout of an interior stage feeds the next stage and is
 therefore not emitted as a line event. See the
 [line-level output section in the users' guide](users-guide.md#line-level-output)
 for ordering, timestamps, teardown, and capture/echo details.
+
+## Owned running-command handle
+
+Cuprum 0.2.0 adds `SafeCmd.start()` and the `RunningCommand` handle it returns.
+The addition is opt-in: `run()`, `run_sync()`, and `lines()` keep owning their
+child from start to finish, and no existing caller is forced to migrate.
+
+`start()` spawns the child and hands back an owned `RunningCommand` rather than
+a `CommandResult`. The handle owns the child's lifetime. Leaving the handle's
+`async with` block settles the run on every exit and stops a still-running
+child down the same `SIGTERM`, cancel-grace, and `SIGKILL` path a cancelled
+`run()` takes. Capture is always on for a handle, so a stopped child still
+reports the output it produced. A `timeout` passed to `start()` is the default
+deadline for each `wait()` on that handle rather than a limit on the child's
+life, because the clock a timeout is measured against starts at the wait that
+asks for one.
+
+The handle exposes `wait()`, `signal()`, `terminate()`, and `kill()`. `wait()`
+awaits the outcome, which is also readable from `result` once the handle has
+settled. `terminate()` stops the child with `SIGTERM` and the cancel grace
+before `SIGKILL`; `kill()` compels it with `SIGKILL` alone; both are no-ops on
+an already-exited child. `signal()` delivers one POSIX signal without settling
+the run. Every caller shares the one settlement, so a later `wait()` reports
+the same recorded result rather than starting the run again.
+
+`signal()` has two refusals, because the remedy differs:
+
+- `SignalAfterExitError` means the child has already exited: treat the
+  recorded outcome as the command's ending.
+- `UnsupportedSignalError` means the platform has no route to a caller-named
+  signal; use `terminate()` or `kill()`, which use the platform's own signals.
+
+For a worked example, the wait deadline, and both refusals, see
+[hold a running child](users-guide.md#hold-a-running-child-and-decide-when-to-stop-it)
+in the users' guide.
 
 ## Structured execution observers handle terminal settlement
 
@@ -214,6 +311,55 @@ attribute usage safely to an individual stage.
 Consumers that serialize or display these optional fields should preserve
 `None` as unavailable and should treat `user_cpu_seconds` and
 `system_cpu_seconds` as approximate when the aggregate fallback is in use.
+
+## Byte-exact capture is now a typed result mode
+
+Cuprum 0.2.0 adds `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with
+`run_bytes_sync()` counterparts, for callers who need the child's output
+undecoded. These entry points are additive: `run()` and `run_sync()` keep
+decoding by default and keep returning `CommandResult` and `PipelineResult`.
+
+A byte run is the same run in a different result mode. It accepts the same
+`output`, `timeout`, and `context` arguments (plus `stdin` for a single
+command) and returns `BytesCommandResult` or `BytesPipelineResult`, whose
+output fields are `bytes | None` rather than `str | None`. Each stage of a
+`BytesPipelineResult` is a `BytesCommandResult`. All measurement fields — `pid`,
+`started_at`, `duration`, `max_rss_bytes`, `user_cpu_seconds`,
+`system_cpu_seconds`, and `relay_fallbacks` — are unchanged, so nothing is lost
+by capturing exactly.
+
+Two behaviours are worth noting before migrating:
+
+- `RunOutputOptions.on_line` is rejected with `ValueError` before the child is
+  spawned. The capture is byte-exact, so a callback carrying decoded text would
+  contradict it. Structured observation registered with `sh.observe()` is
+  unaffected and still receives decoded lines.
+- A timeout still raises `TimeoutExpired` and still carries the partial output
+  read so far, in the same field, as bytes rather than text. An external
+  cancellation still re-raises `asyncio.CancelledError` rather than being
+  converted into a timeout.
+
+### Byte-mode views replace undecodable input; text mode is unchanged
+
+A byte-exact run's line observation and echo render a *view* of the child's
+bytes rather than reporting them. Undecodable input is replaced in those views
+rather than left to raise, so an ambient `sh.observe()` hook cannot end a
+`run_bytes()` from the read loop and cost it the bytes it had already captured.
+This is the one place `ExecutionContext.errors` does not reach, and it is
+scoped to the byte-exact mode.
+
+Text mode keeps the policy it always had. `run()`, `run_sync()`, and
+`SafeCmd.lines()` under `errors="strict"` still raise `UnicodeDecodeError` on
+undecodable output — from the line reader when a view meets those bytes, and
+from the capture decode otherwise — exactly as they did before 0.2.0. A caller
+who used strict decoding as stream validation keeps that guarantee. For a
+byte-exact run, validation is the caller's to perform on the returned bytes,
+which is what `run_bytes()` exists to make possible.
+
+Callers who previously worked around decoding by round-tripping through a
+surrogate encoding can now drop it and request the byte mode directly. See the
+[binary output section in the users' guide](users-guide.md#binary-output) for
+the full contract, echo and sink behaviour, and a worked example.
 
 ## Aggregate Python stream-operation observation
 
@@ -618,4 +764,4 @@ platform, and is the default there as everywhere else.
 `ExecutionContext`, so an existing import line such as
 `from cuprum import ExecutionContext, sh` only needs `ProcessGroupPolicy` added
 to it. The decision and its alternatives are recorded in
-[ADR-019](adr-019-process-group-ownership.md).
+[ADR-021](adr-021-process-group-ownership.md).

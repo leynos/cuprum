@@ -8,7 +8,7 @@ import logging
 import typing as typ
 
 from cuprum import _pipeline_wait
-from cuprum._pipeline_types import _StageWaitContext
+from cuprum._pipeline_records import _StageWaitContext
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.unittests._pipeline_wait_support import (

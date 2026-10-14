@@ -9,143 +9,29 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-import enum
 import typing as typ
-import uuid
+
+# The event vocabularies are split into their own module so a consumer can
+# reach a label — a phase, an outcome, a mode — without importing the payload
+# they ride on. Re-exported here so every ``cuprum.events.<name>`` spelling
+# this module published keeps working, and so ``ExecEvent``'s own field
+# defaults and this module's ``__all__`` can still name them locally.
+from cuprum._event_taxonomy import (
+    CaptureMode,
+    ExecId,
+    ExecPhase,
+    GroupTeardownOutcome,
+    ResourceUsageMode,
+    TerminalOutcome,
+    TimeoutMode,
+    new_exec_id,
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.context.env_overlay import EnvMode, EnvOverlay
     from cuprum.program import Program
-
-# ``plan`` … ``stdin_error`` describe one command's own lifecycle.
-# ``pipeline_fail_fast`` is different in kind: it reports a decision the
-# pipeline coordinator took about a stage: its non-zero exit was the first
-# failure and every other still-running stage — upstream producer and downstream
-# consumer alike — is about to be torn down. The stage's own ``exit`` event
-# still follows. ``group_teardown`` is different again: it reports that the
-# teardown could not establish settlement, on either route, which is a fact
-# about a run that has already finished rather than a phase of it.
-type ExecPhase = typ.Literal[
-    "plan",
-    "start",
-    "stdout",
-    "stderr",
-    "exit",
-    "settled",
-    "stdin",
-    "stdin_error",
-    "timeout",
-    "teardown_error",
-    "capture_eof_grace_expired",
-    "pipeline_fail_fast",
-    "group_teardown",
-]
-
-
-class GroupTeardownOutcome(enum.StrEnum):
-    """Why a teardown could not establish settlement.
-
-    A closed vocabulary because these values label a metric: an operator
-    filters on the set of reasons a group was left behind, so every member is a
-    stable, low-cardinality string that no runtime value can reach.
-
-    ``SIGNAL_REFUSED`` is the one outcome emitted on both routes: it reports a
-    signal the kernel refused rather than a count of surviving members.
-
-    ``UNSIGNALABLE`` and ``SETTLEMENT_TIMEOUT`` both leave members running, and
-    what separates them is what can still be done about it. An unsignalable
-    group is outside this run's authority: nothing it sends reaches those
-    members, so the teardown stops rather than waiting out a process it can
-    never end. A settlement timeout was within reach in principle — the members
-    were compelled with ``SIGKILL`` — and the capped wait expired because
-    something outside this run owns their reaping. The first is a permissions
-    fact about the group; the second is a race with an init process, and only
-    the second is worth retrying.
-    """
-
-    UNSIGNALABLE = "unsignalable"
-    SETTLEMENT_TIMEOUT = "settlement_timeout"
-    SIGNAL_REFUSED = "signal_refused"
-
-
-class TerminalOutcome(enum.StrEnum):
-    """Why an observed execution reached its definitive terminal event.
-
-    The values are shared with presentation sinks, so execution telemetry and
-    output adapters classify the same outcome with the same bounded labels.
-    """
-
-    EXIT_ZERO = "exit_zero"
-    EXIT_NONZERO = "exit_nonzero"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
-    ERROR = "error"
-
-
-# A stable, per-execution correlation token. It is minted once when an
-# execution begins and propagated unchanged through every lifecycle event
-# (``start``, ``stdout``, ``stderr``, ``exit``) for that execution, so
-# consumers can correlate the events of a single execution even when the
-# operating system recycles a process identifier across executions.
-ExecId = typ.NewType("ExecId", uuid.UUID)
-
-# The stable ``timeout_mode`` values, shared by the ``timeout`` observe event
-# and the ``cuprum.timeout`` log records so a consumer keying on either sees
-# the same two strings. ``elapsed_deadline`` is a positive wall-clock deadline
-# that ran out; ``non_positive_immediate`` is a ``timeout <= 0`` that expired
-# at once, without ever awaiting the process.
-type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
-
-
-# The stable ``resource_usage_mode`` values, naming how a terminal ``exit``
-# event obtained the child resource figures it carries. They are shared by the
-# observe event, the ``cuprum_`` log extras, the span attributes, and the
-# metrics label, so a consumer keying on any of them sees the same strings.
-#
-# ``wait4_child`` is the attributable case: one reaped child's own usage, with
-# ``max_rss_bytes`` populated. ``aggregate_cpu_delta`` is the CPU-only
-# fallback, where ``RUSAGE_CHILDREN`` snapshots bracket the run and
-# ``max_rss_bytes`` stays ``None`` because that high-water mark spans every
-# reaped child. ``unavailable`` means the platform offers neither source.
-class ResourceUsageMode(enum.StrEnum):
-    """How a terminal ``exit`` event obtained the resource figures it carries.
-
-    A closed set, like :class:`~cuprum.pump_events.RustPumpDeclineReason`: the
-    value is a metric label and a log extra that operators filter on, so a
-    typo at a new call site would produce a value their filters silently miss.
-    As an enum it is a type error instead.
-
-    Members are `str`, so the observe event, the ``cuprum_`` log extras, the
-    span attributes, and the metrics label all keep carrying plain strings —
-    the constant this replaced was a ``Literal`` of exactly these three values,
-    and a member formats as its own value.
-
-    Examples
-    --------
-    The member value is the string consumers see::
-
-        assert ResourceUsageMode.WAIT4_CHILD == "wait4_child"
-
-    """
-
-    WAIT4_CHILD = "wait4_child"
-    AGGREGATE_CPU_DELTA = "aggregate_cpu_delta"
-    UNAVAILABLE = "unavailable"
-
-
-def new_exec_id() -> ExecId:
-    """Return a fresh, process-unique execution correlation token.
-
-    Returns
-    -------
-    ExecId
-        A new :data:`ExecId` wrapping a random UUID (:func:`uuid.uuid4`),
-        distinct on every call, used to correlate all lifecycle events of a
-        single execution.
-    """
-    return ExecId(uuid.uuid4())
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -332,13 +218,39 @@ class ExecEvent:
         How long the group-settlement wait had run when it expired, carried by
         a ``settlement_timeout`` event. ``None`` on the other outcomes, so an
         absent figure is not read as an instant one.
+    resolved_path:
+        The executable this execution actually ran, when a scope bound the
+        program's logical identity to a specific path. ``None`` when no
+        binding applied, in which case the child ran under the name in
+        ``argv[0]``.
 
-    New optional fields are appended to the end of the declaration to preserve
-    existing positional argument slots. In particular, inserting one ahead of
-    ``exec_id`` would silently rebind a positional argument in existing caller
-    code, handing the correlation token to the new field and leaving
-    ``exec_id=None`` — which consumers such as ``TracingHook`` treat as
-    uncorrelatable and drop.
+        It is the *executable*, not the command: ``argv`` still carries the
+        arguments, and ``program`` still carries the catalogue identity that
+        policy was checked against. Keeping all three means a consumer can see
+        what was permitted, what was asked for, and what ran, without having
+        to infer one from another. The path is a string rather than a
+        resolved file identity, so a replaced binary is not detected; see the
+        TOCTOU note in ``cuprum.executable_binding``.
+    capture_mode:
+        The mode this run reports its captures in, carried on every phase for
+        the reason ``env_mode`` is: it is decided before the child spawns and
+        describes the whole execution rather than one measurement. Without it a
+        byte-exact run and a text run of the same command emit the same
+        counters and span attributes, so a timeout, teardown failure, or
+        terminal failure cannot be attributed to the mode that hit it.
+        ``None`` only on legacy or hand-built events; see
+        :data:`~cuprum.events.CaptureMode`.
+
+    A field appended to this declaration preserves an existing positional slot
+    only if nothing is inserted *ahead* of that slot: inserting one ahead of
+    ``exec_id`` would silently rebind existing positional arguments, handing
+    the correlation token to the new field and leaving ``exec_id=None`` — which
+    consumers such as ``TracingHook`` treat as uncorrelatable and drop. Nor is
+    appending enough by itself, because declaration follows insertion:
+    ``terminal_outcome`` is pinned as the tail by ``test_terminal_outcome_public_api``
+    yet holds a positional slot of its own, so a later field is declared
+    ``kw_only`` and inserted immediately before it. That keeps both the pinned
+    tail and every pre-existing slot exactly where they were.
 
     """
 
@@ -372,21 +284,41 @@ class ExecEvent:
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
+    # Declared before ``terminal_outcome`` so that field stays the declaration
+    # tail, which ``test_terminal_outcome_public_api`` pins via
+    # ``dc.fields()[-1]``. ``terminal_outcome`` already holds a positional slot
+    # on the comparison base, so declaring ``resolved_path`` ahead of it
+    # positionally would shift that slot and silently rebind an existing
+    # caller's positional argument. ``kw_only`` keeps the tail without moving
+    # any pre-existing slot; see the class docstring.
+    resolved_path: str | None = dc.field(default=None, kw_only=True)
+    # ``kw_only`` for the same reason ``resolved_path`` is: the mode is known on
+    # every phase, and declaring it positionally ahead of ``terminal_outcome``
+    # would shift that pinned field's slot; see the class docstring.
+    capture_mode: CaptureMode | None = dc.field(default=None, kw_only=True)
+    # The three group-teardown fields are ``kw_only`` for the reason the two
+    # above are, and so take the same place: declared immediately *before*
+    # ``terminal_outcome`` rather than appended behind it. Appending would move
+    # the declaration tail that ``test_terminal_outcome_public_api`` pins at
+    # ``dc.fields()[-1]``, while deleting nothing from the positional sequence
+    # — so it would trade one invariant away to buy nothing. Either placement
+    # leaves ``terminal_outcome`` at the positional slot a released caller
+    # binds, because ``kw_only`` fields are absent from that sequence; only
+    # this one also leaves it the tail. See the class docstring.
+    #
+    # ``group_outcome`` labels a bounded counter, so it is typed as the closed
+    # enum rather than as a string that a caller could set freely.
+    owns_group: bool | None = dc.field(default=None, kw_only=True)
+    group_outcome: GroupTeardownOutcome | None = dc.field(default=None, kw_only=True)
+    settle_s: float | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
-    # Appended after ``terminal_outcome`` rather than beside the other
-    # ancillary-diagnostic fields, and for the reason the class docstring
-    # records: a positional construction would otherwise rebind an existing
-    # slot. ``group_outcome`` labels a bounded counter, so it is typed as the
-    # closed enum rather than as a string that a caller could set freely.
-    owns_group: bool | None = None
-    group_outcome: GroupTeardownOutcome | None = None
-    settle_s: float | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
 
 
 __all__ = [
+    "CaptureMode",
     "ExecEvent",
     "ExecHook",
     "ExecId",

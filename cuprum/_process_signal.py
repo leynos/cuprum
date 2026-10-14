@@ -37,13 +37,22 @@ templates, and the bounded metric labels — belongs to
 the census below is what keeps a reader from having to guess which one holds
 the answer they want.
 
+Sequencing those answers belongs to
+:func:`cuprum._process_lifecycle._terminate_process_with_wait`, which is where
+this module's two questions are actually asked: it decides *when* to signal,
+holds the grace period that bounds the wait, and escalates once that bound
+expires. The split is not arbitrary. The teardown reports its result as
+:class:`~cuprum._process_lifecycle._TerminationOutcome`, and that type has a
+second consumer entirely — ``cuprum._process_handle``, which compels a child
+without any group question being asked at all — so the outcome belongs beside
+the handle-facing helpers that read it rather than here.
+
 Everything in this module is private to the package. It is a split, not a
 promotion: what callers imported from ``cuprum._process_lifecycle`` is here.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import signal
 import time
@@ -63,10 +72,10 @@ from cuprum._process_group import (
 )
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import collections.abc as cabc
 
     from cuprum._pipeline_types import _StageObservation
-    from cuprum._teardown_policy import _TeardownPolicy
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -192,81 +201,6 @@ async def _settlement(
     _report_teardown(observation, unsignalable_report(outcome, process.pid))
 
 
-async def _terminate_process_with_wait(
-    process: asyncio.subprocess.Process,
-    *,
-    policy: _TeardownPolicy,
-    target: _SettlementTarget,
-    observation: _StageObservation | None = None,
-) -> bool:
-    """Terminate a process and report whether its waiter completed.
-
-    The two-phase grace is unchanged whether the run owns the child's group or
-    not: the first phase asks every member of the target to exit, the second
-    compels whichever of them outlived the grace period. Only the target of
-    those signals, and of the settlement they wait on, differs.
-    :func:`~cuprum._group_teardown.signal_target_or_report` delivers to it and
-    :func:`_settlement` waits on it, so those are the two places that decide
-    which target this run has.
-
-    Settled is decided by :func:`_settlement_of` rather than by *is_done* alone.
-    For an inherited-group run the two are the same question, but an owning
-    run's target is the child's whole group, and that group survives the child
-    that led it: a descendant left holding an inherited pipe is still a member
-    after the child has been reaped. Short-circuiting on the child alone would
-    leave that descendant running and the run's pipes held open, which is the
-    failure this policy exists to prevent.
-
-    *observation* is the execution this teardown is acting for, so a target
-    that could not be reached is reported against the span and the metric of
-    the run it belongs to. It defaults to ``None`` because several teardown
-    routes have no execution to correlate with — the spawn-failure and
-    abandoned-run paths reach here before any observation exists — and those
-    keep the log record without inventing an identity for the event.
-
-    Returns
-    -------
-    bool
-        Whether the target was signalled and its waiter ran to completion.
-        ``False`` has three causes the caller cannot tell apart: the target had
-        already settled or gone, the signal call raised, or the grace period
-        expired with it still running. Only the second is a kernel refusal, and
-        it is the one reported through
-        :func:`~cuprum._group_teardown.signal_target_or_report`.
-    """
-    grace_period = max(0.0, policy.grace_period)
-    owns_group = policy.owns_group_for(0)
-    settled = _settlement_of(process, owns_group=owns_group, target=target)
-    _report_teardown(observation, unsignalable_report(settled, process.pid))
-    if settled is not _GroupProbe.MEMBERS:
-        return False
-    if not signal_target_or_report(
-        process,
-        observation=observation,
-        owns_group=owns_group,
-        group_signal=signal.SIGTERM,
-    ):
-        return False
-    try:
-        await asyncio.wait_for(
-            _settlement(
-                process,
-                target,
-                observation=observation,
-                owns_group=owns_group,
-            ),
-            grace_period,
-        )
-    except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
-        return await _escalate_after_grace(
-            process,
-            target,
-            observation=observation,
-            owns_group=owns_group,
-        )
-    return True
-
-
 async def _escalate_after_grace(
     process: asyncio.subprocess.Process,
     target: _SettlementTarget,
@@ -381,7 +315,8 @@ async def _settle_after_escalation(
 
 __all__ = [
     "_escalate_after_grace",
+    "_report_teardown",
     "_settle_after_escalation",
+    "_settlement",
     "_settlement_of",
-    "_terminate_process_with_wait",
 ]

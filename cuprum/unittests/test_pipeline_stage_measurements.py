@@ -23,17 +23,19 @@ import types
 import typing as typ
 
 from cuprum import ECHO, sh
+from cuprum._pipeline_records import (
+    _PipelineSpawnResult,
+    _PipelineStageResultInputs,
+    _PipelineWaitResult,
+    _StageWaitContext,
+)
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
 from cuprum._pipeline_types import (
     _ExecutionHooks,
-    _PipelineSpawnResult,
-    _PipelineStageResultInputs,
-    _PipelineWaitResult,
     _StageObservation,
-    _StageWaitContext,
 )
 
 if typ.TYPE_CHECKING:
@@ -42,7 +44,7 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum.events import ExecEvent, ExecHook
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import BytesCommandResult, CommandResult
 
 # Injected clocks, one entry per stage of the widest pipeline built here.
 # The wall-clock values are unrelated in magnitude to the monotonic ones, so
@@ -131,12 +133,10 @@ def _build(
     exit_codes: tuple[int, ...],
     ended_at: tuple[float | None, ...],
     observe: tuple[ExecHook, ...] = (),
-) -> list[CommandResult]:
+) -> list[CommandResult | BytesCommandResult]:
     """Assemble the published stage results for a synthetic pipeline."""
     observations = _observations(len(exit_codes), observe)
-    parts: tuple[SafeCmd, ...] = tuple(obs.cmd for obs in observations)
     return _build_pipeline_stage_results(
-        parts,
         observations,
         processes=_processes(observations),
         inputs=_inputs(exit_codes=exit_codes, ended_at=ended_at),

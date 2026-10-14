@@ -5,7 +5,7 @@ Two pure reducers back the temporal, branch-heavy paths in issue `#75`:
 - `cuprum._subprocess_timeout._resolve_timeout_payload` — the timeout-payload
   seam, mapping either timeout variant to one consistent
   `_SubprocessTimeoutDetails`.
-- `cuprum._process_lifecycle._stages_to_terminate` — the fail-fast selection,
+- `cuprum._pipeline_teardown._stages_to_terminate` — the fail-fast selection,
   choosing which stages a pipeline terminates after its first failure.
 
 `test_subprocess_timeout_reducers.py` drives both with Hypothesis. The contracts
@@ -47,7 +47,7 @@ import typing as typ
 
 import pytest
 
-from cuprum._process_lifecycle import _stages_to_terminate
+from cuprum._pipeline_teardown import _stages_to_terminate
 from cuprum._subprocess_timeout import (
     _resolve_timeout_payload,
     _SubprocessInvariantError,

@@ -24,16 +24,19 @@ import dataclasses as dc
 import time
 import typing as typ
 
+from cuprum._context_policy import _merge_env
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._pipeline_records import (
+    _PipelineSpawnResult,
+    _StageWaitContext,
+)
 from cuprum._pipeline_results import _emit_terminal_events
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_types import (
     _EventDetails,
-    _PipelineSpawnResult,
     _StageObservation,
-    _StageWaitContext,
 )
-from cuprum._process_lifecycle import _merge_env, _terminate_all_shielded
+from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import (
     _cwd_arg,
@@ -45,6 +48,7 @@ from cuprum._teardown_policy import _TeardownPolicy
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.sh import SafeCmd
 
 __all__ = ["_spawn_pipeline_processes"]
@@ -72,8 +76,8 @@ class _SpawnedPipelineStages:
     """Resources accumulated while spawning pipeline stages."""
 
     processes: list[asyncio.subprocess.Process] = dc.field(default_factory=list)
-    stderr_tasks: list[asyncio.Task[str | None] | None] = dc.field(default_factory=list)
-    stdout_task: asyncio.Task[str | None] | None = None
+    stderr_tasks: list[_StreamConsumerTask | None] = dc.field(default_factory=list)
+    stdout_task: _StreamConsumerTask | None = None
     started_at: list[float] = dc.field(default_factory=list)
     wall_clock_started_at: list[float] = dc.field(default_factory=list)
     relay_diagnostics_by_stage: list[
@@ -143,7 +147,8 @@ async def _spawn_pipeline_stages(
             consumes_stderr=config.consumes_stderr,
         )
         process = await asyncio.create_subprocess_exec(
-            *observation.cmd.argv_with_program,
+            observation.argv0,
+            *observation.cmd.argv,
             stdin=stream_fds.stdin,
             stdout=stream_fds.stdout,
             stderr=stream_fds.stderr,
@@ -180,8 +185,8 @@ async def _spawn_pipeline_stages(
 
 async def _cleanup_spawned_processes(
     processes: list[asyncio.subprocess.Process],
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
+    stderr_tasks: list[_StreamConsumerTask | None],
+    stdout_task: _StreamConsumerTask | None,
     policy: _TeardownPolicy,
 ) -> None:
     """Terminate processes and cancel tasks after a spawn failure.
@@ -197,7 +202,7 @@ async def _cleanup_spawned_processes(
     """
     await _terminate_all_shielded(processes, policy)
 
-    tasks: list[asyncio.Task[str | None]] = [
+    tasks: list[_StreamConsumerTask] = [
         task for task in stderr_tasks if task is not None
     ]
     if stdout_task is not None:

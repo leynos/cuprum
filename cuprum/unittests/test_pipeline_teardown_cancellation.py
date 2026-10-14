@@ -17,7 +17,7 @@ import typing as typ
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
-from cuprum._process_lifecycle import (
+from cuprum._pipeline_teardown import (
     _StageHandle,
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,

@@ -13,6 +13,9 @@ Python example is executed from this document by the behavioural suite. The
   [0.2.0 migration guide](v0-2-0-migration-guide.md).
 - **Working application:** [Handle failure](#handle-failure),
   [control output](#control-output), and [apply a policy](#apply-a-policy).
+- **Long-running child:**
+  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) and
+  stop it when the caller decides.
 - **Several commands:** [Connect a pipeline](#connect-a-pipeline) or
   [run commands concurrently](#run-commands-concurrently).
 - **Growing an application:** [Going further](#going-further) has task
@@ -249,6 +252,96 @@ independent. `RunOutputOptions.on_line` observes decoded lines even when
 capture and echo are off. Its callback runs synchronously and should return
 promptly; line order is guaranteed within each stream, not across streams.
 
+### Binary output
+
+Capture decodes by default, so `stdout` and `stderr` are strings and bytes the
+child wrote that are not valid UTF-8 arrive with each offending byte replaced by
+`U+FFFD`. That is the right answer for text and the wrong one for anything
+else: a decoded capture cannot be turned back into the bytes the child wrote,
+so a caller who needs the original would have to pick a surrogate encoding and
+undo it afterwards.
+
+`SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
+counterparts, are the same runs as `run()` and `run_sync()` with capture left
+undecoded. They take the same `output`, `timeout`, `context`, and (for a single
+command) `stdin` arguments, and return `BytesCommandResult` or
+`BytesPipelineResult` instead of their text-mode counterparts. Those two
+classes declare the same fields as `CommandResult` and `PipelineResult`,
+including the full set of measurements (`pid`, `started_at`, `duration`,
+`max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
+`relay_fallbacks`), so a caller that needs the byte-exact value does not lose
+the diagnostics. The output fields of a `BytesCommandResult` are
+`bytes | None`, and each stage of a `BytesPipelineResult` is a
+`BytesCommandResult`.
+
+Text remains the default, and the mode is explicit: `run()` never returns bytes
+and `run_bytes()` never returns text, so a mismatch is a bug rather than a
+runtime surprise. Everything the text-mode entry points promise still holds —
+timeout partial output is carried through in the same field, `capture=False`
+still yields `None` rather than `b""`, and an external cancellation still
+re-raises `asyncio.CancelledError` instead of being reported as a timeout.
+
+Binary mode covers capture. A run that asks for `on_line` cannot be given one:
+the capture it returns is byte-exact, so a callback carrying decoded text would
+be a second, contradictory contract for the same stream.
+`run_bytes(output=RunOutputOptions(on_line=lines.append))` is rejected with
+`ValueError` before the child is spawned. Echoing, sinks, and idle heartbeats
+are unaffected, since they mirror output rather than report it; a sink that
+cannot encode the child's bytes records a `relay_fallback` exactly as it does
+in text mode.
+
+The refusal applies only to a caller-supplied `on_line`. Structured observation
+registered with `sh.observe()` still fires in byte mode: those hooks receive
+decoded lines, so undecodable bytes are replaced in the _event_ while the
+captured payload keeps the child's own bytes. The two travel on separate
+channels, and neither is a substitute for the other.
+
+A refused call never reaches the spawn, so it emits no execution event; the
+rejection is recorded as a warning on the `cuprum._bytes_run` logger naming the
+mode that was turned away. Without that record the only trace of a byte-exact
+run the caller asked for and did not get would be the exception the caller saw.
+The warning names the refused callback no more than the exception does —
+neither renders the callback object itself.
+
+Every run also reports which mode it used through its structured telemetry: the
+`cuprum_capture_mode` log extra, the `cuprum.capture_mode` span attribute, and
+the `capture_mode` label on `cuprum_executions_total` and
+`cuprum_failures_total`. The label carries only the mode, never the captured
+payload, so a byte-exact run stays distinguishable from a text one in
+dashboards without any captured output entering the metrics series.
+
+That replacement is scoped to byte mode. `ExecutionContext.errors` keeps its
+meaning everywhere else: a text-mode run with `errors="strict"` still raises
+`UnicodeDecodeError` from line observation and from echo on undecodable bytes,
+exactly as it did before the byte-exact mode existed. A byte-exact run instead
+returns the child's own bytes for the caller to validate — the run cannot both
+promise bytes nobody decoded and let a decode decide its outcome.
+
+For a pipeline, the same rule applies to each stage: only the final stage's
+stdout is captured, interior stdout feeds the next stage and is reported as
+`None`, and each stage reports its own `stderr`.
+
+<!-- tested-example: binary-output -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="binary-output")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+result = python(
+    "-c", f"import sys; sys.stdout.buffer.write({payload!r})"
+).run_bytes_sync()
+assert result.ok
+assert result.stdout == payload
+```
+
+The same command through `run_sync()` reports `stdout` as text: a `str` of the
+same length whose invalid bytes have each become `U+FFFD`, which is why the
+comparison above can only pass in binary mode.
+
 ### Line-level output
 
 <!-- tested-example: output -->
@@ -278,6 +371,12 @@ stream with `async with cmd.lines() as stream:` or `await stream.aclose()` to
 guarantee teardown. Pipelines have no `lines()` method; `on_line` on a pipeline
 run observes final-stage stdout and every stage's stderr. Interior stdout feeds
 the next stage instead.
+
+Line observation decodes for display, so an undecodable byte in text mode
+raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
+[byte-exact mode](#binary-output)
+is the one place observation replaces such bytes instead, so that the bytes
+returned to the caller are not decided by a decode the caller never asked for.
 
 Echo normally limits each mirrored line to 64 KiB, including its truncation
 marker and terminator; captured output remains complete. Set
@@ -344,6 +443,9 @@ assert result.stdout == "ready hello\n"
 A timeout raises `TimeoutExpired`; cancellation of an async run also starts
 child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
+When the caller needs to decide later when a child stops, `start()` hands back
+an owned handle to stop by hand instead; see
+[hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
 
 ## Connect a pipeline
 
@@ -547,16 +649,18 @@ sinks.
 
 ## Troubleshoot a run
 
-| Symptom                 | Check                                                                                     |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `UnknownProgramError`   | Register the exact program in the builder's catalogue.                                    |
-| `ForbiddenProgramError` | Inspect the active scope and parent allowlist.                                            |
-| `FileNotFoundError`     | Confirm the executable path or inherited `PATH`.                                          |
-| `TimeoutExpired`        | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
-| Non-zero `exit_code`    | Use captured stderr and the tool's documented exit codes.                                 |
-| No visible output       | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
-| No heartbeat            | Supply a positive `idle_after`; output activity resets its clock.                         |
-| No native speed-up      | The optional extension may be unavailable or this operation may use Python.               |
+| Symptom                  | Check                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| `UnknownProgramError`    | Register the exact program in the builder's catalogue.                                    |
+| `ForbiddenProgramError`  | Inspect the active scope and parent allowlist.                                            |
+| `FileNotFoundError`      | Confirm the executable path or inherited `PATH`.                                          |
+| `TimeoutExpired`         | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
+| `SignalAfterExitError`   | The child has already exited; treat the recorded outcome as the command's ending.         |
+| `UnsupportedSignalError` | Use `terminate()` or `kill()`, which use the platform's own signals.                      |
+| Non-zero `exit_code`     | Use captured stderr and the tool's documented exit codes.                                 |
+| No visible output        | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
+| No heartbeat             | Supply a positive `idle_after`; output activity resets its clock.                         |
+| No native speed-up       | The optional extension may be unavailable or this operation may use Python.               |
 
 _Table 1: First checks for common execution outcomes._
 
@@ -731,6 +835,61 @@ else:
 [Timeouts](#timeouts) in the reference covers scope-level defaults, pipeline
 deadlines, and the log records each expiry writes.
 
+### Hold a running child and decide when to stop it
+
+`start()` spawns the child and hands back an owned `RunningCommand` instead of
+awaiting it. Await the handle's `wait()` to get the outcome, read `result` once
+the handle has settled, or stop the child with `terminate()` — `SIGTERM`, the
+cancel grace, then `SIGKILL` if it is still there — or `kill()`, which sends
+`SIGKILL` without asking. The `async with` block below is what guarantees
+teardown; leaving it stops a child still running.
+
+<!-- tested-example: hold-a-handle -->
+
+```python
+import asyncio
+import sys
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="handle")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import time; time.sleep(30)")
+
+
+async def stop_a_child() -> int | None:
+    async with await command.start(
+        context=ExecutionContext(cancel_grace=0.2),
+    ) as handle:
+        assert handle.pid is not None and handle.result is None
+        result = await handle.terminate()
+        assert result.exit_code == -15
+        return handle.result.exit_code if handle.result is not None else None
+
+
+assert asyncio.run(stop_a_child()) == -15
+```
+
+`wait(timeout=...)` bounds one call: its expiry stops the child the way a
+timed-out `run()` does and raises `TimeoutExpired` with whatever the child had
+written before it. Because the child is stopped and reaped before that error
+arrives, the outcome it produced is recorded as well — the expiry reaches the
+wait whose clock ran out and no other, so a later `wait()`, `terminate()`,
+`kill()`, or teardown on the same handle reports the exit code instead of
+re-raising an error about a child that is already gone. A `timeout` passed to
+`start()` is instead the default deadline for every `wait()` on that handle,
+because the clock a timeout is measured against starts at the wait that asks
+for one. Capture is always on for a handle, so a stopped child still reports
+its output on the result.
+
+`signal()` delivers one POSIX signal without settling the run. The two refusals
+are separate errors because the remedy differs: `SignalAfterExitError` (a
+`ProcessLookupError`) means the child has gone, and `UnsupportedSignalError`
+means the platform has no route to a caller-named signal, so `terminate()` or
+`kill()` is the only option there. Stopping an already-exited child is not an
+error: `terminate()` and `kill()` are no-ops that report the recorded outcome,
+so both are safe to call twice or from two places at once.
+
 ### Restrict a block of code to specific programs
 
 A scope narrows which catalogued programs may run inside a `with` block.
@@ -771,6 +930,88 @@ with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
     else:
         raise AssertionError("the scope should forbid the interpreter")
 ```
+
+### Bind a catalogued program to a specific executable
+
+A `Program` is the catalogue's name for a program, and by default it is also
+the string that the operating system executes. It is often convenient for those
+to differ: a build may need a pinned absolute path, a virtual-environment
+executable, or a controlled replacement during a test. `bind_executable()`
+supplies the second without changing the first.
+
+Inside the scope, the logical program runs the bound executable while the
+allowlist, project metadata, and telemetry go on carrying the logical name. The
+binding is a scope, so nested scopes override only the program they name, and
+nothing leaks to a sibling scope, thread, or task.
+`CommandResult.resolved_path` reports what actually ran and is `None` when
+nothing was bound.
+
+A binding never widens the allowlist. Binding an unlisted program and running
+it still raises `ForbiddenProgramError`, and the resolver is not called.
+
+The second argument is either a path or a resolver. A path may be a `str` or any
+`os.PathLike`, so a `Path`, a `PurePosixPath`, or a `PureWindowsPath` all bind
+the same way and are stored normalized. A resolver is a zero-argument callable
+returning the executable string; it is stored unchanged and called once per
+execution, at spawn time. Any other value — an `int` where a path was meant,
+say — is rejected with `TypeError` naming the type supplied, rather than being
+stored as a resolver that only fails much later, at spawn time, against a
+resolver the caller never supplied.
+
+A relative binding needs a directory to be meaningful, and which directory it
+gets depends on the execution. When `ExecutionContext.cwd` is set, the binding
+is anchored there and `resolved_path` reports the anchored file. When no
+directory is supplied, the binding is passed through unchanged and the platform
+resolves it: a bare name is looked up on `PATH`, and a relative path with a
+separator is taken as relative to the process's own directory. The bound
+directory is also the one the event reports, so `ExecEvent.cwd` (and its
+`cuprum_cwd` and `cuprum.cwd` projections) carries whatever spelling the caller
+configured, not an anchored form. Prefer an absolute binding when the same file
+must run regardless of where the execution starts.
+
+A resolver must return a `str`. Returning anything else is rejected, because
+`None` is reserved to mean "no binding"; a resolver returning it silently runs
+the catalogued name instead of the executable the caller selected.
+
+Which exception reports that rejection depends on the boundary. Calling
+`resolve_binding()` directly raises `TypeError` naming the type the resolver
+returned. Running a command or pipeline that reaches the same resolver raises
+`ExecutableResolutionError` instead, with that `TypeError` chained as
+`__cause__`. At the execution boundary, whatever a resolver raises or returns
+wrongly is reported as `ExecutableResolutionError`, which names the logical
+program and chains the resolver's own exception as its `__cause__`. It
+subclasses `RuntimeError`, so `except FileNotFoundError` around the call no
+longer catches a resolver that failed to find its virtual environment, and
+`except TypeError` does not catch a resolver that returned the wrong type.
+
+<!-- tested-example: executable-bindings -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, bind_executable, scoped, sh
+
+PYTHON = Program("python")
+OTHER = Program("some-other-tool")
+catalogue = ProgramCatalogue.from_programs(PYTHON, OTHER, name="bindings")
+python = sh.make(PYTHON, catalogue=catalogue)
+
+with (
+    scoped(ScopeConfig(allowlist=frozenset([PYTHON]))),
+    bind_executable(PYTHON, sys.executable),
+):
+    result = python("-c", "import sys; sys.stdout.write(sys.executable)").run_sync()
+    assert result.program == PYTHON, "the logical identity is preserved"
+    assert result.resolved_path == sys.executable, "the bound path was executed"
+    assert (result.stdout or "").strip() == sys.executable, "the child agrees"
+```
+
+Path validation is advisory, not a guarantee. Construction rejects an empty
+path, a relative path unless `allow_relative=True`, and a path containing NUL or
+`..` segments, but the file may still be replaced between that check and the
+`exec`. Keeping the bound path unwritable to the executing user, and read-only
+where binaries must not change, is the operator's responsibility; see
+[§5.1.2 of the design document](cuprum-design.md#512-executable-bindings).
 
 ### Choose how a child environment is composed
 
@@ -914,6 +1155,14 @@ field, which only Cuprum sets, so no caller input can forge it. The tag of the
 same name is reserved for the same reason: a caller-supplied `env_mode` tag is
 stripped when the observation tags are built, and a replacement run's trusted
 value is grafted in its place.
+
+It also carries the run's capture mode as `cuprum_capture_mode` (`text` or
+`bytes`), projected from the typed `ExecEvent.capture_mode` field under the
+same trust rule. The mode names how the run reports its captures, never their
+contents, so the extra holds no output, argument vector, or other unbounded
+value. Without it a byte-exact run and a text run of the same command are
+identical in every record and counter, and a timeout or teardown failure cannot
+be attributed to the mode that hit it.
 
 ### Present output in GitHub Actions
 
@@ -1349,6 +1598,16 @@ because it is known before the child is spawned and describes the whole
 execution rather than one measurement. The value is `None` only on legacy or
 manually constructed events; the execution paths always resolve a mode.
 
+`capture_mode` travels the same way and for the same reason. It is
+`CaptureMode.TEXT` for a decoded run and `CaptureMode.BYTES` for one started
+with `run_bytes()` or `run_bytes_sync()`, and every phase of an execution
+carries the mode that execution resolved. A byte-exact run and a text run of
+the same command otherwise emit the same counters and span attributes, so
+without the field a timeout, teardown failure, or terminal failure could not be
+attributed to the mode that hit it. Like `env_mode` it is a trusted field on
+the typed event rather than an observation tag, because a caller may shadow any
+tag key; `None` appears only on legacy or hand-built events.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
@@ -1495,18 +1754,19 @@ All metrics carry `program` and `project` labels; missing, empty, or explicit
 
 `cuprum_executions_total` and `cuprum_failures_total` additionally carry an
 `env_mode` label holding the execution's effective policy — `inherit`,
-`overlay`, or `replace`. It is a bounded label by construction (`EnvMode` is a
-closed three-value enum resolved by Cuprum, never by caller input), so it
-cannot give the series unbounded cardinality, and it is applied only to those
-two metrics: the per-line stream counters omit it, because a line's environment
-says nothing that its execution's mode does not already carry.
+`overlay`, or `replace` — and a `capture_mode` label holding `text` or `bytes`.
+Both are bounded by construction (`EnvMode` and `CaptureMode` are closed enums
+resolved by Cuprum, never by caller input), so neither can give the series
+unbounded cardinality, and both are applied only to those two metrics: the
+per-line stream counters omit them, because a line's environment and capture
+mode say nothing that its execution's mode does not already carry.
 
 A spawn failure has no `start` or `exit` event, because no child ran, but it
 does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
 therefore increments `cuprum_terminal_outcomes_total` and
 `cuprum_failures_total`; the failure counter carries the execution's `env_mode`
-label when that policy is known. The `pid` and `exit_code` fields remain absent
-because there is no child status to report.
+and `capture_mode` labels when those are known. The `pid` and `exit_code`
+fields remain absent because there is no child status to report.
 
 The four resource metrics also carry a low-cardinality `resource_usage_mode`
 label naming how the measurement was obtained: `wait4_child`,
@@ -1553,6 +1813,8 @@ The hook creates spans with these attributes:
 - `cuprum.project`: Project name from tags
 - `cuprum.env_mode`: The execution's effective environment policy
   (`inherit`, `overlay`, or `replace`), set on spans for every phase
+- `cuprum.capture_mode`: The run's capture mode (`text` or `bytes`), set on
+  spans for every phase for the same reason as `cuprum.env_mode`
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,
@@ -1661,6 +1923,23 @@ The same check runs from a shell:
 ```shell
 python -c "import cuprum; print(cuprum.is_rust_available())"
 ```
+
+Native stream transfers accept a `buffer_size` argument, defaulting to 65536
+bytes (64 KiB). Any size from 1 byte to 1 GiB (`1 << 30`) inclusive is
+accepted; a value outside that window raises `ValueError`, whether the refusal
+comes from the extension or from the Python code in front of it. An integer too
+large for the native boundary to represent at all — beyond `i64::MAX`, or below
+`i64::MIN` — is a different failure and keeps `OverflowError`, because it never
+reaches the size check.
+
+An I/O failure while transferring raises `OSError`. When the failure came from
+the operating system, the exception carries its own code — `errno` on POSIX
+platforms, `winerror` on Windows — so branch on those attributes rather than on
+the message text, which is not a stable interface. Expected broken-pipe
+conditions do not surface at all: the pump treats a closed downstream as the
+end of the transfer, swallows the condition, and keeps draining the reader so
+the upstream process does not block on a full pipe buffer. A broken downstream
+is therefore not reported as an error.
 
 ### Stream telemetry in profiling reports
 

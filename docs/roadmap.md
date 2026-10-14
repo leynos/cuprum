@@ -132,7 +132,11 @@ compromising explicitness.
 
 - [ ] 3.3.1. Add policy toggles for allowlist narrowing, unsafe namespace
   warnings, and default echo behaviour; ensure defaults remain safe and test
-  policy interactions.
+  policy interactions. Scoped *executable bindings* ([#440]) are deliberately
+  not part of this item: a toggle narrows or widens the existing allowlist
+  policy, whereas a binding answers a different question — which executable a
+  program that is already permitted runs — and lives on the execution context
+  rather than in the policy switch set.
 - [ ] 3.3.2. Document policy switches and recommended defaults in
   `docs/users-guide.md` and add release notes describing the migration path for
   existing users.
@@ -355,7 +359,7 @@ relies on. See issue `#90`, tee-hotpath-profiling-baseline-2026-06-12.md §§3-4
 and adr-002-additional-rust-components.md (decoding-drift and FD-ownership
 risks).
 
-- [ ] 6.1.1. Introduce a `RustStreamError` enum in `rust/cuprum-rust/src/lib.rs`
+- [x] 6.1.1. Introduce a `RustStreamError` enum in `rust/cuprum-rust/src/lib.rs`
   and convert it to PyO3 errors at a single boundary point.
   - Success: invalid `buffer_size` raises `ValueError` and I/O failures raise
     `OSError`, with the conversion centralized rather than scattered across call
@@ -976,7 +980,7 @@ it spawned. If a caller could opt into owning a child's process group, then
 teardown could signal every member of that group, the inherited pipes would
 reach end-of-file, and the guarantee could be stated precisely: the group the
 run created is terminated, descendants that leave it are not, and no caller who
-does not opt in is affected. See [ADR-019](adr-019-process-group-ownership.md).
+does not opt in is affected. See [ADR-021](adr-021-process-group-ownership.md).
 
 ### 12.1. Make group ownership a policy on the execution context
 
@@ -1059,4 +1063,5 @@ implementation enforces them.
     escape-the-group limitation is stated as a limitation rather than a
     caveat.
 
+[#440]: https://github.com/leynos/cuprum/issues/440
 [issue-379]: https://github.com/leynos/cuprum/issues/379

@@ -73,6 +73,10 @@ from cuprum.adapters._support import (
     _prefixed,
     _project_tag,
 )
+from cuprum.adapters._tracing_control_join import (
+    _ControlJoinTracingMixin,
+    record_control_events,
+)
 from cuprum.adapters._tracing_fields import _SPAN_FIELDS, write_exit_attributes
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
@@ -93,7 +97,11 @@ class _ActiveSpan:
     is_closed: bool = False
 
 
-class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
+class TracingHook(
+    _ControlJoinTracingMixin,
+    _LineStreamTracingMixin,
+    _NativePumpCleanupTracingMixin,
+):
     """Project correlated execution events onto backend spans.
 
     Events without ``exec_id`` are ignored rather than correlated by a PID.
@@ -284,7 +292,10 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             The open span for the event's token, or ``None`` when the event
             carries no token or no span is registered for it.
         """
-        exec_id = event.exec_id
+        return self._lookup_exec_span(event.exec_id)
+
+    def _lookup_exec_span(self, exec_id: ExecId | None) -> _ActiveSpan | None:
+        """Return the open span registered for one correlation token."""
         if exec_id is None:
             return None
         with self._lock:
@@ -346,5 +357,6 @@ __all__ = [
     "Span",
     "Tracer",
     "TracingHook",
+    "record_control_events",
     "tracing_hook",
 ]

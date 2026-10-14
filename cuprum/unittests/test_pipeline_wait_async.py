@@ -13,7 +13,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_wait, _process_lifecycle
+from cuprum import _pipeline_teardown, _pipeline_wait
 from cuprum._pipeline_wait_records import _completion_log_fields
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._pipeline_wait_support import (
@@ -28,8 +28,8 @@ from cuprum.unittests._pipeline_wait_support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_teardown import _StageHandle
     from cuprum._pipeline_wait import _PipelineWaitState
-    from cuprum._process_lifecycle import _StageHandle
 
 
 class _TerminationProcess:
@@ -150,7 +150,7 @@ async def _run_late_settled_termination(
     scenario = _make_termination_scenario()
     fields = _completion_log_fields(scenario.state, 0, 4, 12.5)
     outcomes: list[tuple[bool, ...]] = []
-    select_targets = _process_lifecycle._stages_to_terminate
+    select_targets = _pipeline_teardown._stages_to_terminate
     terminate_stages = _pipeline_wait._terminate_pipeline_remaining_stages
 
     def settle_after_selection(
@@ -175,7 +175,7 @@ async def _run_late_settled_termination(
         return result
 
     monkeypatch.setattr(
-        _process_lifecycle,
+        _pipeline_teardown,
         "_stages_to_terminate",
         settle_after_selection,
     )

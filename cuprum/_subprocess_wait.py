@@ -1,14 +1,21 @@
-"""Waiting for subprocess exit.
+"""Waiting for subprocess exit, and reconciling its stream consumers.
 
 Split from ``cuprum._subprocess_execution`` so the runner module is about
 orchestration — spawning, wiring streams, assembling the result — while the
-wait half of *ending* a run lives here: how a deadline is applied and when the
-process is terminated. Draining the stream consumers is the other half of
-ending a run, and belongs to ``cuprum._subprocess_drain``.
+rules for *ending* a run live here: how a deadline is applied, when the
+process is terminated, and how the stream consumers are drained exactly once.
 
 Termination goes through ``_terminate_all_shielded`` rather than
 ``_terminate_process`` directly, so a caller cancelling during the grace
-period cannot skip the ``SIGKILL`` escalation and strand a child.
+period cannot skip the ``SIGKILL`` escalation and strand a child. The task
+reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
+so its callers can run it under ``_shielded_cleanup`` as one unit.
+
+Teardown routes the termination through the run's *owns_group* flag, so a
+caller that omits it silently reduces an owning run to the direct-child signal
+and lets the group survive. Requiring the keyword makes an omitted ownership
+value a ``TypeError`` at the call site instead of a lost guarantee, and every
+caller that targets the child alone must say so.
 """
 
 from __future__ import annotations
@@ -17,18 +24,44 @@ import asyncio
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _terminate_all_shielded
-from cuprum._subprocess_timeout import _require_timeout
-from cuprum._teardown_policy import _TeardownPolicy
-from cuprum._timeout_reporting import (
-    _report_timeout_expiry,
+from cuprum._stream_drain import (
+    _CAPTURE_EOF_GRACE_S,
+    _await_eof_grace,
+    _drain_stream_consumers,
 )
+from cuprum._subprocess_stdin import _cancel_stdin_writer
+from cuprum._subprocess_timeout import _require_timeout
+from cuprum._subprocess_wait_types import _DrainContext
+from cuprum._teardown_policy import _TeardownPolicy
+from cuprum._timeout_reporting import _report_timeout_expiry
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import (
+        _RunTaskOwnership,
+        _StreamPayload,
+    )
     from cuprum.sh import ExecutionContext
+
+
+# ``_CAPTURE_EOF_GRACE_S``, ``_await_eof_grace``, and ``_DrainContext`` are
+# imported rather than defined here, but they stay bound in this module's
+# namespace deliberately: the drain once lived here, and callers still import
+# them by this path. Bouncing them through keeps one definition while leaving
+# those imports working.
+#
+# Importing them from here is supported; patching them here is not. The drain
+# resolves each name from its own module's globals, so rebinding the copy in
+# this namespace is invisible to it. Tests that need to replace the grace
+# waiter must patch ``cuprum._stream_drain._await_eof_grace``.
+#
+# The drain's own log records are emitted under the historical channel name
+# ``"cuprum._subprocess_wait"``, spelled explicitly in ``_stream_drain``, so
+# moving the code did not move the channel operators filter on.
 
 
 async def _wait_for_exit_code(
@@ -44,13 +77,6 @@ async def _wait_for_exit_code(
     consumers belong to the caller, which drains them exactly once when the wait
     fails (see :func:`_run_subprocess_with_streams`); terminating the process
     here lets those consumers reach EOF during that drain.
-
-    *owns_group* is mandatory. Teardown routes the termination through this
-    flag, so a caller that omits it silently reduces an owning run to the
-    direct-child signal and lets the group survive. Requiring the keyword
-    makes an omitted ownership value a ``TypeError`` at the call site instead
-    of a lost guarantee, and every caller that targets the child alone must
-    say so.
 
     *observation* is the run being waited on, carried through to that teardown
     so a group it could not reach publishes the ``group_teardown`` event
@@ -119,7 +145,7 @@ async def _wait_for_exit_code_within_timeout(
     :class:`TimeoutError` is raised.
 
     Stream consumers belong to the caller, which drains them exactly once via
-    :func:`cuprum._subprocess_drain._drain_stream_consumers`; terminating the
+    :func:`cuprum._stream_drain._drain_stream_consumers`; terminating the
     process here lets those consumers reach EOF during that drain.
 
     Both expiry routes emit a structured ``cuprum.timeout`` log record and a
@@ -217,8 +243,93 @@ def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
     return execution.timeout - elapsed
 
 
+def _drain_context(
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    pid: int | None,
+    *,
+    capture: bool,
+) -> _DrainContext:
+    """Build the drain context for one reconciliation of *tasks*.
+
+    Every reconciliation route a streamed run has needs the same four values,
+    and the only one they disagree about is *capture*: the expiry routes
+    preserve the text their ``TimeoutExpired`` will report, while a route
+    re-raising some other error discards it rather than spending the capture
+    grace on text nobody will read. Building the bundle at each site instead is
+    how a route drifts from the others, so the one value that legitimately
+    differs is the one asked for here.
+
+    It sits beside :func:`_reconcile_run_tasks`, its only consumer, because the
+    context exists to serve that one reconciliation and reads its cancellation
+    policy from the tasks it is given.
+
+    ``capture_bytes`` is passed through from the execution rather than
+    defaulted, so an absent reader under a byte-exact run is handed ``b""``
+    and never the text-mode ``""``.
+
+    Returns
+    -------
+    _DrainContext
+        The context that reconciliation, and the drain beneath it, read their
+        capture choice, pid, observation, and cancellation policy from.
+    """
+    return _DrainContext(
+        capture=capture,
+        capture_bytes=execution.capture_bytes,
+        pid=pid,
+        observation=execution.observation,
+        discard_on_cancel=tasks.discard_on_cancel,
+    )
+
+
+async def _reconcile_run_tasks(
+    tasks: _RunTaskOwnership,
+    context: _DrainContext,
+) -> tuple[_StreamPayload | None, _StreamPayload | None]:
+    """Stop the idle heartbeat, cancel the stdin writer, then drain the streams.
+
+    The stream consumers drain with ``return_exceptions=True``, so their
+    already-recorded diagnostics survive the cancellation that a teardown
+    performs: a cancelled reader keeps the fallback it recorded before it was
+    cancelled.
+
+    The halves are one unit so a caller can run them under
+    :func:`_shielded_cleanup` and know all of them finish: draining first would
+    leave a writer blocked on a pipe nobody is reading, and shielding them
+    separately would let a cancellation landing between two of them strand the
+    rest.
+
+    The heartbeat goes first. Reconciliation runs once the run is already
+    ending, and a keepalive announcing that a terminated child is "still
+    running" is worse than no keepalive at all. Stopping is idempotent, so the
+    run's other exit paths can call it too.
+
+    Returns
+    -------
+    tuple[_StreamPayload | None, _StreamPayload | None]
+        The stdout and stderr payloads, as produced by
+        :func:`_drain_stream_consumers`.
+    """
+    await _stop_idle_monitor(tasks.idle)
+    await _cancel_stdin_writer(tasks.stdin_task)
+    stdout_text, stderr_text = await _drain_stream_consumers(
+        tasks.consumers,
+        context,
+    )
+    for diagnostics in tasks.relay_diagnostics:
+        diagnostics.settle()
+    return stdout_text, stderr_text
+
+
 __all__ = [
+    "_CAPTURE_EOF_GRACE_S",
+    "_DrainContext",
+    "_await_eof_grace",
     "_deadline_for_collection",
+    "_drain_context",
+    "_drain_stream_consumers",
+    "_reconcile_run_tasks",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

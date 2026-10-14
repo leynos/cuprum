@@ -25,11 +25,11 @@ import dataclasses as dc
 import itertools
 import typing as typ
 
-from cuprum._process_lifecycle import (
+from cuprum._pipeline_teardown import (
     _StageHandle,
-    _terminate_all_shielded,
     _terminate_pipeline_remaining_stages,
 )
+from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.events import GroupTeardownOutcome
 from cuprum.unittests._pipeline_wait_support import (

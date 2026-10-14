@@ -153,8 +153,17 @@ ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py \
   tests/integration/test_extension_typecheck_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_native_pipeline_hand_off_support.py \
+  tests/test_native_pipeline_liveness.py \
+  tests/test_native_pipeline_liveness_runner.py \
+  tests/test_native_pipeline_stall_diagnostic.py \
+  tests/test_native_pipeline_stall_properties.py \
+  tests/test_native_pipeline_stdout_capture.py \
   tests/test_native_sdist.py \
+  tests/test_process_state_degradations.py \
+  tests/test_process_state_helper.py \
   tests/test_py_typed_marker.py \
+  tests/test_running_command_children_contract.py \
   scripts/tests/test_boundary_*.py \
   scripts/tests/test_install_pypy312.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
@@ -169,14 +178,17 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_rust_consume_stream.py \
   cuprum/unittests/test_rust_streams_boundary_property.py \
+  cuprum/unittests/test_rust_streams_roundtrip_property.py \
   cuprum/unittests/test_rust_extension.py \
   cuprum/unittests/test_rust_splice.py \
   cuprum/unittests/test_rust_errno.py \
   cuprum/unittests/test_rust_errno_windows.py \
+  cuprum/unittests/test_rust_stream_native_order.py \
   cuprum/unittests/test_loom_model_conformance.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
   tests/behaviour/test_rust_streams_behaviour.py \
+  tests/behaviour/test_rust_streams_errors_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'

@@ -50,11 +50,17 @@ import asyncio
 import typing as typ
 from time import perf_counter
 
+from cuprum._pipeline_records import _PipelineWaitResult
 from cuprum._pipeline_stream_results import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
-from cuprum._pipeline_types import _PipelineWaitResult
+from cuprum._pipeline_teardown import (
+    _cleanup_pipeline_on_error,
+    _has_stages_to_terminate,
+    _StageHandle,
+    _terminate_pipeline_remaining_stages,
+)
 from cuprum._pipeline_wait_records import (
     _completion_log_fields,
     _CompletionLogFields,
@@ -67,15 +73,9 @@ from cuprum._pipeline_wait_records import (
 # so this one stays inside the project's file-size ceiling. Re-exported because
 # the tests and ``cuprum._pipeline_wait_records`` reach it by this name.
 from cuprum._pipeline_wait_state import _PipelineWaitState
-from cuprum._process_lifecycle import (
-    _cleanup_pipeline_on_error,
-    _has_stages_to_terminate,
-    _StageHandle,
-    _terminate_pipeline_remaining_stages,
-)
 
 if typ.TYPE_CHECKING:
-    from cuprum._pipeline_types import _StageWaitContext
+    from cuprum._pipeline_records import _StageWaitContext
     from cuprum._teardown_policy import _TeardownPolicy
 
 

@@ -22,7 +22,7 @@ import asyncio
 import signal
 import typing as typ
 
-from cuprum import _process_signal
+from cuprum import _process_lifecycle, _process_signal
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
@@ -219,7 +219,7 @@ def _teardown(
     *,
     owns_group: bool,
     observation: _StageObservation | None = None,
-) -> cabc.Coroutine[None, None, bool]:
+) -> cabc.Coroutine[None, None, _process_lifecycle._TerminationOutcome]:
     """Tear the target down under a policy carrying *owns_group*.
 
     *observation* is the execution the teardown reports its outcomes against.
@@ -228,18 +228,25 @@ def _teardown(
     for an absent observation. A case that wants the metric a teardown produces
     has to supply the execution it belongs to.
 
+    The sequencing belongs to ``_process_lifecycle``, which decides when to
+    signal, owns the grace period, and escalates once that bound expires;
+    ``_process_signal`` supplies only the two questions it asks — what to
+    signal and what to wait for — so this calls through the sequencer.
+
     Returns
     -------
-    cabc.Coroutine of (None, None, bool)
-        The teardown awaiting delivery, handing the result back to whichever
-        loop runs it.
+    cabc.Coroutine of (None, None, _TerminationOutcome)
+        The teardown awaiting delivery, handing back what the stop did to the
+        child. Callers assert on the outcome's fields rather than on one
+        flattened ``bool``, because the three facts it carries disagree at the
+        edges and a case that pins one of them wants to say which.
     """
 
     async def wait_for_exit() -> int:
         """Await the direct child's exit, as the real teardown does."""
         return await target.wait()
 
-    return _process_signal._terminate_process_with_wait(
+    return _process_lifecycle._terminate_process_with_wait(
         _as_process(target),
         policy=_TeardownPolicy(0.05, owns_group=owns_group),
         target=_process_signal._SettlementTarget(

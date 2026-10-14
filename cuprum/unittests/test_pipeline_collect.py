@@ -29,7 +29,7 @@ from cuprum._subprocess_timeout import _SubprocessInvariantError
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
-    from cuprum._pipeline_types import _PipelineSpawnResult
+    from cuprum._pipeline_records import _PipelineSpawnResult
     from cuprum.sh import SafeCmd
 
 

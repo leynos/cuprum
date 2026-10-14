@@ -9,9 +9,11 @@ The implementation is split across submodules by responsibility:
 - ``argv`` builds argument vectors and publishes ``ArgValue``.
 - ``builder`` holds the ``SafeCmdBuilder`` callable contract.
 - ``execution`` holds the execution context, stdin, and timeout types.
-- ``results`` holds ``CommandResult`` and ``PipelineResult``.
+- ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
+  counterparts ``BytesCommandResult`` and ``BytesPipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
-- ``safe_cmd`` holds the ``SafeCmd`` and ``Pipeline`` execution primitives.
+- ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
+- ``pipeline`` holds the ``Pipeline`` execution primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``
@@ -29,6 +31,7 @@ from cuprum._command_internals import (
     _prepare_execution_observation as _prepare_execution_observation,
 )
 from cuprum._command_internals import _run_prepared_command as _run_prepared_command
+from cuprum._command_prepare import _prepare_owned_command as _prepare_owned_command
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES as DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._execution_tracking import _ExecutionTracking as _ExecutionTracking
 from cuprum._idle_heartbeat import _validate_idle_options as _validate_idle_options
@@ -39,6 +42,17 @@ from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES as _MIN_PIPELINE_STA
 from cuprum._pipeline_internals import _collect_hooks as _collect_hooks
 from cuprum._pipeline_internals import _enforce_allowlist as _enforce_allowlist
 from cuprum._pipeline_internals import _run_pipeline as _run_pipeline
+from cuprum._process_handle import RunningCommand
+from cuprum._process_handle.tasks import (
+    _build_handle_execution as _build_handle_execution,
+)
+from cuprum._process_handle.tasks import _start_handle_run as _start_handle_run
+from cuprum._process_handle_errors import (
+    SignalAfterExitError as SignalAfterExitError,
+)
+from cuprum._process_handle_errors import (
+    UnsupportedSignalError as UnsupportedSignalError,
+)
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout
@@ -81,14 +95,22 @@ from cuprum.sh.output import _validate_convenience_flags as _validate_convenienc
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
-from cuprum.sh.results import CommandResult, PipelineResult
+from cuprum.sh.pipeline import Pipeline
+from cuprum.sh.results import (
+    BytesCommandResult,
+    BytesPipelineResult,
+    CommandResult,
+    PipelineResult,
+)
 from cuprum.sh.results import dc as dc
-from cuprum.sh.safe_cmd import Pipeline, SafeCmd
+from cuprum.sh.safe_cmd import SafeCmd
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BytesCommandResult",
+    "BytesPipelineResult",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",
@@ -97,11 +119,14 @@ __all__ = [
     "PipelineResult",
     "ProcessGroupPolicy",
     "RunOutputOptions",
+    "RunningCommand",
     "SafeCmd",
     "SafeCmdBuilder",
+    "SignalAfterExitError",
     "StdinInput",
     "TimeoutExpired",
     "UnknownProgramError",
+    "UnsupportedSignalError",
     "build_argv",
     "make",
     "observe",

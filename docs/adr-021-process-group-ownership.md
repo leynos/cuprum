@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 019: Opt-in process-group ownership
+# Architectural decision record (ADR) 021: Opt-in process-group ownership
 
 ## Status
 

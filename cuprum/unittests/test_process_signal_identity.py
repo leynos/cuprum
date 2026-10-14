@@ -101,7 +101,7 @@ def test_reuse_by_an_unrelated_live_group_is_indistinguishable_from_our_own(
 
     handled = asyncio.run(_teardown(stranger, owns_group=True))
 
-    assert handled is True, (
+    assert handled.delivered is True, (
         "teardown proceeds once the probe has answered, because a live answer "
         "does not veto; this is the documented residual, not a safe outcome"
     )
@@ -155,9 +155,13 @@ def test_the_escalation_is_not_attempted_at_a_name_that_emptied_in_the_grace(
         "vetoed, because the group has emptied by the time it is considered "
         f"and a fresh probe says so; got {target.attempts!r}"
     )
-    assert handled is False, (
-        "a group that emptied before the escalation leaves nothing to compel, "
-        f"so teardown must not report that it settled one; got {handled!r}"
+    assert handled.escalated is True, (
+        "the grace window ran out with the graceful signal already delivered, "
+        f"so the ending is an escalated one; got {handled!r}"
+    )
+    assert handled.waiter_completed is False, (
+        "the escalation was vetoed by the fresh probe, so no reaping wait "
+        f"returned; got {handled!r}"
     )
 
 
@@ -246,7 +250,7 @@ def test_an_emptied_group_is_never_signalled_under_its_recycled_name(
 
     handled = asyncio.run(_teardown(target, owns_group=True))
 
-    assert handled is False, (
+    assert handled.delivered is False, (
         "a group whose probe does not answer has already settled, so teardown "
         "must report that it signalled nothing"
     )
@@ -291,7 +295,7 @@ def test_a_live_group_is_probed_before_it_is_signalled(
 
     handled = asyncio.run(_teardown(target, owns_group=True))
 
-    assert handled is True, "a live group must be signalled and awaited"
+    assert handled.delivered is True, "a live group must be signalled and awaited"
     assert target.probes, (
         "no liveness probe ran, so the signal below had no veto consulted before it"
     )
@@ -336,7 +340,7 @@ def test_an_inherited_run_never_probes_or_signals_a_group(
 
     handled = asyncio.run(_teardown(target, owns_group=False))
 
-    assert handled is True, "the direct child is still signalled and awaited"
+    assert handled.delivered is True, "the direct child is still signalled and awaited"
     assert not target.probes, (
         f"an inherited run has no group identity to ask about; got {target.probes!r}"
     )

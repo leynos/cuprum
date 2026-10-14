@@ -6,7 +6,7 @@ decisions can be property-tested without process state or a clock:
 - `_resolve_timeout_payload` (`cuprum._subprocess_timeout`) — the timeout-payload
   seam: it maps either timeout variant to one consistent
   `_SubprocessTimeoutDetails`, always carrying a concrete timeout.
-- `_stages_to_terminate` (`cuprum._process_lifecycle`) — the fail-fast selection:
+- `_stages_to_terminate` (`cuprum._pipeline_teardown`) — the fail-fast selection:
   which stages get a termination task, each at most once and never the failed or
   an already-finished stage.
 """
@@ -19,7 +19,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from cuprum._process_lifecycle import _stages_to_terminate
+from cuprum._pipeline_teardown import _stages_to_terminate
 from cuprum._subprocess_timeout import (
     _resolve_timeout_payload,
     _SubprocessInvariantError,

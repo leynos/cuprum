@@ -21,7 +21,8 @@ from cuprum import (
     _command_internals,
     _rusage,
     _subprocess_execution,
-    _wait4_process,
+    _subprocess_spawn,
+    _wait4_spawn,
     observe,
     sh,
 )
@@ -148,9 +149,12 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
         """Return the next controlled accounting boundary."""
         return snapshots.pop(0)
 
-    monkeypatch.setattr(_wait4_process, "capture_child_rusage", capture_snapshot)
+    # Bound where production resolves the name: the spawn module reads both
+    # helpers from its own globals, so patching the handle module would watch
+    # names no run consults.
+    monkeypatch.setattr(_wait4_spawn, "capture_child_rusage", capture_snapshot)
     monkeypatch.setattr(
-        _wait4_process,
+        _wait4_spawn,
         "wait4_resource_measurement_available",
         lambda: False,
     )
@@ -265,7 +269,11 @@ def test_records_start_times_before_subprocess_spawn(
     # binds at class-creation time and would ignore the patch.
     monkeypatch.setattr(_command_internals.time, "perf_counter", monotonic_clock)
     monkeypatch.setattr(_command_internals.time, "time", wall_clock)
-    monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
+    # Patched on the module that owns the spawn, not on
+    # ``_subprocess_execution``: ``_start_owned_process`` resolves this name
+    # from ``_subprocess_spawn``'s globals, so a patch applied to a re-export
+    # there would rebind a name no call path reads and let the real spawn run.
+    monkeypatch.setattr(_subprocess_spawn, "_spawn_subprocess", fake_spawn)
     monkeypatch.setattr(
         _subprocess_execution,
         "_run_subprocess_without_streams",

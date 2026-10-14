@@ -77,11 +77,11 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 })
 
 # The unit-counter phases whose counter describes the execution as a whole and
-# therefore carries the effective environment mode. The stream, drain, and
-# pipe counters deliberately do not: their volume is per-line or per-event, and
+# therefore carries the effective execution modes. The stream, drain, and pipe
+# counters deliberately do not: their volume is per-line or per-event, and
 # multiplying every one of those series to repeat a per-execution constant
 # would buy nothing an operator cannot read off ``cuprum_executions_total``.
-_ENV_MODE_PHASES: frozenset[str] = frozenset({"start"})
+_EXECUTION_MODE_PHASES: frozenset[str] = frozenset({"start"})
 
 
 def _env_mode_label(event: ExecEvent) -> dict[str, str]:
@@ -104,6 +104,43 @@ def _env_mode_label(event: ExecEvent) -> dict[str, str]:
     # below: the label must be the plain string an operator filters on rather
     # than the member's ``repr``.
     return {"env_mode": str(event.env_mode)}
+
+
+def _capture_mode_label(event: ExecEvent) -> dict[str, str]:
+    """Return the ``capture_mode`` label for an event that records one.
+
+    Bounded by construction, as :func:`_env_mode_label` is:
+    :class:`~cuprum.events.CaptureMode` is a closed two-value ``StrEnum``
+    resolved by production code, so no caller-supplied string can reach it.
+    Without it a byte-exact run and a text run of the same command contribute
+    to the same failure series, and the mode that hit a failure cannot be read
+    off the metrics at all.
+
+    Returns
+    -------
+    dict[str, str]
+        The ``capture_mode`` label, or an empty mapping when the event records
+        no mode, so callers may merge it unconditionally.
+    """
+    if event.capture_mode is None:
+        return {}
+    return {"capture_mode": str(event.capture_mode)}
+
+
+def _execution_mode_labels(event: ExecEvent) -> dict[str, str]:
+    """Return both per-execution mode labels for an event.
+
+    The two modes travel together: each is a bounded policy name known before
+    the child is spawned, and each describes the whole execution rather than one
+    measurement, so any counter that carries one carries the other.
+
+    Returns
+    -------
+    dict[str, str]
+        Both labels, each omitted when the event records no such mode, so
+        callers may merge the result unconditionally.
+    """
+    return {**_env_mode_label(event), **_capture_mode_label(event)}
 
 
 def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
@@ -157,7 +194,7 @@ def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     operations: list[_MetricOp] = []
     if event.exit_code is not None and event.exit_code != 0:
         operations.append(
-            _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))
+            _CounterOp("cuprum_failures_total", 1.0, _execution_mode_labels(event))
         )
     if event.duration_s is not None:
         operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
@@ -179,7 +216,7 @@ def _settled_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     ]
     if outcome is not TerminalOutcome.EXIT_ZERO:
         operations.append(
-            _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))
+            _CounterOp("cuprum_failures_total", 1.0, _execution_mode_labels(event))
         )
     if event.duration_s is not None:
         operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
@@ -273,8 +310,10 @@ def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
         raise _UnhandledMetricsPhaseError(phase)
     # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather than
     # repeated as a literal alternation, so the metric names have exactly one
-    # definition.
-    labels = _env_mode_label(event) if phase in _ENV_MODE_PHASES else {}
+    # definition. Both per-execution modes are carried, not only ``env_mode``:
+    # a unit counter that named one mode and not the other could not separate
+    # a byte-exact run from a text one, which is the pair ``start`` describes.
+    labels = _execution_mode_labels(event) if phase in _EXECUTION_MODE_PHASES else {}
     return (_CounterOp(counter_name, 1.0, labels),)
 
 
@@ -284,6 +323,9 @@ __all__ = [
     "_HistogramOp",
     "_MetricOp",
     "_UnhandledMetricsPhaseError",
+    "_capture_mode_label",
+    "_env_mode_label",
+    "_execution_mode_labels",
     "_exit_operations",
     "_group_teardown_operations",
     "_metric_operations",

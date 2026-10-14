@@ -43,13 +43,10 @@ from cuprum._line_stream.telemetry import (
 )
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_drain import (
-    _drain_stream_consumers,
-    _DrainContext,
-    _reconcile_run_tasks,
-)
-from cuprum._subprocess_execution import (
-    _relay_fallbacks_for_result,
+from cuprum._result_assembly import _require_text
+from cuprum._stream_drain import _drain_stream_consumers
+from cuprum._subprocess_execution import _relay_fallbacks_for_result
+from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
@@ -62,14 +59,17 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import (
+    _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._subprocess_wait_types import _DrainContext, _StreamPayloadPair
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
+    from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.sh import CommandResult
 
 __all__ = [
@@ -159,7 +159,7 @@ async def _start_line_stream_run(
 async def _wait_for_line_stream_exit(
     run: _LineStreamRun,
     execution: _SubprocessExecution,
-) -> tuple[int, float, str | None, str | None]:
+) -> tuple[int, float, _StreamPayload | None, _StreamPayload | None]:
     """Await process exit, reconciling every task when the wait fails.
 
     Mirrors ``_wait_for_streamed_process_exit`` so a ``lines()`` run applies
@@ -168,8 +168,9 @@ async def _wait_for_line_stream_exit(
 
     Returns
     -------
-    tuple[int, float, str | None, str | None]
-        The exit code, exit timestamp, and captured stdout/stderr.
+    tuple[int, float, str | bytes | None, str | bytes | None]
+        The exit code, exit timestamp, and captured stdout/stderr, in the
+        mode the run's config asked for.
 
     Raises
     ------
@@ -254,7 +255,7 @@ async def _cleanup_failed_line_stream_run(
     execution: _SubprocessExecution,
     *,
     capture: bool,
-) -> tuple[str | None, str | None]:
+) -> _StreamPayloadPair:
     """Reconcile a failed run after emitting its teardown boundaries."""
     pid = run.process.pid
     return await _run_line_stream_teardown(
@@ -275,7 +276,7 @@ async def _discard_drain(
     run: _LineStreamRun,
     pid: int | None,
     execution: _SubprocessExecution,
-) -> tuple[str | None, str | None]:
+) -> _StreamPayloadPair:
     """Discard and reconcile the line stream's consumers after a failure."""
     return await _run_line_stream_teardown(
         run,
@@ -338,10 +339,21 @@ async def _run_to_command_result(
     run: _LineStreamRun,
     execution: _SubprocessExecution,
 ) -> CommandResult:
-    """Run to exit, assemble the ``CommandResult``, and emit the exit event."""
+    """Run to exit, assemble the ``CommandResult``, and emit the exit event.
+
+    Always text: ``lines()`` is a text-mode driver and has no byte-exact entry
+    point, so the run reaching here has a text config. The drain still reports
+    the widened payload its shared signature promises, so the text guarantee
+    is re-taken rather than assumed.
+
+    Returns
+    -------
+    CommandResult
+        The completed run's exit code, captured text, and relay diagnostics.
+    """
     started_at = run.started_at
-    stdout_text: str | None = None
-    stderr_text: str | None = None
+    stdout_text: _StreamPayload | None = None
+    stderr_text: _StreamPayload | None = None
     try:
         (
             exit_code,
@@ -378,7 +390,8 @@ async def _run_to_command_result(
         argv=execution.cmd.argv,
         exit_code=exit_code,
         pid=run.process.pid if run.process.pid is not None else -1,
-        stdout=stdout_text,
-        stderr=stderr_text,
+        stdout=_require_text(stdout_text, "stdout"),
+        stderr=_require_text(stderr_text, "stderr"),
         relay_fallbacks=_relay_fallbacks_for_result(run.tasks.relay_diagnostics),
+        resolved_path=execution.observation.resolved_path,
     )

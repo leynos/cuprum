@@ -15,6 +15,7 @@ if typ.TYPE_CHECKING:
 
 from cuprum import (
     ECHO,
+    BytesCommandResult,
     CommandResult,
     ExecEvent,
     SafeCmd,
@@ -74,10 +75,13 @@ class TestConcurrentHooks:
 
         def make_tracker(
             calls: list[int],
-        ) -> cabc.Callable[[SafeCmd, CommandResult], None]:
+        ) -> cabc.Callable[[SafeCmd, CommandResult | BytesCommandResult], None]:
             """Build an after-hook that records each command's exit code."""
 
-            def track_after(cmd: SafeCmd, result: CommandResult) -> None:
+            def track_after(
+                cmd: SafeCmd,
+                result: CommandResult | BytesCommandResult,
+            ) -> None:
                 """Append the command's exit code to the tracked after-hook calls."""
                 _ = cmd  # Unused
                 calls.append(result.exit_code)

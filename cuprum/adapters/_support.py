@@ -43,23 +43,46 @@ def _event_common_fields(
     if event.cwd is not None:
         # A ``Path``, rendered rather than passed through.
         yield name("cwd"), str(event.cwd)
-    if event.resource_usage_mode is not None:
-        # A ``StrEnum``, rendered for the same reason: ``str`` yields the
-        # member's value, and every transport this projection feeds — the log
-        # extras, the span attributes, and the metric label — must carry the
-        # plain string operators key on, not the member's ``repr``.
-        yield name("resource_usage_mode"), str(event.resource_usage_mode)
-    if event.env_mode is not None:
-        # Also a ``StrEnum``, and rendered for the same reason. The mode names
-        # the policy, never the environment: a replacement run whose child
-        # failed to resolve a bare program name is indistinguishable from an
-        # overlay one without it, and its values are a fixed set of three.
-        yield name("env_mode"), str(event.env_mode)
+    yield from _rendered_enum_fields(event, name)
     if event.terminal_outcome is not None:
         yield name("terminal_outcome"), str(event.terminal_outcome)
     for field, value in _verbatim_fields(event):
         if value is not None:
             yield name(field), value
+
+
+def _rendered_enum_fields(
+    event: ExecEvent,
+    name: cabc.Callable[[str], str],
+) -> cabc.Iterator[tuple[str, object]]:
+    """Yield each mode the projection renders rather than passing through.
+
+    Each is a ``StrEnum``, so ``str`` yields the member's value: every
+    transport this projection feeds — the log extras, the span attributes, and
+    the metric label — must carry the plain string operators key on, not the
+    member's ``repr``. All three describe the run rather than one measurement,
+    so each is carried on every phase and omitted only when unset.
+
+    Yields
+    ------
+    tuple[str, object]
+        One named, rendered pair per mode the event records.
+    """
+    modes = (
+        # How the terminal figures were obtained, when they were.
+        ("resource_usage_mode", event.resource_usage_mode),
+        # The environment policy, which a replacement boundary makes
+        # load-bearing: without it a child that failed to resolve a bare
+        # program name is indistinguishable from an ordinary overlay run.
+        ("env_mode", event.env_mode),
+        # The mode the run reports its captures in, which is what keeps a
+        # byte-exact run distinguishable from a text one in every counter and
+        # span attribute.
+        ("capture_mode", event.capture_mode),
+    )
+    for field, mode in modes:
+        if mode is not None:
+            yield name(field), str(mode)
 
 
 def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
@@ -81,6 +104,12 @@ def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
         ("max_rss_bytes", event.max_rss_bytes),
         ("user_cpu_seconds", event.user_cpu_seconds),
         ("system_cpu_seconds", event.system_cpu_seconds),
+        # The executed executable, omitted when unbound. It is the one field
+        # here that names what actually ran rather than what was measured, so
+        # it travels with ``program`` in spirit — but it belongs in the
+        # verbatim group because it is a plain optional string, not a value
+        # needing rendering.
+        ("resolved_path", event.resolved_path),
     )
 
 

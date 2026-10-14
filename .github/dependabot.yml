@@ -28,6 +28,14 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     groups:
+      # Pylint declares the Astroid range it supports (<=4.1.dev0 for 4.0.9),
+      # so the exact pins in pyproject.toml are a mutually compatible pair and
+      # must move together (see pyproject.toml and ADR 003). This group must
+      # precede the catch-all: Dependabot uses the first group that matches.
+      pylint-astroid:
+        patterns:
+          - "pylint"
+          - "astroid"
       minor-and-patch:
         patterns:
           - "*"

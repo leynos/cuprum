@@ -20,6 +20,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import _StreamPayload
 
 
 class _SubprocessInvariantError(_ExecutionInvariantError):
@@ -44,8 +45,8 @@ class _SubprocessTimeoutDetails:
     """Captured subprocess timeout details."""
 
     timeout: float
-    stdout: str | None
-    stderr: str | None
+    stdout: _StreamPayload | None
+    stderr: _StreamPayload | None
     exited_at: float
 
 
@@ -108,8 +109,8 @@ class _TimeoutContext:
 
     cmd_argv: tuple[str, ...]
     timeout: float
-    stdout: str | None
-    stderr: str | None
+    stdout: _StreamPayload | None
+    stderr: _StreamPayload | None
 
 
 def _raise_timeout_expired(
@@ -132,8 +133,8 @@ class _SubprocessTimeoutContext:
     execution: _SubprocessExecution
     process: asyncio.subprocess.Process
     started_at: float
-    stdout_text: str | None
-    stderr_text: str | None
+    stdout_text: _StreamPayload | None
+    stderr_text: _StreamPayload | None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -147,8 +148,8 @@ class _TimeoutFallback:
     """
 
     configured_timeout: float | None
-    stdout: str | None
-    stderr: str | None
+    stdout: _StreamPayload | None
+    stderr: _StreamPayload | None
     exited_at: float
 
 
@@ -230,8 +231,8 @@ def _handle_subprocess_timeout(
 def _handle_stream_timeout(
     exc: TimeoutError,
     *,
-    stdout_text: str | None,
-    stderr_text: str | None,
+    stdout_text: _StreamPayload | None,
+    stderr_text: _StreamPayload | None,
     timeout: float | None,
 ) -> typ.NoReturn:
     """Raise ``_SubprocessTimeoutError`` carrying pre-drained stream output.

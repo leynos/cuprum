@@ -1,0 +1,352 @@
+"""Linux process and pipe diagnostics for stalled subprocess tests.
+
+Every probe reports the *absence* of evidence the same way it reports evidence
+that happens to be empty, and that is deliberate rather than an omission. The
+consumers of these helpers are stall rules that must not invent a verdict, so
+"this host cannot answer" and "the answer is nothing" are both spelled as no
+evidence: a rule that needs a parent writer to fire is not satisfied by an empty
+writer tuple, and a rule that needs queued bytes is not satisfied by an
+unreadable count. The four probes below keep that spelling, because no stall
+rule acts on the difference.
+
+:func:`can_list_processes` is the one exception, and it is spelled as its own
+predicate rather than folded into a probe because its caller *does* act on the
+distinction. A scenario that compares two enumerations of this process's
+children to prove no child leaked cannot read two empty sets as proof: on a
+host that cannot list them, the empty difference records the host's silence
+rather than the library's behaviour. Such a caller has to ask whether the
+comparison was available before it reads it, which is what this predicate
+answers. It asks a strictly stronger question than
+:func:`_procfs_available`: that one covers reading a single known PID's files,
+while this one covers listing the directory and reaching each entry.
+
+The three degradations are distinct and each is spelled the way its consumer
+already reads:
+
+- :func:`process_state` returns ``available=False``, because a caller asking
+  about one process needs to distinguish "unobservable" from "exited".
+- :func:`child_pipes` returns an empty tuple for an unreadable directory and
+  keeps a descriptor whose byte count cannot be read with ``None``, so one
+  procfs race cannot hide the stall that triggered the diagnostic.
+- :func:`parent_read_fds` and :func:`parent_write_fds` return an empty tuple;
+  their callers treat "no parent end found" as "this edge cannot witness a
+  missed hand-off", which is the correct reading in both cases.
+
+The module is Linux-only. Hosts without procfs report no evidence, and the
+behaviour tests that consume it are Linux-gated, so no rule can fire on a host
+that cannot supply process state.
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import os
+import pathlib
+import sys
+
+__all__ = [
+    "ChildPipe",
+    "ProcessState",
+    "can_list_processes",
+    "child_pipes",
+    "parent_pid_from_stat",
+    "parent_read_fds",
+    "parent_write_fds",
+    "process_state",
+    "read_end_pending_bytes",
+]
+
+# The access mode is always the low two bits of ``F_GETFL``, so those bits are
+# masked directly rather than naming ``os.O_ACCMODE``. The constant is absent on
+# some runtimes (PyPy among them, so it cannot be assumed merely because CPython
+# provides it), and an ``AttributeError`` raised here would escape the
+# ``except OSError`` guard below and replace the diagnostic with a traceback.
+_ACCESS_MODE_MASK = 0o3
+
+# Index of the parent PID among the fields that follow the command name: field
+# 0 is the scheduler state, field 1 the parent PID.
+_PARENT_PID_INDEX = 1
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ProcessState:
+    """Snapshot of a process's scheduler state from procfs."""
+
+    pid: int
+    state: str | None
+    exited: bool
+    wchan: str | None
+    available: bool
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ChildPipe:
+    """A child pipe descriptor and its readable byte count when observable."""
+
+    fd: int
+    target: str
+    pending_bytes: int | None
+
+
+def _procfs_available() -> bool:
+    """Return whether this host provides a readable Linux procfs interface.
+
+    This is the single-process question: a caller asking about one PID needs
+    only to open that PID's own files, which takes read permission on the
+    mount. :func:`can_list_processes` is a strictly stronger check, and the two
+    are kept apart because a caller can pass this one and still be unable to
+    enumerate.
+
+    Returns
+    -------
+    bool
+        Whether procfs is mounted and readable, so a probe for one known PID
+        can consult it.
+    """
+    if sys.platform != "linux":
+        return False
+    procfs = pathlib.Path("/proc")
+    return procfs.is_dir() and os.access(procfs, os.R_OK)
+
+
+def _unavailable_process(pid: int) -> ProcessState:
+    """Return the stable record used when procfs cannot be consulted."""
+    return ProcessState(pid, state=None, exited=False, wchan=None, available=False)
+
+
+def _fields_after_comm(stat: str) -> list[str] | None:
+    """Return a procfs ``stat`` line's fields after the command name.
+
+    The command name (``comm``) is parenthesized and may itself contain spaces
+    and parentheses — a process may name itself ``foo) bar`` — so the fields
+    are counted from after the *final* ``)`` rather than from the start, where
+    such a name would put every reading on the wrong field.
+
+    Returns
+    -------
+    list[str] | None
+        The fields that follow the command name, or ``None`` when the line has
+        no closing delimiter to count from.
+    """
+    closing_parenthesis = stat.rfind(")")
+    if closing_parenthesis < 0:
+        return None
+    return stat[closing_parenthesis + 1 :].split()
+
+
+def _state_from_stat(stat: str) -> str | None:
+    """Extract the process state after the final command-name delimiter."""
+    fields = _fields_after_comm(stat)
+    return None if not fields else fields[0]
+
+
+def parent_pid_from_stat(stat: str) -> int | None:
+    """Return the parent PID recorded in a procfs ``stat`` line, if it has one.
+
+    Used to find this test process's own children: the PID of a process whose
+    parent is the reader, which is the one signal a leaked spawn leaves behind.
+
+    Returns
+    -------
+    int | None
+        The parent PID, or ``None`` when the line is too short to carry one or
+        its field is not a number.
+    """
+    fields = _fields_after_comm(stat)
+    if fields is None or len(fields) < _PARENT_PID_INDEX + 1:
+        return None
+    parent_pid = fields[_PARENT_PID_INDEX]
+    return int(parent_pid) if parent_pid.isdigit() else None
+
+
+def can_list_processes() -> bool:
+    """Return whether this host can enumerate the processes it has as children.
+
+    A caller that compares two listings has to know the comparison means
+    something before it reads them. Where this returns ``False`` the listings
+    are both empty and their difference is empty for a reason that has nothing
+    to do with the behaviour under test, so such a caller must report the
+    scenario as not applicable rather than assert the empty difference — an
+    unsupported scan would otherwise be reported as a passed check.
+
+    Enumerating asks strictly more of the mount than reading one known PID
+    does. Listing ``/proc`` needs search permission on it, and so does reaching
+    each entry's own ``stat`` file; a mount that is merely readable answers
+    :func:`_procfs_available` while ``iterdir`` returns nothing. The check is
+    therefore against ``X_OK`` rather than ``R_OK``: it has to fail on exactly
+    the hosts whose listings would come back empty, because those are the hosts
+    where an empty difference proves nothing.
+
+    Returns
+    -------
+    bool
+        Whether procfs is mounted, readable and searchable, so an enumeration
+        of it answers the question it was asked.
+    """
+    if sys.platform != "linux":
+        return False
+    procfs = pathlib.Path("/proc")
+    return procfs.is_dir() and os.access(procfs, os.R_OK | os.X_OK)
+
+
+def _read_wchan(pid: int) -> str | None:
+    """Read a Linux process's wait channel without surfacing diagnostics errors."""
+    try:
+        value = pathlib.Path(f"/proc/{pid}/wchan").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def process_state(pid: int) -> ProcessState:
+    """Return the available Linux process state for ``pid``.
+
+    A missing procfs entry means that the process has exited or been reaped.
+    On unsupported hosts, return an unavailable record rather than making a
+    test diagnostic obscure the original stalled pipeline.
+
+    Returns
+    -------
+    ProcessState
+        The process state, including whether the process has exited and
+        whether procfs made the observation available.
+    """
+    if not _procfs_available():
+        return _unavailable_process(pid)
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ProcessState(pid, state=None, exited=True, wchan=None, available=True)
+    except OSError:
+        return _unavailable_process(pid)
+    state = _state_from_stat(stat)
+    return ProcessState(
+        pid,
+        state=state,
+        exited=state == "Z",
+        wchan=_read_wchan(pid),
+        available=True,
+    )
+
+
+def _pending_bytes(path: pathlib.Path) -> int | None:
+    """Return readable bytes for a procfs descriptor, when its ioctl supports it."""
+    try:
+        import fcntl
+        import struct
+        import termios
+    except ImportError:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        response = fcntl.ioctl(fd, termios.FIONREAD, struct.pack("I", 0))
+        return int(struct.unpack("I", response)[0])
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def child_pipes(pid: int) -> tuple[ChildPipe, ...]:
+    """Return observable pipe descriptors and pending bytes for a child process.
+
+    Unsupported or inaccessible descriptors are retained with ``None`` for
+    their byte count so that a single procfs race cannot hide the stall that
+    triggered the diagnostic.
+
+    Returns
+    -------
+    tuple[ChildPipe, ...]
+        Every observable pipe descriptor, ordered by descriptor number.
+    """
+    if not _procfs_available():
+        return ()
+    directory = pathlib.Path(f"/proc/{pid}/fd")
+    try:
+        entries = tuple(directory.iterdir())
+    except OSError:
+        return ()
+    pipes: list[ChildPipe] = []
+    for entry in entries:
+        try:
+            target = str(entry.readlink())
+            fd = int(entry.name)
+        except (OSError, ValueError):
+            continue
+        if target.startswith("pipe:["):
+            pipes.append(ChildPipe(fd, target, _pending_bytes(entry)))
+    return tuple(sorted(pipes, key=lambda pipe: pipe.fd))
+
+
+def _parent_fds(pipe_target: str, modes: frozenset[int]) -> tuple[int, ...]:
+    """Return this process's descriptors for ``pipe_target`` with one of ``modes``."""
+    if not _procfs_available():
+        return ()
+    try:
+        import fcntl
+    except ImportError:
+        return ()
+    try:
+        entries = tuple(pathlib.Path("/proc/self/fd").iterdir())
+    except OSError:
+        return ()
+    matches: list[int] = []
+    for entry in entries:
+        try:
+            fd = int(entry.name)
+            if str(entry.readlink()) != pipe_target:
+                continue
+            mode = fcntl.fcntl(fd, fcntl.F_GETFL) & _ACCESS_MODE_MASK
+        except (OSError, ValueError):
+            continue
+        if mode in modes:
+            matches.append(fd)
+    return tuple(sorted(matches))
+
+
+def parent_write_fds(pipe_target: str) -> tuple[int, ...]:
+    """Return this process's writable descriptors for a Linux pipe target."""
+    return _parent_fds(pipe_target, frozenset({os.O_WRONLY, os.O_RDWR}))
+
+
+def parent_read_fds(pipe_target: str) -> tuple[int, ...]:
+    """Return this process's readable descriptors for a Linux pipe target.
+
+    A pipeline stage's stdout pipe is held open by whichever parent capture
+    task drains it. Reading the uncollected byte count from that parent end is
+    the only reliable way to show that a child's output was never collected:
+    the child's own descriptors disappear from procfs as soon as it exits.
+
+    Returns
+    -------
+    tuple[int, ...]
+        The read ends this process owns for ``pipe_target``, ascending.
+    """
+    return _parent_fds(pipe_target, frozenset({os.O_RDONLY, os.O_RDWR}))
+
+
+def read_end_pending_bytes(fd: int) -> int | None:
+    """Return the bytes readable on this process's descriptor ``fd``.
+
+    Unlike :func:`child_pipes`, this samples the parent's own descriptor, which
+    outlives the child that wrote to it.
+
+    Returns
+    -------
+    int | None
+        The queued byte count, or ``None`` when the ioctl is unsupported.
+    """
+    try:
+        import fcntl
+        import struct
+        import termios
+    except ImportError:
+        return None
+    try:
+        response = fcntl.ioctl(fd, termios.FIONREAD, struct.pack("I", 0))
+        return int(struct.unpack("I", response)[0])
+    except OSError:
+        return None

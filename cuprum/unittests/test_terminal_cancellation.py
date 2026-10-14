@@ -9,15 +9,22 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _pipeline_internals, scoped, sh
+from cuprum import ScopeConfig, _pipeline_finalize, scoped, sh
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from cuprum._subprocess_wait_types import (
+        _StreamConsumerTask,
+        _StreamPayloadPair,
+    )
     from cuprum.program import Program
 
-_REAL_CANCEL_STREAM_TASKS = _pipeline_internals._cancel_stream_tasks
+# The pipeline's cleanup reads this name from the finalization module, which is
+# where the run-failure reconciliation moved when it was split out of
+# ``_pipeline_internals``; patching the old home would leave the real one in use.
+_REAL_CANCEL_STREAM_TASKS = _pipeline_finalize._cancel_stream_tasks
 
 
 class _CommandCleanupGate:
@@ -51,8 +58,8 @@ class _PipelineCancellationScenario:
 
     async def cancel_stream_tasks(
         self,
-        stderr_tasks: list[asyncio.Task[str | None] | None],
-        stdout_task: asyncio.Task[str | None] | None,
+        stderr_tasks: list[_StreamConsumerTask | None],
+        stdout_task: _StreamConsumerTask | None,
     ) -> None:
         """Hold outer cleanup open while additional cancellations arrive."""
         self.cleanup_entered.set()
@@ -72,7 +79,7 @@ def cancellation_scenario(
     )
     scenario = _PipelineCancellationScenario(pipeline, python_program)
     monkeypatch.setattr(
-        _pipeline_internals, "_cancel_stream_tasks", scenario.cancel_stream_tasks
+        _pipeline_finalize, "_cancel_stream_tasks", scenario.cancel_stream_tasks
     )
     return scenario
 
@@ -140,7 +147,7 @@ def test_repeated_cancellation_settles_one_command_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Repeated cancellation during cleanup still settles the observed command."""
-    from cuprum import _subprocess_drain
+    from cuprum import _subprocess_wait
 
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -148,7 +155,7 @@ def test_repeated_cancellation_settles_one_command_once(
     gate = _CommandCleanupGate()
     started = asyncio.Event()
     events: list[ExecEvent] = []
-    real_drain = _subprocess_drain._drain_stream_consumers
+    real_drain = _subprocess_wait._drain_stream_consumers
 
     def observe(event: ExecEvent) -> None:
         """Record lifecycle events and signal the spawned child."""
@@ -157,15 +164,18 @@ def test_repeated_cancellation_settles_one_command_once(
             started.set()
 
     async def gated_drain(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-        context: _subprocess_drain._DrainContext,
-    ) -> tuple[str | None, str | None]:
+        consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
+        context: _subprocess_wait._DrainContext,
+    ) -> _StreamPayloadPair:
         """Hold reconciliation open while repeated cancellation arrives."""
         gate.entered.set()
         await gate.release.wait()
         return await real_drain(consumers, context)
 
-    monkeypatch.setattr(_subprocess_drain, "_drain_stream_consumers", gated_drain)
+    # Bound where the drain is called: ``_reconcile_run_tasks`` lives in
+    # ``_subprocess_wait`` and reads its own module global, so this is the
+    # binding the run actually resolves.
+    monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
     async def run_case() -> None:
         """Cancel after start, then interrupt the gated cleanup repeatedly."""

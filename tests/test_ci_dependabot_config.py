@@ -49,9 +49,12 @@ INTERVAL = "daily"
 GROUPED_UPDATE_TYPES = frozenset({"minor", "patch"})
 
 #: Narrow groups an ecosystem's stanza lists ahead of the catch-all. A bump of a
-#: ``leynos/shared-actions`` pin moves one commit SHA to another and has no
-#: semver level, so the typed catch-all never takes it; this group does.
-NARROW_GROUPS = {"github-actions": {"shared-actions": ["leynos/shared-actions*"]}}
+#: ``leynos/shared-actions`` pin has no semver level, so the typed catch-all never
+#: takes it; the exact Pylint and Astroid pins are a pair that moves together.
+NARROW_GROUPS = {
+    "github-actions": {"shared-actions": ["leynos/shared-actions*"]},
+    "uv": {"pylint-astroid": ["pylint", "astroid"]},
+}
 
 #: The `applies-to` value a routine-update group must carry, when it names one.
 VERSION_UPDATES = "version-updates"

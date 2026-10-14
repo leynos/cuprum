@@ -10,6 +10,10 @@ agreement:
 - ``_ownership_spawn_kwargs`` and ``_owns_process_group`` turn a
   ``ProcessGroupPolicy`` into the spawn keyword it implies and the fact it
   records, and are the only place either decision is made.
+- ``_event_cwd`` renders the directory an *event* reports, and
+  ``_execution_cwd`` the absolute base a *relative* executable binding is
+  anchored at; the two are kept apart because only resolution needs the
+  absolute form.
 - ``_resolve_timeout`` resolves the effective timeout from the explicit,
   per-call execution-context, and ambient scoped values, in that order.
 - ``_sh_module`` and ``_current_context`` are lazy-import shims that break the
@@ -20,12 +24,16 @@ from __future__ import annotations
 
 import os
 import typing as typ
+from pathlib import Path
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, ExecutionContext, TimeoutExpired
+    from cuprum.sh import (
+        BytesCommandResult,
+        CommandResult,
+        ExecutionContext,
+        TimeoutExpired,
+    )
 
 # Imported at runtime, not under ``TYPE_CHECKING``: the enum is the parameter
 # type of the helpers below and the value the platform guard compares against,
@@ -93,13 +101,15 @@ def _ownership_spawn_kwargs(
 class _ShModule(typ.Protocol):
     """Structural view of the ``cuprum.sh`` members reached lazily.
 
-    Only the two constructors below are accessed through :func:`_sh_module`
-    (``CommandResult`` in ``cuprum._subprocess_execution`` and
-    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``), so naming them
-    keeps the lazy-import shim typed without reintroducing the import cycle.
+    Only the constructors below are accessed through :func:`_sh_module`:
+    ``CommandResult`` and ``BytesCommandResult`` in
+    ``cuprum._subprocess_execution``, where the run's mode picks between them,
+    and ``TimeoutExpired`` in ``cuprum._subprocess_timeout``. Naming them keeps
+    the lazy-import shim typed without reintroducing the import cycle.
     """
 
     CommandResult: type[CommandResult]
+    BytesCommandResult: type[BytesCommandResult]
     TimeoutExpired: type[TimeoutExpired]
 
 
@@ -118,6 +128,67 @@ def _current_context() -> CuprumContext:
     from cuprum.context import current_context
 
     return current_context()
+
+
+def _event_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the working directory an *event* reports: the configured one.
+
+    Both observation builders record the run's directory on ``ExecEvent.cwd``
+    (and, through the adapters, as ``cuprum_cwd`` / ``cuprum.cwd``). That field
+    is a report of what the caller configured, not a resolution input, so it is
+    never anchored against the process directory. Anchoring it here would make
+    the event disagree with both the caller and the spawn — the spawn receives
+    the same directory through :func:`_cwd_arg`.
+
+    "Configured directory" means the value the caller passed, represented as a
+    :class:`~pathlib.Path` — not a verbatim copy of their string. ``Path``
+    normalizes lexical detail such as a trailing ``/`` or a ``./`` segment, so
+    this is the caller's *directory*, faithfully, rather than their spelling of
+    it; a caller comparing strings should not expect their bytes back.
+
+    Only *resolution* needs the absolute form, which is what
+    :func:`_execution_cwd` exists for. Keeping the two side by side states the
+    distinction once, where a reader comparing them will find it.
+
+    Returns
+    -------
+    Path | None
+        The caller's directory as configured, or ``None`` when they named none.
+    """
+    return None if cwd is None else Path(cwd)
+
+
+def _execution_cwd(cwd: str | Path | None) -> Path | None:
+    """Return the directory a *relative* binding may be anchored at, absolutely.
+
+    A caller may supply the working directory relative to the process's own, and
+    a relative binding is anchored at it. Composing those naively yields a
+    relative ``argv[0]``, which the child then resolves against the very
+    directory it was already anchored to — applying the same prefix a second
+    time. The child would execute one file while ``resolved_path`` named
+    another, disagreeing exactly where a caller audits which file ran.
+
+    Anchoring here makes the composed path absolute, so it is anchored once, by
+    us, and the child cannot re-anchor it. The spawn keeps its own spelling of
+    the same directory, which is what ``_cwd_arg`` already renders. ``""`` falls
+    through as any relative spelling does — ``Path("")`` is ``Path(".")`` — and
+    that answer is unobservable because ``asyncio`` refuses an empty ``cwd``
+    before a child starts; it is left as it falls rather than mapped to ``None``,
+    which would claim the caller named no directory when they named one.
+
+    Returns
+    -------
+    Path | None
+        The absolute anchoring base, or ``None`` when *cwd* is ``None``, since
+        an unspecified working directory means the process's own and both
+        consumers already apply that.
+    """
+    if cwd is None:
+        return None
+    path = Path(cwd)
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
 
 
 def _resolve_timeout(

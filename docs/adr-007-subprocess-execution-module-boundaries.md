@@ -442,6 +442,99 @@ package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
 
+## Addendum (2026-10-01): byte-exact runs share the execution seams
+
+Byte-exact runs (issue #444) are not a second execution path.
+`SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
+counterparts, reuse the existing runners and carry one extra fact —
+`capture_bytes` — from the resolved execution state through the stream
+configuration to the drains. The reusable parts of that refactor live in
+separate modules:
+
+- `cuprum/_result_assembly.py` — the rules a finished execution applies when
+  reporting its result: `_RunMeasurements`, which carries the measured fields
+  both result classes declare identically, and the `_require_bytes`/
+  `_require_text` narrowing pair that re-establishes each class's declared
+  payload type. Single-command and per-stage pipeline construction both read
+  these rules from here, so a stage and a direct run of the same command differ
+  only in what could actually be measured. `_pipeline_finalize.py` owns the
+  completed-pipeline teardown ordering for the same reason, keeping
+  `_pipeline_internals` on the spawn half of a run.
+- `cuprum/_bytes_run.py` — the decisions the two byte-exact entry points owe
+  regardless of which is called: `_validate_bytes_output` rejects the one
+  combination bytes mode does not offer (a caller-supplied line observer)
+  before anything is spawned, and the `_require_command_result`/
+  `_require_pipeline_result` helpers re-take the narrower class a text-mode
+  entry point promised. The refusal is policy, not capability: the drain serves
+  byte-exact capture and decoded-line observation at once, so a registered
+  `sh.observe()` hook stays supported.
+- `cuprum/_result_types.py` — the unions the widened internal seam speaks
+  (`_AnyCommandResult`, `_AnyPipelineResult`). It imports nothing from the
+  assembly rules because `cuprum.context` publishes hook signatures that accept
+  either result class, and the assembly rules reach back into `cuprum.context`,
+  so the unions have to be nameable without closing that cycle.
+
+The widening is deliberately confined to the internal seam. Each public
+boundary re-takes the narrower class it promised, and `_require_bytes`/
+`_require_text` raise `_ExecutionInvariantError` on a mode/type contradiction
+rather than reporting a replacement character as the child's output. No
+existing result class, and no `TimeoutExpired`, is subclassed or modified;
+`BytesCommandResult` and `BytesPipelineResult` are separate frozen types.
+
+### Observation and echo render a view, never the capture
+
+Keeping both channels open costs one rule, and the rule is not optional: in a
+byte-exact run, every decode that renders a _view_ of the child's bytes
+replaces undecodable input, so it can never end the run it observes. That is
+`OBSERVER_ERROR_POLICY` in `cuprum/_constants.py`, and it governs the byte-mode
+line observer's decoder and both byte-mode echo decoders. The rule is scoped to
+byte mode by `cuprum/_streams._StreamConfig.view_errors`: a text run's views
+decode under `ExecutionContext.errors`, in step with its capture, exactly as
+they did before byte mode existed. `ExecutionContext.errors` governs the
+capture alone in a byte run, which decodes its own untouched buffer.
+
+The scope is load-bearing rather than stylistic. Reading `config.errors` in a
+byte run's view decoder would let a hook the caller never registered decide the
+run's fate: under `errors="strict"` the observer's `UnicodeDecodeError` escapes
+the drain's read loop and kills a `run_bytes()` that had already captured the
+child's bytes, so the guarantee above — that a registered `sh.observe()` hook
+stays supported — would hold only for the default error policy. The capture
+still enforces a strict policy, because a text run that asked to reject
+undecodable bytes keeps rejecting them; the byte-exact mode simply never
+decodes its capture at all.
+
+This is the same division the mode already relies on elsewhere: a renderer's
+job is to show, and the capture's job is to report. The bounded-echo path needs
+no equivalent change because
+`cuprum/_echo_truncation._validate_bounded_echo_encoding` restricts it to
+ASCII-compatible stateless codecs, and every encode on that path carries
+ASCII-only marker text — a strict policy there has nothing to refuse.
+
+### Guard against shadowed sibling definitions
+
+Moving these seams left one hazard the refactor's own tools could not see. The
+module split landed a second copy of `_build_stream_config` in
+`cuprum/_subprocess_streams.py`, and every gate passed: by the time the
+duplicate was noticed, the only definition reachable was the later one, and the
+earlier body had been unreachable since the commit that added it.
+
+Neither linter the project runs reports it, on exactly the nouns this codebase
+uses. Ruff 0.16.4's F811 and Pylint 4.0.9's E0102 both decline to report a
+redefinition of an underscore-prefixed name, and private helpers here are
+underscore-prefixed by convention. Upstream Pyflakes _does_ report it
+(`redefinition of unused '_foo' from line 1`), so this is a deviation in the
+two linters actually installed rather than a defensible reading of the rule.
+
+`cuprum/unittests/test_no_duplicate_module_definitions.py` closes the gap by
+parsing each scanned module and reporting a name bound twice within one
+statement list. The unit of the check is the statement list rather than the
+module, which is what keeps the branch idiom out of the findings without
+special-casing it: the two arms of an `if`/`else` are separate lists, so a
+platform-specific `_probe` defined once per arm stays legal, while two
+definitions in one arm — or two methods in one class body — are reported. The
+rule is deliberately structural and said so in its own docstring, so a future
+reader can tell which redefinitions it refuses and which it permits.
+
 ## Addendum (2026-10-03): reinstate `_subprocess_drain` on a real seam
 
 The 2026-08-30 addendum read as though `_subprocess_drain.py` had been removed
@@ -449,6 +542,13 @@ for good. In fact, it records the removal of the _earlier_ module of that name
 — the withdrawn compatibility boundary, which duplicated the drain helpers
 behind a second import path. The name returns here for a different reason and a
 different seam.
+
+> **Superseded by the 2026-10-14 addendum.** The module described here never
+> reached the target branch: a concurrent change had already split the same
+> drain helpers onto `cuprum/_stream_drain.py` under its own name, and that
+> module is the one the merged tree carries. Read the 2026-10-14 addendum for
+> the layout that actually landed; the reasoning below still explains why the
+> drain does not belong to a compatibility boundary.
 
 Carrying opt-in process-group ownership through teardown pushed
 `_subprocess_wait.py` past the 400-line module ceiling. The split is by
@@ -512,3 +612,153 @@ symbolic, state-machine, async, batch, examples, and process-exit test modules
 retained for callers written before the split; new code imports from
 `cuprum._pipeline_wait_state` directly, and re-exporting through the
 orchestration module is not the preferred entry point going forward.
+
+## Addendum (2026-10-12): `Pipeline` moves to its own module
+
+The 2026-10-11 addendum closed with "`SafeCmd` and `Pipeline` remain in
+`cuprum/sh/safe_cmd.py`"; that entry was accurate when it landed and is
+historical for the `Pipeline` half. The byte-exact work split the two execution
+primitives into one module each, so `Pipeline` now lives in
+`cuprum/sh/pipeline.py`.
+
+That brings the addendum's own rule to `Pipeline`: `cuprum/sh/safe_cmd.py` holds
+`SafeCmd` and `cuprum/sh/pipeline.py` holds `Pipeline`, so each execution
+primitive owns a module rather than sharing one. Each module imports the other
+— a command composes into a pipeline through `SafeCmd.__or__`, which returns
+`Pipeline.concat`, and a pipeline is built from commands — so each defers the
+import it needs to the foot of its own file, after the class it defines exists:
+`cuprum/sh/safe_cmd.py` reaches for `Pipeline` there, and
+`cuprum/sh/pipeline.py` reaches for `SafeCmd`. The annotations are quoted
+strings, but `typing.get_type_hints` resolves them from module globals, so the
+deferred name is a genuine runtime import rather than a `TYPE_CHECKING` one.
+The 2026-10-11 addendum's `SafeCmdBuilder` half still stands.
+
+`cuprum/sh/__init__.py` continues to re-export both classes unchanged, so
+`cuprum.sh.Pipeline` is the same object as `cuprum.sh.pipeline.Pipeline` and
+importers of the facade see no difference.
+
+## Addendum (2026-10-11): split the spawn seam into `cuprum/_subprocess_spawn.py`
+
+`cuprum/_subprocess_execution.py` had grown past the repository's 400-line
+module ceiling. Rather than compress the comments that explain the timing
+invariants, the spawn step moved into its own module, taking with it the three
+names that describe it: `_SubprocessExecution`, the bundle that decides how a
+child is wired; `_spawn_subprocess`, the seam that creates it; and
+`_start_owned_process`, which spawns and announces a child for the direct run.
+
+Announcing is not owned by this module. `_start_owned_process` is the only
+place _it_ announces a child, and the direct run is its only caller. The other
+two entry points call `_spawn_subprocess` directly and emit their own `start`
+event, because each needs the process in hand before announcing it: the
+line-stream coordinator to attach its consumers, and the owned-handle start to
+attach the tasks that will drive and settle the run. That deviation is
+deliberate rather than an oversight of the split — the seam is shared, the
+announcement is not.
+
+These belong together because the spawn is what the bundle describes. A test
+that needs to refuse a spawn patches `_spawn_subprocess`, and keeping the
+bundle in the same module means such a test never has to reach across a module
+boundary to build the value it refuses to spawn with.
+
+`_subprocess_execution` re-exports `_SubprocessExecution` and the stream-wiring
+names it no longer defines, so importers keep working. It does not re-export
+`_spawn_subprocess`: `_start_owned_process` resolves that name from
+`_subprocess_spawn`'s globals, so a re-exported copy would be a name no call
+path reads. Patching it there would rebind the copy and leave the real spawn
+running — a test that still passes while exercising nothing. A test that
+refuses a spawn therefore patches the module whose globals its entry point
+resolves the name from: `cuprum._subprocess_spawn` for `SafeCmd.run()`,
+`cuprum._line_stream.coordinator` for `SafeCmd.lines()`, and
+`cuprum._process_handle.tasks` for `SafeCmd.start()`. Each binds the seam into
+its own globals, so patching the defining module reaches none of the importers,
+and one patch per entry point is the rule rather than one patch for all of them.
+
+The module boundary is by responsibility, not by call depth:
+`_subprocess_spawn` creates a child and announces it; `_subprocess_execution`
+samples the clocks, waits, and assembles the result. The one invariant the
+split must not disturb is the pre-spawn sampling order, which is why
+`_start_owned_process` still takes `started_at` as an argument instead of
+reading a clock itself — the callers keep owning _when_ their reading is taken.
+
+## Addendum (2026-10-13): `SafeCmd.start` moves to `cuprum/_process_handle/owned_start.py`
+
+The spawn-seam split above was prepared for `SafeCmd.start()`, and once the
+byte-exact work landed its siblings the `SafeCmd` module was one method away
+from the repository's 400-line ceiling. `start` moved to
+`cuprum/_process_handle/owned_start.py`, where `_OwnedStart` contributes it to
+the class by inheritance rather than by delegation, so `SafeCmd.start` is still
+an ordinary bound method and `typing.get_type_hints` still resolves its
+`-> RunningCommand` annotation — from the new module's globals, which is where
+the class that annotation names is imported.
+
+The move is by responsibility rather than by size. `start` resolves a different
+set of run inputs from `run()`: capture is forced on, because a handle exists
+so its caller can inspect the child after the fact, and an explicit deadline
+becomes the default for every `wait()` on the handle rather than a limit on the
+child's life. Keeping that resolution in `_process_handle` means the package
+that owns the handle owns the whole answer to "what does a handle start from?"
+instead of borrowing half of it from the command module.
+
+`_OwnedStart` is deliberately not a dataclass, and declares `__slots__ = ()`.
+`dataclasses.dataclass` refuses a base that already declares `__slots__`, and
+an un-slotted mixin would donate a `__dict__` to the slotted dataclass that
+inherits it, so the empty declaration is what keeps `SafeCmd` a slotted
+dataclass with the field set its callers already rely on.
+
+## Addendum (2026-10-14): the drain lands in `_stream_drain.py`
+
+Two changes drew the same boundary at the same place while neither could see
+the other, and the merged tree keeps the one whose module already existed. The
+branch proposed reinstating `cuprum/_subprocess_drain.py` (2026-10-03
+addendum); the target branch had already moved the same helpers to
+`cuprum/_stream_drain.py` under the byte-exact work (2026-10-01 addendum). Both
+splits are by responsibility and both name the same responsibility, so the
+surviving module is the pre-existing one and `cuprum/_subprocess_drain.py` does
+not exist in this tree.
+
+`cuprum/_stream_drain.py` owns the consumer-side half of ending a run —
+`_CAPTURE_EOF_GRACE_S`, `_drain_stream_consumers`, `_await_capture_eof_grace`,
+`_await_eof_grace`, `_settle_consumers`, `_cancel_pending_consumers`,
+`_decode_consumer_result`, and `_report_drain_failures`. Its three rules are
+about _finishing_ rather than reading: what an absent reader reports, how a
+capturing drain's bounded grace behaves when it expires, and how a reader
+failure is reported without replacing the error that ended the run.
+
+The 2026-10-03 addendum's own reasoning survives the rescoping. It argued the
+drain must not return to a mere compatibility boundary, and that the ceiling on
+`_subprocess_wait.py` — not a preference for a particular filename — is what
+forces the split. Both hold: the confinement is inward from `cuprum/_streams`,
+which owns the reading machinery the drain drives, and neither module
+re-exports the other's names.
+
+The wait half is what `cuprum/_subprocess_wait.py` keeps, and it kept more than
+the 2026-08-30 addendum expected. `_wait_for_exit_code`,
+`_wait_for_exit_code_within_timeout`, `_deadline_for_collection`,
+`_drain_context`, and `_reconcile_run_tasks` all define there.
+`_deadline_for_collection` and `_drain_context` are new since the 2026-08-30
+addendum and are placed beside `_reconcile_run_tasks`, its only consumer,
+because the context exists to serve that one reconciliation. The two supporting
+types live in `cuprum/_subprocess_wait_types.py`, which the 2026-08-30 addendum
+already establishes as the shared home for `_RunTaskOwnership`,
+`_DrainContext`, and `_EofGraceWaiter`.
+
+The import path is what the split changes, and it does so deliberately rather
+than by compatibility shim. `cuprum/_subprocess_wait.py` imports
+`_CAPTURE_EOF_GRACE_S`, `_await_eof_grace`, and `_drain_stream_consumers` from
+`cuprum/_stream_drain.py` and keeps them bound in its own namespace, because
+callers still import them by that path — but importing from there is supported
+while _patching_ there is not. The drain resolves each name from its own
+module's globals, so rebinding the copy in `_subprocess_wait` is invisible to
+it. A test that needs to replace the grace waiter patches
+`cuprum._stream_drain._await_eof_grace`; a test that needs to hold the drain
+open patches `_drain_stream_consumers` on whichever module its entry point
+resolves the name from, which for the streamed `run()` path is
+`cuprum._subprocess_wait`, where `_reconcile_run_tasks` calls it.
+
+The drain's log records are emitted under the historical channel name
+`cuprum._subprocess_wait`, spelled explicitly in `_stream_drain` rather than
+derived from `__name__`, so moving the code did not move the channel operators
+filter on.
+
+No public API changes, and no module in this tree needs a module-size
+suppression.

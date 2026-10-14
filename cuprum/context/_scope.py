@@ -14,14 +14,20 @@ import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
 
+from cuprum._result_types import _AnyCommandResult
+from cuprum.context._executable import _ExecutableBindingSource
 from cuprum.context._policy import _validate_timeout
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
+from cuprum.context.executable_overlay import (
+    ExecutableBindingOverlay,
+    _coerce_executable_bindings,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecHook
     from cuprum.program import Program
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import SafeCmd
 
 __all__ = [
     "AfterHook",
@@ -33,7 +39,13 @@ __all__ = [
 
 
 type BeforeHook = cabc.Callable[[SafeCmd], None]
-type AfterHook = cabc.Callable[[SafeCmd, CommandResult], None]
+# Widened to either result class when byte-exact capture was added, because a
+# binary run dispatches its after-hooks with a ``BytesCommandResult`` in place
+# of a ``CommandResult``. An existing hook keeps working unchanged: the extra
+# element only widens what a registered hook may be handed, and both classes
+# declare the same field names, so a hook that reads ``exit_code`` or
+# ``stdout`` reads it off either.
+type AfterHook = cabc.Callable[[SafeCmd, _AnyCommandResult], None]
 
 
 class ContextError(Exception):
@@ -61,7 +73,7 @@ class ForbiddenProgramError(ContextError, PermissionError):
 
 
 @dc.dataclass(frozen=True, slots=True)
-class ScopeConfig:
+class ScopeConfig(_ExecutableBindingSource):
     """Configuration object for scoped execution context updates.
 
     Attributes
@@ -88,6 +100,11 @@ class ScopeConfig:
         the active catalogue is inherited. A named catalogue replaces the
         inherited one outright; see
         :func:`~cuprum.context._policy._resolve_narrowed_catalogue`.
+    executable_bindings:
+        Optional immutable mapping from a logical program to the executable it
+        should run within the scope. When ``None``, the bindings already in
+        effect are inherited unchanged. Entries here win per program over the
+        inherited layer, and never widen the allowlist.
 
     """
 
@@ -99,9 +116,10 @@ class ScopeConfig:
     env_overlay: EnvOverlay | None = None
     env_mode: EnvMode = EnvMode.OVERLAY
     catalogue: ProgramCatalogue | None = None
+    executable_bindings: ExecutableBindingOverlay | None = None
 
     def __post_init__(self) -> None:
-        """Validate and coerce timeout after initialization."""
+        """Validate and coerce timeout and overlay layers."""
         validated = _validate_timeout(self.timeout, "ScopeConfig")
         # Use object.__setattr__ because the dataclass is frozen
         object.__setattr__(self, "timeout", validated)
@@ -109,4 +127,9 @@ class ScopeConfig:
             self,
             "env_overlay",
             _coerce_env_overlay(self.env_overlay),
+        )
+        object.__setattr__(
+            self,
+            "executable_bindings",
+            _coerce_executable_bindings(self.executable_bindings),
         )

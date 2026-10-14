@@ -25,7 +25,8 @@ import typing as typ
 from cuprum._process_exit import _await_process_exit
 
 if typ.TYPE_CHECKING:
-    from cuprum._pipeline_types import _StageObservation, _StageWaitContext
+    from cuprum._pipeline_records import _StageWaitContext
+    from cuprum._pipeline_types import _StageObservation
 
 
 @dc.dataclass(slots=True)

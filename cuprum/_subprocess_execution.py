@@ -2,42 +2,49 @@
 
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline and terminating the process — live in
-``cuprum._subprocess_wait``. What happens to the tasks a run leaves behind —
-draining the stream consumers exactly once and reconciling every task the run
-still owns — lives in ``cuprum._subprocess_drain``, whose
-``_reconcile_run_tasks`` is the single unit both halves run inside. The
-streamed run loop that invokes those helpers, and the consumer construction it
-drives, live in ``cuprum._subprocess_stream_run`` and
-``cuprum._subprocess_streams``; both are re-exported here so importers of this
-module keep working unchanged. Timing and child resource usage are measured
-here, with ``cuprum._wait4_process`` owning the direct child's ``wait4`` reap
-and the aggregate fallback; ``_DirectRunStart`` keeps the three pre-spawn
-readings together so their shared ordering cannot drift.
+run — applying the deadline, terminating the process, and draining the stream
+consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
+run loop that waits for exit and reconciles the consumer tasks lives in
+``cuprum._subprocess_stream_run``, the consumer construction those two drive
+lives in ``cuprum._subprocess_streams``, and the spawn seam itself lives in
+``cuprum._subprocess_spawn``. All three are re-exported here so importers of
+this module keep working unchanged. Timing and child resource usage are
+measured here, with ``cuprum._wait4_spawn`` owning the direct child's
+``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps the three
+pre-spawn readings together so their shared ordering cannot drift.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._subprocess_context import (
-    _cwd_arg,
-    _ownership_spawn_kwargs,
-    _sh_module,
+from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._result_assembly import (
+    _require_bytes,
+    _require_text,
+    _RunMeasurements,
 )
-from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
-from cuprum._subprocess_stream_run import _run_subprocess_with_streams
+from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_spawn import _start_owned_process, _SubprocessExecution
+from cuprum._subprocess_stream_run import (
+    # Imported, not merely re-exported: the direct run path below is the caller.
+    _run_subprocess_with_streams,
+    _run_subprocess_without_streams,
+)
 from cuprum._subprocess_streams import (
-    _build_stream_config,
-    _create_stream_callback,
-    _spawn_stream_consumers,
-    _StreamConsumerSpawnContext,
+    _build_stream_config as _build_stream_config,
+)
+from cuprum._subprocess_streams import (
+    _create_stream_callback as _create_stream_callback,
+)
+from cuprum._subprocess_streams import (
+    _spawn_stream_consumers as _spawn_stream_consumers,
+)
+from cuprum._subprocess_streams import (
+    _StreamConsumerSpawnContext as _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
@@ -46,98 +53,19 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
 )
-from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
-
-# Imported at runtime, not under ``TYPE_CHECKING``: the policies below are this
-# dataclass's own default values, so the names must resolve when the class body
-# executes.
-from cuprum.echo_events import BrokenPipePolicy
-from cuprum.sh.execution import ProcessGroupPolicy
+from cuprum._subprocess_wait import (
+    _wait_for_exit_code_within_timeout as _wait_for_exit_code_within_timeout,
+)
 
 if typ.TYPE_CHECKING:
-    from cuprum._idle_heartbeat import _IdleMonitor
+    import asyncio
+
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum._result_types import _AnyCommandResult
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
-    from cuprum.lines import _LineHookFn
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-    from cuprum.sinks.base import OutputSession
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SubprocessExecution:
-    """Execution context bundle for subprocess spawning."""
-
-    cmd: SafeCmd
-
-    ctx: ExecutionContext
-
-    capture: bool
-
-    echo_stdout: bool
-
-    echo_stderr: bool
-
-    max_echo_line_bytes: int | None
-
-    sink_session: OutputSession | None
-
-    timeout: float | None
-
-    observation: _StageObservation
-
-    stdin_data: bytes | None
-    on_line: _LineHookFn | None = None
-    # Defaulted for the tests that build this bundle directly, and resolved by
-    # ``RunOutputOptions.__post_init__`` on the production path, so the value
-    # reaching the stream config is always a member, never a raw spelling.
-    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
-    # Monotonic reference the per-line ``at`` stamps are measured from; taken
-    # once at spawn so every line of a run shares one time base.
-    started_at: float = 0.0
-    idle: _IdleMonitor | None = None
-    # Mirrors ``ExecutionContext.process_group``. Carried on the bundle so the
-    # spawn and the teardown of the same run cannot disagree about whether the
-    # child's group belongs to this run.
-    process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT
-
-    @property
-    def owns_process_group(self) -> bool:
-        """Whether this run owns the child's process group.
-
-        Derived from ``process_group`` rather than stored again, so the spawn
-        decision and every teardown decision are read from one field and
-        cannot fall out of step. False for a child that was never spawned
-        under ``OWN_GROUP``, which is also the answer for a platform where
-        that policy was rejected before any child existed.
-        """
-        return self.process_group is ProcessGroupPolicy.OWN_GROUP
-
-    @property
-    def consumes_stdout(self) -> bool:
-        """Whether the parent must consume stdout, rather than discard it.
-
-        A registered ``on_line`` observes both streams, so it keeps the pipe
-        open and the consumer running even when capture and echo are both off.
-        Without that, ``run(output=RunOutputOptions(on_line=...))`` would attach
-        stdout to ``DEVNULL`` and silently deliver nothing.
-        """
-        return (
-            self.capture
-            or self.echo_stdout
-            or self.idle is not None
-            or self.on_line is not None
-        )
-
-    @property
-    def consumes_stderr(self) -> bool:
-        """Whether the parent must consume stderr, rather than discard it."""
-        return (
-            self.capture
-            or self.echo_stderr
-            or self.idle is not None
-            or self.on_line is not None
-        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -161,7 +89,7 @@ class _DirectRunStart:
 def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
     """Take the pre-spawn readings, in the order the timing tests pin."""
     return _DirectRunStart(
-        rusage_before=_wait4_process.capture_resource_before_spawn(),
+        rusage_before=_wait4_spawn.capture_resource_before_spawn(),
         # The deadline is a remainder from this clock, so both come from it.
         monotonic_started_at=observation.monotonic_clock(),
         wall_clock_started_at=observation.wall_clock(),
@@ -177,80 +105,18 @@ class _DirectCompletion:
     three. Returning them as one record keeps the waiting and the result
     assembly in separate helpers, so neither accumulates enough locals to trip
     the repository's ``too-many-locals`` ceiling.
+
+    The two payload fields are typed ``str | bytes`` because the drain reports
+    whichever the run's mode asked for. Nothing here inspects the type: the
+    mode is read once, at the seam that chooses which result class to build,
+    so the payload reaches its field unexamined.
     """
 
     exit_code: int
     exited_at: float
-    stdout_text: str | None
-    stderr_text: str | None
+    stdout_text: _StreamPayload | None
+    stderr_text: _StreamPayload | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
-
-
-async def _spawn_subprocess(
-    execution: _SubprocessExecution,
-) -> asyncio.subprocess.Process:
-    """Spawn an async subprocess with configured I/O and environment."""
-    # ``consumes_stdout``/``consumes_stderr`` fold in the idle monitor as well as
-    # capture and echo, so a run the watchdog narrates keeps its pipes.
-    return await _wait4_process.spawn_direct_process(
-        _wait4_process.DirectProcessConfig(
-            argv=execution.cmd.argv_with_program,
-            stdout=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stdout
-                else asyncio.subprocess.DEVNULL
-            ),
-            stderr=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stderr
-                else asyncio.subprocess.DEVNULL
-            ),
-            stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
-            env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
-            cwd=_cwd_arg(execution.ctx.cwd),
-            # Raises before spawning when the platform cannot honour the
-            # policy, so the failure names the option rather than arriving as
-            # a run that quietly contained nothing.
-            **_ownership_spawn_kwargs(execution.process_group),
-        )
-    )
-
-
-async def _run_subprocess_without_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> tuple[int, float]:
-    """Run a subprocess directly, without stdout/stderr capture or echo.
-
-    The direct path spawns no stream consumers, so the only task to reconcile is
-    the stdin writer. Whatever escapes the wait — a timeout, a cancellation, or
-    an unexpected failure — it is cancelled and drained through
-    :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
-    drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation, and no writer is left running behind a failure. That cleanup
-    is shielded, so a cancellation arriving while it runs cannot abandon it. An
-    unexpected stdin-writer failure after the process exits normally propagates
-    unchanged.
-
-    Returns
-    -------
-    tuple[int, float]
-        The process exit code and the ``perf_counter`` timestamp of exit.
-    """
-    stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
-    )
-    try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
-        )
-    except BaseException:
-        await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
-        raise
-    if stdin_task is not None:
-        await stdin_task
-    return exit_code, exited_at
 
 
 def _relay_fallbacks_for_result(
@@ -282,8 +148,8 @@ async def _await_direct_completion(
 ) -> _DirectCompletion:
     """Wait for the child to settle and report how it ended as one record."""
     # The direct path captures nothing; the stream path overwrites these values.
-    stdout_text: str | None = None
-    stderr_text: str | None = None
+    stdout_text: _StreamPayload | None = None
+    stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     try:
         if execution.consumes_stdout or execution.consumes_stderr:
@@ -329,25 +195,20 @@ async def _await_direct_completion(
     )
 
 
-async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
+async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandResult:
     """Execute a subprocess and return the command result."""
-    # All three pre-spawn readings are taken here, before the spawn await, so
-    # a run's recorded duration includes the time its spawn blocked and the
-    # rusage bracket spans the child's whole life. ``started_at`` is the
-    # monotonic reference the duration and every line stamp are measured
-    # against; ``wall_clock_started_at`` is the separate wall-clock instant the
-    # result reports to callers.
+    # All three pre-spawn readings are taken here, before the spawn await, so a
+    # run's recorded duration includes the time its spawn blocked and the rusage
+    # bracket spans the child's whole life. ``started_at`` is the monotonic
+    # reference the duration and every line stamp are measured against;
+    # ``wall_clock_started_at`` is the separate wall-clock instant the result
+    # reports to callers.
     run_start = _sample_run_start(execution.observation)
     started_at = run_start.monotonic_started_at
-    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
-    # consumers read ``started_at`` off it when stamping each ``LineEvent``.
-    # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
-    # uptime rather than seconds since this command started. Stamping the
-    # bundle reads no clock, so it does not disturb the sampling order above.
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
+    started = await _start_owned_process(execution, started_at)
+    process = started.process
+    execution = started.execution
     pid = process.pid
-    execution.observation.emit("start", _EventDetails(pid=pid))
     completion = await _await_direct_completion(
         process,
         execution,
@@ -355,7 +216,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         started_at=started_at,
     )
 
-    rusage = _wait4_process.resource_usage_for(process, run_start.rusage_before)
+    rusage = _wait4_spawn.resource_usage_for(process, run_start.rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(
@@ -369,19 +230,59 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             resource_usage=rusage,
         ),
     )
-    return _sh_module().CommandResult(
+    return _build_command_result(
+        execution,
+        completion,
+        _RunMeasurements(
+            pid=pid if pid is not None else -1,
+            started_at=run_start.wall_clock_started_at,
+            duration=max(0.0, completion.exited_at - started_at),
+            rusage=rusage,
+            resolved_path=execution.observation.resolved_path,
+            relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
+        ),
+    )
+
+
+def _build_command_result(
+    execution: _SubprocessExecution,
+    completion: _DirectCompletion,
+    measurements: _RunMeasurements,
+) -> _AnyCommandResult:
+    """Assemble the run's result, choosing the class its mode calls for.
+
+    This is the only place either result class is constructed, and the only
+    place the run's mode is read on the way out. One builder rather than two
+    keeps every measurement — duration, rusage, the relay diagnostics — from
+    being computed twice under two names, which is how a binary run would come
+    to report figures that a text run of the same command did not. The two
+    constructions differ only in the class and in the narrowing of the captured
+    payloads, and both narrowing rules are read from
+    :mod:`cuprum._result_assembly` rather than restated here.
+
+    Returns
+    -------
+    CommandResult | BytesCommandResult
+        A ``BytesCommandResult`` when the run captured bytes, otherwise the
+        ordinary text result.
+    """
+    sh = _sh_module()
+    if execution.capture_bytes:
+        return sh.BytesCommandResult(
+            program=execution.cmd.program,
+            argv=execution.cmd.argv,
+            exit_code=completion.exit_code,
+            stdout=_require_bytes(completion.stdout_text, "stdout"),
+            stderr=_require_bytes(completion.stderr_text, "stderr"),
+            **measurements.as_kwargs(),
+        )
+    return sh.CommandResult(
         program=execution.cmd.program,
         argv=execution.cmd.argv,
         exit_code=completion.exit_code,
-        pid=process.pid if process.pid is not None else -1,
-        stdout=completion.stdout_text,
-        stderr=completion.stderr_text,
-        started_at=run_start.wall_clock_started_at,
-        duration=max(0.0, completion.exited_at - started_at),
-        max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
-        user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
-        system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
-        relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
+        stdout=_require_text(completion.stdout_text, "stdout"),
+        stderr=_require_text(completion.stderr_text, "stderr"),
+        **measurements.as_kwargs(),
     )
 
 
@@ -394,7 +295,12 @@ __all__ = [
     "_create_stream_callback",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
+    # Re-exported so the tests that neutralize the direct path can keep
+    # patching it where they always have.
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
-    "_spawn_subprocess",
+    # Re-exported so existing imports resolve: the deadline wait moved to
+    # ``cuprum._subprocess_wait``. It supports imports only, so a test must
+    # patch ``_subprocess_stream_run`` or ``_line_stream.coordinator``.
+    "_wait_for_exit_code_within_timeout",
 ]

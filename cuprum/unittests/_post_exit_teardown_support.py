@@ -28,7 +28,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_drain, _subprocess_stream_run, scoped
+from cuprum import ScopeConfig, _subprocess_stream_run, _subprocess_wait, scoped
 from cuprum.sh import (
     ExecutionContext,
     ProcessGroupPolicy,
@@ -48,8 +48,13 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
-    from cuprum._subprocess_drain import _DrainContext, _RunTaskOwnership
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import (
+        _DrainContext,
+        _RunTaskOwnership,
+        _StreamPayload,
+        _StreamPayloadPair,
+    )
     from cuprum.sh import SafeCmd
 
 # A run whose group was never settled does not return at all, so every wait
@@ -125,10 +130,11 @@ class TeardownWatch:
     a test defect. The originals are captured before the module attributes are
     rebound, because the wrappers have to call through to them.
 
-    The drain is bound on ``cuprum._subprocess_drain``, not on the stream-run
-    module. Nothing in the stream-run module calls ``_drain_stream_consumers``;
-    reconciliation calls it, and reconciliation resolves the name in its own
-    module's globals — so a rebound attribute on the importing module would
+    The drain is bound on ``cuprum._subprocess_wait``, not on the stream-run
+    module. The stream-run module only calls ``_reconcile_run_tasks``; that
+    reconciliation calls ``_drain_stream_consumers``, and it resolves the name
+    in its own module's globals — so rebinding the attribute on the stream-run
+    module, or on the ``_stream_drain`` module that defines the drain, would
     watch a name no production path reads, and the drain would go unrecorded
     while the test reported a boundary that was never reached.
     """
@@ -140,7 +146,7 @@ class TeardownWatch:
         self.drained = asyncio.Event()
         self._await_writer = _subprocess_stream_run._await_stdin_writer
         self._settle_group = _subprocess_stream_run._settle_owned_group_before_draining
-        self._drain = _subprocess_drain._drain_stream_consumers
+        self._drain = _subprocess_wait._drain_stream_consumers
         monkeypatch.setattr(
             _subprocess_stream_run,
             "_await_stdin_writer",
@@ -152,7 +158,7 @@ class TeardownWatch:
             self._gated_settle,
         )
         monkeypatch.setattr(
-            _subprocess_drain,
+            _subprocess_wait,
             "_drain_stream_consumers",
             self._recording_drain,
         )
@@ -173,10 +179,23 @@ class TeardownWatch:
 
     async def _recording_drain(
         self,
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        consumers: tuple[
+            asyncio.Task[_StreamPayload | None], asyncio.Task[_StreamPayload | None]
+        ],
         context: _DrainContext,
-    ) -> tuple[str | None, str | None]:
-        """Run the real drain, recording that reconciliation was reached."""
+    ) -> _StreamPayloadPair:
+        """Run the real drain, recording that reconciliation was reached.
+
+        The double mirrors the real drain's widened payload rather than
+        narrowing it. Patching it to a ``str``-only signature would let a
+        byte-exact run reach this seam and be recorded as text, so the type
+        has to admit both even though every caller here runs in text mode.
+
+        Returns
+        -------
+        _StreamPayloadPair
+            Whatever the real drain produced for these consumers.
+        """
         self.drained.set()
         return await self._drain(consumers, context)
 

@@ -33,6 +33,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent
+    from cuprum.unittests._stream_drain_support import CapturedOrNone, ConsumerTask
 
 
 class _CleanupGate:
@@ -175,29 +176,32 @@ class TestSingleCommandRun:
         at a known point — after reconciliation has begun — rather than at whatever
         moment a sleep happened to pick.
         """
-        from cuprum import _subprocess_drain
+        from cuprum import _subprocess_wait
 
         catalogue, python_program = python_catalogue()
         python = sh.make(python_program, catalogue=catalogue)
         cmd = python("-c", "import time; time.sleep(30)")
 
         gate = _CleanupGate()
-        real_drain = _subprocess_drain._drain_stream_consumers
-        observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
+        real_drain = _subprocess_wait._drain_stream_consumers
+        observed: dict[str, tuple[ConsumerTask, ...]] = {}
 
         # Keep the test double at the drain boundary, including its context
         # object, so it observes the run's actual cleanup call shape.
         async def gated_drain(
-            consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-            context: _subprocess_drain._DrainContext,
-        ) -> tuple[str | None, str | None]:
+            consumers: tuple[ConsumerTask, ConsumerTask],
+            context: _subprocess_wait._DrainContext,
+        ) -> tuple[CapturedOrNone, CapturedOrNone]:
             """Announce that the drain started, wait to be released, then drain."""
             observed["consumers"] = consumers
             gate.entered.set()
             await gate.release.wait()
             return await real_drain(consumers, context)
 
-        monkeypatch.setattr(_subprocess_drain, "_drain_stream_consumers", gated_drain)
+        # Bound on ``_subprocess_wait``, which is where the drain is *called*:
+        # ``_reconcile_run_tasks`` lives there and reads its own module global,
+        # so rebinding the name here replaces the call the run actually makes.
+        monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
         async def run_case() -> None:
             """Cancel the run once its drain is under way, then release it."""
@@ -326,11 +330,11 @@ class TestSuccessPath:
         python = sh.make(python_program, catalogue=catalogue)
         cmd = python("-c", "print('hi')")
 
-        spawned: dict[str, asyncio.Task[str | None]] = {}
+        spawned: dict[str, ConsumerTask] = {}
 
         def failing_consumers(
             *_args: object, **_kwargs: object
-        ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+        ) -> tuple[ConsumerTask, ConsumerTask]:
             """Return one consumer that fails and one that blocks indefinitely."""
 
             async def boom() -> str | None:

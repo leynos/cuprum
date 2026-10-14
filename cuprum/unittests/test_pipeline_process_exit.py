@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._pipeline_types import _StageWaitContext
+from cuprum._pipeline_records import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_exit import (
     _PROCESS_EXIT_INITIAL_POLL_INTERVAL,

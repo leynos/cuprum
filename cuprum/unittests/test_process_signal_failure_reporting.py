@@ -1,29 +1,31 @@
 """What teardown reports when a signal cannot be delivered.
 
-A teardown signal has two ways to fail to arrive, and the caller cannot tell
-them apart: both surface as the same ``False``, meaning "there was nothing left
-to do here". The distinction is not cosmetic. ``ProcessLookupError`` is the
-race both signal routes already tolerate, so passing it over silently is
-correct. A wider ``OSError`` is a target this run believes is still there and
-could not signal, and passing *that* over silently conflates two different
-outcomes — a teardown that found nothing left to do, and a teardown that
-failed. Both are reported to the caller identically, so the record is the only
-thing that separates them.
+A teardown signal has two ways to fail to arrive, and the stop helpers cannot
+tell them apart: both reach them as the same ``ProcessLookupError``. The
+distinction is not cosmetic. That error is the race both signal routes already
+tolerate, so passing it over silently is correct. A wider ``OSError`` is a
+target this run believes is still there and could not signal, and passing
+*that* over silently conflates two different outcomes — a teardown that found
+nothing left to do, and a teardown that failed. Neither is signalled by the
+stop helpers' own return, so the record is the only thing that separates them.
 
 What the record does *not* do is change any caller's arithmetic. The fail-fast
-path does count teardown outcomes, but it counts them with
-``outcome is True``, so a refusal has always contributed zero there — the same
-as absence. Reporting adds diagnosis, not a corrected tally.
+path counts teardown outcomes by ``waiter_completed``, so a refusal has always
+contributed zero there — the same as absence. Reporting adds diagnosis, not a
+corrected tally.
 
 These tests pin the reporting that separates the two. The teardown is the real
 one, driven through the same entry the identity tests use; only the kernel call
 is scripted, and it is scripted to fail for a named signal so both call sites
-of the reporting wrapper are exercised rather than only the first.
+of the reporting wrapper are exercised rather than only the first. The stop
+helpers report the delivery facts they observed and not the refusal — only the
+handle, which can read the child's own status, can weigh one against the other.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
 import os
 import signal
@@ -52,6 +54,22 @@ pytestmark = _posix_only
 # deciding module would leave them capturing nothing while still passing the
 # assertions that only require *no* record.
 _SIGNAL_LOGGER = _group_teardown.__name__
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ExpectedOutcome:
+    """The three facts a refused teardown must report for one case.
+
+    They travel together because they are one outcome, not three independent
+    expectations: which signals reached the child, whether the escalation was
+    tried, and whether any reaping wait returned. Carrying them as a record
+    keeps the parametrisation table readable and stops the case list from
+    growing an argument per fact.
+    """
+
+    delivered: bool
+    escalated: bool
+    waiter_completed: bool
 
 
 class _RefusingKernel:
@@ -124,32 +142,48 @@ def test_a_group_that_went_before_the_signal_is_passed_over_silently(
     with caplog.at_level(logging.WARNING, logger=_SIGNAL_LOGGER):
         handled = asyncio.run(_teardown(kernel.target, owns_group=True))
 
-    assert handled is False, "a target that went settles nothing"
+    assert handled.delivered is False, "a target that went settles nothing"
     assert _records(caplog) == [], (
         "the tolerated race must not be reported as a failure, or every "
         f"teardown of a fast-exiting group would be noise; got {caplog.messages}"
     )
 
 
-@pytest.mark.parametrize("refused", [signal.SIGTERM, signal.SIGKILL])
+@pytest.mark.parametrize(
+    ("refused", "expected"),
+    [
+        (signal.SIGTERM, _ExpectedOutcome(False, False, False)),
+        (signal.SIGKILL, _ExpectedOutcome(True, True, False)),
+    ],
+    ids=["the-graceful-signal", "the-escalation"],
+)
 def test_a_signal_the_kernel_refuses_is_recorded_and_reported(
     refused: signal.Signals,
+    expected: _ExpectedOutcome,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A refused signal is recorded, and still reported as nothing done.
+    """A refused signal is recorded, and the outcome still says what happened.
 
     The child ignores ``SIGTERM``, so refusing the graceful signal and refusing
     the escalation are separate reaches into the code under test: the first is
     refused before the grace period begins, the second only once the grace has
-    expired and the escalation has been considered. Both have to be recorded,
-    because the caller receives the same ``False`` either way.
+    expired and the escalation has been considered.
+
+    Both have to be recorded, and neither may be flattened onto the other. The
+    two refusals leave the child in genuinely different states and the outcome
+    carries that difference: a refused graceful signal means nothing ever
+    reached the child, while a refused escalation means the child was asked to
+    leave, ignored it, and outlived the window. This is why ``delivered`` alone
+    is not the assertion — it is ``True`` for the second refusal, and a shared
+    expectation would have to call that either a completed teardown or a
+    failed one. Reporting must not *replace* the outcome either, or a caller
+    branching on it would read a refused graceful signal as an escalated
+    ending.
 
     The record must name the signal, because the two states it distinguishes
     are very different: the first leaves a process that was never asked to
-    leave, the second leaves one that was asked and did not. The return value
-    is asserted too — reporting must not *replace* the outcome, or a caller
-    branching on it would change behaviour.
+    leave, the second leaves one that was asked and did not.
     """
     kernel = _RefusingKernel(
         refused,
@@ -161,8 +195,17 @@ def test_a_signal_the_kernel_refuses_is_recorded_and_reported(
     with caplog.at_level(logging.WARNING, logger=_SIGNAL_LOGGER):
         handled = asyncio.run(_teardown(kernel.target, owns_group=True))
 
-    assert handled is False, (
-        "a signal that could not be delivered is not a completed teardown"
+    assert handled.delivered is expected.delivered, (
+        "the graceful signal is the only one that decides whether the child "
+        f"was ever reached; got {handled!r}"
+    )
+    assert handled.escalated is expected.escalated, (
+        "only a refusal of the escalation can leave the grace window closed "
+        f"with the child still running; got {handled!r}"
+    )
+    assert handled.waiter_completed is expected.waiter_completed, (
+        "a refused signal never reaches a reaping wait on either route, so no "
+        f"wait can be reported as returned; got {handled!r}"
     )
     refused_records = [
         record
@@ -227,7 +270,7 @@ def test_a_refused_direct_signal_is_recorded_like_a_refused_group_signal(
     with caplog.at_level(logging.WARNING, logger=_SIGNAL_LOGGER):
         handled = asyncio.run(_teardown(target, owns_group=False))
 
-    assert handled is False, (
+    assert handled.delivered is False, (
         "a direct signal that could not be delivered is not a completed teardown"
     )
     assert attempted == ["terminate"], (
@@ -275,7 +318,7 @@ def test_a_teardown_whose_signals_arrive_records_nothing(
     with caplog.at_level(logging.WARNING, logger=_SIGNAL_LOGGER):
         handled = asyncio.run(_teardown(kernel.target, owns_group=True))
 
-    assert handled is True, "the child accepts the signal and the run settles"
+    assert handled.delivered is True, "the child accepts the signal and the run settles"
     assert _records(caplog) == [], (
         "a teardown whose signals arrive must record nothing at warning level; "
         f"got {caplog.messages}"

@@ -40,6 +40,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.lines import LineStreamName, _LineHookOutcome
     from cuprum.sinks.base import OutputSession
 
@@ -111,7 +112,7 @@ def _spawn_stream_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     spawn_context: _StreamConsumerSpawnContext,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
+) -> tuple[_StreamConsumerTask, _StreamConsumerTask]:
     """Spawn stdout and stderr stream consumer tasks.
 
     Each consumer drains into its collector from ``spawn_context``:
@@ -121,7 +122,7 @@ def _spawn_stream_consumers(
 
     Returns
     -------
-    tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+    tuple[_StreamConsumerTask, _StreamConsumerTask]
         The stdout and stderr consumer tasks, in that order.
     """
     pid = spawn_context.pid
@@ -169,12 +170,18 @@ def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
 ) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context.
+    """Build the stdout ``_StreamConfig`` for an execution context.
 
     When a presentation-sink session is active, mirrored stdout is routed
     through the session's log destination so it lands inside the adapter's
     framing (for example, inside the GitHub Actions group) in the order the
     adapter received it.
+
+    The mode and the broken-pipe policy are both set on the stdout config and
+    inherited by the stderr one, which this module derives with
+    ``dc.replace``: each is a property of the run rather than of a stream, so
+    one value governs both, exactly as the caller specified it on the options
+    object.
 
     Returns
     -------
@@ -188,9 +195,7 @@ def _build_stream_config(
         capture_output=execution.capture,
         echo_output=execution.echo_stdout,
         echo_max_line_bytes=execution.max_echo_line_bytes,
-        # Set on the stdout config and inherited by the stderr one, which this
-        # module derives with ``dc.replace``: one policy governs the run, as
-        # the caller specified on the options object.
+        capture_bytes=execution.capture_bytes,
         broken_pipe_policy=execution.broken_pipe_policy,
         sink=stdout_sink,
         encoding=execution.ctx.encoding,

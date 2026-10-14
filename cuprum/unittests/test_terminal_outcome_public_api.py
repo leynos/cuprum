@@ -52,8 +52,16 @@ def test_terminal_outcome_keeps_its_positional_slot() -> None:
     assert "terminal_outcome" in fields, (
         f"the settled category must remain a declared field; got {fields}"
     )
-    assert fields.index("terminal_outcome") == _TERMINAL_OUTCOME_INDEX, (
+
+    # Only ``kw_only`` fields are excluded, because only they are absent from
+    # a positional call. Measuring ``dc.fields()`` instead would count a
+    # keyword-only field declared ahead of ``terminal_outcome`` as if it had
+    # moved the slot a caller binds to, which is a false regression: the field
+    # is not in the positional sequence at all.
+    positional = [field.name for field in dc.fields(c.ExecEvent) if not field.kw_only]
+    assert positional.index("terminal_outcome") == _TERMINAL_OUTCOME_INDEX, (
         "terminal_outcome must keep the slot its positional callers bind to; "
         f"expected index {_TERMINAL_OUTCOME_INDEX}, got "
-        f"{fields.index('terminal_outcome')} of {len(fields)} fields: {fields}"
+        f"{positional.index('terminal_outcome')} of {len(positional)} positional "
+        f"fields: {positional}"
     )
