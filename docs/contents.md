@@ -98,6 +98,8 @@ open each document.
   block `make lint` on the pinned nose detector with reasoned location-keyed
   exceptions, adopting an already-benchmarked tool choice by reference rather
   than rerunning the comparison here.
+- [ADR-023: Bounded output delivery][adr-023] - accepted decision for
+  opt-in, byte-bounded output delivery on a run-owned daemon worker.
 
 ## Requests for comments
 
@@ -155,6 +157,7 @@ open each document.
 [adr-020]: adr-020-typed-argument-contract-for-sh-make.md
 [adr-021]: adr-021-process-group-ownership.md
 [adr-022]: adr-022-adopt-nose-duplication-gate.md
+[adr-023]: adr-023-bounded-output-delivery.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

@@ -14,6 +14,11 @@ The event carries only bounded values. The stream name is one of ``stdout`` or
 ``stderr`` and the error category is one closed value; a sink's type, its
 encoding, any exception text, and the subprocess payload never reach it.
 
+Opt-in bounded delivery also reports saturated queue writes, failed worker
+writes or flushes, and output abandoned after the shutdown drain grace. Those
+events use the same categorical channel and do not change capture or process
+outcomes.
+
 The two recoverable failures are not equally welcome. An unencodable payload is
 inherent to the sink's configuration and is always handled. A broken pipe may
 instead mean the caller's destination went away, so recovering from it is
@@ -60,12 +65,18 @@ class EchoErrorCategory(enum.StrEnum):
 
         assert EchoErrorCategory.UNICODE_ENCODE == "unicode_encode"
         assert EchoErrorCategory.BROKEN_PIPE == "broken_pipe"
+        assert EchoErrorCategory.DROPPED == "dropped"
+        assert EchoErrorCategory.UNDELIVERED == "undelivered"
+        assert EchoErrorCategory.DELIVERY_ERROR == "delivery_error"
 
     """
 
     UNICODE_ENCODE = "unicode_encode"
     BROKEN_PIPE = "broken_pipe"
     TRUNCATED = "truncated"
+    DROPPED = "dropped"
+    UNDELIVERED = "undelivered"
+    DELIVERY_ERROR = "delivery_error"
 
 
 class BrokenPipePolicy(enum.StrEnum):
@@ -144,7 +155,8 @@ class EchoEvent:
         The closed-set category naming why the event occurred.
     dropped_bytes:
         Child-output bytes omitted from a successfully truncated echo line,
-        otherwise ``None``.
+        otherwise ``None``. Bounded delivery also uses this field for bytes
+        dropped on queue saturation or left undelivered at shutdown.
 
     Examples
     --------
