@@ -33,7 +33,7 @@ from cuprum.unittests._stream_drain_support import (
 
 if typ.TYPE_CHECKING:
     from cuprum.unittests._stream_drain_support import (
-        CapturedOrNone,
+        CapturedDrain,
         ConsumerTask,
     )
 
@@ -203,7 +203,7 @@ def _expected_drain_outcome(
         return UnicodeDecodeError
 
 
-async def _run_drain_scenario(scenario: _DrainScenario) -> CapturedOrNone:
+async def _run_drain_scenario(scenario: _DrainScenario) -> CapturedDrain:
     """Drive a capturing drain to the scenario's EOF or cancellation boundary."""
     _payload, chunks = scenario.payload_and_chunks
     discard_event = asyncio.Event() if scenario.discard_on_cancel else None
@@ -228,7 +228,7 @@ async def _run_drain_scenario(scenario: _DrainScenario) -> CapturedOrNone:
 async def _drain_to_eof(
     chunks: tuple[bytes, ...],
     config: _StreamConfig,
-) -> CapturedOrNone:
+) -> CapturedDrain:
     """Drain chunks supplied through EOF."""
     reader = asyncio.StreamReader()
     for chunk in chunks:
@@ -249,7 +249,7 @@ async def _drain_until_cancelled(
     discard_event: asyncio.Event | None,
     *,
     cancel_before_read: bool,
-) -> CapturedOrNone:
+) -> CapturedDrain:
     """Drain chunks until cancellation reaches the blocked reader."""
     reader = _BlockingChunkedReader(chunks)
     task = asyncio.create_task(_drain(typ.cast("asyncio.StreamReader", reader), config))

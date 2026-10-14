@@ -15,7 +15,6 @@ import dataclasses as dc
 import typing as typ
 
 if typ.TYPE_CHECKING:
-    import io
     import pathlib
 
     from cuprum.capture_policy import CapturedStream
@@ -95,9 +94,11 @@ class CaptureSinkRegistry:
 class CaptureFinal:
     """One accumulator's finalized output: payload, metadata, and spill handle.
 
-    ``payload`` is typed ``object`` because it is handed straight to callers
-    that already type the drain's return as ``str | bytes | None``; narrowing
-    here would only add a cast at every site.
+    ``payload`` carries the same widened ``str | bytes`` the drain's own seam
+    produces, which is what lets :class:`cuprum._stream_drain_finish._CapturedDrain`
+    store it under its ``str | bytes | None`` annotation without a cast. An
+    ``object`` here would have read as "anything goes" and forced every reader
+    to narrow what the accumulator had already guaranteed.
 
     ``handle`` is the spill file this final is still responsible for, which is
     what makes cleanup reachable from teardown: the final travels out with the
@@ -106,7 +107,11 @@ class CaptureFinal:
     :meth:`CaptureSink.cleanup`.
     """
 
-    payload: object
+    # ``None`` is a real answer, not an absent one: a spilled capture in text
+    # mode deliberately retains nothing on the heap, so the caller reads the
+    # file at ``capture.path`` instead. Only a byte-exact spill reads the file
+    # back, because there the child's own bytes are what was asked for.
+    payload: str | bytes | None
     capture: CapturedStream
     handle: SpillHandle | None = None
 
@@ -121,7 +126,13 @@ class SpillHandle:
     """
 
     path: pathlib.Path
-    file: io.BufferedRandom
+    # ``IO[bytes]`` rather than ``BufferedRandom``: the file comes from
+    # ``NamedTemporaryFile(delete=False)``, whose typeshed type is
+    # ``_TemporaryFileWrapper[bytes]`` — a proxy that forwards to the
+    # underlying buffered file rather than being one. Typing this as the
+    # concrete class would promise a ``seek``/``truncate`` surface nothing here
+    # uses and that the wrapper does not actually declare.
+    file: typ.IO[bytes]
     keep: bool
     closed: bool = False
 

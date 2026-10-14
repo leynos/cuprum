@@ -17,7 +17,7 @@ from cuprum._subprocess_wait import _consumer_awaitable
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineStreamRun
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamPayloadPair
+    from cuprum._subprocess_wait_types import _DrainPair
 
 __all__ = ["_drain_after_exit"]
 
@@ -26,8 +26,18 @@ async def _drain_after_exit(
     run: _LineStreamRun,
     pid: int | None,
     execution: _SubprocessExecution,
-) -> _StreamPayloadPair:
-    """Await the settled consumers and drain them exactly once on failure."""
+) -> _DrainPair:
+    """Await the settled consumers and drain them exactly once on failure.
+
+    Returns
+    -------
+    _DrainPair
+        The stdout and stderr drain results, in that order. Each carries the
+        payload *and* the capture record and spill handle beside it, which is
+        what makes this pair sufficient to build a result: the caller reads
+        ``.payload`` for the text and hands the whole record on, so a spilled
+        capture's file is still reachable after the drain has been consumed.
+    """
     # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
     # lives in ``cuprum._line_stream.coordinator`` because a test patches its
     # module-level ``_drain_stream_consumers`` name, and that module imports
@@ -45,7 +55,7 @@ async def _drain_after_exit(
     # reports a list however many awaitables it was handed, so the pair is
     # unpacked by hand rather than returned as it comes back.
     try:
-        stdout_text, stderr_text = await asyncio.gather(
+        stdout_drain, stderr_drain = await asyncio.gather(
             *(_consumer_awaitable(task) for task in run.tasks.consumers)
         )
     except BaseException:
@@ -58,4 +68,4 @@ async def _drain_after_exit(
     # and the collectors they leave unsettled are read by nobody.
     for diagnostics in run.tasks.relay_diagnostics:
         diagnostics.settle()
-    return stdout_text, stderr_text
+    return stdout_drain, stderr_drain

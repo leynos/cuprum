@@ -25,14 +25,14 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum._capture_types import CaptureSink
-from cuprum._streams import _StreamConfig, _drain
+from cuprum._streams import _drain, _StreamConfig
 from cuprum.capture_policy import BoundedCapture, FullCapture
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
+    from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_finish import _CapturedDrain
-    from cuprum.capture_policy import CapturePolicy, CapturedStream
+    from cuprum.capture_policy import CapturedStream, CapturePolicy
 
 _PROPERTY_MAX_EXAMPLES = 150
 # Long enough that a bound of 1 spends most of the stream dropping, short
@@ -43,9 +43,18 @@ _PAYLOAD_MAX_BYTES = 48
 # would retain the wrong number of bytes, and an ASCII-only alphabet would let
 # that pass. The empty string is in every generated stream's reach, so the
 # zero case is covered without a separate alphabet.
-_TEXT_ALPHABET = st.sampled_from(
-    ["a", "z", " ", "\n", "é", "ß", "中", "文", "\U0001f600", "\U0001f4a9"]
-)
+_TEXT_ALPHABET = st.sampled_from([
+    "a",
+    "z",
+    " ",
+    "\n",
+    "é",
+    "ß",
+    "中",
+    "文",
+    "\U0001f600",
+    "\U0001f4a9",
+])
 _PAYLOADS = st.text(alphabet=_TEXT_ALPHABET, max_size=_PAYLOAD_MAX_BYTES)
 _BOUNDS = st.integers(min_value=1, max_value=_PAYLOAD_MAX_BYTES + 8)
 
@@ -126,7 +135,7 @@ def _retain(
 
 
 def _retained_bytes(payload: bytes, record: CapturedStream) -> bytes:
-    """The suffix of *payload* the record's counts say was retained."""
+    """Slice off the prefix the record's drop count says was discarded."""
     return payload[record.dropped_bytes :]
 
 
@@ -250,7 +259,12 @@ def test_the_drain_config_owns_the_accumulator_its_policy_names() -> None:
     assert sink is not None, "a bounded policy must build a sink"
 
     sink.absorb(b"0123456789ab")
-    final = config.capture_sink.finalize()
+    # Read through the attribute again rather than reusing ``sink``: the
+    # assertion above narrows a *local*, and the invariant under test is that
+    # the config itself keeps handing back the same accumulator.
+    reread = config.capture_sink
+    assert reread is not None, "the policy is still bounded on re-read"
+    final = reread.finalize()
 
     assert isinstance(config.capture, BoundedCapture)
     assert config.capture.max_bytes == 8
@@ -323,7 +337,7 @@ def test_the_drain_retains_through_the_policy_it_was_configured_with(
     multiple of three for two of the three cases, so the trim has real work to
     do rather than passing on a stream that happens to fit whole.
     """
-    payload = "中".encode("utf-8") * 8
+    payload = "中".encode() * 8
     result = _run_drain(payload, BoundedCapture(max_bytes=max_bytes))
 
     assert isinstance(result.payload, str), "text mode must decode to text"
@@ -426,7 +440,7 @@ def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
     that explicitly is what distinguishes "the bound held" from "the trim
     quietly grew the budget to fit a code point".
     """
-    payload = "中".encode("utf-8")
+    payload = "中".encode()
     sink = _sink(BoundedCapture(max_bytes=1))
 
     sink.absorb(payload)
@@ -444,7 +458,7 @@ def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
 
 def test_a_bound_exactly_the_stream_length_drops_nothing() -> None:
     """The bound is inclusive, so a stream its own length is not truncated."""
-    payload = "中a".encode("utf-8")
+    payload = "中a".encode()
     sink = _sink(BoundedCapture(max_bytes=len(payload)))
 
     sink.absorb(payload)

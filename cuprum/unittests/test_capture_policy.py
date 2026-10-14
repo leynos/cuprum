@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import pathlib
+import typing as typ
 
 import pytest
 from hypothesis import given, settings
@@ -12,6 +13,7 @@ from hypothesis import strategies as st
 from cuprum import (
     BoundedCapture,
     CapturedStream,
+    CapturePolicy,
     CapturePolicyKind,
     FileBackedCapture,
     FullCapture,
@@ -19,6 +21,12 @@ from cuprum import (
 )
 from cuprum._constants import DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES
 from cuprum.capture_policy import policy_kind
+
+# A stream's declared capture setting: a policy, the shorthand's boolean, or
+# ``None`` to inherit the run-wide one. Named because these cases pass values
+# of exactly this union into the field and read them back, and three separate
+# ``object`` annotations would describe neither end of that traffic.
+type DeclaredCapture = CapturePolicy | bool | None
 
 # A policy a caller may name, plus the shorthand spellings, plus ``None`` for
 # "inherit the shorthand". The inherited value is not in the strategy: it is
@@ -45,8 +53,8 @@ _POLICIES = st.one_of(
 def test_each_stream_resolves_from_its_own_field(
     *,
     capture: bool,
-    stdout: object,
-    stderr: object,
+    stdout: DeclaredCapture,
+    stderr: DeclaredCapture,
 ) -> None:
     """A per-stream field governs that stream and never the other.
 
@@ -62,7 +70,7 @@ def test_each_stream_resolves_from_its_own_field(
     )
     resolved_stdout, resolved_stderr = options.resolved_capture
 
-    def expected(declared: object) -> CapturePolicyKind | None:
+    def expected(declared: DeclaredCapture) -> CapturePolicyKind | None:
         if declared is None:
             return policy_kind(FullCapture()) if capture else None
         if isinstance(declared, bool):
@@ -98,14 +106,23 @@ def test_each_stream_resolves_from_its_own_field(
 def test_capture_resolution_matrix(
     *,
     capture: bool,
-    declared: object,
+    declared: bool | str,
     expected: str | None,
 ) -> None:
     """Every quadrant of shorthand-versus-override resolves as documented."""
-    policy: object = {
+    named: dict[str, CapturePolicy] = {
         "bounded": BoundedCapture(max_bytes=16),
         "file": FileBackedCapture(),
-    }.get(declared, declared)
+    }
+    # A case names a policy as a caller would spell one, so the name is looked
+    # up rather than passed through: the assertion is what keeps an unknown
+    # name from reaching the field as a string and being rejected there, where
+    # it would fail for a reason the case did not mean to test.
+    if isinstance(declared, str):
+        assert declared in named, f"unknown policy name {declared!r}"
+        policy: DeclaredCapture = named[declared]
+    else:
+        policy = declared
     options = RunOutputOptions(capture=capture, capture_stdout=policy)
     assert policy_kind(options.resolved_capture[0]) == expected, (
         f"capture={capture} declared={declared!r} resolved to "
@@ -124,11 +141,13 @@ def test_capture_resolution_matrix(
 )
 def test_non_policy_capture_value_is_rejected(declared: object) -> None:
     """A value that is neither a policy nor a bool fails before spawning."""
+    # Casts because these values are wrong on purpose: the point of the case is
+    # that the field rejects at runtime what its type already forbids.
     with pytest.raises(ValueError, match="capture_stdout must be a capture policy"):
-        RunOutputOptions(capture_stdout=declared)
+        RunOutputOptions(capture_stdout=typ.cast("DeclaredCapture", declared))
 
     with pytest.raises(ValueError, match="capture_stderr must be a capture policy"):
-        RunOutputOptions(capture_stderr=declared)
+        RunOutputOptions(capture_stderr=typ.cast("DeclaredCapture", declared))
 
 
 @pytest.mark.parametrize(
@@ -144,7 +163,7 @@ def test_non_policy_capture_value_is_rejected(declared: object) -> None:
 def test_bounded_capture_rejects_a_non_positive_bound(max_bytes: object) -> None:
     """A bound that retains nothing is refused, ``bool`` included."""
     with pytest.raises(ValueError, match="max_bytes must be a positive integer"):
-        BoundedCapture(max_bytes=max_bytes)
+        BoundedCapture(max_bytes=typ.cast("int", max_bytes))
 
 
 @pytest.mark.parametrize(
@@ -164,7 +183,9 @@ def test_file_backed_capture_rejects_a_non_positive_threshold(
         ValueError,
         match="spill_threshold_bytes must be a positive integer or None",
     ):
-        FileBackedCapture(spill_threshold_bytes=threshold)
+        FileBackedCapture(
+            spill_threshold_bytes=typ.cast("int | None", threshold)
+        )
 
 
 def test_file_backed_capture_defaults_to_the_package_constant() -> None:
@@ -212,7 +233,7 @@ def test_policies_are_frozen_and_hashable() -> None:
 )
 def test_captured_stream_reports_the_applied_policy(
     *,
-    policy: object,
+    policy: CapturePolicy,
     expected: CapturePolicyKind,
 ) -> None:
     """The metadata names a closed-vocabulary kind, not a class name."""

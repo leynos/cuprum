@@ -26,7 +26,7 @@ from tests.helpers.parity import (
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import PipelineResult
-    from cuprum.unittests._stream_drain_support import CapturedOrNone
+    from cuprum.unittests._stream_drain_support import CapturedDrain
 
 _GENERAL_MAX_EXAMPLES = 12
 _BOUNDARY_MAX_EXAMPLES = 1
@@ -89,7 +89,7 @@ async def _consume_at_read_size(
     *,
     read_size: int,
     lines: list[str] | None = None,
-) -> CapturedOrNone:
+) -> CapturedDrain:
     """Consume payload through a real reader using an injected read size."""
     reader = asyncio.StreamReader()
     reader.feed_data(payload)
@@ -155,8 +155,18 @@ async def _consume_bytes_at_read_size(
     payload: bytes,
     *,
     read_size: int,
-) -> bytes | None:
-    """Consume *payload* byte-exactly through a real reader and a real drain."""
+) -> CapturedDrain:
+    """Consume *payload* byte-exactly through a real reader and a real drain.
+
+    The drain, not the payload: a reader settles to a whole drain result, so a
+    helper that forwards ``_consume_stream``'s value unchanged reports that
+    result. The caller below reads ``.payload`` off it.
+
+    Returns
+    -------
+    CapturedDrain
+        The settled drain, carrying the byte-exact payload.
+    """
     reader = asyncio.StreamReader()
     reader.feed_data(payload)
     reader.feed_eof()

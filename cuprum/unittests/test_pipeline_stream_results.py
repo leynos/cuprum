@@ -26,12 +26,12 @@ from cuprum._pipeline_stream_results import (
     _surface_unexpected_pipe_failures,
 )
 from cuprum._pipeline_streams import _create_pipe_tasks
+from cuprum._stream_drain_finish import _CapturedDrain
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
 
     from cuprum.unittests._stream_drain_support import (
-        CapturedOrNone,
+        CapturedDrain,
         ConsumerTask,
     )
 
@@ -197,9 +197,20 @@ def test_a_pump_task_joins_each_adjacent_stage_pair(
     )
 
 
-async def _immediate(value: str | None) -> str | None:  # ruff: ignore[unused-async]
-    """Return ``value`` from a task without touching real I/O."""
-    return value
+async def _immediate(value: str | None) -> _CapturedDrain:  # ruff: ignore[unused-async]
+    """Settle to a drain reporting *value*, without touching real I/O.
+
+    A consumer settles to a whole drain result, so the double has to as well:
+    a task that returned a bare ``str`` would pass the flattening and gather
+    helpers a value their real callers can never produce, and the type they
+    are declared over is exactly what keeps that from happening.
+
+    Returns
+    -------
+    _CapturedDrain
+        The settled drain, carrying ``value`` as its payload.
+    """
+    return _CapturedDrain(payload=value)
 
 
 @pytest.mark.parametrize(
@@ -232,9 +243,9 @@ def test_flatten_drops_absent_tasks_and_appends_stdout_last(
         assert all(task is not None for task in flattened), (
             "absent tasks must be dropped, not carried through as None"
         )
-        assert [await task for task in flattened] == expected, (
-            f"expected {expected!r} in order, found {flattened!r}"
-        )
+        assert [drained.payload for drained in await asyncio.gather(*flattened)] == (
+            expected
+        ), f"expected {expected!r} in order, found {flattened!r}"
 
     asyncio.run(drive())
 
@@ -242,7 +253,7 @@ def test_flatten_drops_absent_tasks_and_appends_stdout_last(
 def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
     """Absent capture tasks yield ``None`` in place, preserving stage order."""
 
-    async def drive() -> tuple[CapturedOrNone, ...]:
+    async def drive() -> tuple[CapturedDrain | None, ...]:
         """Await a mix of present and absent capture tasks."""
         tasks: list[ConsumerTask | None] = [
             None,
@@ -253,12 +264,20 @@ def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
         ]
         return await _gather_optional_text_tasks(tasks)
 
-    assert asyncio.run(drive()) == (None, "first", None, "second", None)
+    assert tuple(
+        None if drained is None else drained.payload
+        for drained in asyncio.run(drive())
+    ) == (None, "first", None, "second", None)
 
 
 async def _failing(error: BaseException) -> None:  # ruff: ignore[unused-async]
     """Raise ``error`` from a task, standing in for a failed pump."""
     raise error
+
+
+async def _succeeds() -> None:  # ruff: ignore[unused-async]
+    """Complete as a pump does, standing in for one that relayed cleanly."""
+    return
 
 
 def test_collect_returns_exceptions_in_task_order() -> None:
@@ -268,11 +287,13 @@ def test_collect_returns_exceptions_in_task_order() -> None:
 
     async def drive() -> list[object]:
         """Collect a mix of successful and failing pipe tasks."""
+        # Pumps, not drain readers: ``_collect_pipe_results`` gathers the
+        # inter-stage relays, which settle to nothing, so a double that
+        # returned a drain would give this seam a value its real callers
+        # cannot produce.
         tasks: list[asyncio.Task[None]] = [
             asyncio.create_task(_failing(first)),
-            asyncio.create_task(
-                typ.cast("cabc.Coroutine[None, None, None]", _immediate(None)),
-            ),
+            asyncio.create_task(_succeeds()),
             asyncio.create_task(_failing(second)),
         ]
         return await _collect_pipe_results(tasks)

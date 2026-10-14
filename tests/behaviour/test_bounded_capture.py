@@ -21,7 +21,7 @@ from pytest_bdd import given, scenario, then, when
 
 from cuprum import ScopeConfig, scoped
 from cuprum.capture_policy import BoundedCapture, CapturedStream, FullCapture
-from cuprum.sh import PipelineResult, RunOutputOptions, SafeCmd
+from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions, SafeCmd
 from tests.helpers.catalogue import build_python_catalogue_env
 
 # The payload the producer writes, the bound applied to it, and what follows
@@ -53,12 +53,28 @@ _REPORTER_SOURCE = "import sys; sys.stdout.write(str(len(sys.stdin.read())))"
 
 
 def _run_pipeline(stages: list[str], options: RunOutputOptions) -> PipelineResult:
-    """Build and run *stages* under one catalogue scope, applying *options*."""
+    """Build and run *stages* under one catalogue scope, applying *options*.
+
+    ``SafeCmd.__or__`` returns a ``Pipeline`` while the fold starts at a single
+    ``SafeCmd``, so the local is typed at the wider union the reassignment
+    actually produces and narrowed once the fold is done. The assertion is what
+    makes the narrowing honest rather than assumed: every scenario here runs a
+    real two-stage pipeline, and a fold that had somehow left a bare command
+    would have nothing to relay between.
+
+    Returns
+    -------
+    PipelineResult
+        The completed run, holding every stage and both streams' captures.
+    """
     env = build_python_catalogue_env()
     commands: list[SafeCmd] = [env.builder("-c", source) for source in stages]
-    pipeline = commands[0]
+    pipeline: SafeCmd | Pipeline = commands[0]
     for command in commands[1:]:
         pipeline |= command
+    assert isinstance(pipeline, Pipeline), (
+        f"these scenarios run pipelines, so the fold must produce one; got {pipeline!r}"
+    )
     with scoped(ScopeConfig(allowlist=frozenset({env.program}))):
         return pipeline.run_sync(output=options)
 

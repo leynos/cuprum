@@ -15,7 +15,6 @@ transition, would still produce a file and still report ``storage`` of
 
 from __future__ import annotations
 
-import pathlib
 import typing as typ
 
 import pytest
@@ -27,6 +26,8 @@ from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import CapturePolicyKind, FileBackedCapture
 
 if typ.TYPE_CHECKING:
+    import pathlib
+
     from cuprum._capture_types import CaptureFinal
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)

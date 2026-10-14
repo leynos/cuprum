@@ -87,7 +87,7 @@ class _DecodeSettings:
         )
 
 
-def _render(retained: bytes, settings: _DecodeSettings) -> object:
+def _render(retained: bytes, settings: _DecodeSettings) -> str | bytes:
     """Render retained bytes the way the drain's own seam renders them.
 
     Replaces the drain's former ``_captured_payload`` seam, and every
@@ -96,8 +96,12 @@ def _render(retained: bytes, settings: _DecodeSettings) -> object:
 
     Returns
     -------
-    object
+    str | bytes
         The child's bytes untouched in byte mode, otherwise the decoded text.
+        This is exactly the widened payload the drain itself carries, so a
+        caller that already types its result as ``str | bytes | None`` can
+        store this without a cast; an ``object`` return would have forced one
+        at every site that reads it.
     """
     if settings.capture_bytes:
         return retained

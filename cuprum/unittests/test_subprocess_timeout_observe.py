@@ -13,6 +13,7 @@ import typing as typ
 
 import pytest
 
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
     _ConsumerPair,
@@ -24,6 +25,7 @@ from cuprum.sh import ExecutionContext
 from cuprum.unittests._stream_drain_support import (
     _BOTH_CAPTURED,
     _NONE_CAPTURED,
+    captured,
 )
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
@@ -135,19 +137,19 @@ def test_non_positive_timeout_emits_observe_event() -> None:
 def test_teardown_drain_failure_emits_observe_event() -> None:
     """A consumer drain failure emits a ``teardown_error`` observe event."""
 
-    async def failing_consumer() -> str | None:
+    async def failing_consumer() -> _CapturedDrain:
         """Block until cancelled, then fail during cleanup instead of cancelling."""
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             msg = "consumer boom"
             raise ValueError(msg) from None
-        return None
+        return _CapturedDrain()
 
     async def run_case() -> _RecordingObservation:
         """Drain a failing consumer through the shared drain."""
         consumer = asyncio.create_task(failing_consumer())
-        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        completed = asyncio.create_task(asyncio.sleep(0, result=captured("stderr")))
         observation = _RecordingObservation()
         await asyncio.sleep(0)
 
@@ -188,16 +190,17 @@ def test_teardown_drain_failure_emits_observe_event() -> None:
 def test_capture_eof_grace_expiry_emits_observe_event() -> None:
     """A wedged capturing drain emits its one bounded expiry event."""
 
-    async def never_reaches_eof() -> str | None:
+    async def never_reaches_eof() -> _CapturedDrain:
         """Block until the capture drain cancels the reader."""
         await asyncio.Event().wait()
+        return _CapturedDrain()
 
     async def expire_immediately(_consumers: _ConsumerPair) -> None:
         """Close the test grace window without elapsed wall-clock time."""
 
     async def run_case() -> _RecordingObservation:
         """Drain one parked and one completed reader through observation."""
-        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        completed = asyncio.create_task(asyncio.sleep(0, result=captured("stderr")))
         await completed
         recorder = _RecordingObservation()
         await _drain_stream_consumers(
@@ -246,8 +249,8 @@ def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
         recorder = _RecordingObservation()
         await _drain_stream_consumers(
             (
-                asyncio.create_task(asyncio.sleep(0, result="stdout")),
-                asyncio.create_task(asyncio.sleep(0, result="stderr")),
+                asyncio.create_task(asyncio.sleep(0, result=captured("stdout"))),
+                asyncio.create_task(asyncio.sleep(0, result=captured("stderr"))),
             ),
             _DrainContext(
                 captures=_BOTH_CAPTURED,
@@ -266,9 +269,10 @@ def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
 def test_non_capturing_drain_emits_no_grace_expiry_event() -> None:
     """Non-capturing cleanup skips the grace window and its telemetry."""
 
-    async def never_reaches_eof() -> str | None:
+    async def never_reaches_eof() -> _CapturedDrain:
         """Block until the non-capturing drain cancels the reader."""
         await asyncio.Event().wait()
+        return _CapturedDrain()
 
     async def run_case() -> _RecordingObservation:
         """Drain parked readers without requesting capture."""
@@ -294,9 +298,10 @@ def test_non_capturing_drain_emits_no_grace_expiry_event() -> None:
 def test_failing_grace_observer_cannot_replace_cancellation() -> None:
     """Observer failure cannot displace cancellation after a grace expiry."""
 
-    async def never_reaches_eof() -> str | None:
+    async def never_reaches_eof() -> _CapturedDrain:
         """Block until the capture drain settles the reader."""
         await asyncio.Event().wait()
+        return _CapturedDrain()
 
     async def expire_immediately(_consumers: _ConsumerPair) -> None:
         """Close the grace window before the observer requests cancellation."""

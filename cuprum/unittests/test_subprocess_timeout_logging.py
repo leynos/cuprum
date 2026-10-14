@@ -15,13 +15,14 @@ import typing as typ
 import pytest
 
 from cuprum import _timeout_reporting
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
-from cuprum.unittests._stream_drain_support import _NONE_CAPTURED
+from cuprum.unittests._stream_drain_support import _NONE_CAPTURED, captured
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
     _ExitedProcess,
@@ -140,19 +141,19 @@ def test_teardown_drain_failure_logs_diagnostic(
     ``teardown_outcome="drain_error"`` and the offending error class.
     """
 
-    async def failing_consumer() -> str | None:
+    async def failing_consumer() -> _CapturedDrain:
         """Block until cancelled, then fail during cleanup instead of cancelling."""
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             msg = "consumer boom"
             raise ValueError(msg) from None
-        return
+        return _CapturedDrain()
 
     async def run_case() -> None:
         """Drain a consumer that surfaces a non-cancellation error on teardown."""
         consumer = asyncio.create_task(failing_consumer())
-        completed = asyncio.create_task(asyncio.sleep(0, result="stderr"))
+        completed = asyncio.create_task(asyncio.sleep(0, result=captured("stderr")))
         # Let the consumer reach its await before the drain cancels it, so its
         # cancellation handler runs and surfaces a ValueError rather than a plain
         # CancelledError during the drain.

@@ -25,8 +25,6 @@ import errno
 import pathlib
 import typing as typ
 
-import pytest
-
 from cuprum._capture_decode import _DecodeSettings
 from cuprum._capture_file import _FileAccumulator
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
@@ -35,6 +33,8 @@ from cuprum.capture_policy import FileBackedCapture
 
 if typ.TYPE_CHECKING:
     import io
+
+    import pytest
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
 _PAYLOAD = b"the child's output, in full\n"
@@ -118,7 +118,7 @@ class _SpillFiles:
         self,
         *,
         delete: bool,
-        dir: str | pathlib.Path | None,  # noqa: A002 - the stdlib keyword
+        dir: str | pathlib.Path | None,  # ruff: ignore[builtin-argument-shadowing] - the stdlib keyword
     ) -> _SpillFileDouble:
         """Create one double, at a real path inside the requested directory."""
         assert delete is False, "the accumulator must ask for a surviving file"
@@ -365,7 +365,8 @@ def test_a_failed_append_stops_writing_rather_than_retrying_per_chunk(
     # One write took the prefix, one was refused; the five chunks after that
     # refusal must not have reached the file at all.
     assert files.only.writes == 2, (
-        f"a stopped append must not be retried per chunk; got {files.only.writes} writes"
+        "a stopped append must not be retried per chunk; "
+        f"got {files.only.writes} writes"
     )
     assert [event.category for event in recorder] == [
         CaptureEventCategory.SPILLED_TO_FILE,
