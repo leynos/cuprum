@@ -64,12 +64,17 @@ repository rather than re-derived here.
   high. Likelihood: certain, and already observed. Mitigation: pin the verified
   root-relative glob in `[tool.nose]`, assert the scanned file set in the
   ported tests, and record the trap in the ADR and developer guide.
-- Risk: `top = 30` silently caps the enforced surface, so a genuine clone below
-  the cutoff is never adjudicated and a stale exception is never re-observed.
-  Severity: medium. Likelihood: certain. Mitigation: choose the root scope so
-  the ranked surface is not saturated, report the cap in the gate's own output
-  and documentation, and keep stale-entry reporting while stating plainly that
-  absence from a capped report is not proof.
+- Risk: a truncating `top` bound silently caps the enforced surface, so a
+  genuine clone below the cutoff is never adjudicated and a stale exception is
+  never re-observed. Severity: medium. Likelihood: certain — and it
+  materialized. The `top = 30` bound inherited from the original adoption
+  emitted 30 of the 63 families on this branch's tree, and because the
+  stale-entry report is computed from the families a scan returned, it
+  instructed the maintainer to *delete* exceptions whose duplication was still
+  present. Mitigation: the bound is now `top = 0`, nose's unbounded spelling,
+  and `scripts/nose_schema.py` refuses a truncated report outright rather than
+  letting one be adjudicated as a whole surface, so the saturation cannot
+  recur silently. See "Rebuild on current main" below.
 - Risk: the ported tests import Python 3.14-only syntax and are collected by an
   older application interpreter. Severity: medium. Likelihood: medium.
   Mitigation: keep the tooling tests out of the default `PYTEST_TARGETS` globs
