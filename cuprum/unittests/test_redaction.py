@@ -244,3 +244,18 @@ def test_single_rules_and_iterators_have_typed_constructor_support() -> None:
     assert changed.apply_text(_SENTINEL) == "<masked>", (
         "dataclass replacement must retain constructor normalization"
     )
+
+
+@pytest.mark.parametrize(
+    "literals",
+    [("tok", "token-123"), ("token-123", "tok")],
+)
+def test_overlapping_literals_mask_the_complete_longer_value(
+    literals: tuple[str, ...],
+) -> None:
+    """A shorter configured prefix must not leave a longer secret's suffix."""
+    policy = RedactionPolicy(literals=literals)
+
+    assert policy.apply_text("token-123 tok") == "[REDACTED] [REDACTED]", (
+        "overlapping literals must be fully masked regardless of rule order"
+    )
