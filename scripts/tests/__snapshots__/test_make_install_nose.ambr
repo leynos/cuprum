@@ -1,0 +1,13 @@
+# serializer version: 1
+# name: TestMakeInstallNose.test_missing_or_mismatched_binary_invokes_the_pinned_installer
+  list([
+    '--no-confirm',
+    '--disable-strategies',
+    'compile,quick-install',
+    '--install-path',
+    '<install-path>',
+    '--git',
+    'https://github.com/corca-ai/nose',
+    'nose-cli@0.20.0',
+  ])
+# ---

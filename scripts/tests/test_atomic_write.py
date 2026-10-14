@@ -263,10 +263,6 @@ class _InterruptedStream:
     def flush(self) -> None:
         """Flush the underlying file."""
 
-    def fileno(self) -> int:
-        """Return the underlying descriptor."""
-        return self._file.fileno()
-
 
 def test_a_failed_fill_leaves_no_temporary_and_no_replacement(
     tmp_path: Path,

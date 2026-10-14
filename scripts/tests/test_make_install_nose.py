@@ -22,18 +22,69 @@ from pathlib import Path
 
 import pytest
 
+from scripts.nose_detector import load_settings
+
+if typ.TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = REPOSITORY_ROOT / "Makefile"
 
-#: The detector pin these tests assume. The scope-contract test owns
-#: pin-drift enforcement between the Makefile and ``[tool.nose]``; this value
-#: only names the version the stubs report.
-NOSE_VERSION = "0.20.0"
+#: The detector pin, read from ``[tool.nose]`` rather than restated. The
+#: scope-contract test owns pin-drift enforcement between the Makefile and the
+#: manifest; this test *is* the manifest's claim, so restating the version here
+#: would let the two disagree while both read as consistent.
+NOSE_VERSION = load_settings(REPOSITORY_ROOT / "pyproject.toml").version
 
 pytestmark = pytest.mark.skipif(
     shutil.which("make") is None,
     reason="`make` is required to exercise the installer target.",
 )
+
+#: The install directory is the test's own ``tmp_path``, so it changes every
+#: run. The scanner that polices recorded snapshots reads an absolute path as a
+#: leaked host path, and a snapshot that changed per run would be worthless
+#: anyway, so the directory is replaced with a stable placeholder.
+_INSTALL_DIRECTORY_KEY = "--install-path"
+
+
+def _redact_install_path(arguments: list[str]) -> list[str]:
+    """Replace the ``--install-path`` operand with a stable placeholder.
+
+    Each element is redacted whole, so the recorded vector keeps one entry per
+    argument. Substituting inside a joined rendering would lose the boundaries
+    that make a reordered vector fail the comparison.
+
+    Returns
+    -------
+    list[str]
+        The argv with its install directory replaced.
+    """
+    return [
+        "<install-path>"
+        if index and arguments[index - 1] == _INSTALL_DIRECTORY_KEY
+        else argument
+        for index, argument in enumerate(arguments)
+    ]
+
+
+def _next_scratch_root(tmp_path: Path) -> Path:
+    """Return an unused scratch root beneath *tmp_path*.
+
+    A test that drives more than one install needs one root per call, and the
+    caller should not have to know how many have already been made. Counting
+    the roots already present keeps the allocation inside the test's own
+    ``tmp_path``, so nothing is left behind for the next test to inherit.
+
+    Returns
+    -------
+    Path
+        A newly created directory.
+    """
+    taken = sum(1 for entry in tmp_path.iterdir() if entry.is_dir())
+    scratch = tmp_path / f"case-{taken}"
+    scratch.mkdir()
+    return scratch
 
 
 class InstallerInvocation(typ.NamedTuple):
@@ -44,6 +95,9 @@ class InstallerInvocation(typ.NamedTuple):
 
     binstall_arguments: list[str]
     """The argument vector the stub `cargo-binstall` received, if any."""
+
+    install_directory: Path
+    """The directory passed as ``NOSE_TOOLS_DIR`` for this run."""
 
 
 def _write_executable(path: Path, body: str) -> Path:
@@ -136,19 +190,24 @@ def _run_install_nose(
     make = shutil.which("make")
     assert make is not None, "Guarded by the module-level skip."
 
-    tools = tmp_path / "tools"
+    # A test that drives more than one case owns the allocation, so the second
+    # call is given its own scratch root rather than colliding on this one; a
+    # single-case test still gets the `tmp_path` it asked for, by the same rule.
+    scratch = _next_scratch_root(tmp_path)
+
+    tools = scratch / "tools"
     tools.mkdir()
-    (tmp_path / "payload").mkdir()
+    (scratch / "payload").mkdir()
     nose_bin = tools / "nose"
     if installed_version is not None:
         _stub_nose(tools, installed_version)
 
-    binstall_log = tmp_path / "binstall-arguments"
+    binstall_log = scratch / "binstall-arguments"
     # The installer stub copies this template, so a successful reinstall
     # normally leaves a detector at the pinned version.
-    detonator = _stub_nose(tmp_path / "payload", installed_after)
+    detonator = _stub_nose(scratch / "payload", installed_after)
     binstall = _stub_binstall(
-        tmp_path, binstall_log, detonator, exit_code=binstall_exit_code
+        scratch, binstall_log, detonator, exit_code=binstall_exit_code
     )
 
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed target and stubbed tools.
@@ -173,7 +232,11 @@ def _run_install_nose(
         if binstall_log.exists()
         else []
     )
-    return InstallerInvocation(result=result, binstall_arguments=arguments)
+    return InstallerInvocation(
+        result=result,
+        binstall_arguments=_redact_install_path(arguments),
+        install_directory=tools,
+    )
 
 
 class TestMakeInstallNose:
@@ -191,41 +254,34 @@ class TestMakeInstallNose:
             "A matching cached detector must not invoke the installer."
         )
 
-    @pytest.mark.parametrize(
-        ("installed_version", "case"),
-        [
-            pytest.param(None, "missing", id="missing-binary"),
-            pytest.param("0.19.0", "mismatched", id="mismatched-version"),
-        ],
-    )
     def test_missing_or_mismatched_binary_invokes_the_pinned_installer(
         self,
         tmp_path: Path,
-        installed_version: str | None,
-        case: str,
+        snapshot: SnapshotAssertion,
     ) -> None:
-        """A missing or stale detector triggers a pinned reinstall."""
-        invocation = _run_install_nose(tmp_path, installed_version=installed_version)
+        """A missing or stale detector triggers the same pinned reinstall.
 
-        assert invocation.result.returncode == 0, invocation.result.stderr
-        assert f"Installing nose {NOSE_VERSION}" in invocation.result.stdout, (
-            f"A {case} detector must trigger an install."
+        Both cases are driven into one recorded vector rather than asserted
+        field by field. The whole argv is the contract — the flags that make
+        the install non-interactive, the git source, the pinned crate, and the
+        strategy restriction all have to reach ``cargo-binstall`` together — so
+        pinning it in order catches a dropped or reordered flag that separate
+        membership checks would read past.
+        """
+        missing = _run_install_nose(tmp_path, installed_version=None)
+        stale = _run_install_nose(tmp_path, installed_version="0.19.0")
+
+        for case, invocation in (("missing", missing), ("mismatched", stale)):
+            assert invocation.result.returncode == 0, invocation.result.stderr
+            assert f"Installing nose {NOSE_VERSION}" in invocation.result.stdout, (
+                f"A {case} detector must trigger an install."
+            )
+        assert missing.binstall_arguments == snapshot, (
+            "Every install flag must reach cargo-binstall, in the documented order."
         )
-        assert "--no-confirm" in invocation.binstall_arguments, (
-            "Installation must run non-interactively."
-        )
-        assert "--git" in invocation.binstall_arguments, (
-            "The crate is not on crates.io, so the install must use git mode."
-        )
-        assert f"nose-cli@{NOSE_VERSION}" in invocation.binstall_arguments, (
-            "Installation must request the pinned detector version."
-        )
-        assert "--disable-strategies" in invocation.binstall_arguments, (
-            "The install must refuse the compile and quick-install strategies."
-        )
-        assert "compile,quick-install" in invocation.binstall_arguments, (
-            "Only the pre-built download strategies may be used; compiling the "
-            "detector from source defeats the point of the pin."
+        assert stale.binstall_arguments == missing.binstall_arguments, (
+            "A missing and a stale detector must be installed identically; only "
+            "the decision to install may differ between them."
         )
 
     def test_reinstall_leaves_a_detector_at_the_pinned_version(
@@ -238,11 +294,12 @@ class TestMakeInstallNose:
         assert ".tools/nose/nose --version" not in invocation.result.stdout, (
             "The recipe must verify through the configured NOSE_BIN."
         )
-        assert (tmp_path / "tools" / "nose").exists(), (
+        installed = invocation.install_directory / "nose"
+        assert installed.exists(), (
             "Installation must place the detector at NOSE_TOOLS_DIR."
         )
         verified = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the stub written by this test.
-            [str(tmp_path / "tools" / "nose"), "--version"],
+            [str(installed), "--version"],
             check=False,
             capture_output=True,
             text=True,

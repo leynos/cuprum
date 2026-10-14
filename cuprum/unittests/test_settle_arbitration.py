@@ -73,32 +73,40 @@ def _failing_settle(
     return settle
 
 
+def _assert_the_cancellation_survives(
+    stop: cabc.Awaitable[tuple[None, _TerminationOutcome]],
+    settle: cabc.Callable[[], cabc.Awaitable[CommandResult]],
+) -> None:
+    """Weigh *stop* against *settle* and check the cancellation is what propagates.
+
+    Whichever side carries it, the assertion is the same one, so the two
+    directions differ only in which argument was built from the cancellation.
+    Taking the pair rather than a flag keeps that difference at the call site,
+    where it reads as the case under test rather than as a branch inside here.
+    """
+
+    async def run_case() -> None:
+        """Drive the pair and check the caller sees the cancellation."""
+        with pytest.raises(asyncio.CancelledError):
+            await _settle_after_stop(stop, settle)
+
+    asyncio.run(run_case())
+
+
 class TestCancellationOutranksFailure:
     """A cancellation is a request to stop, not a failure to report."""
 
     def test_a_cancelled_stop_outranks_a_successful_settle(self) -> None:
         """The stop's cancellation reaches the caller even though settling worked."""
-
-        async def run_case() -> None:
-            """Cancel the stop and check it is what propagates."""
-            cancellation = asyncio.CancelledError()
-            with pytest.raises(asyncio.CancelledError):
-                await _settle_after_stop(_failing_stop(cancellation), _settle())
-
-        asyncio.run(run_case())
+        cancellation = asyncio.CancelledError()
+        _assert_the_cancellation_survives(_failing_stop(cancellation), _settle())
 
     def test_a_cancelled_settle_outranks_a_successful_stop(self) -> None:
         """The settle's cancellation is owed even when the stop delivered."""
-
-        async def run_case() -> None:
-            """Cancel the settle and check it is what propagates."""
-            cancellation = asyncio.CancelledError()
-            with pytest.raises(asyncio.CancelledError):
-                await _settle_after_stop(
-                    _succeeding_stop(), _failing_settle(cancellation)
-                )
-
-        asyncio.run(run_case())
+        cancellation = asyncio.CancelledError()
+        _assert_the_cancellation_survives(
+            _succeeding_stop(), _failing_settle(cancellation)
+        )
 
     def test_a_cancellation_outranks_an_ordinary_failure(self) -> None:
         """A cancelled stop is reported, not the settle error it arrived beside.

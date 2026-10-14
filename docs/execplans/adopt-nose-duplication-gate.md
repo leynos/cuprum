@@ -538,6 +538,69 @@ the polarity of the remaining condition is part of the extraction.
   about the floor. Two passes keep the application's declared support honest
   and still check the tooling, rather than excluding it from type checking
   altogether.
+- **The scope-registration base is a protocol extraction, not a manufactured
+  hierarchy.** The tolerance above prohibits building an inheritance hierarchy
+  *to satisfy the detector*. `cuprum/_scope_registration.py` is not that, and
+  the distinction is worth stating because the shape alone does not show it.
+
+  The measured premise. On `main` this family was the detector's first-ranked
+  finding at value 201.6, as recorded in "Rebuild on current main" above from
+  the scan that ran then; the figure is not re-measured here. Eight
+  independently defined classes — the seven observation handles plus
+  `_TokenRegistration` — restated the same context-manager protocol:
+  `__enter__` returning `self`, `__exit__` calling `self.detach()`, and a
+  once-only guard that makes a repeated `detach()` harmless. That the bodies
+  really were one body written eight times is re-derived here rather than taken
+  from the commit message: reading each class out of `origin/main` and
+  comparing the unparsed ASTs with docstrings stripped, **all eight**
+  `__exit__` bodies are exactly `self.detach()`, and **seven of the eight**
+  `__enter__` bodies are exactly `return self` (the eighth returns its own
+  concrete class rather than `typ.Self`). The commit message's "all eight
+  bodies byte-identical" is imprecise — the surviving variance is docstring
+  wording and that one self-type annotation — but it does not overstate the
+  premise the extraction rests on, which is that the protocol half carried no
+  per-handle information.
+
+  What varies is what the extraction keeps local. Each handle's undo differs
+  for a real reason: it restores a captured `ContextVar` token, removes its own
+  entry from a tuple by identity, or detaches a pair of nested registrations in
+  reverse order. Those are three distinct disciplines, not three spellings of
+  one, and the extracted base does not collapse them — it names them as the
+  three `_TupleRegistration` subclasses so a channel selects a discipline
+  rather than retyping one. The identity scan is further isolated in
+  `_without_identity` because matching by identity rather than equality, and
+  scanning from the end, is the half that is easy to get subtly wrong.
+
+  Why it is not the prohibited shape. The tolerance's concern is a hierarchy
+  introduced to change a *metric* — levels spanning a detector's size floor
+  that add no concept the code did not already have. Here every level names a
+  concept that already exists in the domain: `_ScopeRegistration` is the
+  protocol, `_TupleRegistration` is "a hook appended to a channel's own
+  tuple-valued `ContextVar`", and the two leaf disciplines are the two ways
+  those hooks are removed. No level is empty of meaning and none was added to
+  dilute an average; the family disappeared because eight copies of one
+  protocol became one protocol, not because the bodies were scattered.
+
+  The inheritance is also not gratuitous variation-hiding. It is not
+  polymorphic dispatch: nothing in `cuprum/` does `isinstance` or `issubclass`
+  against these types, and the one handler that does check a registration type
+  (`test_token_registration_stateful.py`) checks an unrelated
+  `ExecutableBindingRegistration`. The levels are pure code reuse, chosen
+  deliberately over a compositional alternative: a mixin or a delegating helper
+  object would still have needed each handle to declare its undo and would have
+  added an indirection layer with nothing in it. The one cost the extraction
+  does carry is honest and documented in the ADR — the base's `_release`
+  consults a `ContextVar` on each detach, so an identity-based handle pays one
+  lookup it does not need. That is a bounded, measured trade for removing eight
+  copies of a cancellation-sensitive guard, and the alternative (two bases, one
+  per discipline) would restore exactly the duplication the gate found.
+
+  The pre-existing `cuprum/context/_registration_base.py` is the corroborating
+  case rather than an accident: it already owned this protocol for the context
+  handles, and once the observation channels were extracted the two bases were
+  byte-identical. Deriving one from the other is what a review would ask for
+  independently of any detector, which is the test that separates this from a
+  metric-driven hierarchy.
 
 ## Outcomes & Retrospective
 
