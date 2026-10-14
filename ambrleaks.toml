@@ -11,4 +11,12 @@ values = [
     # projection snapshot exists to pin the exact spelling each adapter
     # publishes the executed path under, which a placeholder would erode.
     '^/opt/tools/[^/]+$',
+    # The installer snapshot pins the detector's upstream repository, which the
+    # Makefile already names twice in the clear: once in the comment above
+    # ``NOSE_VERSION`` and once as the ``--git`` argument of the ``install-nose``
+    # recipe. It is a public source URL rather than a credential, and it is
+    # deliberately not redacted: the snapshot exists to pin the exact source the
+    # installer is told to fetch, so a placeholder would erode the contract the
+    # test is there to enforce.
+    '^https://github\.com/corca-ai/nose$',
 ]
