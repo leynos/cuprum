@@ -98,6 +98,9 @@ open each document.
   block `make lint` on the pinned nose detector with reasoned location-keyed
   exceptions, adopting an already-benchmarked tool choice by reference rather
   than rerunning the comparison here.
+- [ADR-023: Opt-in telemetry redaction][adr-023] -
+  accepted decision to redact configured values at opted-in export boundaries
+  while preserving execution inputs and bounded metric labels.
 
 ## Requests for comments
 
@@ -155,6 +158,7 @@ open each document.
 [adr-020]: adr-020-typed-argument-contract-for-sh-make.md
 [adr-021]: adr-021-process-group-ownership.md
 [adr-022]: adr-022-adopt-nose-duplication-gate.md
+[adr-023]: adr-023-opt-in-telemetry-redaction.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md
