@@ -190,13 +190,11 @@ def _bounded_extra(
 
 
 def _correlation_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
-    """The bounded fields that tie one record back to the run that raised it.
-
-    Every drill-down record carries this prefix: which child, which project,
-    which execution, and which operation. Grouping them here keeps the pair of
-    per-phase builders below about their own fields, and keeps the four keys
-    from drifting apart between them.
-    """
+    """Name the bounded fields that tie one record back to its run."""
+    # Every drill-down record carries this prefix: which child, which project,
+    # which execution, and which operation. Grouping them here keeps the
+    # per-phase builders below about their own fields, and keeps the four keys
+    # from drifting apart between them.
     return (
         ("cuprum_pid", event.pid),
         ("cuprum_project", event.project),
@@ -234,7 +232,10 @@ def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
             *_correlation_fields(event),
             ("cuprum_eof_grace_s", event.eof_grace_s),
             ("cuprum_pending_readers", event.pending_readers),
-            ("cuprum_env_mode", None if event.env_mode is None else str(event.env_mode)),
+            (
+                "cuprum_env_mode",
+                None if event.env_mode is None else str(event.env_mode),
+            ),
             (
                 "cuprum_capture_mode",
                 None if event.capture_mode is None else str(event.capture_mode),

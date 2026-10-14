@@ -128,7 +128,7 @@ def _parse_broken_pipe_policy(raw: BrokenPipePolicy | str) -> BrokenPipePolicy:
     ------
     ValueError
         If ``raw`` is not a known policy value.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from parse_enum_member
     return parse_enum_member(BrokenPipePolicy, raw, field="broken_pipe_policy")
 
 

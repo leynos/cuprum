@@ -14,17 +14,14 @@ may depend on it without adding a layer to the package's import graph.
 from __future__ import annotations
 
 import enum
-import typing as typ
-
-_E = typ.TypeVar("_E", bound=enum.Enum)
 
 
-def parse_enum_member(
-    policy: type[_E],
-    raw: _E | str,
+def parse_enum_member[E: enum.Enum](
+    policy: type[E],
+    raw: E | str,
     *,
     field: str,
-) -> _E:
+) -> E:
     """Return ``raw`` as a member of ``policy``, rejecting unknown spellings.
 
     Parameters
@@ -39,7 +36,7 @@ def parse_enum_member(
 
     Returns
     -------
-    _E
+    E
         The resolved member, unchanged when ``raw`` already is one.
 
     Raises
@@ -52,9 +49,9 @@ def parse_enum_member(
     >>> import enum
     >>> class Mode(enum.Enum):
     ...     FAST = "fast"
-    >>> parse_enum_member(Mode, "fast")
+    >>> parse_enum_member(Mode, "fast", field="mode")
     <Mode.FAST: 'fast'>
-    >>> parse_enum_member(Mode, "slow")
+    >>> parse_enum_member(Mode, "slow", field="mode")
     Traceback (most recent call last):
     ...
     ValueError: invalid mode 'slow'; expected one of: fast

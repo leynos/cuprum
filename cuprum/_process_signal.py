@@ -183,6 +183,12 @@ def _members_remain_to_signal(
     The second case has a report attached; the first has nothing to report,
     because a target that is simply gone is the ordinary case rather than a
     failure of the run.
+
+    Returns
+    -------
+    bool
+        Whether the target may be signalled at all, and therefore whether the
+        caller has anything to deliver.
     """
     settled = _settlement_of(process, owns_group=owns_group, target=target)
     _report_teardown(observation, unsignalable_report(settled, process.pid))
@@ -236,6 +242,7 @@ async def _escalate_after_grace(
     owns_group: bool,
 ) -> bool:
     """Compel a target that outlived its grace period, or report it settled.
+
     Settlement is asked again here, and that second ask is the one place a
     fresh probe buys anything an earlier one cannot. The first probe did not
     veto the graceful signal; the whole grace period has passed since, which is

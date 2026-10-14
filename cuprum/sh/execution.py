@@ -91,7 +91,7 @@ def _parse_process_group_policy(
     ------
     ValueError
         If ``raw`` is not a known policy value.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from parse_enum_member
     return parse_enum_member(ProcessGroupPolicy, raw, field="process_group")
 
 

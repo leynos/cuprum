@@ -106,15 +106,13 @@ async def _reconcile_shielded(
     *,
     capture: bool,
 ) -> _StreamPayloadPair:
-    """Reconcile every task the run owns under one shield.
-
-    The shield is what makes the reconciliation a guarantee: a caller
-    cancelling now would otherwise abandon the consumers mid-drain and leak
-    them. *capture* is the caller's, because the routes disagree about what the
-    drained text is for — a capturing route hands it to the caller's
-    ``TimeoutExpired``, and a route re-raising some other error settles
-    promptly rather than spending the capture grace on text nobody will read.
-    """
+    """Reconcile every task the run owns under one shield."""
+    # The shield is what makes the reconciliation a guarantee: a caller
+    # cancelling now would otherwise abandon the consumers mid-drain and leak
+    # them. *capture* is the caller's, because the routes disagree about what
+    # the drained text is for — a capturing route hands it to the caller's
+    # ``TimeoutExpired``, and a route re-raising some other error settles
+    # promptly rather than spending the capture grace on text nobody will read.
     return await _shielded_cleanup(
         _reconcile_run_tasks(
             tasks,
