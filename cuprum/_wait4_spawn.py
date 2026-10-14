@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import subprocess  # ruff: ignore[suspicious-subprocess-import]
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated spawn seam builds the child from a validated argv.
 import typing as typ
 
 from cuprum._process_lifecycle import _terminate_all_shielded
