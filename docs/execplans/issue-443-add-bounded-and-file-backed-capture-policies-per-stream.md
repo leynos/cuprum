@@ -345,6 +345,57 @@ Thresholds that trigger escalation when breached.
   handler's arguments decide whether it survives to the caller.
   Date/Author: 2026-10-14, implementation agent.
 
+- Observation (M4, O10): the documentation harness
+  (`tests/behaviour/test_documentation_examples_behaviour.py`) executes every
+  `tested-example` Python fence in `README.md`, `docs/users-guide.md`, and
+  `docs/v0-2-0-migration-guide.md`, and requires each to contain an `assert`.
+  `docs/cuprum-design.md` and `docs/roadmap.md` are **not** scanned. Impact:
+  prose in the design document and roadmap is unreviewed by the harness, so it
+  was checked by hand, and that is where the false claim below had survived.
+
+- Observation (M4, O11): three documented claims were **wrong** and were found
+  by running the code, not by reading it. (a) The design document, the roadmap,
+  and the users' guide all stated that naming the `capture` shorthand together
+  with a per-stream policy raises `ValueError`. It does not: a stream left at
+  `None` inherits the shorthand and an explicit value wins for its own stream,
+  exactly as `echo_stdout`/`echo_stderr` already resolve from `echo` — verified
+  both ways. (b) The users' guide implied `storage_failed=True` by itself
+  distinguished a complete capture from an incomplete one. A failed *create*
+  leaves the stream in memory, complete, with `storage == "memory"` and
+  `storage_failed=True`; a failed *append* gives `storage == "file"`. It is the
+  pair that distinguishes them, and four tests in `test_capture_spill_failure`
+  pin exactly that pairing. (c) The migration guide's first example captured
+  both streams and then wrote `(record,) = result.captures`, which raises
+  `ValueError` because capturing stderr too contributes a second record. The
+  harness would have caught (c); only running the code caught (a) and (b).
+  Date/Author: 2026-10-14, implementation agent.
+
+- Observation (M4, O12): issue #443 pushed four production modules over the
+  400-line ceiling — `_streams.py` 407, `_subprocess_stream_run.py` 423,
+  `sh/output.py` 408, `_line_stream/coordinator.py` 428 — which `make lint`
+  reports as pylint C0302 (`pyproject.toml` sets `max-module-lines = 400` with
+  the comment "Match the project file-size ceiling enforced during review").
+  Impact: four splits were required. The seam for each was chosen by evidence:
+  an AST sweep for every `setattr`/`patch` call naming each module found the
+  outside-patch sites, and a seam was only taken when the moved code's callers
+  travelled with it or when the moved name is re-imported at the original site.
+  A three-module probe confirmed the premise the `_subprocess_stream_run` split
+  depends on: a name *defined* in A and *re-imported* into B is still read from
+  B's globals by B's own callers, so patching `B.name` keeps working.
+  Date/Author: 2026-10-14, implementation agent.
+
+- Observation (M4, O13): moving `_start_line_stream_run` to
+  `cuprum/_line_stream/spawn.py` **did** break a patch seam, and the break was
+  the useful signal. `test_lines_stamp_events_from_the_spawn_clock` injected the
+  spawn clock by patching `coordinator.perf_counter`. The sampling moved with
+  the function, so a re-import into `coordinator` would have left the test
+  patching a name nothing reads — it would have kept passing while testing
+  nothing. The test now patches `spawn.perf_counter`; a mutation check confirms
+  the seam is live (injecting 30.0 in place of 40.0 shifts the reported line
+  timestamp to 13.25, exactly 43.25 − 30.0), and patching the old target now
+  fails with `AttributeError` rather than passing vacuously.
+  Date/Author: 2026-10-14, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -478,6 +529,33 @@ Thresholds that trigger escalation when breached.
   programming or dispatch error is not. A sink that fails to clean up is
   reporting a broken filesystem, which the caller can act on and the metadata
   cannot express. Date/Author: 2026-10-14, implementation agent.
+
+- Decision: split the four over-cap modules at these seams —
+  `_StreamConfig` to `cuprum/_stream_config.py`, the three post-exit awaits to
+  `cuprum/_subprocess_stream_post_exit.py`, `_resolve_capture` to
+  `cuprum/sh/_capture_options.py`, and `_start_line_stream_run` to
+  `cuprum/_line_stream/spawn.py`. Rationale: each seam removes a cohesive unit
+  whose callers either travel with it or read it through a re-export, so no
+  outer patch seam moves. `_StreamConfig` is read by roughly twenty importers
+  through the `cuprum._streams` re-export; the post-exit helpers are re-imported
+  into the run module *because* their callers stayed there, which the
+  re-export probe confirmed is what keeps those patch sites live; nothing
+  imports `_resolve_capture` externally; and the starter belongs beside the
+  three builders it drives. Two alternatives were declined: moving
+  `_finalize_capture_handles` (its caller set is broader than the split needs)
+  and moving any name whose only purpose would be to make a milestone viable.
+  Date/Author: 2026-10-14, implementation agent.
+
+- Decision: `CapturePolicy` becomes a `TYPE_CHECKING`-only import in
+  `cuprum/sh/output.py` while `sinks` stays a run-time import carrying a
+  `ruff: ignore[typing-only-first-party-import]`. Rationale: the comment on
+  `sinks` says it must stay resolvable from the module's globals for
+  `typing.get_type_hints`. That invariant is *already* not satisfied —
+  `get_type_hints(RunOutputOptions)` raises `NameError: name 'LineHook' is not
+  defined`, because `LineHook` is already type-only — so extending the existing
+  pattern for `CapturePolicy` neither breaks a working contract nor newly
+  violates one. Claiming the `sinks` rule applies to `CapturePolicy` would have
+  been the error. Date/Author: 2026-10-14, implementation agent.
 
 ## Outcomes & retrospective
 
