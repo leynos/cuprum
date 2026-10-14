@@ -94,8 +94,8 @@ to extract, to achieve deterministic duplication enforcement whose exceptions
 stay reviewable in version control, accepting that the gate depends on a
 pre-1.0 platform-specific binary published through GitHub releases, that nose
 reports spans without qualified unit names so allow keys are path globs with an
-optional `::name` suffix, and that the gate adjudicates a ranked surface of 30
-families rather than every reported one.
+optional `::name` suffix, and that the gate adjudicates every reported family
+rather than a ranked prefix of them.
 
 ## Consequences
 
@@ -124,10 +124,12 @@ families rather than every reported one.
   `cuprum/unittests` excluded; `mode = "syntax,semantic,near"` so a change to
   nose's defaults cannot widen or narrow the gate silently; a floor of 24
   intermediate-language (IL) tokens; `surface = "all"` so families nose keeps
-  off its dashboard are still adjudicated; and `top = 30` ranked families. At
-  introduction the full surface above the floor was 26 families, falling to 25
-  once the first extraction landed, so `top = 30` was not yet binding — that is
-  a measurement, not a guarantee, and a future scan may saturate it.
+  off its dashboard are still adjudicated; and `top = 0`, nose's unbounded
+  spelling, so every family above the floor is adjudicated. The bound the ADR
+  was first accepted with was 30, which was not binding at introduction — the
+  full surface above the floor was 26 families, falling to 25 once the first
+  extraction landed — but saturated as `main` grew, and has since been removed
+  rather than raised; see the accepted trade-off below.
 - The semantic channel reports only exact intermediate-language equivalence,
   so the gate blocks on a narrow, witness-backed subset of semantic
   duplication. Broader Type-4 duplication remains a human review concern.
@@ -255,6 +257,29 @@ families rather than every reported one.
   duplication below it does not, and the bound must be revisited if the ranked
   surface saturates. Evidence that a family is no longer reported is not
   evidence that it is gone.
+
+  That condition was met, and the bound has been removed rather than raised.
+  The surface at the original adjudication was 26 families; measured on
+  2026-10-14 it is 72 on `main` at `8c78a5b77` and 63 over this branch's
+  adjudicated tree, so a bound of 30 would have emitted 30 of 63 and silently
+  excluded the tail. That exclusion is not benign, and the reason is structural
+  rather than a matter of how large the tail happened to be. The stale-entry
+  report is computed from the families the scan returned, and
+  `partition_findings` marks an entry stale when no returned family matches it,
+  so a family hidden below the bound leaves its reason matching nothing and the
+  gate instructs the maintainer to *delete* an exception whose duplication is
+  still present. Re-adjudicating this branch's own unbounded report at
+  `top = 30` falsely reports 24 of its 52 entries as stale — nearly half the
+  list, and each one a deletion instruction for duplication that is there.
+  `top = 0` is the unbounded spelling nose accepts — omitting the term falls
+  back to nose's default view of 30, and `top = all` and `top = -1` are both
+  rejected. The schema module now refuses a report whose `summary.shown` is
+  below `summary.families`, so any truncating bound fails the gate loudly
+  instead of being adjudicated as the whole surface. Verified on this branch:
+  `top=0` reports 63 families shown of 63; `top=30` reports 30 shown of 63 and
+  is refused. Re-measured after the extraction that removed the last blocking
+  families: 63 families, all 63 allowed by reasoned exceptions, 0 blocking, 0
+  stale.
 - A gate launched as a script path resolves its sibling modules through the
   `scripts` namespace package, which a development install of the application
   also contributes. The entry point pins its own tree to `sys.path` before

@@ -28,8 +28,14 @@ if typ.TYPE_CHECKING:
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 #: Report emitted by the stub detector: one two-member duplication family.
+#:
+#: ``summary`` is present because a real ``nose query`` always emits one, and
+#: the gate reads ``summary.families``/``summary.shown`` to refuse a truncated
+#: surface. A stub without it would exercise a report shape nose never
+#: produces.
 STUB_REPORT: dict[str, object] = {
     "schema_version": 9,
+    "summary": {"families": 1, "shown": 1},
     "families": [
         {
             "id": "stub",
@@ -179,7 +185,7 @@ def stub_settings() -> detector.NoseSettings:
         mode="syntax,semantic,near",
         min_size=24,
         surface="all",
-        top=30,
+        top=0,
         exclude=(),
     )
 

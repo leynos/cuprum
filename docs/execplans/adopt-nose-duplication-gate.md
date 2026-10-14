@@ -118,6 +118,17 @@ repository rather than re-derived here.
       [ADR-018: Typed environment policies](../../docs/adr-018-typed-environment-policies.md),
       so this branch's record was renumbered to ADR-019 across
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
+- [x] (2026-10-14) A later replay onto `main` found ADR-019 and ADR-020 both
+      taken by other records, so the duplication ADR moved once more, to
+      ADR-021, across the same four files. The ADR's own title line was corrected in the same pass:
+      the 2026-10-02 renumber had updated the filename and every reference but
+      left the heading reading "ADR 019".
+- [x] (2026-10-14) The rebuild onto `main` at `8c78a5b77` reached the same
+      collision a third time: `main` had claimed ADR-021 for its own
+      process-group record. The duplication record moved to
+      [ADR-022](../../docs/adr-022-adopt-nose-duplication-gate.md), and the
+      same four files were renumbered again. The ADR numbers of *other*
+      records are unaffected; only this branch's moving record changed.
 - [x] (2026-10-02) Widened two allow entries and added a third after the
       replay surfaced three unsuppressed families. `main`'s env-policy and
       line-event work had reshaped three `if typ.TYPE_CHECKING:` import blocks
@@ -178,6 +189,37 @@ repository rather than re-derived here.
       pull request. The `ccccaa85` evidence above describes the pre-rebase
       series and does not carry over to the rewritten commits.
 
+### Rebuild on current main (2026-10-14)
+
+The published branch had grown to 20 commits over a base (`b6bb9a99`) that
+`main` had since left far behind, and its later history was mostly widening the
+allow list each time a replay reshaped an import block. That is the failure
+mode ADR-022 warns about: the branch was buying green by enlarging the surface
+it refused to adjudicate.
+
+The branch was therefore rebuilt rather than rebased. Two commits on the
+current merge-base `014b8efc9` carry the whole change:
+
+- `56437ed9b` — the gate, its modules, its tests, its Make wiring, the ADR, and
+  the first adjudication on *current* `main`.
+- `505e81fb8` — the extraction the current scan demanded: eight registration
+  handles across the observation channels each restated the same
+  context-manager protocol, ranked first at value 201.6.
+
+The 20 published commits are not ancestors of the rebuilt pair and are not
+replayed. Their substantive content either landed on `main` independently or
+was superseded; the allow-list widenings they accumulated are deliberately
+gone. Recovery refs preserve the old head for comparison.
+
+Adjudicating on current `main` changed the numbers this plan records elsewhere:
+`main`'s own evolution moved the ranked surface from 26 to 72 families
+(measured at `8c78a5b77`), so the `top = 30` bound inherited from the original
+adoption **saturated** — it emitted 30 of 63 families on this branch's tree.
+That is the condition the ADR's trade-off section anticipates, and the bound is
+now `top = 0`, nose's unbounded spelling. `scripts/nose_schema.py` refuses a
+truncated report outright rather than letting one be adjudicated as a whole
+surface, so the saturation cannot silently recur.
+
 ### Gate remediation (2026-09-27)
 
 The first full gate run failed four checks. Each is fixed; the fixes are commits
@@ -203,7 +245,7 @@ The first full gate run failed four checks. Each is fixed; the fixes are commits
   `try` beside a `skip` in `except`). The latter is resolved with the
   `-> typ.NoReturn` helper idiom `test_duplication_gate_blocking.py` already
   documents for exactly this case.
-- **Spelling.** Two non-Oxford spellings in `docs/adr-019` were reported and
+- **Spelling.** Two non-Oxford spellings in the duplication ADR were reported and
   corrected. Four more in `pyproject.toml` allow reasons were *not* reported,
   because the spelling gate never reads a file named `pyproject.toml`. They
   were corrected anyway, as genuine ADR-009 violations that the gate has a
@@ -247,7 +289,7 @@ maps to exit 2, and `test_nose_detector.py` covers it. Verified against the
 real pinned binary: `docs` and a nonexistent root both exit 2, while
 `roots = ["cuprum"]` still returns its 26 findings.
 
-The count in this plan's own risk section and in ADR-019 moved with these two
+The count in this plan's own risk section and in ADR-022 moved with these two
 changes: the surface is 26 families covered by 24 reasoned entries, up from the
 23 entries / 25 families recorded at adjudication time. `top = 30` remains
 non-binding.
@@ -518,7 +560,7 @@ shell syntax, so actionlint's shell linting is recorded as unobserved rather
 than passing.
 
 Two deviations from the reference were made deliberately and are recorded in
-ADR-019: `MEMBERS` replaces a repeated `SECOND`, because GNU Make overwrites a
+ADR-022: `MEMBERS` replaces a repeated `SECOND`, because GNU Make overwrites a
 repeated command-line variable so a family with more than two locations could
 not otherwise be recorded; and an empty scope is now a configuration error
 rather than a silent pass. The second was a real gap, not a hypothetical one:
@@ -556,7 +598,7 @@ changes were responsible, and neither duplicated anything:
   covered the six-location family.
 
 All three families are `if typ.TYPE_CHECKING:` import windows, which the entry
-preamble and ADR-019 already establish as the one category that cannot be
+preamble and ADR-022 already establish as the one category that cannot be
 factored into a shared helper: re-importing from a common module would not
 remove the per-module binding, and a wildcard re-export would trade a
 reviewable import list for an invisible one. The two entries were therefore

@@ -29,10 +29,12 @@ from scripts.nose_schema import (
     GateExecutionError,
     Location,
     normalize_findings,
+    require_non_negative_int,
     require_positive_int,
     require_string,
     require_string_tuple,
     require_table,
+    require_untruncated_surface,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -83,8 +85,10 @@ class NoseSettings:
         ``"default"`` for nose's ranked dashboard, or ``"all"`` to include
         hidden-surface families.
     top : int | None
-        How many ranked families to adjudicate, or ``None`` for nose's own
-        view size.
+        How many ranked families to adjudicate, ``0`` for the whole surface,
+        or ``None`` for nose's own view size. Zero is the only unbounded
+        spelling: omitting the term altogether falls back to nose's default
+        view of 30, which truncates just as a small explicit bound does.
     exclude : tuple[str, ...]
         Globs excluded from the scan, matched relative to each configured
         root rather than to the repository root.
@@ -137,7 +141,7 @@ def load_settings(pyproject_path: Path) -> NoseSettings:
         top=(
             None
             if nose.get("top") is None
-            else require_positive_int(nose.get("top"), context="tool.nose.top")
+            else require_non_negative_int(nose.get("top"), context="tool.nose.top")
         ),
         exclude=require_string_tuple(
             nose.get("exclude", []), context="tool.nose.exclude"
@@ -220,6 +224,11 @@ def build_command(binary: str, settings: NoseSettings) -> list[str]:
         # The bare `all` term unhides families nose keeps off its dashboard.
         command.append("all")
     if settings.top is not None:
+        # `top=0` is nose's unbounded spelling, not an empty request: it admits
+        # every family the scan found, where omitting the term silently falls
+        # back to nose's default view of 30. `require_untruncated_surface`
+        # re-checks the result, so a bound that does truncate is refused rather
+        # than adjudicated as a whole surface.
         command.append(f"top={settings.top}")
     command.extend(("--mode", settings.mode))
     command.extend(("--min-size", str(settings.min_size)))
@@ -263,6 +272,7 @@ def run_detector(
     except json.JSONDecodeError as error:
         msg = f"nose report is not valid JSON: {error}"
         raise GateExecutionError(msg) from error
+    require_untruncated_surface(report)
     return normalize_findings(report)
 
 

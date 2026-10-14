@@ -32,6 +32,17 @@ MINIMUM_SIZE_FLOOR = 24
 #: The surface name that admits every family, hidden ones included.
 WIDENED_SURFACE = "all"
 
+#: nose's unbounded ranking, spelled as an explicit bound of zero.
+#:
+#: This is the only setting under which the stale-entry report is trustworthy.
+#: `partition_findings` marks an entry stale when no returned family matches it,
+#: and the returned families are the ranked ones the bound admits, so any
+#: positive bound hides the tail of the ranking and reports the entries
+#: covering that tail as removable. Measured on this tree, a bound of 30
+#: falsely reports 24 of the 52 entries as stale. A contract that required a
+#: positive bound would therefore require the failure mode.
+UNBOUNDED_TOP = 0
+
 
 def _nose_table() -> dict[str, object]:
     """Return the raw ``[tool.nose]`` table from the repository manifest.
@@ -176,8 +187,8 @@ def test_mode_selects_every_known_channel() -> None:
     )
 
 
-def test_size_floor_and_ranking_bound_are_positive() -> None:
-    """The size floor is at least the minimum, and the ranking bound is positive."""
+def test_size_floor_and_ranking_bound_adjudicate_the_whole_surface() -> None:
+    """The size floor is at least the minimum, and the ranking is unbounded."""
     table = _nose_table()
     min_size = table.get("min-size")
     top = table.get("top")
@@ -185,9 +196,10 @@ def test_size_floor_and_ranking_bound_are_positive() -> None:
     assert min_size >= MINIMUM_SIZE_FLOOR, (
         f"tool.nose.min-size must be at least {MINIMUM_SIZE_FLOOR}."
     )
-    assert isinstance(top, int), "tool.nose.top must be an integer."
-    assert top > 0, (
-        "tool.nose.top must be a positive integer bounding the adjudicated view."
+    assert top == UNBOUNDED_TOP, (
+        f"tool.nose.top must be {UNBOUNDED_TOP} to adjudicate the whole "
+        f"surface; any positive bound hides the tail of the ranking and "
+        f"reports its allow entries as stale. Found {top!r}."
     )
 
 

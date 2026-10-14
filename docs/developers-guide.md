@@ -5500,10 +5500,17 @@ empty scope alone: a root that does contain sources still returns its findings.
 with `cuprum/unittests` excluded, `mode = "syntax,semantic,near"` so a change
 to nose's defaults cannot widen or narrow the gate silently, a floor of 24
 intermediate-language tokens, `surface = "all"` so families nose hides behind
-its dashboard ranking are still adjudicated, and `top = 30` ranked families. At
-introduction the full surface above the floor was 26 families, falling to 25
-once the first extraction landed, so `top = 30` was not binding; that is a
-measurement, not a guarantee. The count moves in both directions: a refactor
+its dashboard ranking are still adjudicated, and `top = 0`, nose's unbounded
+spelling, so every family above the floor is adjudicated. The gate was first
+accepted with `top = 30`, which was not binding at introduction — the full
+surface above the floor was 26 families, falling to 25 once the first
+extraction landed — but that is a measurement, not a guarantee, and it
+saturated as the package grew. The bound has since been removed rather than
+raised, because a positive bound does not merely narrow the view: the
+stale-entry report is computed from the families the scan returned, so any
+family hidden below the bound makes its allow entry look stale and the gate
+instructs the maintainer to delete a reasoned exception whose duplication is
+still present. The count moves in both directions: a refactor
 can pair up two windows that were previously distinct without duplicating
 anything on purpose, and it can equally drop a pair below the floor. The
 semantic channel reports only exact intermediate-language equivalence, so the
