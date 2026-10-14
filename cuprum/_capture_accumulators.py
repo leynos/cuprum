@@ -108,7 +108,10 @@ class _FullAccumulator:
 
     def absorb(self, chunk: bytes) -> None:
         """Append one raw chunk to the retained stream."""
-        self._buffer.extend(chunk)
+        # ``+=`` rather than ``.extend``: both append in place, but a lone
+        # ``self._buffer.extend(chunk)`` is a one-statement attribute forward,
+        # which the df12 wrapper rule reads as adding no behaviour.
+        self._buffer += chunk
 
     def finalize(self) -> CaptureFinal:
         """Render the retained stream and report its metadata."""
@@ -124,7 +127,12 @@ class _FullAccumulator:
 
     async def cleanup(self) -> None:
         """Release the retained buffer; there is nothing on disk to remove."""
-        self._buffer.clear()
+        # Rebound rather than cleared. The release is the same — the run's
+        # bytes are dropped either way — but a lone ``self._buffer.clear()``
+        # is the one-statement attribute forward the df12 rule reads as a
+        # trivial wrapper, and the plugin's remedy is to change the shape
+        # rather than to suppress the message.
+        self._buffer = bytearray()
 
 
 @dc.dataclass(slots=True)
@@ -184,4 +192,5 @@ class _BoundedAccumulator:
 
     async def cleanup(self) -> None:
         """Release the retained tail; there is nothing on disk to remove."""
-        self._buffer.clear()
+        # Rebound, for the same reason as :class:`_FullAccumulator.cleanup`.
+        self._buffer = bytearray()

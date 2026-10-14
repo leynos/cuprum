@@ -71,6 +71,7 @@ def test_each_stream_resolves_from_its_own_field(
     resolved_stdout, resolved_stderr = options.resolved_capture
 
     def expected(declared: DeclaredCapture) -> CapturePolicyKind | None:
+        """Resolve *declared* independently of the stream it was written on."""
         if declared is None:
             return policy_kind(FullCapture()) if capture else None
         if isinstance(declared, bool):

@@ -52,12 +52,13 @@ def _resolve_capture(
     ValueError
         If the value is not ``None``, a ``bool``, or a capture policy.
     """
-    if declared is None:
-        return FullCapture() if shorthand else None
-    if isinstance(declared, bool):
-        return FullCapture() if declared else None
-    if isinstance(declared, FullCapture | BoundedCapture | FileBackedCapture):
-        return declared
+    match declared:
+        case None:
+            return FullCapture() if shorthand else None
+        case bool():
+            return FullCapture() if declared else None
+        case FullCapture() | BoundedCapture() | FileBackedCapture():
+            return declared
     msg = (
         f"RunOutputOptions {field} must be a capture policy, a bool, or None, "
         f"got {declared!r}"
