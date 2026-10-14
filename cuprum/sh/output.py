@@ -1,30 +1,30 @@
 """Captured/echoed output configuration for ``cuprum.sh`` runs.
 
-``RunOutputOptions`` (and its deprecated ``IOOptions`` alias) configure how a
-command or pipeline's stdout and stderr are captured, mirrored, and
-optionally reframed through a presentation sink. This module also hosts the
-deprecated flat ``capture``/``echo`` keyword resolution used by
-``Pipeline.run``/``run_sync``. The ``cuprum.sh`` package re-exports the
-public names.
+``RunOutputOptions`` configures how a command or pipeline's stdout and stderr
+are captured, mirrored, and optionally reframed through a presentation sink.
+The ``cuprum.sh`` package re-exports the public name, and the deprecated
+spellings that still resolve to it live in :mod:`cuprum.sh._deprecated`.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-import warnings
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh._convenience_sink import (
+    _validate_convenience_flags,
+    synthesize_sink,
+)
 
-# ``GitHubActionsSink`` comes from the same package surface rather than its
-# ``github_actions`` submodule: the package publishes it in ``__all__``, and the
-# convenience flags synthesize it as part of this class's documented contract.
-from cuprum.sinks import GitHubActionsSink
-
-# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
-from cuprum.sinks import base as sinks
+# ``RunOutputOptions.sink`` is public and its annotation names ``sinks``, so
+# ``typing.get_type_hints`` must resolve ``sinks`` from this module's globals —
+# a type-checking block would break that. Ruff reads an annotation-only use as
+# type-only and suggests moving it; the run-time sink construction that used to
+# keep this import visibly run-time now lives in ``cuprum.sh._convenience_sink``.
+from cuprum.sinks import base as sinks  # ruff: ignore[typing-only-first-party-import]
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -32,37 +32,8 @@ if typ.TYPE_CHECKING:
     from cuprum.lines import LineHook
 
 __all__ = [
-    "IOOptions",
     "RunOutputOptions",
 ]
-
-
-def _validate_convenience_flags(options: RunOutputOptions) -> None:
-    """Reject non-``bool`` values for the convenience opt-in flags.
-
-    Both flags gate whether workflow commands are written, so a value that
-    merely coerces to a truthy bool — the integer ``1``, say — would frame a
-    run on the strength of something the caller never documented as a flag.
-    ``max_echo_line_bytes`` draws the same line for the same reason.
-
-    Parameters
-    ----------
-    options : RunOutputOptions
-        The options whose ``group`` and ``annotate_failure`` are checked.
-
-    Raises
-    ------
-    ValueError
-        If either flag is not a ``bool``.
-    """
-    for name, value in (
-        ("group", options.group),
-        ("annotate_failure", options.annotate_failure),
-    ):
-        if not isinstance(value, bool):
-            msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
-            # Issue #375 expressly specifies ValueError for these flags.
-            raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -246,7 +217,7 @@ class RunOutputOptions:
             _parse_broken_pipe_policy(self.broken_pipe_policy),
         )
         _validate_convenience_flags(self)
-        self._synthesize_sink_from_flags()
+        synthesize_sink(self)
 
         if self.max_echo_line_bytes is None:
             return
@@ -258,39 +229,6 @@ class RunOutputOptions:
                 f"integer or None, got {bound!r}"
             )
             raise ValueError(msg)
-
-    def _synthesize_sink_from_flags(self) -> None:
-        """Materialize the convenience flags as this run's presentation sink.
-
-        Both flags are spelled as a configuration of the existing
-        :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
-        code, which is what keeps workflow-command syntax inside the adapter.
-        The synthesized sink carries no ``force``, so it stays subject to the
-        adapter's own ``GITHUB_ACTIONS`` gate. Private identity metadata tracks
-        the adapter created by this options object so
-        :func:`dataclasses.replace` can resynthesize it when flags change.
-        An adapter supplied to a new options object remains explicit regardless
-        of its concrete type.
-        """
-        is_synthesized_sink = self.sink is self._synthesized_sink
-        if self.sink is not None and not is_synthesized_sink:
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        if not (self.group or self.annotate_failure):
-            if is_synthesized_sink:
-                object.__setattr__(self, "sink", None)
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        synthesized_sink = GitHubActionsSink(
-            emit_group=self.group,
-            emit_annotation=self.annotate_failure,
-        )
-        object.__setattr__(
-            self,
-            "sink",
-            synthesized_sink,
-        )
-        object.__setattr__(self, "_synthesized_sink", synthesized_sink)
 
     @property
     def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
@@ -320,60 +258,3 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class IOOptions(RunOutputOptions):
-    """Deprecated alias for command output stream options."""
-
-    def __post_init__(self) -> None:
-        """Resolve the inherited options, then warn about the deprecated alias."""
-        # Zero-arg ``super()`` breaks under ``slots=True``: the decorator
-        # rebuilds the class, so the method's ``__class__`` cell refers to the
-        # pre-rebuild class and the instance fails the ``super`` type check.
-        RunOutputOptions.__post_init__(self)
-        warnings.warn(
-            "IOOptions is deprecated; use RunOutputOptions instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-
-class _DeprecatedOutputFlags(typ.TypedDict, total=False):
-    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
-
-    capture: bool
-    echo: bool
-
-
-def _resolve_pipeline_output(
-    output: RunOutputOptions | None,
-    flags: _DeprecatedOutputFlags,
-) -> RunOutputOptions:
-    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
-    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
-    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
-    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
-    # here to preserve the strict keyword surface.
-    unknown = set(flags) - {"capture", "echo"}
-    if unknown:
-        joined = ", ".join(sorted(unknown))
-        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
-        raise TypeError(msg)
-    if not flags:
-        return output or RunOutputOptions()
-    if output is not None:
-        # Reject combining the deprecated flat flags with ``output``: the
-        # caller's intent would otherwise be ambiguous.
-        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
-        raise ValueError(msg)
-    warnings.warn(
-        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
-        "deprecated; pass output=RunOutputOptions(...) instead",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    return RunOutputOptions(
-        capture=flags.get("capture", True),
-        echo=flags.get("echo", False),
-    )

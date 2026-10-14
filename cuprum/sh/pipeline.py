@@ -31,12 +31,9 @@ from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
+from cuprum.sh._deprecated import _DeprecatedOutputFlags, _resolve_pipeline_output
 from cuprum.sh.execution import ExecutionContext
-from cuprum.sh.output import (
-    RunOutputOptions,
-    _DeprecatedOutputFlags,
-    _resolve_pipeline_output,
-)
+from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import BytesPipelineResult, PipelineResult
 
 __all__ = ["Pipeline"]
