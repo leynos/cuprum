@@ -4919,17 +4919,17 @@ both Markdown structure and en-GB-oxendict spelling.
 
 ### GitHub Actions workflow linting
 
-`make lint` finishes by running
-`yamllint --strict --config-file .yamllint.yml .github/workflows .github/actions`,
-followed by `actionlint -config-file .github/actionlint.yaml -shellcheck=`.
-Yamllint enforces the YAML policy; actionlint enforces GitHub Actions
-semantics: expression syntax and context, including `${{ }}` interpolations
-inside `run:` steps, plus the workflow schema and `uses:` references. It does
-not check the shell syntax of `run:` bodies, because `-shellcheck=` disables
-that integration (see below). The yamllint invocation covers the composite
-actions under `.github/actions` as well as the workflows, because a shared step
-obeys the same YAML policy and a style or structural error there would
-otherwise pass the gate silently.
+`make lint` finishes by running `yamllint --strict --config-file .yamllint.yml`
+over `.github/workflows` and `.github/actions`, followed by
+`actionlint -config-file .github/actionlint.yaml -shellcheck=`. Yamllint
+enforces the YAML policy; actionlint enforces GitHub Actions semantics:
+expression syntax and context, including `${{ }}` interpolations inside `run:`
+steps, plus the workflow schema and `uses:` references. It does not check the
+shell syntax of `run:` bodies, because `-shellcheck=` disables that integration
+(see below). The yamllint invocation covers the composite actions under
+`.github/actions` as well as the workflows, because a shared step obeys the
+same YAML policy and a style or structural error there would otherwise pass the
+gate silently.
 
 The actionlint command reads `.github/actionlint.yaml` from the repository
 root. It stays pointed at `.github/workflows` alone: actionlint parses every
@@ -4939,14 +4939,24 @@ linted file to start with `---`, permits GitHub's unquoted `on` trigger key,
 and requires quoted `'true'` and `'false'` values.
 
 `-shellcheck=` disables actionlint's shellcheck integration, so no shellcheck
-binary is needed and the gate matches `lint-test`, which installs none. Version
-1.7.12 writes each `run:` body to its shellcheck child's standard input before
-starting that child, so a body larger than the kernel pipe buffer (about 64 KiB;
-`ci.yml`'s benchmark step already exceeds 9 KiB) races a deadlock once the
-pipe fills. A clean checkout of `main` can hang the same way, and upstream
-tracks the defect as
-[rhysd/actionlint#702](https://github.com/rhysd/actionlint/issues/702), [#704](https://github.com/rhysd/actionlint/issues/704),
-and [#712](https://github.com/rhysd/actionlint/issues/712). Drop the flag only
+binary is needed and the gate matches `lint-test`, which installs none. This is
+load-bearing rather than cosmetic. actionlint 1.7.12 writes each `run:` body to
+its shellcheck child's standard input *before* starting that child, so the
+write completes only if the body fits the pipe buffer at that moment. 64 KiB is
+the usual Linux capacity, not a fixed one: once a user's combined pipe
+allocation crosses `fs.pipe-user-pages-soft` (16384 pages by default, shared
+across all of that user's pipes, which is routine on a busy host), newly
+created pipes are allocated far smaller. The upstream report measured 8192
+bytes and saw an 8419-byte script deadlock against it.
+
+This gate is not immune. Its largest `run:` body is `ci.yml`'s benchmark step
+at 9287 bytes: far below 64 KiB, but larger than the 8192-byte capacity the
+upstream report measured, so a shrunk pipe cannot hold it. A clean checkout of
+`main` can hang the same way, and the hung process has been reported to ignore
+`SIGTERM`, so a stuck gate may need `SIGKILL`. Upstream tracks the defect as
+[rhysd/actionlint#702](https://github.com/rhysd/actionlint/issues/702),
+together with [#704](https://github.com/rhysd/actionlint/issues/704) and
+[#712](https://github.com/rhysd/actionlint/issues/712). Drop the flag only
 alongside an actionlint release that fixes the write-before-start ordering, and
 re-check that the lint gate still terminates.
 
