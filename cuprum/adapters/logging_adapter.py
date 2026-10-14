@@ -177,25 +177,48 @@ def structured_logging_hook(
     )
 
 
-def _group_teardown_extra(event: ExecEvent) -> dict[str, object]:
-    """Build bounded, trusted fields for a group-teardown report."""
-    optional_fields = (
-        ("cuprum_pid", event.pid),
-        ("cuprum_project", event.project),
-        ("cuprum_exec_id", event.exec_id),
-        ("cuprum_operation", event.operation),
-        ("cuprum_owns_group", event.owns_group),
-        (
-            "cuprum_group_outcome",
-            None if event.group_outcome is None else str(event.group_outcome),
-        ),
-        ("cuprum_settle_s", event.settle_s),
-    )
+def _bounded_extra(
+    event: ExecEvent,
+    optional_fields: cabc.Iterable[tuple[str, object]],
+) -> dict[str, object]:
+    """Render one whitelist field set as a log record, dropping absent fields."""
     return {
         "cuprum_phase": event.phase,
         "cuprum_program": str(event.program),
         **{name: value for name, value in optional_fields if value is not None},
     }
+
+
+def _correlation_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
+    """The bounded fields that tie one record back to the run that raised it.
+
+    Every drill-down record carries this prefix: which child, which project,
+    which execution, and which operation. Grouping them here keeps the pair of
+    per-phase builders below about their own fields, and keeps the four keys
+    from drifting apart between them.
+    """
+    return (
+        ("cuprum_pid", event.pid),
+        ("cuprum_project", event.project),
+        ("cuprum_exec_id", event.exec_id),
+        ("cuprum_operation", event.operation),
+    )
+
+
+def _group_teardown_extra(event: ExecEvent) -> dict[str, object]:
+    """Build bounded, trusted fields for a group-teardown report."""
+    return _bounded_extra(
+        event,
+        (
+            *_correlation_fields(event),
+            ("cuprum_owns_group", event.owns_group),
+            (
+                "cuprum_group_outcome",
+                None if event.group_outcome is None else str(event.group_outcome),
+            ),
+            ("cuprum_settle_s", event.settle_s),
+        ),
+    )
 
 
 def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
@@ -205,23 +228,19 @@ def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
     # resolved by production code, so neither carries caller data, and both are
     # rendered rather than passed through so the record holds the plain string
     # operators key on rather than the member's ``repr``.
-    mode = None if event.env_mode is None else str(event.env_mode)
-    capture_mode = None if event.capture_mode is None else str(event.capture_mode)
-    optional_fields = (
-        ("cuprum_pid", event.pid),
-        ("cuprum_project", event.project),
-        ("cuprum_exec_id", event.exec_id),
-        ("cuprum_operation", event.operation),
-        ("cuprum_eof_grace_s", event.eof_grace_s),
-        ("cuprum_pending_readers", event.pending_readers),
-        ("cuprum_env_mode", mode),
-        ("cuprum_capture_mode", capture_mode),
+    return _bounded_extra(
+        event,
+        (
+            *_correlation_fields(event),
+            ("cuprum_eof_grace_s", event.eof_grace_s),
+            ("cuprum_pending_readers", event.pending_readers),
+            ("cuprum_env_mode", None if event.env_mode is None else str(event.env_mode)),
+            (
+                "cuprum_capture_mode",
+                None if event.capture_mode is None else str(event.capture_mode),
+            ),
+        ),
     )
-    return {
-        "cuprum_phase": event.phase,
-        "cuprum_program": str(event.program),
-        **{name: value for name, value in optional_fields if value is not None},
-    }
 
 
 def _build_extra(event: ExecEvent) -> dict[str, object]:

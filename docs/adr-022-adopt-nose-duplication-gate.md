@@ -214,6 +214,36 @@ rather than a ranked prefix of them.
   the scope follows Cuprum's existing production-Python idiom
   (`SKYLOS_PRODUCTION_TARGETS`, `SKYLOS_EXCLUDE_FOLDERS`) rather than
   introducing a second convention.
+- An unbounded surface makes re-adjudication a recurring cost, not a
+  one-off: `main`'s own growth re-enters the branch's scan, and the entry
+  count is a snapshot rather than a fixed budget. The gate was re-adjudicated
+  a second time when this ADR's branch was rebased onto a `main` that had
+  added families the original 24 entries never described. Four extractions
+  and four exception changes followed, and the surface settled at 63 families
+  under 51 entries. The extractions were:
+  - the whitelist-field rendering shared by the two drill-down log records
+    in `cuprum/adapters/logging_adapter.py`;
+  - the enum coercion behind `cuprum.echo_events._parse_broken_pipe_policy`
+    and `cuprum.sh.execution._parse_process_group_policy`, extracted to the
+    new leaf module `cuprum/_enum_parse.py` because the two callers sit on
+    opposite sides of the package's layering and neither may import the
+    other;
+  - the probe-report-veto sequence shared by the grace period's first signal
+    and the escalation after it, extracted as
+    `cuprum._process_signal._members_remain_to_signal` beside the probe and
+    reporter it already owned; and
+  - the shielded reconciliation `cuprum._subprocess_stream_run` owed on both
+    of the exit routes that failed before its gather.
+  Four entries cover families whose duplication is main's own: a six-location
+  `None` guard, a two-module import prologue, the 26-location
+  `if typ.TYPE_CHECKING:` family, and a two-line `None` guard. The
+  `cuprum/_process_handle/control.py::_terminate_shielded ~
+  cuprum/_process_lifecycle.py::_terminate_process` entry was removed rather
+  than widened: `main` had changed `_terminate_process_with_wait` to take a
+  `_SettlementTarget` value, which moved the two inlined predicate pairs into
+  separate functions and dissolved the window they shared. The same three-way
+  check the previous consequence describes applies — the removal records that
+  the window went away, not that the call sites stopped resembling each other.
 
 ## Rejected alternatives
 
@@ -269,7 +299,7 @@ rather than a ranked prefix of them.
   so a family hidden below the bound leaves its reason matching nothing and the
   gate instructs the maintainer to *delete* an exception whose duplication is
   still present. Re-adjudicating this branch's own unbounded report at
-  `top = 30` falsely reports 24 of its 52 entries as stale — nearly half the
+  `top = 30` falsely reports 23 of its 51 entries as stale — nearly half the
   list, and each one a deletion instruction for duplication that is there.
   `top = 0` is the unbounded spelling nose accepts — omitting the term falls
   back to nose's default view of 30, and `top = all` and `top = -1` are both
@@ -278,8 +308,10 @@ rather than a ranked prefix of them.
   instead of being adjudicated as the whole surface. Verified on this branch:
   `top=0` reports 63 families shown of 63; `top=30` reports 30 shown of 63 and
   is refused. Re-measured after the extraction that removed the last blocking
-  families: 63 families, all 63 allowed by reasoned exceptions, 0 blocking, 0
-  stale.
+  families, and again after the re-adjudication recorded above: 63 families,
+  all 63 allowed by reasoned exceptions, 0 blocking, 0 stale — and at
+  `top = 30`, 30 families with 23 stale entries, which is the false-deletion
+  count the check exists to refuse.
 - A gate launched as a script path resolves its sibling modules through the
   `scripts` namespace package, which a development install of the application
   also contributes. The entry point pins its own tree to `sys.path` before

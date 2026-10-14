@@ -649,8 +649,12 @@ members = [
     "cuprum/_line_iteration.py",
     "cuprum/_pipeline_collect.py",
     "cuprum/_pipeline_native_pump_types.py",
+    "cuprum/_pipeline_records.py",
+    "cuprum/_pipeline_results.py",
+    "cuprum/_pipeline_types.py",
     "cuprum/_process_handle/state.py",
     "cuprum/_subprocess_context.py",
+    "cuprum/_subprocess_stream_run.py",
     "cuprum/_line_stream/telemetry.py",
     "cuprum/_result_types.py",
     "cuprum/_subprocess_streams.py",
@@ -669,7 +673,7 @@ members = [
     "cuprum/context/_scope.py",
     "cuprum/events.py",
 ]
-reason = "Twenty-four modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match *every* key of an entry to be silenced."
+reason = "Twenty-eight modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match *every* key of an entry to be silenced. Widened again — from twenty-four to twenty-eight, a separate two-module entry having been folded in and `main`'s `_pipeline_records`, `_pipeline_results`, `_pipeline_types` and `_subprocess_stream_run` blocks surfacing as locations of the same family — so this entry alone now covers both the twenty-six-location family the detector reports and the `_pipeline_collect ~ _pipeline_spawn` pair that shares the idiom at two locations."
 
 
 
@@ -816,15 +820,6 @@ reason = "`if <field> is None: return None` over seven different fields in seven
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_pipeline_stream_native_cleanup.py",
-    "cuprum/_pipeline_wait_records.py",
-    "cuprum/_sink_lifecycle.py",
-    "cuprum/_timeout_reporting.py",
-]
-reason = "`if <field> is None: return` over five call sites in four modules: native fds, an observation (twice), a session, an observation. Each is a same-module early return guarding a different optional collaborator; the shared text is the guard idiom, not a shared operation."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/_pipeline_types.py",
     "cuprum/events.py",
 ]
@@ -908,13 +903,6 @@ reason = "Two child-reaping probes in one module sharing a `waitid(... P_PID ...
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_process_handle/control.py::_terminate_shielded",
-    "cuprum/_process_lifecycle.py::_terminate_process",
-]
-reason = "Two call sites of one already-shared implementation, `_terminate_process_with_wait`. What the detector matches is the call — a grace period, an `is_done` predicate and a `wait_for_exit` thunk — and the shielded site adds `_shielded_cleanup`, which is its entire contract: a cancelled caller must not leave the child running. Collapsing them would delete the shield."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/builders/args.py",
     "cuprum/executable_paths.py",
 ]
@@ -985,10 +973,6 @@ unit = "cuprum/_wait4_process.py"
 reason = "Two ownership checks in one module, `if pid != self.pid: raise _Wait4InvariantError(...)`. The two callers are deliberately different modes — a blocking `wait4` under a caller-guaranteed-waitable precondition and a non-blocking `wait4(..., WNOHANG)` under the settlement lock — and the waitable caller additionally returns early for pid zero first. A shared `_check_owner(pid)` would be a one-line delegate, the shape the wrapper-extraction rule rejects."
 
 [[tool.duplication_gate.allow]]
-unit = "cuprum/_subprocess_stream_run.py"
-reason = "The same discard-and-reraise arm — shield a cleanup of the stream consumers, then re-raise — written at two sites in one module, with a third variant in `_line_stream/coordinator.py`. The module's happy-path counterpart is already a single helper. Extracting the error-path twin is the right fix and is recorded here as outstanding: the two sites differ in which task set they reconcile, which is the one thing a shared helper must be written carefully to preserve."
-
-[[tool.duplication_gate.allow]]
 unit = "cuprum/adapters/_metrics_operations.py"
 reason = "Two metric-emission blocks in one module sharing a failure counter and a duration histogram. One is the live `TerminalOutcome`-driven projection, the other a frozen compatibility shim kept for a documented direct-import contract and no longer on the routing path. A shared helper would have to be parameterized by the failure predicate — a boolean-mode helper — and would tie the frozen shim to current semantics."
 
@@ -1030,13 +1014,6 @@ reason = "Two modules importing the same four result names. `_bytes_run` must ta
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_line_stream/spawn.py",
-    "cuprum/_subprocess_stream_run.py",
-]
-reason = "The `if typ.TYPE_CHECKING:` block repeating in two more modules for the reason the main entry above records: one guard keyword and one convention, followed by each module's own distinct type-only imports."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/adapters/control_metrics.py",
     "cuprum/adapters/stream_metrics.py",
 ]
@@ -1045,6 +1022,15 @@ reason = "Two metric adapters whose import blocks and recorder-name lists overla
 [[tool.duplication_gate.allow]]
 unit = "cuprum/sh/results.py"
 reason = "The buffered and bytes result records in one module: `CommandResult` and `BytesCommandResult`, whose field skeleton, keyword-only declarations and `ok` property are the same, with only the `stdout`/`stderr` element types differing. `_result_types.py` states that the bytes form deliberately does not subclass the buffered one, the public-API tests pin each type's `dc.fields()` order and positional slots, and the differing annotations are asserted. A shared base would re-order those fields and cap the annotations, and the only shared logic is a one-line `ok`."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_subprocess_stream_run.py", "cuprum/_process_handle/coordinator.py"]
+reason = "Two modules importing the same run-machinery surface — `_drain_context`, `_reconcile_run_tasks`, `_wait_for_exit_code_within_timeout` from `cuprum._subprocess_wait` and `_TeardownPolicy` from its own module — before each declares its own `if typ.TYPE_CHECKING:` block. Import declarations cannot be factored into a shared helper, for the reason the import-family entries above record, and the two blocks are each module's declared dependency surface rather than one operation written twice. The overlap is the prologue; the run loops below it diverge entirely."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_process_signal.py", "cuprum/adapters/_tracing_control_join.py"]
+reason = "A two-line `if <field> is None: return` guard in two unrelated modules: one declines to report a teardown for a run with no report to file, the other declines to record an event with no execution to attribute it to. The shared text is the None-tolerance guard this codebase uses at every optional-collaborator boundary — the same idiom the seven-module and two-module entries elsewhere in this list adjudicate — not a shared operation. Neither module has a collaborator to hand the guard, and collapsing them would mean one module importing the other only to restate two lines."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py", "cuprum/_group_teardown.py"]
+reason = "`if <field> is None: return` over an observation (three times, in three modules), native file descriptors, a session, and a teardown report: each is a same-module early return guarding a different optional collaborator, and the shared text is the guard idiom rather than a shared operation. Grown from four locations to five by `main`, which added the `_group_teardown.py` report guard while this branch was rebasing. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

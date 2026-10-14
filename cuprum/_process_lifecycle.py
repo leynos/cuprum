@@ -44,15 +44,12 @@ import typing as typ
 
 from cuprum._group_teardown import (
     signal_target_or_report,
-    unsignalable_report,
 )
 from cuprum._process_exit import _await_process_exit
-from cuprum._process_group import _GroupProbe
 from cuprum._process_signal import (
     _escalate_after_grace,
-    _report_teardown,
+    _members_remain_to_signal,
     _settlement,
-    _settlement_of,
     _SettlementTarget,
 )
 
@@ -198,9 +195,12 @@ async def _terminate_process_with_wait(
     """
     grace_period = max(0.0, policy.grace_period)
     owns_group = policy.owns_group_for(0)
-    settled = _settlement_of(process, owns_group=owns_group, target=target)
-    _report_teardown(observation, unsignalable_report(settled, process.pid))
-    if settled is not _GroupProbe.MEMBERS:
+    if not _members_remain_to_signal(
+        process,
+        target,
+        observation=observation,
+        owns_group=owns_group,
+    ):
         return _NO_STOP
     if not signal_target_or_report(
         process,
