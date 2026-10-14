@@ -29,7 +29,6 @@ from cuprum._pipeline_streams import _create_pipe_tasks
 from cuprum._stream_drain_finish import _CapturedDrain
 
 if typ.TYPE_CHECKING:
-
     from cuprum.unittests._stream_drain_support import (
         CapturedDrain,
         ConsumerTask,
@@ -265,8 +264,7 @@ def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
         return await _gather_optional_text_tasks(tasks)
 
     assert tuple(
-        None if drained is None else drained.payload
-        for drained in asyncio.run(drive())
+        None if drained is None else drained.payload for drained in asyncio.run(drive())
     ) == (None, "first", None, "second", None)
 
 

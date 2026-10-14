@@ -120,7 +120,7 @@ class CaptureFinal:
 class SpillHandle:
     """A spill file this run created, and so must remove.
 
-    Mutable and shared by both paths that can reach it — result materialisation
+    Mutable and shared by both paths that can reach it — result materialization
     and teardown reconciliation — so closing is idempotent whichever runs
     first.
     """

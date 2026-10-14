@@ -465,18 +465,18 @@ Keep the callback and sink writes prompt: they run on the command's event loop.
 A heartbeat reports silence, not a deadlock, and does not alter the deadline or
 exit status.
 
-Capture is configured per stream, and a stream's policy decides where its
-bytes are kept. `capture=True` and `capture=False` are the shorthands for the
-whole-run switch, and each stream can name its own policy with
-`capture_stdout` and `capture_stderr`:
+Capture is configured per stream, and a stream's policy decides where its bytes
+are kept. `capture=True` and `capture=False` are the shorthands for the
+whole-run switch, and each stream can name its own policy with `capture_stdout`
+and `capture_stderr`:
 
-| Policy | What the run reports |
-| ------------ | --------------------------------------------------------- |
-| `True` | Complete text, held in the parent's memory. The default. |
-| `False` | Nothing: `None` for that stream, and no record. |
-| `FullCapture()` | The same as `True`, stated explicitly. |
-| `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory. |
-| `FileBackedCapture(...)` | A file, named by the record. |
+| Policy                        | What the run reports                                     |
+| ----------------------------- | -------------------------------------------------------- |
+| `True`                        | Complete text, held in the parent's memory. The default. |
+| `False`                       | Nothing: `None` for that stream, and no record.          |
+| `FullCapture()`               | The same as `True`, stated explicitly.                   |
+| `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
+| `FileBackedCapture(...)`      | A file, named by the record.                             |
 
 A per-stream field left at `None` inherits `capture`, and a per-stream value
 always wins for its own stream: `capture=True, capture_stderr=False` captures
@@ -519,7 +519,7 @@ assert record.dropped_bytes == 6
 assert record.truncated is True
 ```
 
-A bound is a decision about what the *result* keeps. It never shortens what a
+A bound is a decision about what the _result_ keeps. It never shortens what a
 pipeline stage hands to the stage after it, and it never shortens the mirrored
 copy an echo sink receives; those read the child's own pipe.
 
@@ -566,21 +566,21 @@ who asked for the child's own bytes cannot be handed anything less. That read
 is O(stream size), so byte mode does not carry the bounded-memory guarantee
 that text mode does.
 
-`directory` defaults to the system temporary directory, and the file's name is
-a `NamedTemporaryFile` name. Pass `keep_file=True` to keep it: the file then
+`directory` defaults to the system temporary directory, and the file's name is a
+`NamedTemporaryFile` name. Pass `keep_file=True` to keep it: the file then
 survives the run, `record.owned` is `False`, and removing it is the caller's
 job. Without it, `record.owned` is `True` and the run removes the file before
 returning the result — on the success path, on a non-zero exit, on a timeout,
 and on cancellation alike.
 
 A failure to create or write the spill file is absorbed rather than raised: a
-failure to *retain* output is not a failure of the command that produced it.
+failure to _retain_ output is not a failure of the command that produced it.
 The run still completes and the caller still receives a result, with
 `storage_failed=True` on the record. Read that flag together with `storage`,
 because the pair distinguishes the two failures:
 
 - The file could not be created. The stream never left memory, so `storage`
-  stays `"memory"`, `path` is `None`, and the capture is *complete* — the
+  stays `"memory"`, `path` is `None`, and the capture is _complete_ — the
   caller has the whole stream and only lost the spill.
 - An append failed after the spill began. `storage` is `"file"` and `path`
   names the file, but the capture holds only whatever reached it before the
@@ -589,22 +589,22 @@ because the pair distinguishes the two failures:
 
 ### Reading a stream's capture metadata
 
-Every captured stream contributes one `CapturedStream` to `result.captures`,
-in stdout-then-stderr order, and a stream that was not captured contributes
-none. The record is how a caller learns that a result is a tail rather than
-the whole stream, or that the payload is a file rather than text:
+Every captured stream contributes one `CapturedStream` to `result.captures`, in
+stdout-then-stderr order, and a stream that was not captured contributes none.
+The record is how a caller learns that a result is a tail rather than the whole
+stream, or that the payload is a file rather than text:
 
-| Field | Meaning |
-| --------------- | --------------------------------------------------- |
-| `stream` | `"stdout"` or `"stderr"`. |
-| `policy` | `"full"`, `"bounded"`, or `"file_backed"`. |
-| `total_bytes` | What the child wrote, not what was kept. |
-| `dropped_bytes` | What the bound discarded. `0` for the others. |
-| `storage` | `"memory"` or `"file"`. |
-| `path` | The spill file, when the storage is a file. |
-| `owned` | Whether this run still must remove that file. |
-| `storage_failed` | Whether the spill failed, as above. |
-| `truncated` | Derived: `dropped_bytes > 0`. |
+| Field            | Meaning                                       |
+| ---------------- | --------------------------------------------- |
+| `stream`         | `"stdout"` or `"stderr"`.                     |
+| `policy`         | `"full"`, `"bounded"`, or `"file_backed"`.    |
+| `total_bytes`    | What the child wrote, not what was kept.      |
+| `dropped_bytes`  | What the bound discarded. `0` for the others. |
+| `storage`        | `"memory"` or `"file"`.                       |
+| `path`           | The spill file, when the storage is a file.   |
+| `owned`          | Whether this run still must remove that file. |
+| `storage_failed` | Whether the spill failed, as above.           |
+| `truncated`      | Derived: `dropped_bytes > 0`.                 |
 
 `truncated` is derived rather than stored, so it cannot disagree with the count
 beside it. Spill transitions and storage failures are also published as

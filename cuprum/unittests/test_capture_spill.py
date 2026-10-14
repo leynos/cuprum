@@ -37,16 +37,39 @@ _BYTES = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=True)
 _PAYLOAD = "中文 payload\n".encode()
 
 
-def _spill(
-    payload: bytes,
+def _spilling_to(
+    directory: pathlib.Path,
     *,
     threshold: int,
-    directory: pathlib.Path,
     keep_file: bool = False,
+) -> FileBackedCapture:
+    """Return a file-backed policy spilling into *directory* at *threshold*.
+
+    Returns
+    -------
+    FileBackedCapture
+        The policy, ready to hand to :func:`_spill`.
+    """
+    return FileBackedCapture(
+        spill_threshold_bytes=threshold,
+        directory=directory,
+        keep_file=keep_file,
+    )
+
+
+def _spill(
+    payload: bytes,
+    policy: FileBackedCapture,
+    *,
     settings: _DecodeSettings = _TEXT,
     chunks: int = 1,
 ) -> CaptureFinal:
-    """Feed *payload* through a file-backed accumulator in *chunks* pieces.
+    """Feed *payload* through *policy*'s accumulator in *chunks* pieces.
+
+    The policy is passed rather than its fields because the three of them are
+    one value — the library already models them as
+    :class:`~cuprum.capture_policy.FileBackedCapture`, and unpacking it here
+    only to repack it below would put a second copy of that shape in the test.
 
     Returns
     -------
@@ -55,11 +78,7 @@ def _spill(
         because nothing has cleaned it up.
     """
     accumulator = _FileAccumulator(
-        policy=FileBackedCapture(
-            spill_threshold_bytes=threshold,
-            directory=directory,
-            keep_file=keep_file,
-        ),
+        policy=policy,
         stream="stdout",
         settings=settings,
     )
@@ -78,7 +97,7 @@ def test_a_spilled_capture_writes_the_whole_stream_to_its_file(
     to the file as well as every later chunk. A file missing the prefix would
     still exist, still be named by the record, and still hold the tail.
     """
-    final = _spill(_PAYLOAD, threshold=4, directory=tmp_path)
+    final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=4))
 
     assert final.capture.storage == "file"
     assert final.capture.path is not None, "a spilled capture must name its file"
@@ -94,7 +113,7 @@ def test_a_spilled_capture_reports_its_file_as_owned_by_the_run(
     tmp_path: pathlib.Path,
 ) -> None:
     """An owned file is one this run must remove, and the record says so."""
-    final = _spill(_PAYLOAD, threshold=4, directory=tmp_path)
+    final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=4))
 
     assert final.capture.owned is True, (
         "a file the caller did not keep is this run's to remove"
@@ -107,7 +126,7 @@ def test_a_kept_spill_file_is_reported_unowned_but_still_written(
     tmp_path: pathlib.Path,
 ) -> None:
     """``keep_file`` changes ownership, not the bytes the file holds."""
-    final = _spill(_PAYLOAD, threshold=4, directory=tmp_path, keep_file=True)
+    final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=4, keep_file=True))
 
     assert final.capture.owned is False, (
         "a file the caller kept is handed over, not removed by the run"
@@ -128,7 +147,7 @@ def test_a_spilled_capture_reports_text_as_absent_and_the_file_instead(
     in the payload's place would put a ``Path`` where every caller expects text
     or bytes.
     """
-    final = _spill(b"short", threshold=1, directory=tmp_path)
+    final = _spill(b"short", _spilling_to(tmp_path, threshold=1))
 
     assert final.payload is None, (
         f"a spilled text capture must not also retain the text; got {final.payload!r}"
@@ -141,7 +160,7 @@ def test_a_spilled_capture_in_byte_mode_returns_the_files_bytes(
 ) -> None:
     """Byte mode hands back the child's own bytes, read from the file."""
     payload = bytes(range(256))
-    final = _spill(payload, threshold=4, directory=tmp_path, settings=_BYTES)
+    final = _spill(payload, _spilling_to(tmp_path, threshold=4), settings=_BYTES)
 
     assert isinstance(final.payload, bytes), (
         f"byte mode must return bytes; got {type(final.payload).__name__}"
@@ -159,7 +178,7 @@ def test_a_stream_within_its_threshold_stays_on_the_heap(
     be indistinguishable from a :class:`~cuprum.capture_policy.FullCapture`
     apart from the policy's name: complete text, no file, no handle.
     """
-    final = _spill(_PAYLOAD, threshold=len(_PAYLOAD), directory=tmp_path)
+    final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=len(_PAYLOAD)))
 
     assert final.payload == _PAYLOAD.decode(), (
         "a stream within its threshold must finalize as complete text"
@@ -179,8 +198,8 @@ def test_the_threshold_is_crossed_by_exceeding_it_not_by_reaching_it(
     bytes went, which is the only way to pin an off-by-one in either direction.
     """
     payload = b"eight by"  # exactly eight bytes
-    at_threshold = _spill(payload, threshold=len(payload), directory=tmp_path)
-    over_threshold = _spill(payload, threshold=len(payload) - 1, directory=tmp_path)
+    at_threshold = _spill(payload, _spilling_to(tmp_path, threshold=len(payload)))
+    over_threshold = _spill(payload, _spilling_to(tmp_path, threshold=len(payload) - 1))
 
     assert at_threshold.capture.storage == "memory"
     assert over_threshold.capture.storage == "file"
@@ -193,7 +212,7 @@ def test_an_empty_spill_directory_is_named_by_the_policy_not_the_default(
     chosen = tmp_path / "spills"
     chosen.mkdir()
 
-    final = _spill(_PAYLOAD, threshold=4, directory=chosen)
+    final = _spill(_PAYLOAD, _spilling_to(chosen, threshold=4))
 
     assert final.capture.path is not None
     assert final.capture.path.parent == chosen, (
@@ -212,7 +231,7 @@ def test_a_spill_reports_its_transition_once_with_the_bytes_moved(
     """
     recorder: list[CaptureEvent] = []
     with observe_capture(recorder.append):
-        _spill(_PAYLOAD, threshold=1, directory=tmp_path)
+        _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=1))
 
     assert [event.category for event in recorder] == [
         CaptureEventCategory.SPILLED_TO_FILE
@@ -237,7 +256,7 @@ def test_a_spill_reports_the_bytes_written_so_far_not_the_whole_stream(
     """
     recorder: list[CaptureEvent] = []
     with observe_capture(recorder.append):
-        final = _spill(_PAYLOAD, threshold=1, directory=tmp_path, chunks=2)
+        final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=1), chunks=2)
     # The helper divides the payload into two chunks, so the first one is what
     # the threshold was crossed by. Asserting against a computed chunk width
     # rather than a literal keeps this honest if the payload changes.
@@ -260,9 +279,9 @@ def test_no_event_is_emitted_for_a_stream_that_never_spills(
     """A capture that stays on the heap reports nothing about storage."""
     recorder: list[CaptureEvent] = []
     with observe_capture(recorder.append):
-        _spill(_PAYLOAD, threshold=4096, directory=tmp_path)
+        _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=4096))
 
-    assert recorder == [], (
+    assert not recorder, (
         f"a memory-backed capture must emit no storage event; got {recorder!r}"
     )
 
@@ -277,7 +296,7 @@ def test_a_spill_survives_a_chunk_partition_that_splits_characters(
     stream, so this is the assertion that pins the file as a byte-for-byte
     record rather than a re-encoded rendering.
     """
-    final = _spill(_PAYLOAD, threshold=1, directory=tmp_path, chunks=len(_PAYLOAD))
+    final = _spill(_PAYLOAD, _spilling_to(tmp_path, threshold=1), chunks=len(_PAYLOAD))
 
     assert final.capture.path is not None
     assert final.capture.path.read_bytes() == _PAYLOAD
@@ -290,7 +309,7 @@ def test_the_record_counts_the_stream_even_when_the_file_holds_it(
 ) -> None:
     """``total_bytes`` describes the child's output, not the file's accounting."""
     payload = b"x" * 128
-    final = _spill(payload, threshold=threshold, directory=tmp_path)
+    final = _spill(payload, _spilling_to(tmp_path, threshold=threshold))
 
     assert final.capture.total_bytes == len(payload), (
         f"the record must count the whole stream; got {final.capture.total_bytes}"

@@ -995,8 +995,7 @@ assert default.stderr == "kept"
 is a byte count rather than a character count, and it never splits a code
 point, so the tail it retains is always decodable and the count is what a
 caller can reason about without knowing the encoding. The run also reports what
-it dropped, on the new `captures` field of `CommandResult` and
-`PipelineResult`:
+it dropped, on the new `captures` field of `CommandResult` and `PipelineResult`:
 
 <!-- tested-example: migration-capture-metadata -->
 
@@ -1033,10 +1032,10 @@ limits on separate paths.
 stream on the heap until `spill_threshold_bytes`, then moves it to a file. In
 text mode the payload for a spilled stream is `None` and the record names the
 file, because reading the file back would defeat the point of spilling it; in
-byte mode the file is read back, so byte mode does not carry the
-bounded-memory guarantee. The file is removed by the run before it returns
-unless `keep_file=True` is passed, on every exit route including a timeout and
-a cancellation. Set `keep_file=True` if the caller wants the file, and read
+byte mode the file is read back, so byte mode does not carry the bounded-memory
+guarantee. The file is removed by the run before it returns unless
+`keep_file=True` is passed, on every exit route including a timeout and a
+cancellation. Set `keep_file=True` if the caller wants the file, and read
 `record.owned` to know which case applies.
 
 A failure to create or write the spill file does not fail the run: it is

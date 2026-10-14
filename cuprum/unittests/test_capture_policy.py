@@ -183,9 +183,7 @@ def test_file_backed_capture_rejects_a_non_positive_threshold(
         ValueError,
         match="spill_threshold_bytes must be a positive integer or None",
     ):
-        FileBackedCapture(
-            spill_threshold_bytes=typ.cast("int | None", threshold)
-        )
+        FileBackedCapture(spill_threshold_bytes=typ.cast("int | None", threshold))
 
 
 def test_file_backed_capture_defaults_to_the_package_constant() -> None:

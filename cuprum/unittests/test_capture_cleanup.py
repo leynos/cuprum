@@ -145,7 +145,7 @@ def test_cleanup_removes_the_file_a_spilled_sink_owns(
     assert not path.exists(), (
         f"the sink's own cleanup must remove the file it owns; {path} survived"
     )
-    assert list(tmp_path.iterdir()) == [], (
+    assert not list(tmp_path.iterdir()), (
         f"the directory must be left as empty as it was found; "
         f"found {list(tmp_path.iterdir())}"
     )

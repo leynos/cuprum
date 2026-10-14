@@ -51,6 +51,7 @@ class _ReaderFailureError(RuntimeError):
 # drain is declared over. A double reporting just its text would let these
 # cases pass values through a seam that cannot receive them in a live run.
 
+
 async def _fails_immediately() -> _CapturedDrain:
     """Fail as a reader does when its stream breaks rather than ends."""
     await asyncio.sleep(0)

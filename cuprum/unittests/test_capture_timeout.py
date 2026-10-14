@@ -229,7 +229,10 @@ def test_stderr_recovers_its_own_prefix_when_the_child_stalls() -> None:
     assert failure.stderr == _PREFIX, (
         f"stderr must report the prefix it received; got {failure.stderr!r}"
     )
-    assert failure.output == "", (
+    # ``None`` would mean stdout was not captured at all, which is stderr's
+    # policy in this run and not stdout's, so the two are asserted apart.
+    assert failure.output is not None, "stdout was captured, so it reports text"
+    assert not failure.output, (
         "stdout received nothing before the stall, so its bounded capture "
         f"must report an empty string rather than the other stream's bytes; "
         f"got {failure.output!r}"
