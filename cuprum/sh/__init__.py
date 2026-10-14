@@ -58,6 +58,14 @@ from cuprum._process_handle_errors import (
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout
+from cuprum.capture_policy import (
+    BoundedCapture,
+    CapturedStream,
+    FileBackedCapture,
+    FullCapture,
+)
+from cuprum.capture_policy import CapturePolicy as CapturePolicy
+from cuprum.capture_policy import CapturePolicyKind as CapturePolicyKind
 from cuprum.catalogue import DEFAULT_CATALOGUE as DEFAULT_CATALOGUE
 from cuprum.catalogue import ProgramCatalogue as ProgramCatalogue
 from cuprum.catalogue import ProjectSettings as ProjectSettings
@@ -111,10 +119,16 @@ from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BoundedCapture",
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CapturePolicy",
+    "CapturePolicyKind",
+    "CapturedStream",
     "CommandResult",
     "ExecutionContext",
+    "FileBackedCapture",
+    "FullCapture",
     "IOOptions",
     "LineStream",
     "Pipeline",
