@@ -976,3 +976,67 @@ forbids.
 One limit carried forward without change: CodeScene's approval arrives
 automatically per commit, so its `APPROVED` on this head is corroboration
 rather than an independent review of the plan.
+
+### Correcting the stale re-measurement claim (2026-10-14)
+
+The formal review at `e30aa6ba2` raised one finding against the ADR's Accepted
+trade-offs passage, which claimed the surface had been "Re-measured … and again
+after the re-adjudication recorded above: 63 families, all 63 allowed".
+
+The finding was correct on the substance and I verified it by measurement
+rather than by reading the reviewer's diff. The sentence was written at
+`c02d1ba8cb` (10:48) when the surface was 63 families under 51 entries. The
+addendum that performed the re-adjudication landed at `d1150a59b` (14:33), five
+hours later, and performed one deferred extraction — the `settle.py`
+arbitration — which removed the entry describing it. Parsed with
+`scripts.duplication_allowlist.load_allowlist`, the allowlist delta across that
+commit is exactly one removal and no additions: 51 entries become 50. So the
+clause asserting the 63 figures cover the re-adjudication was false, and it
+contradicted the qualifier three lines above it, which already scoped 63/51 as
+pre-extraction.
+
+Measurement through the gate's own modules at `41d43e14e`, not by grepping:
+`top=0` reports 62 families with 0 blocking and 0 stale under 50 entries; the
+same report re-adjudicated at `top = 30` yields 30 families with 23 stale
+entries. The reviewer's suggested replacement text gave the same figures, but
+accepting a diff on authority is the failure mode this log exists to prevent,
+so each number was reproduced before the edit was written.
+
+Two notes on method, both of which changed what I wrote:
+
+- A `grep -c 'reason = '` over `pyproject.toml` reports 64 entries where the
+  manifest holds 50. The field is not a reliable count: entries take either a
+  `members` list or a `unit` key, and reasons contain embedded matches. Every
+  count in this entry comes from `load_allowlist` or `tomllib` parsing, never
+  from a text search.
+- `make duplication` prints "62 allowed by reasoned exceptions", which counts
+  allowed *findings*, not allowlist entries — `scripts/duplication_gate.py:210`
+  builds the suffix from `len(allowed)`. Fifty entries cover 62 findings. The
+  two numbers measure different things and are not expected to equal.
+
+The same sentence also referred to the re-adjudication as recorded "above",
+when the addendum sits at the end of the file, below the passage; that now
+reads "below". The 63/51 figures are retained and explicitly scoped to the
+measurement that justified removing the top bound, because deleting them would
+erase why that decision was made.
+
+The repository's append-only convention for accepted ADR text was checked
+before editing, and does not bar this change: ADR-022 does not exist on
+`origin/main` — it is introduced by this PR and has not been accepted into a
+merged revision, unlike ADR-020 and ADR-021, whose bodies carry explicit
+"accepted ADR text is append-only" notes. The file's own correction precedent
+for an in-body claim is the PEP 723 paragraph under its addendum, which
+corrects an accepted sentence without rewriting it in place.
+
+**Local gates at `41d43e14e`** are the Markdown/format set, since the delta is
+one Markdown file: `make check-fmt`, `make markdownlint` (with its spelling
+leaf), `make nixie`, and `make duplication` all pass, each log recording the
+head it certified. `make lint`, `make test-rust`, and `make typecheck` were not
+re-run; they were green at `e30aa6ba2` and the delta touches no Python or Rust.
+
+**Hosted CI at `41d43e14e`** is terminal: 26 check runs, 22 `success`, 4
+`skipped` (the opt-in `Kody Code Review`, `Sourcery review`, `automerge`, and
+`extended` apps), 0 failures and 0 in progress. All twelve ruleset-required
+contexts are green. `mergeable_state` reads `blocked`, which is the standing
+`CHANGES_REQUESTED` from the superseded review and not a failing check; a
+current-head review has been queued to clear it.
