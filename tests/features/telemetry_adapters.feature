@@ -45,8 +45,7 @@ Feature: Telemetry adapters for structured execution events
     Then the pump-hop span is cancelled after the worker returns
 
   Scenario: Shared redaction sanitizes exports without changing execution
-    Given a curated Python command for testing
-    And a shared policy for telemetry redaction
+    Given a shared policy for telemetry redaction
     When I run a command with sentinel values through redacted telemetry
     Then configured telemetry exports contain no sentinel values
     And execution and raw observations retain every sentinel value

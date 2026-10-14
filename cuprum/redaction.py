@@ -183,9 +183,10 @@ class RedactionPolicy:
         """Return a sanitized event copy for an opted-in consumer.
 
         String values in ``argv``, ``env``, ``line``, ``note``, and ``tags``
-        pass through :meth:`apply_text`. The program, trusted project, tag
-        keys, non-string tag values, and typed numeric and enum fields remain
-        unchanged. An inert policy returns *event* itself.
+        pass through :meth:`apply_text`. The program, trusted project, paths
+        (``cwd`` and ``resolved_path``), tag keys, non-string tag values, and
+        typed numeric and enum fields remain unchanged. An inert policy
+        returns *event* itself.
 
         Parameters
         ----------
