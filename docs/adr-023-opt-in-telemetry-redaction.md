@@ -2,9 +2,8 @@
 
 ## Status
 
-Accepted. The policy, observation wrapper, structured logging, tracing, and
-plain-text logging integrations are implemented. Direct GitHub Actions sink
-configuration remains planned as part of issue #442.
+Accepted. Redaction is configured independently for each logging, tracing,
+presentation-title, or explicitly wrapped observation destination.
 
 ## Date
 
@@ -79,13 +78,13 @@ copies before registration with `observe()`.
 
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
-projection; plain-text logging applies the policy to its argv projection.
-Direct GitHub Actions sink configuration is planned at this milestone: that
-integration will apply the policy to the derived group title. GitHub Actions
-titles currently remain unchanged.
+projection; plain-text logging applies the policy to its argv projection. The
+GitHub Actions sink accepts the same keyword and applies the policy to
+argv-derived group titles before workflow-command escaping. Explicit titles,
+trusted annotation labels, and mirrored child output remain unchanged.
 
-Across both the implemented wrapper and planned integrations, the raw event,
-executed argv, child environment, and captured result remain unchanged.
+Across all these integrations, the raw event, executed argv, child environment,
+and captured result remain unchanged.
 
 An error while applying a pattern raises `RedactionError` with rule metadata.
 The error omits the source value and the underlying exception text. Export

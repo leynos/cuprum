@@ -57,6 +57,9 @@ from cuprum.sinks.base import (
     TerminalOutcome,
 )
 
+if typ.TYPE_CHECKING:
+    from cuprum.redaction import RedactionPolicy
+
 __all__ = ["GitHubActionsSession", "GitHubActionsSink"]
 
 _GROUP_PREFIX = "::group::"
@@ -290,9 +293,9 @@ class GitHubActionsSink:
         output. Defaults to the parent's stderr, matching where GitHub
         Actions reads workflow commands from.
     title:
-        Optional display label overriding the derived
-        ``"<project>: <program>"`` label, used for both the group title and a
-        failure annotation's title.
+        Optional explicit label for both the group and failure annotation.
+        By default, argv titles the group and the bounded run label titles
+        the annotation.
     force:
         Activate the sink even when the parent process does not run on
         GitHub Actions. Intended for local reproduction of CI framing and
@@ -307,6 +310,9 @@ class GitHubActionsSink:
         Whether a failed outcome emits its ``::error::`` annotation. ``False``
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
+    redaction:
+        Optional policy for argv-derived group titles, applied before escaping.
+        Defaults to ``None``. Explicit titles and echoed output are unchanged.
 
     Raises
     ------
@@ -316,6 +322,8 @@ class GitHubActionsSink:
         strength of something the caller never documented as a flag.
     """
 
+    # Preserve the explicit keyword-only options of this public constructor.
+    # pylint: disable-next=too-many-arguments
     def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
         self,
         destination: typ.IO[str] | None = None,
@@ -324,6 +332,7 @@ class GitHubActionsSink:
         force: bool = False,
         emit_group: bool = True,
         emit_annotation: bool = True,
+        redaction: RedactionPolicy | None = None,
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
         _reject_non_bool("emit_group", emit_group)
@@ -333,6 +342,7 @@ class GitHubActionsSink:
         self.force = force
         self.emit_group = emit_group
         self.emit_annotation = emit_annotation
+        self.redaction = redaction
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
@@ -360,6 +370,8 @@ class GitHubActionsSink:
             label = self.title
         elif start.argv:
             label = " ".join(start.argv)
+            if self.redaction is not None:
+                label = self.redaction.apply_text(label)
         else:
             label = start.label
         # The annotation keeps the bounded label even when the group is titled
@@ -377,20 +389,8 @@ class GitHubActionsSink:
         )
 
     def _is_active(self) -> bool:
-        """Return whether this run's environment demands Actions framing.
-
-        The environment value is read per run, not cached at import or
-        construction time, so a run started after the variable is set (or
-        removed) sees the current environment. ``GITHUB_ACTIONS=true`` is the
-        runner's own signal; any other value — including ``1`` or ``TRUE`` —
-        keeps the sink inactive because only the documented runner value may
-        trigger framing.
-
-        Returns
-        -------
-        bool
-            ``True`` when the sink should open a framed session this run.
-        """
+        """Check activation against the current parent environment."""
+        # A reused sink must observe environment changes between runs.
         return self.force or (
             os.environ.get(_GITHUB_ACTIONS_ENV) == _GITHUB_ACTIONS_TRUE
         )
