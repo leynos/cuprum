@@ -55,12 +55,12 @@ dev = [
 ]
 
 [tool.ty.src]
-# The duplication gate is isolated tooling, not application code. Its modules
-# are declared for `>=3.14` in their PEP 723 headers and use `typing.TypeIs`
-# and `PurePosixPath.full_match`, which do not exist at this project's 3.12
-# floor; their tests run under the same 3.14 interpreter and use the same APIs,
-# so they carry the same floor. Already-excluded files stay checked when named
-# explicitly, so `make typecheck` runs them in their own pass at the
+# The duplication gate is isolated tooling, not application code. Its entry
+# point declares `>=3.14` in a PEP 723 header, and the sibling modules it loads
+# run under that same interpreter; together they use `typing.TypeIs` and
+# `PurePosixPath.full_match`, which do not exist at this project's 3.12 floor,
+# so their tests carry the same floor. Already-excluded files stay checked when
+# named explicitly, so `make typecheck` runs them in their own pass at the
 # interpreter they actually target; excluding them here only keeps the
 # application pass honest about the floor the application itself supports.
 exclude = [

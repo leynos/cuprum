@@ -543,7 +543,7 @@ lint-whitaker: ## Run Whitaker for every Rust workspace package
 cli_value = $(if $(filter command line,$(origin $(1))),$(value $(1)))
 
 install-nose: ## Install the pinned nose duplication detector
-	@if [ "$$($(NOSE_BIN) --version 2>/dev/null)" = "nose $(NOSE_VERSION)" ]; then \
+	@if [ "$$($(call shell_quote,$(NOSE_BIN)) --version 2>/dev/null)" = "nose $(NOSE_VERSION)" ]; then \
 	  printf "nose %s already installed at %s\n" "$(NOSE_VERSION)" "$(NOSE_BIN)"; \
 	else \
 	  printf "Installing nose %s into %s\n" "$(NOSE_VERSION)" "$(NOSE_TOOLS_DIR)"; \
@@ -551,7 +551,7 @@ install-nose: ## Install the pinned nose duplication detector
 	  $(CARGO_BINSTALL) --no-confirm --disable-strategies compile,quick-install \
 	    --install-path "$(NOSE_TOOLS_DIR)" \
 	    --git https://github.com/corca-ai/nose 'nose-cli@$(NOSE_VERSION)' || exit $$?; \
-	  installed=$$($(NOSE_BIN) --version 2>/dev/null) || exit $$?; \
+	  installed=$$($(call shell_quote,$(NOSE_BIN)) --version 2>/dev/null) || exit $$?; \
 	  if [ "$$installed" != "nose $(NOSE_VERSION)" ]; then \
 	    printf "install-nose: expected 'nose %s', got '%s'\n" \
 	      "$(NOSE_VERSION)" "$$installed" >&2; \

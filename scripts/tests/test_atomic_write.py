@@ -24,6 +24,7 @@ import pytest
 from scripts import atomic_write
 
 if typ.TYPE_CHECKING:
+    from collections import abc as cabc
     from pathlib import Path
 
 
@@ -234,19 +235,14 @@ class _FailingFileSync:
         os.close(descriptor)
 
 
-class _InterruptedStream:
-    """A temporary stream whose first write fails, wrapping a real file object.
-
-    The real descriptor is opened so the path exists and the helper's own
-    ``Path(stream.name)`` resolves, but every write is refused before it
-    reaches the file. That is the failure the helper has to clean up after.
-    """
+class _RealTemporaryStream:
+    """Stand in for ``NamedTemporaryFile``, owning a real file on disk."""
 
     def __init__(self, path: Path) -> None:
         self.name = str(path)
         self._file = path.open("wb")
 
-    def __enter__(self) -> _InterruptedStream:
+    def __enter__(self) -> typ.Self:
         """Enter the context manager, as ``NamedTemporaryFile`` does."""
         return self
 
@@ -255,13 +251,37 @@ class _InterruptedStream:
         self._file.close()
         return False
 
+    def write(self, payload: bytes) -> int:
+        """Write the payload through to the real file."""
+        self._file.write(payload)
+        return len(payload)
+
+    def flush(self) -> None:
+        """Accept the flush; ``write`` completion is what a flush syncs."""
+
+
+class _FailingCloseStream(_RealTemporaryStream):
+    """A temporary stream whose ``__exit__`` fails after a clean fill.
+
+    Every write and flush succeeds, so the failure lands where the pre-fix
+    guard stopped watching: in the ``__exit__`` that closes the stream. The
+    file is closed before the refusal, so the stand-in leaks no descriptor.
+    """
+
+    def __exit__(self, *exc_info: object) -> bool:
+        """Close the underlying file, then refuse the close."""
+        self._file.close()
+        message = "close failed"
+        raise OSError(message)
+
+
+class _InterruptedStream(_RealTemporaryStream):
+    """A temporary stream whose first write fails, over a real file object."""
+
     def write(self, _payload: bytes) -> int:
         """Refuse the write."""
         message = "write failed"
         raise OSError(message)
-
-    def flush(self) -> None:
-        """Flush the underlying file."""
 
 
 def test_a_failed_fill_leaves_no_temporary_and_no_replacement(
@@ -297,54 +317,82 @@ def test_a_failed_fill_leaves_no_temporary_and_no_replacement(
     )
 
 
-def test_a_write_failure_also_removes_the_temporary(
-    tmp_path: Path,
+def _swap_in_stream(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failure inside ``write`` is cleaned up by the same owner.
+    destination: Path,
+    stream_type: cabc.Callable[[Path], _RealTemporaryStream],
+) -> list[Path]:
+    """Install *stream_type* in place of ``NamedTemporaryFile``.
 
-    The sync and the write are both inside the fill interval, so a failure in
-    either must unlink the temporary before it propagates. Without that, the
-    outer guard would be the only cleanup and the two paths would drift.
+    The stand-in is built over a real temporary so the cleanup assertions have
+    something to observe: a stream over a path that was never created would
+    pass ``not exists()`` without the helper having cleaned anything up. The
+    keywords are checked through ``kwargs`` rather than declared as parameters,
+    because a real ``dir`` parameter would shadow the builtin that
+    ``NamedTemporaryFile`` itself declares.
+
+    Returns
+    -------
+    list[Path]
+        Filled in with each temporary the fill creates.
     """
-    destination = tmp_path / "config.toml"
     created: list[Path] = []
-    real_named_temporary_file = atomic_write.tempfile.NamedTemporaryFile
+    # Held before the patch goes in: reading the attribute later would find the
+    # stand-in and recurse.
+    real_temporary_file = atomic_write.tempfile.NamedTemporaryFile
 
-    def interrupted_named_temporary_file(**kwargs: object) -> _InterruptedStream:
-        """Swap in a stream whose write fails, keeping the real temporary path.
-
-        The keywords are asserted rather than declared in the signature. A real
-        ``dir`` parameter would shadow the builtin that ``NamedTemporaryFile``
-        itself declares, and a catch-all typed as ``object`` is what lets the
-        forwarded call be cast to the real overloads rather than matching none
-        of them.
-
-        Returns
-        -------
-        _InterruptedStream
-            A stream over the real temporary's path that refuses every write.
-        """
+    def swap(**kwargs: object) -> _RealTemporaryStream:
         assert kwargs["delete"] is False, "The caller must keep the temporary."
         assert kwargs["prefix"] == f".{destination.name}.", (
             "The temporary must stay a hidden sibling of the destination."
         )
-        with real_named_temporary_file(
-            **typ.cast("dict[str, typ.Any]", kwargs)
-        ) as real:
+        with real_temporary_file(**typ.cast("dict[str, typ.Any]", kwargs)) as real:
             temporary = pathlib.Path(real.name)
         created.append(temporary)
-        return _InterruptedStream(temporary)
+        return stream_type(temporary)
 
-    monkeypatch.setattr(
-        atomic_write.tempfile, "NamedTemporaryFile", interrupted_named_temporary_file
-    )
+    monkeypatch.setattr(atomic_write.tempfile, "NamedTemporaryFile", swap)
+    return created
 
-    with pytest.raises(OSError, match="write failed"):
-        atomic_write.atomic_write(destination, b"payload\n")
 
-    assert created, "The helper must have created a temporary to fail on."
+def _assert_the_failed_fill_left_nothing_behind(
+    created: list[Path],
+    destination: Path,
+) -> None:
+    """Assert a failed fill created a temporary and removed it again."""
+    assert created, "The fill must have created a temporary to fail on."
     assert all(not temporary.exists() for temporary in created), (
         "Every temporary the fill created must be unlinked before it re-raises."
     )
     assert not destination.exists(), "A failed fill must not create the destination."
+
+
+@pytest.mark.parametrize(
+    ("stream_type", "diagnostic"),
+    [
+        pytest.param(_InterruptedStream, "write failed", id="write"),
+        pytest.param(_FailingCloseStream, "close failed", id="close"),
+    ],
+)
+def test_a_failed_fill_removes_the_temporary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stream_type: cabc.Callable[[Path], _RealTemporaryStream],
+    diagnostic: str,
+) -> None:
+    """Every failure inside the fill is cleaned up by the same owner.
+
+    The write, the flush, and the stream's own closure are all inside the fill
+    interval, so a failure in any of them must unlink the temporary before it
+    propagates. Without that, the outer guard would be the only cleanup and the
+    paths would drift. The closure is the one that reads as if it sits outside:
+    it records the failure after every write has already succeeded, so a guard
+    written inside the ``with`` ends before the failing step runs.
+    """
+    destination = tmp_path / "config.toml"
+    created = _swap_in_stream(monkeypatch, destination, stream_type)
+
+    with pytest.raises(OSError, match=diagnostic):
+        atomic_write.atomic_write(destination, b"payload\n")
+
+    _assert_the_failed_fill_left_nothing_behind(created, destination)

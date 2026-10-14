@@ -611,11 +611,13 @@ is open, draft, and **not merged**.
 
 That commit count is the state at first delivery and stayed stale through two
 later rebuilds: the branch was replayed onto `b6bb9a99`, then rebuilt on current
-`main`, and stands at 16 commits over
+`main`, and stands at 19 commits over
 `8c78a5b77781654b8a92282f8f8dbde387966c36` as of 2026-10-14. The earlier figure
 is left in place rather than edited, because it describes the delivery it
 records; the current count is what a reader following this plan should measure
-against.
+against. That figure is itself a measurement with a date on it: re-run
+`git rev-list --count origin/main..HEAD` rather than trusting it after any
+further commit lands on this branch.
 
 The branch was then rebased onto `main` on 2026-10-02. The replay renumbered
 this plan's ADR to 019 (the identifier collision noted in the Decision Log),
@@ -730,7 +732,16 @@ The second group is a set of correctness gaps in the guard machinery itself:
   reason reworded: `_arbitrate` now holds the cancellation-outranks-failure
   rule once for both `_settle_teardown` and `_weigh`, differing only in whether
   an ordinary failure is suppressed. The entry was removed, and ADR-022 carries
-  a dated addendum rather than edited accepted text.
+  a dated addendum rather than edited accepted text. The first attempt at this
+  extraction kept the promised *shape* while breaking the promised *semantics*:
+  it passed `suppress_failure=True` from the teardown and `False` from the
+  public stop, which is a flag deciding suppression, not the pending exception
+  being handed over. That reads correctly while every caller's state happens to
+  agree with the flag, and a third caller whose block exception and flag
+  disagree would get the wrong answer silently. `_arbitrate` now takes
+  `pending: BaseException | None` and derives suppression from its presence, so
+  a caller cannot select suppression without also supplying the exception it is
+  suppressing *for*.
 - `make install-nose` ended on the version print, so a failed `cargo-binstall`,
   or one that exited zero having placed the wrong detector, left the target
   reporting success over a stale binary. The recipe now propagates the

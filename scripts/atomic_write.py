@@ -101,21 +101,31 @@ def _filled_temporary(
     code that created the file: whoever unlinks it last is not also the code
     that has to know how far the write got.
 
+    The path is read off the stream before the fill starts, and the guard wraps
+    the ``with`` rather than sitting inside it, so the window covers the stream's
+    own closure too. A ``__exit__`` that raises while flushing or closing is a
+    failure of this function like any other, and the temporary it left behind is
+    still this function's to remove.
+
     Returns
     -------
     pathlib.Path
         The path of the written temporary, which the caller owns from here.
     """
-    with tempfile.NamedTemporaryFile(
+    # ruff: ignore[open-file-with-context-handler] - the stream is entered as a
+    # context manager by the `with` below; the binding only sits outside it so
+    # that the guard covers the stream's own closure.
+    stream = tempfile.NamedTemporaryFile(
         delete=False, dir=path.parent, prefix=f".{path.name}."
-    ) as stream:
-        temporary = pathlib.Path(stream.name)
-        try:
+    )
+    temporary = pathlib.Path(stream.name)
+    try:
+        with stream:
             stream.write(content)
             stream.flush()
             if options.sync_file:
                 os.fsync(stream.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
     return temporary

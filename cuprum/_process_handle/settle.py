@@ -148,14 +148,14 @@ async def _settle_teardown[T](
     """
     stop_step = await _run_shielded_step(stop)
     settle_step = await _run_shielded_step(settle())
-    _arbitrate(stop_step, settle_step, suppress_failure=exc is not None)
+    _arbitrate(stop_step, settle_step, pending=exc)
 
 
 def _arbitrate[U, V](
     stop_step: _ShieldedStepFailure[U],
     settle_step: _ShieldedStepFailure[V],
     *,
-    suppress_failure: bool,
+    pending: BaseException | None,
 ) -> None:
     """Raise the error the stop and settle steps owe the caller, if any.
 
@@ -163,16 +163,16 @@ def _arbitrate[U, V](
     and the stop's failure outranks the settle's. A cancellation always
     propagates — it is a request that the task stop, not a failure to report,
     and swallowing it would leave the task marked cancelled with no matching
-    ``CancelledError`` for an enclosing timeout or task group to observe. Only
-    an ordinary failure can be suppressed, and ``suppress_failure`` says
-    whether this caller wants that: a teardown defers to an error that already
-    caused the exit, while a public stop is what the caller asked for and has
-    nothing to defer to.
+    ``CancelledError`` for an enclosing timeout or task group to observe.
 
-    The two callers differ only in that flag. Passing the pending exception's
-    presence rather than a mode is deliberate: the caller with a pending
-    exception is expressing "the block already failed", which is a fact about
-    its own state, not a choice of strategy.
+    ``pending`` is the exception that already caused this exit, or ``None``
+    when nothing is in flight. It is the state, not a mode: a teardown calls
+    with the block's own exception and so defers an ordinary teardown failure
+    to it, while a public stop has nothing in flight and raises what it owes.
+    Reading the presence here rather than at the call site keeps the rule in
+    one place, and passing the exception itself means a caller cannot select
+    suppression without one — the flag could say "suppress" while the caller
+    had nothing to suppress for.
 
     The failure is not returned. Every caller either raises it or leaves it to
     the caller above, and a returned exception invites one to be dropped.
@@ -183,7 +183,7 @@ def _arbitrate[U, V](
     )
     if cancellation is not None:
         raise cancellation
-    if failure is not None and not suppress_failure:
+    if failure is not None and pending is None:
         raise failure
 
 
@@ -205,5 +205,5 @@ async def _weigh[T, U](
         rather than taken from the step report, because a report's value may be
         absent while the caller is still owed a settled result.
     """
-    _arbitrate(stop_step, settle_step, suppress_failure=False)
+    _arbitrate(stop_step, settle_step, pending=None)
     return await settle()
