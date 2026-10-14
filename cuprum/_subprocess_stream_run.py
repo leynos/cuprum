@@ -60,6 +60,7 @@ from cuprum._subprocess_wait_types import _DrainContext, _RunTaskOwnership
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
+    from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _StreamPayload, _StreamPayloadPair
 
@@ -341,9 +342,8 @@ async def _run_subprocess_with_streams(
     # Imported here to avoid the orchestration module importing this one at
     # module load time (they reference each other's helpers).
     from cuprum._subprocess_streams import (
-        _build_stream_config,
-        _spawn_stream_consumers,
-        _StreamConsumerSpawnContext,
+        _build_run_task_ownership,
+        _prepare_stream_spawn,
     )
 
     if execution.idle is not None:
@@ -351,30 +351,11 @@ async def _run_subprocess_with_streams(
         # before hooks that preceded this spawn are the parent's work, not the
         # child's silence.
         execution.idle.launch()
-    discard_on_cancel = asyncio.Event()
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
     # The spawn context is a value snapshot, not an ownership hand-off: the
     # run keeps retaining the same collector tuple on _RunTaskOwnership so
     # its single reconciliation point settles them exactly once.
-    spawn_context = _StreamConsumerSpawnContext(
-        stream_config=stream_config,
-        pid=pid,
-        relay_diagnostics=relay_diagnostics,
-    )
-    tasks = _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
-        ),
-        consumers=_spawn_stream_consumers(
-            process,
-            execution,
-            spawn_context,
-        ),
-        discard_on_cancel=discard_on_cancel,
-        relay_diagnostics=relay_diagnostics,
-        idle=execution.idle,
-    )
+    spawn = _prepare_stream_spawn(execution, pid)
+    tasks = _build_run_task_ownership(process, execution, spawn)
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
         execution,
@@ -387,7 +368,7 @@ async def _run_subprocess_with_streams(
         tasks,
         pid,
     )
-    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
+    return exit_code, exited_at, stdout_text, stderr_text, spawn.relay_diagnostics
 
 
 __all__ = [

@@ -8,7 +8,6 @@ queue, and the teardown of a run that failed before it could be returned.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import typing as typ
 
@@ -20,18 +19,16 @@ from cuprum._line_stream.line_queue import (
     _queue_line_sink,
 )
 from cuprum._process_lifecycle import _terminate_all_shielded
-from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_streams import (
-    _build_stream_config,
-    _spawn_stream_consumers,
-    _StreamConsumerSpawnContext,
+    _build_run_task_ownership,
+    _prepare_stream_spawn,
 )
-from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum._line_stream.line_queue import _LineQueueItem
     from cuprum._line_stream.telemetry import _LineStreamTelemetry
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -115,8 +112,8 @@ def _build_unstarted_run(
     caller's first fallible step — the ``start`` emission — already has a whole
     run to abandon rather than a partial one to guess at.
 
-    Nothing here suspends or fails. ``_build_stream_config`` only reads the
-    execution, ``_spawn_stdin_writer`` and ``_spawn_stream_consumers`` are plain
+    Nothing here suspends or fails. The preparation helper only reads the
+    execution, the stdin writer and the stream consumers it starts are plain
     ``create_task`` calls, and ``_LineStreamRun`` is a frozen dataclass, so no
     exception can escape and leave a child running with half-built ownership.
 
@@ -125,31 +122,12 @@ def _build_unstarted_run(
     _LineStreamRun
         The unstarted run, owning the process and every task that reads it.
     """
-    discard_on_cancel = asyncio.Event()
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
-    # The same consumer builder ``run()`` uses, so iterating lines can never
-    # silently diverge from it on capture, echo, or sink selection.
-    spawn_context = _StreamConsumerSpawnContext(
-        stream_config=stream_config,
-        pid=process.pid,
-        relay_diagnostics=relay_diagnostics,
-    )
+    # The same wiring ``run()`` uses, so iterating lines can never silently
+    # diverge from it on capture, echo, or sink selection.
+    spawn = _prepare_stream_spawn(execution, process.pid)
     return _LineStreamRun(
         process=process,
-        tasks=_RunTaskOwnership(
-            stdin_task=_spawn_stdin_writer(
-                process, execution.stdin_data, execution.observation
-            ),
-            consumers=_spawn_stream_consumers(
-                process,
-                execution,
-                spawn_context,
-            ),
-            discard_on_cancel=discard_on_cancel,
-            relay_diagnostics=relay_diagnostics,
-            idle=execution.idle,
-        ),
+        tasks=_build_run_task_ownership(process, execution, spawn),
         queue=queue,
         started_at=execution.started_at,
         telemetry=telemetry,
