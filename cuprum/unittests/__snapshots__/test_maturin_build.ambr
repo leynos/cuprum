@@ -176,6 +176,7 @@
       'cuprum/redaction.py',
       'cuprum/rust.py',
       'cuprum/sh/__init__.py',
+      'cuprum/sh/_deprecated.py',
       'cuprum/sh/argv.py',
       'cuprum/sh/builder.py',
       'cuprum/sh/bytes_entry_points.py',
