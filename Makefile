@@ -535,7 +535,7 @@ lint-clippy: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation and Clippy
 lint-whitaker: ## Run Whitaker for every Rust workspace package
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 
-# Accept FIRST/SECOND/REASON only from the make command line: an ambient
+# Accept FIRST/MEMBERS/REASON only from the make command line: an ambient
 # environment variable must not be able to write an exception into
 # pyproject.toml, and `NAME` in particular is already taken by WSL, which
 # injects the hostname there. `$(value ...)` preserves the literal text so
@@ -573,10 +573,12 @@ duplication-test: ## Run the duplication-gate helper tests
 
 # `MEMBERS` carries every location past the first as one whitespace-separated
 # value, each forwarded as its own `--second`. GNU Make overwrites a repeated
-# command-line variable with its last occurrence, so `SECOND=a SECOND=b` never
-# reaches the recipe; a single list-valued variable keeps every member
-# addressable. `$(value ...)` yields the list unexpanded, so `$(foreach)` sees
-# the literal entries rather than a shell-quoted single string.
+# command-line variable with its last occurrence, which is why the interface
+# has no repeated `SECOND`: `SECOND=a SECOND=b` would keep only `b` and record
+# a three-member family as covering two. A single list-valued variable keeps
+# every member addressable. `$(value ...)` yields the list unexpanded, so
+# `$(foreach)` sees the literal entries rather than a shell-quoted single
+# string.
 duplication-allow: export DUPLICATION_FIRST = $(call cli_value,FIRST)
 duplication-allow: export DUPLICATION_MEMBERS = $(call cli_value,MEMBERS)
 duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)

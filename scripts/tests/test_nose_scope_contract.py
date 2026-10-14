@@ -197,13 +197,15 @@ def test_size_floor_and_ranking_bound_adjudicate_the_whole_surface() -> None:
     min_size = table.get("min-size")
     top = table.get("top")
     assert isinstance(min_size, int), "tool.nose.min-size must be an integer."
-    # Equality rather than a floor comparison. The floor direction only guards
-    # against narrowing; it accepts any widening, and widening is the same
-    # defect mirrored — a raised floor hides small families below it exactly as
-    # a lowered one admits noise above it. Neither direction is adjudicated by
-    # the gate, because a family under the floor is never reported, so a silent
-    # change either way shrinks the surface the gate claims to enforce. An
-    # approved widening changes this constant in the same commit.
+    # Equality rather than a floor comparison. A `>=` comparison only guards
+    # against lowering; it accepts any raising, and raising narrows — measured
+    # on this tree, min-size 16 admits 104 families, 24 admits 62, and 40 admits
+    # 43. Narrowing is the same defect mirrored: a raised floor hides small
+    # families below it exactly as a lowered one admits noise above it. Neither
+    # direction is adjudicated by the gate, because a family under the floor is
+    # never reported, so a silent change either way moves the surface the gate
+    # claims to enforce. An approved change to the floor changes this constant
+    # in the same commit.
     assert min_size == MINIMUM_SIZE_FLOOR, (
         f"tool.nose.min-size must be exactly {MINIMUM_SIZE_FLOOR}; found "
         f"{min_size!r}. Raising it hides families below the new floor without "
