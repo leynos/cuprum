@@ -47,7 +47,7 @@ projections, with consistent opt-in behaviour at each supported destination.
 
 - Keep the raw `ExecEvent` immutable and return a sanitized copy.
 - Scope policy instances to an adapter, sink, or explicitly wrapped consumer.
-- Propagate redaction failures so raw values are never used as a fallback.
+- Propagate redaction failures to prevent any fallback to raw values.
 - Leave metric adapters and their bounded labels unchanged.
 
 ## Options considered

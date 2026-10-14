@@ -87,21 +87,10 @@ def test_apply_text_masks_literals_and_pattern_matches() -> None:
     )
 
 
-def test_failed_pattern_raises_without_echoing_source_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("failing_redaction_substitution")
+def test_failed_pattern_raises_without_echoing_source_text() -> None:
     """A failed rule stops projection and exposes only safe failure metadata."""
     policy = RedactionPolicy(patterns=(re.compile(r"credential"),))
-
-    def fail_substitution(
-        _pattern: re.Pattern[str],
-        value: str,
-        _mask: str,
-    ) -> str:
-        """Model a rule whose exception embeds its input."""
-        raise ValueError(value)
-
-    monkeypatch.setattr("cuprum.redaction._substitute_pattern", fail_substitution)
 
     with pytest.raises(RedactionError) as raised:
         policy.apply_text(_SENTINEL)
@@ -174,7 +163,7 @@ def test_literal_redaction_preserves_surrounding_unicode(
 
     assert policy.apply_text(prefix + "!secret!" + suffix) == (
         prefix + "[REDACTED]" + suffix
-    )
+    ), "only the configured marker must change"
 
 
 def test_pattern_mask_is_literal_and_optional_fields_stay_absent() -> None:
@@ -182,16 +171,18 @@ def test_pattern_mask_is_literal_and_optional_fields_stay_absent() -> None:
     policy = RedactionPolicy(patterns=(re.compile(r"secret"),), mask=r"\1\g<value>")
     event = dc.replace(_event(), env=None, line=None, note=None)
 
-    assert policy.apply_text("secret") == r"\1\g<value>"
-    assert policy.apply_text("unmatched") == "unmatched"
+    assert policy.apply_text("secret") == r"\1\g<value>", "the mask must remain literal"
+    assert policy.apply_text("unmatched") == "unmatched", "unmatched text must survive"
     projected = policy.redact_event(event)
-    assert projected.env is None
-    assert projected.line is None
-    assert projected.note is None
+    assert projected.env is None, "an absent environment must remain absent"
+    assert projected.line is None, "an absent output line must remain absent"
+    assert projected.note is None, "an absent note must remain absent"
     selected = {"argv", "env", "line", "note", "tags"}
     for field in dc.fields(event):
         if field.name not in selected:
-            assert getattr(projected, field.name) == getattr(event, field.name)
+            assert getattr(projected, field.name) == getattr(event, field.name), (
+                f"unselected field {field.name} must remain unchanged"
+            )
 
 
 def test_observer_wrapper_isolates_sanitized_copies() -> None:
@@ -200,9 +191,9 @@ def test_observer_wrapper_isolates_sanitized_copies() -> None:
     event = _event()
     hook = redacting_hook(received.append, RedactionPolicy(literals=(_SENTINEL,)))
 
-    assert hook(event) is None
-    assert received[0].line == "[REDACTED]"
-    assert event.line == _SENTINEL
+    assert hook(event) is None, "the synchronous consumer must return None"
+    assert received[0].line == "[REDACTED]", "the consumer must receive redacted text"
+    assert event.line == _SENTINEL, "the raw event must remain unchanged"
 
 
 def test_observer_wrapper_preserves_async_consumers() -> None:
@@ -219,35 +210,25 @@ def test_observer_wrapper_preserves_async_consumers() -> None:
         result = redacting_hook(consume, RedactionPolicy(literals=(_SENTINEL,)))(
             _event()
         )
-        assert result is not None
-        assert not received
+        assert result is not None, "the async consumer must return an awaitable"
+        assert not received, "a consumer must not run before successful delivery"
         await result
 
     asyncio.run(run_case())
-    assert received[0].line == "[REDACTED]"
+    assert received[0].line == "[REDACTED]", "the consumer must receive redacted text"
 
 
-def test_failed_redaction_never_calls_the_observer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("failing_redaction_substitution")
+def test_failed_redaction_never_calls_the_observer() -> None:
     """A failing projection cannot fall back to passing the raw event."""
     received: list[ExecEvent] = []
 
-    def fail_substitution(
-        _pattern: re.Pattern[str],
-        value: str,
-        _mask: str,
-    ) -> str:
-        """Model a rule whose exception embeds its input."""
-        raise ValueError(value)
-
-    monkeypatch.setattr("cuprum.redaction._substitute_pattern", fail_substitution)
     hook = redacting_hook(
         received.append, RedactionPolicy(patterns=(re.compile(r"."),))
     )
     with pytest.raises(RedactionError):
         hook(_event())
-    assert not received
+    assert not received, "a consumer must not run before successful delivery"
 
 
 def test_single_rules_and_iterators_have_typed_constructor_support() -> None:
