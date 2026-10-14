@@ -69,8 +69,13 @@ def _diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
 @pytest.mark.skipif(
     sys.platform != "linux", reason="the production doctest warning route is Linux-only"
 )
+@pytest.mark.timeout(10 * 60)
 def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
-    """Only the corrected nightly Rustdoc route rejects a doctest warning."""
+    """Only the corrected nightly Rustdoc route rejects a doctest warning.
+
+    Cargo compiles the scratch crate twice, so allow time for shared compiler
+    admission and package-cache locks as well as the cold build.
+    """
     crate = tmp_path / "warning-doctest"
     source = crate / "src/lib.rs"
     source.parent.mkdir(parents=True)

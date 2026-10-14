@@ -235,3 +235,21 @@ generated property cases are bounded to 16; both settings bound runtime without
 weakening interpretation. The per-path inventory and the excluded tests remain
 in
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md).
+
+## Addendum (2026-09-27): Windows synchronous native I/O capability
+
+Issue #428 distinguishes a live borrowed Windows handle from one suitable for
+the synchronous `ReadFile`/`WriteFile` operations used by the native adapter.
+`SynchronousBorrowedStream` and `SynchronousOwnedStream` encode the
+non-overlapped requirement: a handle opened with `FILE_FLAG_OVERLAPPED` does
+not satisfy the synchronous `Read`/`Write` contract. `synchronous_pipe()` can
+safely provide this capability for Cuprum-created `CreatePipe` resources.
+
+Win32 does not provide a documented runtime query that can establish this
+creation-time mode from a bare handle. The unsafe `borrow_reader` and
+`adopt_writer` FFI hand-offs therefore require their caller to establish and
+guarantee the synchronous, non-overlapped property. Python's
+`ProactorEventLoop` subprocess pipes use overlapped handles, so the existing
+Python fallback remains in place until a separately designed overlapped-I/O
+adapter exists. The `cap-std` file and handle adapters remain trusted
+dependencies, not verifier-proved implementations.

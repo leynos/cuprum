@@ -403,7 +403,13 @@ observation does not change command or pipeline execution behaviour.
 
 The registration is context-local. Remove the registration by leaving its
 context manager or calling `detach()` on the returned handle. The existing
-`ExecEvent` observation API and Rust-pump observation channel are unchanged.
+`ExecEvent` observation API is unchanged. The Rust-pump hand-off outcomes add
+`RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED`, recorded as
+`windows_raw_handle_rejected` in `cuprum_rust_pump_handoff_total`. This bounded
+outcome identifies deliberate rejection when a direct native-shim caller
+supplies a raw Windows handle; normal pipeline hops still fall back to the
+Python pump as before. Update dashboards and exhaustive outcome handling to
+include the new value.
 
 ## Echo-fallback diagnostics
 

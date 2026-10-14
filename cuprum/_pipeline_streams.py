@@ -66,9 +66,9 @@ def _native_pump_supported_on_platform() -> bool:
     """Return whether the native Rust pump is safe for this platform.
 
     Windows ``ProactorEventLoop`` subprocess pipes use overlapped handles, but
-    the Rust extension currently performs synchronous ``std::fs::File`` I/O.
-    Do not give native pumping those handles until it implements true
-    overlapped I/O.
+    the Rust extension's ``SynchronousBorrowedStream`` contract permits only
+    synchronous ``std::fs::File`` I/O. Do not give native pumping those
+    handles until it implements true overlapped I/O.
 
     Returns
     -------

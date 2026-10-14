@@ -2,7 +2,6 @@
 
 use super::{
     BufferSize,
-    PlatformFd,
     PumpError,
     PyErr,
     PyResult,
@@ -66,14 +65,15 @@ pub(super) fn rust_pump_stream(
     buffer_size: i64,
 ) -> PyResult<u64> {
     run_stream_operation(py, reader_fd, buffer_size, || {
-        let writer_raw: PlatformFd = convert_fd(writer_fd)?;
+        let writer_raw: super::PlatformFd = convert_fd(writer_fd)?;
         // SAFETY: `_streams_rs` transfers its duplicate exactly once.
         // Python retains no owner after this hand-off; see the boundary
         // contract for direct native callers and submission rollback.
         let writer = unsafe { cuprum_native_io::adopt_writer(writer_raw) };
         Ok(move |reader: ReaderFd, validated_buffer_size| {
             // SAFETY: Python keeps the paused reader transport alive until
-            // the worker and cleanup finish, including cancellation.
+            // the worker and cleanup finish, including cancellation. On
+            // Unix, the borrow only lasts for this synchronous operation.
             let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
             pump_stream(&source, writer, validated_buffer_size)
         })

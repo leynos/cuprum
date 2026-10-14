@@ -198,6 +198,31 @@ def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
     _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
 
 
+def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:
+    """Log and emit the Windows raw-handle capability rejection."""
+    outcome = RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED
+    logger.debug(
+        "Rust pump rejected raw Windows handles without a synchronous-I/O capability",
+        extra={
+            "cuprum_action": "rust_pump_handoff_rejected",
+            "cuprum_outcome": outcome.value,
+        },
+    )
+    _emit_rust_pump_handoff_outcome(outcome)
+
+
+def _emit_native_pump_io_failure(
+    logger: logging.Logger,
+    *,
+    is_windows: bool,
+) -> None:
+    """Record a native pump error using the platform-specific outcome."""
+    if is_windows:
+        _emit_windows_raw_handle_rejected(logger)
+    else:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+
+
 def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
     """Invoke one pump hook, reporting rather than propagating its failure."""
     try:

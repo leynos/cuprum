@@ -136,7 +136,8 @@ class PumpMetricsHook:
     - ``cuprum_rust_pump_cleanup_deferred_total``: an unlabelled counter for
       deferred cleanup completed by the worker's callback.
     - ``cuprum_rust_pump_handoff_total``: a counter labelled ``outcome`` by
-      the closed :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary.
+      the closed :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary,
+      including the Windows raw-handle rejection.
 
     All labels are closed and bounded; descriptor values, exception details,
     and other event data are never labels. Unknown phases are ignored so a

@@ -5,9 +5,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use cuprum_native_io::PlatformFd;
-use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
+use cuprum_streams::{BufferSize, PumpError};
+#[cfg(unix)]
+use cuprum_streams::{consume_stream, pump_stream};
 use pyo3::prelude::*;
 use thiserror::Error;
+
 mod errors;
 #[cfg(test)]
 mod fd_tests;
@@ -20,6 +23,7 @@ mod stream_error_behaviour;
 mod stream_error_tests;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(unix)]
 struct ReaderFd(PlatformFd);
 
 /// Classify a failure at the native stream boundary.
@@ -63,14 +67,21 @@ fn validate_buffer_size(size: i64) -> Result<BufferSize, RustStreamError> {
 #[pyfunction]
 pub const fn is_available() -> bool { true }
 
+#[cfg(unix)]
 #[expect(
-    clippy::allow_attributes,
-    reason = "PyO3 emits the argument-count lint only in some build configurations"
-)]
-#[allow(
     clippy::too_many_arguments,
-    reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
+    reason = "PyO3-generated stream wrappers in this module exceed the workspace argument \
+              threshold"
 )]
+mod stream_pyfunctions;
+
+#[cfg(windows)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3-generated stream wrappers in this module exceed the workspace argument \
+              threshold"
+)]
+#[path = "stream_pyfunctions_windows.rs"]
 mod stream_pyfunctions;
 
 use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};

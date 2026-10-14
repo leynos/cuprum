@@ -6,6 +6,8 @@ mod buffer;
 mod buffer_size_tests;
 #[cfg(all(test, unix, not(miri)))]
 mod consume_snapshot_tests;
+#[cfg(test)]
+mod consume_tests;
 mod errors;
 mod io_utils;
 #[cfg(all(test, unix))]
@@ -23,11 +25,16 @@ mod test_support;
 #[cfg(all(test, unix))]
 mod tracing_capture;
 mod utf8;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
+#[cfg(unix)]
 use cuprum_native_io::{AsStream, OwnedStream};
+#[cfg(windows)]
+use cuprum_native_io::{SynchronousBorrowedStream, SynchronousOwnedStream};
 pub use errors::PumpError;
 use io_utils::{classify_write, operation_span, read_stream};
-use pump_machine::{Flow, PumpState, advance};
+use pump_machine::{Flow, PumpState, WriteEvent, advance};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Maximum accepted stream buffer size, in bytes (1 GiB).
@@ -99,6 +106,7 @@ impl BufferSize {
 ///
 /// # Errors
 /// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(unix)]
 pub fn pump_stream(
     reader: &impl AsStream,
     writer: OwnedStream,
@@ -109,10 +117,29 @@ pub fn pump_stream(
     })
 }
 
+/// Pump from a synchronous Windows reader, consuming the synchronous writer.
+///
+/// The writer drops on success, error, and unwind. The reader's owner must
+/// outlive this borrow and remains responsible for closing it.
+///
+/// # Errors
+/// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(windows)]
+pub fn pump_stream(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousOwnedStream,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    cuprum_native_io::with_owned_writer(&reader, writer, |source, sink| {
+        pump_stream_files(*source, sink.as_synchronous_borrowed(), buffer_size)
+    })
+}
+
 /// Decode a borrowed stream as UTF-8 with replacement semantics.
 ///
 /// # Errors
 /// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(unix)]
 pub fn consume_stream(
     reader: &impl AsStream,
     buffer_size: BufferSize,
@@ -120,6 +147,19 @@ pub fn consume_stream(
     consume_stream_files(reader, buffer_size)
 }
 
+/// Decode a synchronous Windows stream as UTF-8 with replacement semantics.
+///
+/// # Errors
+/// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(windows)]
+pub fn consume_stream(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    consume_stream_files(reader, buffer_size)
+}
+
+#[cfg(unix)]
 fn pump_stream_files(
     reader: &impl AsStream,
     writer: &impl AsStream,
@@ -135,19 +175,56 @@ fn pump_stream_files(
     pump_stream_files_readwrite(reader, writer, buffer_size)
 }
 
+#[cfg(windows)]
+fn pump_stream_files(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    pump_stream_files_readwrite(reader, writer, buffer_size)
+}
+
 /// Read/write loop fallback for pumping bytes between file descriptors.
 ///
 /// This is used when splice is not available (non-Linux) or when the file
 /// descriptors do not support splice (regular files, some sockets).
+#[cfg(unix)]
 fn pump_stream_files_readwrite(
     reader: &impl AsStream,
     writer: &impl AsStream,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
-    // Operation span (see `operation_span`) so the EINTR (`warn!`) and
-    // fatal-I/O (`error!`) events emitted from the read/write seams inherit
-    // the operation name, `buffer_size`, and `total_bytes` context even under
-    // a `warn`/`error`-only production filter.
+    pump_stream_with_io(
+        |buffer| read_stream(reader, buffer),
+        |chunk| classify_write(writer, chunk),
+        buffer_size,
+    )
+}
+
+// @codescene(disable:"Code Duplication") This Windows adapter mirrors the Unix adapter to preserve
+// its capability-typed stream contract; both forward to the shared executable loop.
+#[cfg(windows)]
+fn pump_stream_files_readwrite(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    pump_stream_with_io(
+        |buffer| read_stream(reader, buffer),
+        |chunk| classify_write(writer, chunk),
+        buffer_size,
+    )
+}
+
+/// Run the shared pump loop while platform adapters retain their typed I/O.
+fn pump_stream_with_io(
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, PumpError>,
+    mut write: impl FnMut(&[u8]) -> Result<WriteEvent, PumpError>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    // Operation span (see `operation_span`) so the native I/O events inherit
+    // the operation name, `buffer_size`, and `total_bytes` context on every
+    // platform while the closures keep the Windows capability boundary local.
     let span = operation_span("pump_stream_readwrite", buffer_size.value());
     let _guard = span.enter();
     io_utils::reset_retry_counters();
@@ -156,24 +233,21 @@ fn pump_stream_files_readwrite(
     let mut state = PumpState::start();
 
     loop {
-        let read_len = read_stream(reader, &mut buffer)?;
+        let read_len = read(&mut buffer)?;
         let writer_was_open = state.writer_open();
 
-        // `advance` owns both the zero-length-is-EOF translation and the write
-        // precondition — a chunk read while the writer is still open — so this
-        // loop, the property tests, and the bounded proofs share one
-        // definition of them. Fatal writes propagate the real error and never
-        // reach the pure state machine.
+        // `advance` owns zero-length-is-EOF translation and the write
+        // precondition, so this loop and the state-machine tests share them.
+        // Fatal writes propagate without reaching the pure state machine.
         let flow = advance(&mut state, read_len, || {
             let chunk = buffer
                 .get(..read_len)
                 .ok_or(PumpError::BufferRangeExceeded)?;
-            classify_write(writer, chunk)
+            write(chunk)
         })?;
 
-        // The latch closing is the `head`-style early exit. Mirror splice's
-        // field and message so the event is not visible on one path only, and
-        // observe it here rather than in the deliberately pure `pump_machine`.
+        // Observe the latch here so the broken-pipe drain event remains visible
+        // outside the deliberately pure `pump_machine`.
         if writer_was_open && !state.writer_open() {
             tracing::debug!(
                 bytes_transferred = state.total_written(),
@@ -193,9 +267,32 @@ fn pump_stream_files_readwrite(
     Ok(total_written)
 }
 
+#[cfg(unix)]
 fn consume_stream_files(
     reader: &impl AsStream,
     buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    consume_with_reader(|buffer| read_stream(reader, buffer), buffer_size, "unix")
+}
+
+#[cfg(windows)]
+fn consume_stream_files(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    consume_with_reader(|buffer| read_stream(reader, buffer), buffer_size, "windows")
+}
+
+/// Drain `read` to EOF, decoding the bytes as UTF-8 with replacement.
+///
+/// Each platform entry point supplies a closure over its own capability-typed
+/// `read_stream`, so this loop never sees a handle and cannot widen the
+/// Windows synchronous-handle boundary. `platform` labels the length-overflow
+/// event so it names the entry point's platform.
+fn consume_with_reader(
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, PumpError>,
+    buffer_size: BufferSize,
+    platform: &'static str,
 ) -> Result<String, PumpError> {
     // Operation span (see `operation_span`) so the read seam's `warn!`/`error!`
     // events inherit this operation's context even under a `warn`/`error`-only
@@ -209,13 +306,8 @@ fn consume_stream_files(
     let mut output = String::new();
     let mut total_read = 0_u64;
 
-    #[cfg(unix)]
-    let platform = "unix";
-    #[cfg(windows)]
-    let platform = "windows";
-
     loop {
-        let read_len = read_stream(reader, &mut buffer)?;
+        let read_len = read(&mut buffer)?;
         if read_len == 0 {
             break;
         }
