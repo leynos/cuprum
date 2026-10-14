@@ -7,7 +7,7 @@ one of those cases passing while a real run captured everything — and that the
 retention invariants hold over an open-ended input space rather than over
 payloads someone thought of.
 
-The generator is the part that matters. A page of hand-written examples is
+The generator is the part that matters. A page of handwritten examples is
 where a bound bug survives: every case a person writes is a case they already
 had in mind. The properties below are stated so that the interesting classes —
 a stream longer than its bound, a stream shorter, an exactly-fitting stream, a
@@ -425,7 +425,11 @@ def test_a_zero_length_stream_is_a_complete_empty_capture() -> None:
 
     final = sink.finalize()
 
-    assert final.payload == ""
+    # Absent and empty are different answers here: ``None`` is how a spilled
+    # capture says the payload is the file, so an idle bounded capture has to
+    # report empty text rather than borrow that signal for having nothing.
+    assert final.payload is not None, "an idle bounded capture still reports text"
+    assert not final.payload
     assert final.capture.total_bytes == 0
     assert final.capture.dropped_bytes == 0
     assert final.capture.truncated is False
@@ -446,7 +450,11 @@ def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
     sink.absorb(payload)
     final = sink.finalize()
 
-    assert final.payload == "", (
+    # A bound that retains nothing reports empty text, not an absent payload:
+    # the accumulator decoded the stream and found no usable suffix, which is
+    # a different outcome from a spilled capture's "read the file instead".
+    assert final.payload is not None, "a bounded capture still reports text"
+    assert not final.payload, (
         "no suffix of one byte decodes on its own, so nothing may be retained"
     )
     assert final.capture.total_bytes == len(payload)

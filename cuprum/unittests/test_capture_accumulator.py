@@ -113,7 +113,7 @@ def test_full_capture_reproduces_the_stream_it_replaced(
 
 @pytest.mark.parametrize("payload", _CORPUS)
 @pytest.mark.parametrize("chunk_size", [1, 3, 64])
-def test_full_capture_in_bytes_mode_returns_the_childs_own_bytes(
+def test_full_capture_in_bytes_mode_returns_the_original_bytes(
     payload: bytes,
     chunk_size: int,
 ) -> None:

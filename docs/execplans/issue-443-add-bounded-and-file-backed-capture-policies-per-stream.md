@@ -20,7 +20,7 @@ That forces a bad choice on anyone driving a long-running, noisy child — a
 build tool, a compiler, a test runner that emits megabytes of progress. Capture
 it, and the parent's resident memory tracks the child's total output for the
 life of the run. Do not capture it, and when the run fails there is nothing to
-report: no trailing diagnostic, no last lines of context, no artifact to attach
+report: no trailing diagnostic, no last lines of context, no artefact to attach
 to a bug report. Capture is also joint: stdout and stderr cannot be configured
 independently, so a caller who wants stderr's last 64 KiB *and* stdout streamed
 to a file must currently take both in full.
@@ -207,7 +207,7 @@ Thresholds that trigger escalation when breached.
 - [ ] Task 2: `_capture_sink.py` accumulators, `capture_events.py`,
   `capture_observation.py`, and the drain-loop wiring in `_streams.py`.
 - [ ] Task 3: thread policies through the single-command and pipeline paths;
-  materialise results; cleanup on success/failure/timeout/cancellation;
+  materialize results; cleanup on success/failure/timeout/cancellation;
   storage-failure handling.
 - [ ] Task 4: unit tests, BDD feature and behaviour tests, documentation
   updates. Tests landed and green: `test_capture_cleanup.py`,
@@ -312,18 +312,18 @@ Thresholds that trigger escalation when breached.
   invisible until the specific route it exists for — a drain cancelled
   mid-await — was exercised. Closed by adding
   `cuprum/unittests/test_capture_cleanup.py`, whose
-  `test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle`
-  passes an empty drain tuple so the result step has nothing to act on and the
-  sink step is the only thing that can remove the file. Under the same
-  mutation that case and `test_cleanup_removes_the_file_a_spilled_sink_owns`
-  now fail (2 of 6). Date/Author: 2026-10-14, implementation agent.
+  `test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle` passes
+  an empty drain tuple so the result step has nothing to act on and the sink
+  step is the only thing that can remove the file. Under the same mutation that
+  case and `test_cleanup_removes_the_file_a_spilled_sink_owns` now fail (2 of
+  6). Date/Author: 2026-10-14, implementation agent.
 
 - Observation (M3, O9): the obligation's wording — "a run with no capture
   configured still produces empty `captures` and complete `stdout`/`stderr`
   text" — describes two different runs, not one. A default `RunOutputOptions()`
   resolves both streams to `FullCapture` and reports two `full`/`memory`
-  records; it is `capture=False` that reports `captures == ()` with `stdout`
-  and `stderr` both `None`. The verification was split into two tests in
+  records; it is `capture=False` that reports `captures == ()` with `stdout` and
+  `stderr` both `None`. The verification was split into two tests in
   `cuprum/unittests/test_public_api.py` so each run's real shape is pinned:
   `test_a_default_run_still_returns_complete_text_under_full_capture` and
   `test_a_run_that_disables_capture_reports_neither_text_nor_records`. The
@@ -331,19 +331,19 @@ Thresholds that trigger escalation when breached.
   alone and would have been wrong about the other. Date/Author: 2026-10-14,
   implementation agent.
 
-- Observation (M3, O8): partial output surviving a timeout is carried by the drain
-  *payloads* handed to `_handle_stream_timeout`
-  (`cuprum/_subprocess_stream_run.py:132` and `:306`), not by
-  `_finish_drain`'s non-EOF branch nor by `_finalize_capture_handles`. Two
-  mutations that a reading of the design would predict to bite did not:
-  replacing `_finish_drain`'s non-EOF branch with an empty capture, and
-  skipping both calls inside `_finalize_capture_handles`, each left all five
-  timeout cases passing. Passing `stdout_text=None, stderr_text=None` at both
+- Observation (M3, O8): partial output surviving a timeout is carried by the
+  drain *payloads* handed to `_handle_stream_timeout`
+  (`cuprum/_subprocess_stream_run.py:132` and `:306`), not by `_finish_drain`'s
+  non-EOF branch nor by `_finalize_capture_handles`. Two mutations that a
+  reading of the design would predict to bite did not: replacing
+  `_finish_drain`'s non-EOF branch with an empty capture, and skipping both
+  calls inside `_finalize_capture_handles`, each left all five timeout cases
+  passing. Passing `stdout_text=None, stderr_text=None` at both
   `_handle_stream_timeout` call sites failed 4 of 5. This is recorded because
   it locates the responsibility precisely: the readers reach EOF after the
   child is signalled, so the payload arrives by the EOF path, and only the
-  handler's arguments decide whether it survives to the caller.
-  Date/Author: 2026-10-14, implementation agent.
+  handler's arguments decide whether it survives to the caller. Date/Author:
+  2026-10-14, implementation agent.
 
 - Observation (M4, O10): the documentation harness
   (`tests/behaviour/test_documentation_examples_behaviour.py`) executes every
@@ -386,15 +386,15 @@ Thresholds that trigger escalation when breached.
 
 - Observation (M4, O13): moving `_start_line_stream_run` to
   `cuprum/_line_stream/spawn.py` **did** break a patch seam, and the break was
-  the useful signal. `test_lines_stamp_events_from_the_spawn_clock` injected the
-  spawn clock by patching `coordinator.perf_counter`. The sampling moved with
-  the function, so a re-import into `coordinator` would have left the test
+  the useful signal. `test_lines_stamp_events_from_the_spawn_clock` injected
+  the spawn clock by patching `coordinator.perf_counter`. The sampling moved
+  with the function, so a re-import into `coordinator` would have left the test
   patching a name nothing reads — it would have kept passing while testing
   nothing. The test now patches `spawn.perf_counter`; a mutation check confirms
   the seam is live (injecting 30.0 in place of 40.0 shifts the reported line
   timestamp to 13.25, exactly 43.25 − 30.0), and patching the old target now
-  fails with `AttributeError` rather than passing vacuously.
-  Date/Author: 2026-10-14, implementation agent.
+  fails with `AttributeError` rather than passing vacuously. Date/Author:
+  2026-10-14, implementation agent.
 
 ## Decision log
 
@@ -537,9 +537,9 @@ Thresholds that trigger escalation when breached.
   `cuprum/_line_stream/spawn.py`. Rationale: each seam removes a cohesive unit
   whose callers either travel with it or read it through a re-export, so no
   outer patch seam moves. `_StreamConfig` is read by roughly twenty importers
-  through the `cuprum._streams` re-export; the post-exit helpers are re-imported
-  into the run module *because* their callers stayed there, which the
-  re-export probe confirmed is what keeps those patch sites live; nothing
+  through the `cuprum._streams` re-export; the post-exit helpers are
+  re-imported into the run module *because* their callers stayed there, which
+  the re-export probe confirmed is what keeps those patch sites live; nothing
   imports `_resolve_capture` externally; and the starter belongs beside the
   three builders it drives. Two alternatives were declined: moving
   `_finalize_capture_handles` (its caller set is broader than the split needs)
@@ -551,11 +551,12 @@ Thresholds that trigger escalation when breached.
   `ruff: ignore[typing-only-first-party-import]`. Rationale: the comment on
   `sinks` says it must stay resolvable from the module's globals for
   `typing.get_type_hints`. That invariant is *already* not satisfied —
-  `get_type_hints(RunOutputOptions)` raises `NameError: name 'LineHook' is not
-  defined`, because `LineHook` is already type-only — so extending the existing
-  pattern for `CapturePolicy` neither breaks a working contract nor newly
-  violates one. Claiming the `sinks` rule applies to `CapturePolicy` would have
-  been the error. Date/Author: 2026-10-14, implementation agent.
+  `get_type_hints(RunOutputOptions)` raises
+  `NameError: name 'LineHook' is not defined`, because `LineHook` is already
+  type-only — so extending the existing pattern for `CapturePolicy` neither
+  breaks a working contract nor newly violates one. Claiming the `sinks` rule
+  applies to `CapturePolicy` would have been the error. Date/Author:
+  2026-10-14, implementation agent.
 
 ## Outcomes & retrospective
 
@@ -588,7 +589,7 @@ Terms used below:
   stage's stdin. It is not capture, and no capture policy may affect it.
 - *Shorthand resolution*: `echo` filling in `echo_stdout`/`echo_stderr` when
   those are left `None`. The new capture fields resolve the same way.
-- *Finalise*: turning an accumulator's retained state into the pair (public
+- *Finalize*: turning an accumulator's retained state into the pair (public
   value, `CapturedStream` metadata) at the end of a drain.
 
 ## Conformance basis
@@ -636,7 +637,7 @@ decodable suffix (they start on a code-point boundary). Lemma:
 `dropped_bytes + len(retained) == total_bytes`. Method: property test with
 Hypothesis over generated byte strings and bounds, plus parameterized cases for
 the boundaries `n = 1`, `n` exactly equal to the stream length,
-`n = len(S) - 1`, and `n > len(S)`. Artifact:
+`n = len(S) - 1`, and `n > len(S)`. Artefact:
 `cuprum/unittests/test_bounded_capture_drain.py`. Evidence: hypothesis reports
 `Falsifying example` before the accumulator handles multi-byte input; all cases
 pass after. Non-vacuity: generators must reach multi-byte UTF-8 (assert a
@@ -650,7 +651,7 @@ classes; the negative control is a deliberately off-by-one bound
 `buffer.decode(encoding, errors)` for the same input. Method: parameterized
 comparison test that drives the drain once through the old `bytearray` path
 semantics and once through the accumulator, asserting equality across a fixed
-corpus (ASCII, UTF-8 multibyte, empty stream). Artifact:
+corpus (ASCII, UTF-8 multibyte, empty stream). Artefact:
 `cuprum/unittests/test_capture_accumulator.py`. Evidence: passes; would fail if
 the accumulator reordered, dropped, or re-decoded bytes. Non-vacuity: the
 corpus includes a non-empty multibyte case and the empty stream, so neither the
@@ -658,12 +659,12 @@ corpus includes a non-empty multibyte case and the empty stream, so neither the
 
 **O3 — File-backed capture writes the complete stream and reports byte
 counts.** Invariant: the spill file's contents equal the full `total_bytes` of
-the stream, byte for byte, and the finalised metadata reports
+the stream, byte for byte, and the finalized metadata reports
 `storage == "file"`, `owned is True`, and a real path, with `stdout is None`.
 Method: parameterized test driving the drain with a file-backed policy over
 corpora both below and above `spill_threshold_bytes` (asserting a file exists
 in the above-threshold case and that the below-threshold case still reports
-`storage == "memory"`). Artifact: `cuprum/unittests/test_capture_spill.py`.
+`storage == "memory"`). Artefact: `cuprum/unittests/test_capture_spill.py`.
 Evidence: the below-threshold case would fail if the accumulator spilled
 eagerly; the above-threshold case would fail if it truncated the file.
 Non-vacuity: the below-threshold corpus is non-empty, so "no file written"
@@ -674,7 +675,7 @@ spill write or flush raises `OSError`, the drain continues to EOF, the run
 returns a result, and a `CaptureEvent` with category `STORAGE_WRITE_FAILED` or
 `STORAGE_FLUSH_FAILED` is emitted carrying only the exception's class name.
 Method: injected-fault test with a spy/spilled accumulator whose write raises,
-subscribed through `observe_capture`. Artifact:
+subscribed through `observe_capture`. Artefact:
 `cuprum/unittests/test_capture_spill_failure.py`. Evidence: the run raises
 nothing and the emitted event's `error_type` is `"OSError"`; without the catch
 the test fails with the injected exception propagating out of the drain.
@@ -686,7 +687,7 @@ success, non-zero exit, timeout, and cancellation, a run with
 `FileBackedCapture(keep_file=False)` leaves no file at the reported path; with
 `keep_file=True` the file survives with complete contents. Method:
 parameterized end-to-end test over the four outcomes, asserting `Path.exists()`
-afterwards. Artifact: `cuprum/unittests/test_capture_spill_cleanup.py`.
+afterwards. Artefact: `cuprum/unittests/test_capture_spill_cleanup.py`.
 Evidence: the timeout and cancellation cases fail before the cleanup is
 registered through `_shielded_cleanup`. Non-vacuity: each case first asserts
 the file *existed* during the run (via the reported metadata path), so "not
@@ -696,7 +697,7 @@ there afterwards" cannot be satisfied by never having written it.
 where stage 1's stdout is bounded, stage 2 observes stage 1's complete stream.
 Method: behavioural test running a producer stage under `BoundedCapture` with a
 consumer stage that echoes what it read; compare against the unbounded
-producer's output. Artifact: `tests/behaviour/test_bounded_capture.py`
+producer's output. Artefact: `tests/behaviour/test_bounded_capture.py`
 (scenario "Bounded capture does not bound the downstream stage") and
 `tests/features/bounded_capture.feature`. Evidence: the consumer's captured
 output is the full producer payload while the producer's own `stdout` is the
@@ -708,7 +709,7 @@ leaking bound changes the consumer's output.
 `capture` only when that field is `None`, and never mixing the two. Method:
 property test over `capture × capture_stdout × capture_stderr` with Hypothesis,
 plus parameterized cases for the shorthand/override matrix, plus explicit
-rejection cases for invalid values. Artifact:
+rejection cases for invalid values. Artefact:
 `cuprum/unittests/test_capture_policy.py` (the plan named
 `test_capture_options.py`; the file that exists is named for the module it
 covers). Evidence: **measured.** Mutating `RunOutputOptions.__post_init__` so
@@ -729,8 +730,8 @@ stream that is cut short by a timeout still reports the bytes received up to
 that moment (text for the bounded case, a readable spill file for the
 file-backed case). Method: parameterized test with a child that writes a known
 prefix then stalls past a short timeout, asserting the retained payload.
-Artifact: `cuprum/unittests/test_capture_timeout.py`. Evidence: the assertion
-fails if finalisation only runs on the clean-EOF path. Non-vacuity: the child
+Artefact: `cuprum/unittests/test_capture_timeout.py`. Evidence: the assertion
+fails if finalization only runs on the clean-EOF path. Non-vacuity: the child
 writes a non-empty prefix before stalling, and the test asserts that prefix
 specifically rather than mere non-emptiness.
 
@@ -738,7 +739,7 @@ specifically rather than mere non-emptiness.
 closes at M3.* Invariant: `RunOutputOptions()` resolves both streams to
 `FullCapture()` and `CommandResult`'s seven positional slots are unchanged, with
 `captures` defaulting to `()`. Method: parameterized assertions in the
-public-API pinning test. Artifact: `cuprum/unittests/test_public_api.py`.
+public-API pinning test. Artefact: `cuprum/unittests/test_public_api.py`.
 Evidence: **measured at M1** for the declaration and resolution halves —
 `test_public_api.py` asserts `fields[-1] == "captures"` and
 `positional[-1] == "relay_fallbacks"` in the same test, so the two cannot be
@@ -786,25 +787,25 @@ unchanged.
 **EP-M2 — Accumulators, events, and the drain tap (Task 2).** Add
 `cuprum/_capture_sink.py` with the three accumulators behind one interface: a
 full accumulator, a bounded-tail accumulator, and a spill accumulator, each
-offering "absorb this chunk" and "finalise" (public value plus metadata), plus
+offering "absorb this chunk" and "finalize" (public value plus metadata), plus
 an async cleanup for the spill file. Add `cuprum/capture_events.py` (closed
 `StrEnum` vocabularies plus a bounded-field `CaptureEvent`) and
 `cuprum/capture_observation.py` (a `ContextVar`-backed `observe_capture`
 channel modelled on `cuprum/echo_observation.py`). Change
 `_StreamConfig.capture_output` from `bool` to `CapturePolicy | None`, allocate
 the accumulator in `_build_drain_state`, feed it in `_deliver_chunk`, and
-finalise it in `_finish_drain`, emitting capture events on the way. Update
+finalize it in `_finish_drain`, emitting capture events on the way. Update
 every direct `_StreamConfig` construction in the tests.
 
-**EP-M3 — Threading, materialisation, and teardown (Task 3).** Replace
+**EP-M3 — Threading, materialization, and teardown (Task 3).** Replace
 `_SubprocessExecution.capture: bool` with the two resolved policies and pass
 each to its own stream config, mirroring how `echo_output` already differs per
 stream. Do the same for `_PipelineRunConfig`. Widen the capture plumbing types
-from `str | None` to the finalise result without changing tuple alignment.
-Materialise each finalise result into `stdout`/`stderr` plus a `captures` entry
+from `str | None` to the finalize result without changing tuple alignment.
+Materialize each finalize result into `stdout`/`stderr` plus a `captures` entry
 at the result-construction sites. Register the accumulator cleanup through
 `_shielded_cleanup` at `_reconcile_run_tasks` and the pipeline teardown. Handle
-the timeout path so partial output is finalised, keep the cancellation path's
+the timeout path so partial output is finalized, keep the cancellation path's
 `CancelledError` re-raise unchanged, and make a spill storage failure non-fatal.
 
 **EP-M4 — Tests and documentation (Task 4).** The unit tests, BDD feature and
@@ -868,7 +869,7 @@ Remaining gaps: nothing resolves a policy from `RunOutputOptions` into the
 execution path yet, so the feature is not reachable from a public entry point.
 Compatibility decision: `<none>`.
 
-**EP-M3 — Threading, materialisation, and teardown.** Requirements and gaps:
+**EP-M3 — Threading, materialization, and teardown.** Requirements and gaps:
 `ISSUE-443-AC-relay-untouched`, `ISSUE-443-AC-partial-on-failure`,
 `ISSUE-443-AC-storage-failure`, `ISSUE-443-AC-deterministic-cleanup`. End state:
 `run_sync(RunOutputOptions(capture_stdout=BoundedCapture(...)))` returns a
@@ -1078,7 +1079,7 @@ In `cuprum/capture_observation.py`, mirror `cuprum/echo_observation.py`:
 and a private `_emit_capture_event(event)`.
 
 In `cuprum/_capture_sink.py`, define an accumulator protocol with
-`absorb(chunk: bytes) -> None`, `finalise(stream, config) -> _CaptureFinal`, and
+`absorb(chunk: bytes) -> None`, `finalize(stream, config) -> _CaptureFinal`, and
 `async cleanup() -> None`, plus three implementations and a
 `build_accumulator(policy, *, stream, encoding, errors) -> _Accumulator | None`
 factory returning `None` when capture is disabled.

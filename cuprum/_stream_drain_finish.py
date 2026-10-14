@@ -118,7 +118,7 @@ type _DrainParts = tuple[
 
 
 def _finalize(state: _DrainState) -> _CapturedDrain:
-    """Finalise the drain's accumulator, if it had one.
+    """Finalize the drain's accumulator, if it had one.
 
     Returns
     -------

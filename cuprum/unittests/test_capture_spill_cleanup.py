@@ -146,7 +146,7 @@ def _reported_path(record: CapturedStream) -> pathlib.Path:
 def _directory_is_clean(directory: pathlib.Path, *, outcome: str) -> None:
     """Assert *outcome* left no spill file behind."""
     remaining = list(directory.iterdir())
-    assert remaining == [], (
+    assert not remaining, (
         f"{outcome} must leave no spill file behind; found {remaining}"
     )
 
@@ -307,10 +307,10 @@ def test_a_stream_under_its_threshold_is_not_a_witnessed_spill(
     with observe_capture(witness):
         result = _builder()("-c", _UNDER_THRESHOLD).run_sync(output=_options(tmp_path))
 
-    assert witness.snapshots == [], (
+    assert not witness.snapshots, (
         f"a stream within its threshold must not spill; got {witness.snapshots!r}"
     )
-    assert witness.categories == [], (
+    assert not witness.categories, (
         "a memory-backed capture must emit no storage event; "
         f"got {witness.categories!r}"
     )
@@ -398,7 +398,7 @@ def test_two_runs_into_one_directory_leave_nothing_behind(
     # Between the runs exactly one file exists: the second run's spill has not
     # happened yet, so this is also the assertion that the first run removed
     # its own file rather than the second run removing both.
-    assert list(tmp_path.iterdir()) == [], (
+    assert not list(tmp_path.iterdir()), (
         f"the first run must remove its file before the second starts; {first_path}"
     )
 

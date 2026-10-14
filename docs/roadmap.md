@@ -1090,19 +1090,20 @@ implementation enforces them.
 ## 13. Bounded and file-backed capture policies (issue `#443`)
 
 Idea: capture was a single joint switch. `capture=True` retained both streams
-in full, in the parent's memory, for as long as the result lived; `capture=False`
-retained nothing. A command whose output did not fit in memory therefore had to
-choose between an unbounded result and no result at all, and the one bound the
-library already had — `max_echo_line_bytes` — shortens only the mirrored copy,
-which leaves the returned capture complete. If capture became a per-stream
-policy that can bound or relocate what a run *retains* while leaving the relay
-and the echo path untouched, then a long-running noisy child could be run to
-completion with a result whose memory does not track its output. See
+in full, in the parent's memory, for as long as the result lived;
+`capture=False` retained nothing. A command whose output did not fit in memory
+therefore had to choose between an unbounded result and no result at all, and
+the one bound the library already had — `max_echo_line_bytes` — shortens only
+the mirrored copy, which leaves the returned capture complete. If capture
+became a per-stream policy that can bound or relocate what a run *retains*
+while leaving the relay and the echo path untouched, then a long-running noisy
+child could be run to completion with a result whose memory does not track its
+output. See
 [the design discussion](cuprum-design.md#74-tee-and-output-observation).
 
 This phase is distinct from, and does not duplicate, three earlier changes:
-phase 5's echo bound limits line delivery rather than the result buffer;
-phase 6 accelerates the *full* capture path without bounding it; and phase 7
+phase 5's echo bound limits line delivery rather than the result buffer; phase
+6 accelerates the *full* capture path without bounding it; and phase 7
 accelerates echo without changing what is retained. Issue `#355` bounds echoed
 *lines* and merged `#365` bounds line-delivery *queues*; neither touches the
 result buffer this phase is about.
@@ -1189,5 +1190,3 @@ implemented, and whether a caller can find out what it promises.
   - Success: every documented example is executable and is executed by the
     behavioural suite, and the guides state the unchanged default, the
     bounded-memory guarantee's byte-mode exception, and the file lifetime.
-
-[#443]: https://github.com/leynos/cuprum/issues/443

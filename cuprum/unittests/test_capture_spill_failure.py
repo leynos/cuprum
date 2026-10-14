@@ -467,6 +467,6 @@ def test_cleanup_after_a_failed_create_leaves_no_file_and_does_not_raise(
     _cleanup(accumulator)
     _cleanup(accumulator)
 
-    assert list(tmp_path.iterdir()) == [], (
+    assert not list(tmp_path.iterdir()), (
         "a failed spill must leave nothing in the spill directory"
     )

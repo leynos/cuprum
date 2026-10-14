@@ -39,7 +39,6 @@ from cuprum.capture_observation import _emit_capture_event
 from cuprum.capture_policy import CapturedStream, FileBackedCapture, policy_kind
 
 if typ.TYPE_CHECKING:
-
     from cuprum.capture_policy import CaptureStreamName
 
 __all__ = [
