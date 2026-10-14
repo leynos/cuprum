@@ -2211,10 +2211,11 @@ The `outcome` label on `cuprum_rust_pump_handoff_total` is closed to exactly
 `submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
 `native_load_failed`, `buffer_validation_failed`,
 `platform_writer_transfer_failed`, `native_io_failed`,
-`duplicate_writer_failed`, and `reader_preparation_failed`. `outcome` is the
-only label on this counter. Descriptor numbers, Windows handle values, errno
-values, exception types, exception messages, and tracebacks never become metric
-labels.
+`duplicate_writer_failed`, `reader_preparation_failed`, and
+`windows_raw_handle_rejected`. The last value represents the deliberate Windows
+raw-handle rejection exposed by the Python shim. `outcome` is the only label on
+this counter. Descriptor numbers, Windows handle values, errno values,
+exception types, exception messages, and tracebacks never become metric labels.
 
 The `reason` label takes exactly the values in Table 3, plus `unknown`, and
 nothing else. Table 3's values are published as the `RustPumpDeclineReason`

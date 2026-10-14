@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import logging
 import typing as typ
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -269,6 +270,51 @@ def test_native_io_failure_emits_one_bounded_outcome_without_python_close(
         RustPumpHandoffOutcome.NATIVE_IO_FAILED,
         "native I/O failure must emit exactly its closed outcome",
     )
+
+
+def test_windows_raw_handle_rejection_has_a_distinct_bounded_outcome(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The intentional Windows rejection is separate from native I/O failure."""
+    caplog.set_level(logging.DEBUG, logger="cuprum._streams_rs")
+    native_pump = mock.Mock(side_effect=OSError("raw Windows handle rejected"))
+    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
+    windows_os = SimpleNamespace(name="nt")
+    monkeypatch.setattr(_streams_rs, "os", windows_os)
+    monkeypatch.setattr(
+        _streams_rs,
+        "_transfer_writer_fd_for_platform",
+        lambda writer_fd: writer_fd,
+    )
+    collector = RecordingCollector()
+
+    with (
+        observe_pump(events.append),
+        observe_pump(PumpMetricsHook(collector)),
+        pytest.raises(OSError, match="raw Windows handle rejected"),
+    ):
+        _streams_rs.rust_pump_stream(11, 12)
+
+    close_writer.assert_not_called()
+    native_pump.assert_called_once_with(11, 12, buffer_size=65536)
+    _assert_handoff_outcome(
+        events,
+        RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED,
+        "raw Windows rejection must have its own bounded outcome",
+    )
+    _assert_handoff_metric(
+        collector,
+        RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED,
+        "raw Windows rejection must increment the bounded hand-off metric",
+    )
+    records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_rejected"
+    ]
+    assert len(records) == 1, "raw Windows rejection must emit one diagnostic"
+    assert records[0]["cuprum_outcome"] == "windows_raw_handle_rejected"
 
 
 def test_failing_observer_cannot_replace_a_native_io_error(

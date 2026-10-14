@@ -29,7 +29,10 @@ import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum.pump_events import RustPumpHandoffOutcome
-from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_observation import (
+    _emit_rust_pump_handoff_outcome,
+    _emit_windows_raw_handle_rejected,
+)
 from cuprum.pump_span_events import NATIVE_PUMP_BUFFER_SIZE
 
 if typ.TYPE_CHECKING:
@@ -298,7 +301,8 @@ def rust_pump_stream(
     Raises
     ------
     OSError
-        If the Rust pump encounters an I/O error.
+        If the Rust pump encounters an I/O error, or if Windows rejects a raw
+        handle because synchronous-I/O suitability has not been established.
     ValueError
         If the wrapper rejects an argument before any native hand-off:
         ``buffer_size`` that is not positive or exceeds 1 GiB, or a negative
@@ -310,7 +314,8 @@ def rust_pump_stream(
     a Windows writer resource, preserving the native entry point's errors
     without leaking a duplicated handle. Other failures propagate unchanged
     from the Rust extension: ``ImportError`` if the native module cannot be
-    imported and ``OSError`` if an I/O error occurs while pumping bytes.
+    imported and ``OSError`` for native I/O errors. Windows raw-handle
+    rejection has its own bounded hand-off observation outcome.
     """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _prepare_rust_pump_call.
     prepared = _prepare_rust_pump_call(
         reader_fd=reader_fd,
@@ -339,7 +344,10 @@ def rust_pump_stream(
             )
         )
     except OSError:
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+        if os.name == "nt":
+            _emit_windows_raw_handle_rejected(_LOGGER)
+        else:
+            _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
         raise
 
 

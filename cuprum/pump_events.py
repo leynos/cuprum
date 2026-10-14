@@ -65,6 +65,7 @@ class RustPumpHandoffOutcome(enum.StrEnum):
     READER_PREPARATION_FAILED = "reader_preparation_failed"
     BUFFER_VALIDATION_FAILED = "buffer_validation_failed"
     PLATFORM_WRITER_TRANSFER_FAILED = "platform_writer_transfer_failed"
+    WINDOWS_RAW_HANDLE_REJECTED = "windows_raw_handle_rejected"
     NATIVE_IO_FAILED = "native_io_failed"
 
 

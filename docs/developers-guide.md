@@ -1979,7 +1979,9 @@ six in Table 1 above. The `outcome` label is also closed: it is exactly
 `submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
 `native_load_failed`, `buffer_validation_failed`,
 `platform_writer_transfer_failed`, `native_io_failed`,
-`duplicate_writer_failed`, or `reader_preparation_failed`. The hand-off counter
+`duplicate_writer_failed`, `reader_preparation_failed`, or
+`windows_raw_handle_rejected`. The last value records the deliberate Windows
+raw-handle rejection exposed by the Python shim. The hand-off counter
 increments once for each such outcome, including a successful submission.
 `outcome` is the only label on the hand-off counter. Descriptor numbers,
 Windows handle values, errno values, exception types, exception messages, and
@@ -4351,8 +4353,8 @@ On Unix, the private `stream_pyfunctions::run_stream_operation` helper is
 limited to the two PyO3 stream exports. It owns their shared buffer validation,
 reader descriptor preparation, GIL release, and the typed `RustStreamError`
 conversion; the pump export alone prepares its ownership-consuming writer and
-both exports supply their stream operation. The helper wraps a stream failure
-as `RustStreamError::Stream` and reaches Python through `map_err(PyErr::from)`;
+both exports supply their stream operation. The helper wraps a stream failure as
+`RustStreamError::Stream` and reaches Python through `map_err(PyErr::from)`;
 the classification a caller branches on is decided by the single
 `From<RustStreamError> for PyErr` implementation in
 `rust/cuprum-rust/src/errors.rs`. That implementation also maps
