@@ -13,6 +13,7 @@ from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from tests.behaviour import _telemetry_adapter_tracing_steps as _tracing_steps
+from tests.behaviour import test_telemetry_redaction_support as _redaction_steps
 from tests.behaviour._telemetry_adapter_support import (
     _FAILURE_SCRIPT,
     _OUTPUT_SCRIPT,
@@ -41,6 +42,28 @@ then("the pump-hop span is successful and records transferred bytes")(
 then("the pump-hop span is cancelled after the worker returns")(
     _tracing_steps.then_cancelled_pump_hop_span
 )
+
+
+given("a shared policy for telemetry redaction", target_fixture="redaction_policy")(
+    _redaction_steps.given_shared_redaction_policy
+)
+when("I run a command with sentinel values through redacted telemetry")(
+    _redaction_steps.when_run_with_shared_redaction
+)
+then("configured telemetry exports contain no sentinel values")(
+    _redaction_steps.then_exports_exclude_sentinels
+)
+then("execution and raw observations retain every sentinel value")(
+    _redaction_steps.then_execution_preserves_sentinels
+)
+
+
+@scenario(
+    "../features/telemetry_adapters.feature",
+    "Shared redaction sanitizes exports without changing execution",
+)
+def test_shared_redaction_preserves_execution() -> None:
+    """One explicit policy sanitizes exports without changing raw execution."""
 
 
 @scenario(

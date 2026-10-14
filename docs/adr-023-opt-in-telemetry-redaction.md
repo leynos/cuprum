@@ -78,10 +78,14 @@ copies before registration with `observe()`.
 
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
-projection; plain-text logging applies the policy to its argv projection. The
-GitHub Actions sink accepts the same keyword and applies the policy to
-argv-derived group titles before workflow-command escaping. Explicit titles,
-trusted annotation labels, and mirrored child output remain unchanged.
+projection, redacting argv items, environment values, output lines, diagnostic
+notes, and top-level string-valued tag values. Plain-text logging applies the
+policy only to its argv projection. The GitHub Actions sink accepts the same
+keyword and applies the policy only to argv-derived group titles before
+workflow-command escaping; an explicit title, the annotation-label path, and
+mirrored child output remain unchanged. The convenience group and annotation
+flags do not accept a policy, so callers needing title redaction configure the
+sink directly. Passing `None` or an inert policy preserves existing output.
 
 Across all these integrations, the raw event, executed argv, child environment,
 and captured result remain unchanged.

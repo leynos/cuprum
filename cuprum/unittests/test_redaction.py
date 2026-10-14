@@ -12,6 +12,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from cuprum.context import UNSET, EnvMode
 from cuprum.events import ExecEvent
 from cuprum.program import Program
 from cuprum.redaction import RedactionError, RedactionPolicy, redacting_hook
@@ -259,3 +260,32 @@ def test_overlapping_literals_mask_the_complete_longer_value(
     assert policy.apply_text("token-123 tok") == "[REDACTED] [REDACTED]", (
         "overlapping literals must be fully masked regardless of rule order"
     )
+
+
+def test_trusted_fields_keys_and_environment_markers_are_outside_text_scope() -> None:
+    """Only selected values change even when other fields match literal rules."""
+    event = dc.replace(
+        _event(),
+        env={"VARIABLE": _SENTINEL, "DELETE": UNSET},
+        env_mode=EnvMode.REPLACE,
+    )
+    policy = RedactionPolicy(
+        literals=(
+            "python",
+            "trusted-project",
+            "credential",
+            "VARIABLE",
+            "replace",
+            _SENTINEL,
+        ),
+    )
+    projected = policy.redact_event(event)
+
+    assert projected.program == event.program, "trusted programs must stay unchanged"
+    assert projected.project == event.project, "trusted projects must stay unchanged"
+    assert projected.env_mode is EnvMode.REPLACE, "typed enums must stay unchanged"
+    assert projected.argv[0] == "[REDACTED]", "argv uses value redaction independently"
+    assert projected.tags["credential"] == "[REDACTED]", "tag keys must stay unchanged"
+    assert projected.env is not None, "the environment overlay must remain present"
+    assert projected.env["VARIABLE"] == "[REDACTED]", "environment names must survive"
+    assert projected.env["DELETE"] is UNSET, "deletion markers must stay unchanged"
