@@ -60,6 +60,7 @@ _Step = typ.TypedDict(
         "if": object,
         "name": object,
         "run": object,
+        "shell": object,
         "uses": object,
         "with": dict[str, object],
     },
