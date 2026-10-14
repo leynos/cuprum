@@ -120,9 +120,9 @@ repository rather than re-derived here.
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
 - [x] (2026-10-14) A later replay onto `main` found ADR-019 and ADR-020 both
       taken by other records, so the duplication ADR moved once more, to
-      ADR-021, across the same four files. The ADR's own title line was corrected in the same pass:
-      the 2026-10-02 renumber had updated the filename and every reference but
-      left the heading reading "ADR 019".
+      ADR-021, across the same four files. The ADR's own title line was
+      corrected in the same pass: the 2026-10-02 renumber had updated the
+      filename and every reference but left the heading reading "ADR 019".
 - [x] (2026-10-14) The rebuild onto `main` at `8c78a5b77` reached the same
       collision a third time: `main` had claimed ADR-021 for its own
       process-group record. The duplication record moved to
