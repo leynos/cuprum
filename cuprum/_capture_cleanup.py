@@ -56,7 +56,7 @@ async def _cleanup_capture_sinks(
 
 
 async def _finalize_capture_handles(
-    drains: cabc.Iterable[_CapturedDrain],
+    drains: cabc.Iterable[_CapturedDrain | None],
     sinks: cabc.Iterable[CaptureSink | None],
 ) -> None:
     """Close a run's spill files, by result first and by accumulator second.
@@ -68,8 +68,12 @@ async def _finalize_capture_handles(
 
     Parameters
     ----------
-    drains : cabc.Iterable[_CapturedDrain]
-        Every drain result the run produced, settled or partial.
+    drains : cabc.Iterable[_CapturedDrain | None]
+        Every drain result the run produced, settled or partial. ``None``
+        entries are skipped, which is what a pipeline stage with no capture
+        contributes: its per-stage tuple is ``None`` for a stream it never
+        drained, and the caller concatenates those tuples without filtering so
+        the passes stay in stage order.
     sinks : cabc.Iterable[CaptureSink | None]
         The accumulators those drains read into.
     """

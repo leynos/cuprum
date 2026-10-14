@@ -39,13 +39,50 @@ from cuprum.capture_observation import _emit_capture_event
 from cuprum.capture_policy import CapturedStream, FileBackedCapture, policy_kind
 
 if typ.TYPE_CHECKING:
-    import io
 
     from cuprum.capture_policy import CaptureStreamName
 
 __all__ = [
     "_FileAccumulator",
 ]
+
+
+def _open_spill_file(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
+    """Create the spill file a capture keeps appending to.
+
+    ``delete=False`` is the point, not an oversight: the file must outlive this
+    call and every later append, so a ``with`` block would close the descriptor
+    the accumulator means to keep writing through. The file is removed by
+    :meth:`SpillHandle.close` when the stream is neither kept nor already
+    unlinked.
+
+    Returning the handle rather than assigning it at the call site is what
+    makes that intent legible to a reader and to the linter: the resource is
+    this function's *result*, not a temporary bound to a name in the middle of
+    a longer method, and the obligation to release it passed to the caller
+    along with it.
+
+    Parameters
+    ----------
+    directory : pathlib.Path | str | None
+        Directory to create the file in, or ``None`` for the process's
+        temporary directory. The ``str`` arm is admitted to match the declared
+        type of :attr:`~cuprum.capture_policy.FileBackedCapture.directory`,
+        which is ``Path | str | None`` so a caller may pass either. Its
+        ``__post_init__`` normalizes to :class:`~pathlib.Path` before this is
+        ever reached, but that normalization is invisible in the field's
+        annotation, so narrowing here would only force a cast at the call site
+        that asserted the very thing the annotation cannot promise.
+
+    Returns
+    -------
+    typ.IO[bytes]
+        The open spill file, positioned at the start.
+    """
+    return tempfile.NamedTemporaryFile(
+        delete=False,
+        dir=directory,
+    )
 
 
 class _FileAccumulator:
@@ -85,7 +122,11 @@ class _FileAccumulator:
         self._stream = stream
         self._settings = settings
         self._buffer: bytearray | None = bytearray()
-        self._file: io.BufferedRandom | None = None
+        # Whichever type :func:`_open_spill_file` hands back, which is the
+        # temporary-file wrapper rather than the buffered file it forwards to;
+        # the two annotations must agree or every assignment between them
+        # fails the typechecker.
+        self._file: typ.IO[bytes] | None = None
         # One handle for the life of the capture, not one per query: the
         # normal path closes it from the finalized result while teardown may
         # also close it from the sink, and a fresh object each time would give
@@ -143,15 +184,7 @@ class _FileAccumulator:
         if buffered is None:
             return
         try:
-            # ``delete=False`` is the point, not an oversight: the file must
-            # outlive this call and every later append, so a ``with`` block
-            # would close the descriptor we mean to keep writing through. The
-            # file is removed by ``SpillHandle.close`` when the stream is
-            # neither kept nor already unlinked.
-            handle = tempfile.NamedTemporaryFile(  # ruff: ignore[open-file-with-context-handler] - the file outlives this call by design
-                delete=False,
-                dir=self._policy.directory,
-            )
+            handle = _open_spill_file(self._policy.directory)
         except OSError as exc:
             self._abandon_spill(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
@@ -177,7 +210,7 @@ class _FileAccumulator:
 
     def _discard_failed_spill(
         self,
-        handle: io.BufferedRandom,
+        handle: typ.IO[bytes],
         exc: OSError,
     ) -> None:
         """Remove a spill file that never took the prefix, and stop retrying."""

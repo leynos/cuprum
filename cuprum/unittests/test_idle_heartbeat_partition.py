@@ -29,9 +29,7 @@ from cuprum.capture_policy import CapturePolicy, FullCapture
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.unittests._stream_drain_support import (
-        CapturedOrNone,
-    )
+    from cuprum.unittests._stream_drain_support import CapturedDrain
 
 _PROPERTY_MAX_EXAMPLES = 24
 _CHUNKS = st.lists(st.binary(min_size=1, max_size=6), min_size=1, max_size=6)
@@ -145,11 +143,11 @@ def _run_drain(
     *,
     capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = True,
-) -> CapturedOrNone:
+) -> CapturedDrain:
     """Run the canonical drain over *chunks* and return what it captured."""
     config = _config(recorder, capture=capture, echo=echo)
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain the chunked reader with the configuration under test."""
         return await _drain(_reader(chunks), config)
 
@@ -195,7 +193,7 @@ def test_activity_is_reported_before_every_line(chunks: list[bytes]) -> None:
     """Property: no line callback can precede the read that produced it."""
     recorder = _ActivityRecorder()
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain with a line observer recording into the same event log."""
         return await _drain(
             _reader(chunks),
@@ -238,7 +236,7 @@ def test_rejected_echo_chunks_still_report_activity(chunks: list[bytes]) -> None
     recorder = _ActivityRecorder()
     config = _config(recorder, sink=typ.cast("typ.IO[str]", _RejectingSink()))
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain with the sink that refuses every echoed chunk."""
         return await _drain(_reader(chunks), config)
 

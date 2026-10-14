@@ -295,7 +295,7 @@ async def _run_subprocess_with_streams(
     # ``owned=True`` for a file nothing was ever going to remove.
     await _finalize_capture_handles(
         (stdout_drain, stderr_drain),
-        typ.cast("tuple[object, object]", tasks.captures),
+        tasks.captures,
     )
     return exit_code, exited_at, stdout_drain, stderr_drain, spawn.relay_diagnostics
 

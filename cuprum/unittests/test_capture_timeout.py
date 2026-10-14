@@ -27,6 +27,7 @@ from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import build_python_catalogue_env
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib
 
     from cuprum.sh import SafeCmd
@@ -59,8 +60,18 @@ _STDERR_STALL = (
 )
 
 
-def _builder() -> SafeCmd:
-    """Return a command for the current interpreter, allowlisted."""
+def _builder() -> cabc.Callable[..., SafeCmd]:
+    """Return a builder for the current interpreter, allowlisted.
+
+    A *builder*, not a command: the catalogue hands back the callable and each
+    case supplies its own ``-c`` source, so annotating this ``SafeCmd`` would
+    describe a value the caller immediately calls.
+
+    Returns
+    -------
+    collections.abc.Callable[..., SafeCmd]
+        A builder that constructs commands for the current interpreter.
+    """
     return build_python_catalogue_env().builder
 
 

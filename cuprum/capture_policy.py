@@ -330,6 +330,14 @@ def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+@typ.overload
+def policy_kind(policy: CapturePolicy) -> CapturePolicyKind: ...
+
+
+@typ.overload
+def policy_kind(policy: None) -> None: ...
+
+
 def policy_kind(policy: CapturePolicy | None) -> CapturePolicyKind | None:
     """Classify a resolved policy for the metadata a run reports.
 

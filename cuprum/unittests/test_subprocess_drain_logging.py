@@ -13,6 +13,7 @@ import asyncio
 import logging
 import typing as typ
 
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
@@ -21,6 +22,7 @@ from cuprum._subprocess_wait import (
 from cuprum.unittests._stream_drain_support import (
     _BOTH_CAPTURED,
     _NONE_CAPTURED,
+    captured,
 )
 
 if typ.TYPE_CHECKING:
@@ -44,21 +46,27 @@ class _ReaderFailureError(RuntimeError):
     """Raised by a stream-consumer double that fails during the drain."""
 
 
-async def _fails_immediately() -> str | None:
+# The three reader doubles below settle to a whole drain result rather than a
+# bare payload, because that is what the real readers settle to and what the
+# drain is declared over. A double reporting just its text would let these
+# cases pass values through a seam that cannot receive them in a live run.
+
+async def _fails_immediately() -> _CapturedDrain:
     """Fail as a reader does when its stream breaks rather than ends."""
     await asyncio.sleep(0)
     raise _ReaderFailureError
 
 
-async def _completes(text: str) -> str | None:
+async def _completes(text: str) -> _CapturedDrain:
     """Settle promptly with ``text``, as a reader that reached EOF does."""
     await asyncio.sleep(0)
-    return text
+    return captured(text)
 
 
-async def _never_reaches_eof() -> str | None:
+async def _never_reaches_eof() -> _CapturedDrain:
     """Block as a reader does on a pipe whose EOF never arrives."""
     await asyncio.Event().wait()
+    return _CapturedDrain()
 
 
 def test_a_failed_reader_is_recorded_before_it_is_discarded(

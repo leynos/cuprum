@@ -118,6 +118,11 @@ def _inputs(
     bare payload, because that is what the assembler reads a stage's payload and
     capture record off. Each stage's stderr text names its own index, so a
     result built from the wrong stage's stream cannot pass by coincidence.
+
+    Returns
+    -------
+    _PipelineStageResultInputs
+        The inputs, one stderr drain per stage plus the final stdout drain.
     """
     return _PipelineStageResultInputs(
         wait_result=_PipelineWaitResult(

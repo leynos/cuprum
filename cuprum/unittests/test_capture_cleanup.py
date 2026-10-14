@@ -24,12 +24,13 @@ from cuprum._capture_cleanup import (
 )
 from cuprum._capture_decode import _DecodeSettings
 from cuprum._capture_file import _FileAccumulator
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum.capture_policy import FileBackedCapture
 
 if typ.TYPE_CHECKING:
     import pathlib
 
-    from cuprum._capture_types import CaptureFinal, SpillHandle
+    from cuprum._capture_types import CaptureFinal
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
 _SPILLED = b"more than the threshold allows"
@@ -87,26 +88,17 @@ def _spilled_accumulator(
     return accumulator
 
 
-def _drain(fin: CaptureFinal) -> _DrainStub:
+def _drain(fin: CaptureFinal) -> _CapturedDrain:
     """Wrap *fin* as the drain result a settled consumer would report.
 
     Returns
     -------
-    _DrainStub
-        A result carrying only the handle, which is the whole of what the
-        drain-result step reads.
+    _CapturedDrain
+        The real record shape, carrying the final's handle. A bespoke stub
+        would satisfy the cleanup seam's duck-typed read but not the type it
+        declares, so the seam would accept values no drain can produce.
     """
-    return _DrainStub(handle=fin.handle)
-
-
-class _DrainStub:
-    """A drain result whose only interesting member is its spill handle."""
-
-    __slots__ = ("handle",)
-
-    def __init__(self, *, handle: SpillHandle | None) -> None:
-        """Hold the handle a real drain result would have carried out."""
-        self.handle = handle
+    return _CapturedDrain(handle=fin.handle)
 
 
 def test_cleanup_of_no_sinks_is_a_no_op() -> None:

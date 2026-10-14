@@ -25,7 +25,6 @@ from cuprum._capture_accumulators import (
     build_accumulator,
 )
 from cuprum._capture_decode import _DecodeSettings
-from cuprum._capture_types import CaptureSink
 from cuprum.capture_policy import (
     BoundedCapture,
     CapturePolicyKind,
@@ -34,7 +33,10 @@ from cuprum.capture_policy import (
 )
 
 if typ.TYPE_CHECKING:
-    from cuprum.capture_policy import CaptureStreamName, CapturedStream
+    import collections.abc as cabc
+
+    from cuprum._capture_types import CaptureSink
+    from cuprum.capture_policy import CapturedStream, CaptureStreamName
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
 # The same decode, but the child's own bytes are the payload. Both modes are
@@ -69,7 +71,7 @@ def _sink(
     return sink
 
 
-def _absorb(sink: CaptureSink, chunks: typ.Iterable[bytes]) -> None:
+def _absorb(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
     """Feed each chunk to *sink*, in order."""
     for chunk in chunks:
         sink.absorb(chunk)

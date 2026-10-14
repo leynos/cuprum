@@ -57,9 +57,9 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import (
         _DrainContext,
+        _DrainPair,
         _RunTaskOwnership,
-        _StreamPayload,
-        _StreamPayloadPair,
+        _StreamConsumerTask,
     )
     from cuprum.sh import SafeCmd
 
@@ -185,21 +185,20 @@ class TeardownWatch:
 
     async def _recording_drain(
         self,
-        consumers: tuple[
-            asyncio.Task[_StreamPayload | None], asyncio.Task[_StreamPayload | None]
-        ],
+        consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
         context: _DrainContext,
-    ) -> _StreamPayloadPair:
+    ) -> _DrainPair:
         """Run the real drain, recording that reconciliation was reached.
 
-        The double mirrors the real drain's widened payload rather than
-        narrowing it. Patching it to a ``str``-only signature would let a
-        byte-exact run reach this seam and be recorded as text, so the type
-        has to admit both even though every caller here runs in text mode.
+        The double mirrors the real drain's own signature rather than
+        widening or narrowing it: it stands in for that callable, so a
+        consumer task type or a return type that differs from the real one
+        would let the run reach this seam with values the patched signature
+        merely appears to accept.
 
         Returns
         -------
-        _StreamPayloadPair
+        _DrainPair
             Whatever the real drain produced for these consumers.
         """
         self.drained.set()

@@ -45,7 +45,7 @@ import typing as typ
 from cuprum import _wait4_spawn
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
-from cuprum._result_assembly import _require_text
+from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
@@ -300,5 +300,10 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
         # caller's binding is exactly what chose the file that ran.
         resolved_path=execution.observation.resolved_path,
         relay_fallbacks=_relay_fallbacks_for_result(run.ownership.relay_diagnostics),
-        captures=outcome.captures,
+        # Flattened through the same helper every other result-construction
+        # site uses, so a handle that captured one stream reports exactly the
+        # one record a ``run()`` of the same command would: the raw optional
+        # pair would put a ``None`` in a tuple the field declares as holding
+        # only records.
+        captures=_recorded_captures(outcome.captures),
     )

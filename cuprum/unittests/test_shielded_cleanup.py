@@ -26,14 +26,16 @@ import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._stream_drain_finish import _CapturedDrain
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import pending_tasks
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._subprocess_wait_types import _DrainPair
     from cuprum.events import ExecEvent
-    from cuprum.unittests._stream_drain_support import CapturedOrNone, ConsumerTask
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 class _CleanupGate:
@@ -191,7 +193,7 @@ class TestSingleCommandRun:
         async def gated_drain(
             consumers: tuple[ConsumerTask, ConsumerTask],
             context: _subprocess_wait._DrainContext,
-        ) -> tuple[CapturedOrNone, CapturedOrNone]:
+        ) -> _DrainPair:
             """Announce that the drain started, wait to be released, then drain."""
             observed["consumers"] = consumers
             gate.entered.set()
@@ -337,15 +339,15 @@ class TestSuccessPath:
         ) -> tuple[ConsumerTask, ConsumerTask]:
             """Return one consumer that fails and one that blocks indefinitely."""
 
-            async def boom() -> str | None:
+            async def boom() -> _CapturedDrain:
                 """Fail the way a broken reader would."""
                 await asyncio.sleep(0)
                 raise _ConsumerBoomError
 
-            async def blocked() -> str | None:
+            async def blocked() -> _CapturedDrain:
                 """Block as a reader wedged on a pipe that never reaches EOF."""
                 await asyncio.Event().wait()
-                return None
+                return _CapturedDrain()
 
             spawned["boom"] = asyncio.create_task(boom())
             spawned["blocked"] = asyncio.create_task(blocked())
