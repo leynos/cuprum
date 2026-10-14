@@ -12,6 +12,7 @@ import pytest
 
 import cuprum
 from cuprum._bounded_delivery import (
+    _DeliveryItem,
     _DeliveryPayload,
     _DeliveryWorker,
 )
@@ -135,6 +136,70 @@ def test_worker_disables_after_write_or_flush_failure(failure_site: str) -> None
     ) == ((EchoStream.STDERR, 2),)
     assert result.undelivered_bytes[0].diagnostics is stderr_diagnostics
     assert worker.close(grace=1) == result
+
+
+def test_worker_contains_base_exception_and_accounts_queued_output() -> None:
+    """Sink exits disable delivery and retain only categorical diagnostics."""
+    ready = threading.Event()
+    release = threading.Event()
+
+    class _SinkAbort(BaseException):
+        """Represent a sink raising outside the ordinary exception tree."""
+
+    class _AbortingSink(io.StringIO):
+        """Block the active write before raising a BaseException subclass."""
+
+        def write(self, text: str, /) -> int:
+            ready.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError
+            raise _SinkAbort
+
+    worker = _delivery_worker(_AbortingSink())
+    assert (
+        worker.enqueue(
+            EchoStream.STDOUT,
+            _payload("active", 2),
+            flush=True,
+        )
+        == 0
+    )
+    assert ready.wait(timeout=1)
+    assert (
+        worker.enqueue(
+            EchoStream.STDERR,
+            _payload("queued", 3),
+            flush=True,
+        )
+        == 0
+    )
+    release.set()
+
+    result = worker.close(grace=1)
+
+    assert tuple(failure.stream for failure in result.failures) == (EchoStream.STDOUT,)
+    assert tuple(
+        (item.stream, item.byte_count) for item in result.undelivered_bytes
+    ) == ((EchoStream.STDERR, 3),)
+    assert worker.queued_bytes == 0
+
+
+def test_close_accounts_for_active_item_left_by_a_stopped_worker() -> None:
+    """Close repairs accounting if a worker exits with an active item set."""
+    worker = _delivery_worker(io.StringIO())
+    with worker._condition:
+        worker._active_item = _DeliveryItem(
+            stream=EchoStream.STDOUT,
+            payload=_payload("stuck", 2),
+            flush=True,
+            diagnostics=None,
+        )
+    result = worker.close(grace=1)
+
+    assert tuple(
+        (item.stream, item.byte_count) for item in result.undelivered_bytes
+    ) == ((EchoStream.STDOUT, 2),)
+    assert worker.queued_bytes == 0
 
 
 def test_close_abandons_a_blocked_daemon_after_the_drain_grace() -> None:

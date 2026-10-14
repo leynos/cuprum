@@ -1,12 +1,13 @@
 """Per-drain echo bookkeeping shared by the stream consumers.
 
 A drain of one subprocess stream owns three small pieces of mutable state:
-the collector for handled echo-disablement records that becomes
-``CommandResult.relay_fallbacks``, the guard that stops further echo writes
-after the first handled sink failure, and the cursor recording whether a
-mirrored sink is mid-line for the idle heartbeat. Bounded delivery may append
-multiple saturation records while leaving echo enabled. ``cuprum._streams``
-re-exports these names, so importers of that module keep working unchanged.
+the collector for categorical echo-failure and delivery-loss records that
+becomes ``CommandResult.relay_fallbacks``, the guard that stops further echo
+writes after the first handled synchronous sink failure, and the cursor
+recording whether a mirrored sink is mid-line for the idle heartbeat. Bounded
+delivery may append multiple saturation records while leaving echo enabled;
+worker shutdown may append deferred delivery failures and loss. The
+``cuprum._streams`` module re-exports these names.
 """
 
 from __future__ import annotations
@@ -20,11 +21,11 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(slots=True)
 class _RelayDiagnostics:
-    """Per-drain collector for handled echo-disablement records.
+    """Per-drain collector for categorical echo and delivery diagnostics.
 
     One collector belongs to one command stream. A synchronous handled sink
-    failure disables that drain, while bounded queue saturation can append a
-    record for each rejected chunk.
+    failure disables that drain, while bounded queue saturation can append one
+    record per rejected chunk and worker close can append deferred records.
     """
 
     fallbacks: list[RelayFallback] = dc.field(default_factory=list)
