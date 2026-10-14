@@ -72,6 +72,27 @@ class _ExpectedOutcome:
     waiter_completed: bool
 
 
+# Declared as named outcomes rather than built positionally in the table below,
+# which is the same shape ``_process_lifecycle`` uses for the production
+# records: three bare booleans in a call say nothing about which fact is which,
+# and a transposed pair would still read as a plausible outcome.
+#:
+# Refusing the graceful signal leaves a child that was never asked to leave, so
+# neither the grace window nor a reaping wait was ever engaged.
+_GRACEFUL_REFUSED = _ExpectedOutcome(
+    delivered=False,
+    escalated=False,
+    waiter_completed=False,
+)
+# Refusing the escalation leaves a child that was asked to leave, ignored it
+# and outlived the window — but the wait for it never returned either.
+_ESCALATION_REFUSED = _ExpectedOutcome(
+    delivered=True,
+    escalated=True,
+    waiter_completed=False,
+)
+
+
 class _RefusingKernel:
     """A ``killpg`` that answers probes and refuses one named signal.
 
@@ -152,8 +173,8 @@ def test_a_group_that_went_before_the_signal_is_passed_over_silently(
 @pytest.mark.parametrize(
     ("refused", "expected"),
     [
-        (signal.SIGTERM, _ExpectedOutcome(False, False, False)),
-        (signal.SIGKILL, _ExpectedOutcome(True, True, False)),
+        (signal.SIGTERM, _GRACEFUL_REFUSED),
+        (signal.SIGKILL, _ESCALATION_REFUSED),
     ],
     ids=["the-graceful-signal", "the-escalation"],
 )
