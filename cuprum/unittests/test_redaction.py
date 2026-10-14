@@ -59,8 +59,8 @@ def test_rule_inputs_are_coerced_and_validated() -> None:
     """Mutable rule collections become immutable and malformed rules fail early."""
     pattern = re.compile(r"session-[0-9]+")
     policy = RedactionPolicy(
-        literals=typ.cast("tuple[str, ...]", [_SENTINEL]),
-        patterns=typ.cast("tuple[re.Pattern[str], ...]", [pattern]),
+        literals=[_SENTINEL],
+        patterns=[pattern],
     )
 
     assert policy.literals == (_SENTINEL,), "literal rules must be snapshotted"
@@ -248,3 +248,18 @@ def test_failed_redaction_never_calls_the_observer(
     with pytest.raises(RedactionError):
         hook(_event())
     assert not received
+
+
+def test_single_rules_and_iterators_have_typed_constructor_support() -> None:
+    """Supported input shapes produce the same immutable policy fields."""
+    pattern = re.compile(r"session-[0-9]+")
+    single = RedactionPolicy(literals=_SENTINEL, patterns=pattern)
+    iterated = RedactionPolicy(literals=iter([_SENTINEL]), patterns=iter([pattern]))
+
+    assert single == iterated, "input shapes must not alter policy meaning"
+    assert single.literals == (_SENTINEL,), "stored literals remain tuple-typed"
+    assert single.patterns == (pattern,), "stored patterns remain tuple-typed"
+    changed = dc.replace(single, mask="<masked>")
+    assert changed.apply_text(_SENTINEL) == "<masked>", (
+        "dataclass replacement must retain constructor normalization"
+    )
