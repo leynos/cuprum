@@ -73,8 +73,8 @@ repository rather than re-derived here.
   instructed the maintainer to *delete* exceptions whose duplication was still
   present. Mitigation: the bound is now `top = 0`, nose's unbounded spelling,
   and `scripts/nose_schema.py` refuses a truncated report outright rather than
-  letting one be adjudicated as a whole surface, so the saturation cannot
-  recur silently. See "Rebuild on current main" below.
+  letting one be adjudicated as a whole surface, so the saturation cannot recur
+  silently. See "Rebuild on current main" below.
 - Risk: the ported tests import Python 3.14-only syntax and are collected by an
   older application interpreter. Severity: medium. Likelihood: medium.
   Mitigation: keep the tooling tests out of the default `PYTEST_TARGETS` globs
