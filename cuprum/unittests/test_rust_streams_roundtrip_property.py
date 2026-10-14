@@ -11,8 +11,10 @@ the Rust entry point against an independently computed expectation:
   sink match Python's own results, so "the default applies" cannot be satisfied
   by two identically wrong answers.
 
-Every property here runs the entry point over a real pipe rather than a
-throwaway descriptor, so the assertions hold on Windows as well as POSIX.
+Each property here runs the entry point over a real POSIX pipe. Windows raw
+handles do not establish the synchronous-I/O capability and are rejected by
+the native boundary; the Windows rejection contract is covered separately by
+``test_rust_errno_windows.py``.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import contextlib
 import os
 import typing as typ
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -37,6 +40,13 @@ _DEFAULT_BUFFER_SIZE = 65536
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
     max_examples=50,
+)
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "POSIX pipe descriptors cannot establish the Windows synchronous-I/O capability"
+    ),
 )
 
 
