@@ -245,11 +245,12 @@ The first full gate run failed four checks. Each is fixed; the fixes are commits
   `try` beside a `skip` in `except`). The latter is resolved with the
   `-> typ.NoReturn` helper idiom `test_duplication_gate_blocking.py` already
   documents for exactly this case.
-- **Spelling.** Two non-Oxford spellings in the duplication ADR were reported and
-  corrected. Four more in `pyproject.toml` allow reasons were *not* reported,
-  because the spelling gate never reads a file named `pyproject.toml`. They
-  were corrected anyway, as genuine ADR-009 violations that the gate has a
-  blind spot for, and the gap is now documented where allow reasons are written.
+- **Spelling.** Two non-Oxford spellings in the duplication ADR were reported
+  and corrected. Four more in `pyproject.toml` allow reasons were *not*
+  reported, because the spelling gate never reads a file named
+  `pyproject.toml`. They were corrected anyway, as genuine ADR-009 violations
+  that the gate has a blind spot for, and the gap is now documented where allow
+  reasons are written.
 
 ### Two further findings (2026-09-27)
 

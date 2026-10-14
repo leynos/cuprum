@@ -5511,12 +5511,12 @@ raised, because a positive bound does not merely narrow the view: the
 stale-entry report is computed from the families the scan returned, so any
 family hidden below the bound makes its allow entry look stale and the gate
 instructs the maintainer to delete a reasoned exception whose duplication is
-still present. The count moves in both directions: a refactor
-can pair up two windows that were previously distinct without duplicating
-anything on purpose, and it can equally drop a pair below the floor. The
-semantic channel reports only exact intermediate-language equivalence, so the
-gate blocks on a narrow, witness-backed subset of semantic duplication; broader
-Type-4 duplication remains a review concern.
+still present. The count moves in both directions: a refactor can pair up two
+windows that were previously distinct without duplicating anything on purpose,
+and it can equally drop a pair below the floor. The semantic channel reports
+only exact intermediate-language equivalence, so the gate blocks on a narrow,
+witness-backed subset of semantic duplication; broader Type-4 duplication
+remains a review concern.
 
 Treat every new finding as copy-paste until proven otherwise: prefer extracting
 the shared logic over suppressing the report. When the parallel structure is
