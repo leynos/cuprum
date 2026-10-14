@@ -182,13 +182,18 @@ def test_the_recorded_settlement_duration_is_the_measured_wait(
         monkeypatch.setattr(_process_group, "_await_group_exit", poll)
         started = time.monotonic()
         with caplog.at_level(logging.WARNING, logger=_SETTLEMENT_LOGGER):
-            delivered = await _teardown(
+            outcome = await _teardown(
                 target,
                 owns_group=True,
             )
-        assert delivered, (
-            "the escalation must have been delivered, or the settlement wait "
-            "this test observes was never reached"
+        # The outcome is a ``NamedTuple``, so a bare truthiness check on it
+        # cannot be false and would guard nothing. ``escalated`` is the fact
+        # carrying this test's premise: it is set only on the branch that closes
+        # the grace window with the child still running, and that is the branch
+        # whose settlement wait this test is timing.
+        assert outcome.escalated is True, (
+            "the grace window must have closed with the child still running, "
+            "or the settlement wait this test observes was never reached"
         )
         assert time.monotonic() - started < _WIDENED_BOUND_S, (
             "the teardown must not have waited out the widened bound, or the "
@@ -246,14 +251,17 @@ def test_the_measured_wait_reaches_the_collector_unchanged(
         monkeypatch.setattr(os, "killpg", target.record_killpg)
         monkeypatch.setattr(_process_group, "_POST_KILL_SETTLEMENT_S", _WIDENED_BOUND_S)
         monkeypatch.setattr(_process_group, "_await_group_exit", poll)
-        delivered = await _teardown(
+        outcome = await _teardown(
             target,
             owns_group=True,
             observation=observation,
         )
-        assert delivered, (
-            "the escalation must have been delivered, or the settlement wait "
-            "this test observes was never reached"
+        # ``escalated`` rather than the outcome's truthiness, for the reason
+        # given in the record's case above: the tuple is always truthy, and this
+        # is the field that witnesses the branch the assertions below read.
+        assert outcome.escalated is True, (
+            "the grace window must have closed with the child still running, "
+            "or the settlement wait this test observes was never reached"
         )
 
     asyncio.run(run_case())
