@@ -51,7 +51,7 @@ def _substitute_pattern(pattern: re.Pattern[str], value: str, mask: str) -> str:
     return pattern.sub(lambda _match: mask, value)
 
 
-class RedactionError(RuntimeError):
+class RedactionError(Exception):
     """A configured redaction rule failed before an export could be built.
 
     Attributes
