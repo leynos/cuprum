@@ -611,13 +611,18 @@ is open, draft, and **not merged**.
 
 That commit count is the state at first delivery and stayed stale through two
 later rebuilds: the branch was replayed onto `b6bb9a99`, then rebuilt on current
-`main`, and stands at 19 commits over
-`8c78a5b77781654b8a92282f8f8dbde387966c36` as of 2026-10-14. The earlier figure
+`main`. Measured over `8c78a5b77781654b8a92282f8f8dbde387966c36`, it reached
+19 commits at head `62bbb09bad1647b95a40678cb48cd7d409813a50` on 2026-10-14;
+four further commits closed the second assessment on top of that head
+(`0d356fd38`, `c6d0951ec`, `a3afd48db`, `124fdf830`).
+
+Both figures are bound to the head they were counted at rather than to the
+branch tip, because a count stated against a moving tip goes stale the moment
+anything else lands — which is how the first was overtaken. The earlier figure
 is left in place rather than edited, because it describes the delivery it
-records; the current count is what a reader following this plan should measure
-against. That figure is itself a measurement with a date on it: re-run
-`git rev-list --count origin/main..HEAD` rather than trusting it after any
-further commit lands on this branch.
+records; a reader following this plan should re-run
+`git rev-list --count origin/main..HEAD` and count forward from the named head
+rather than trusting a number to have kept up.
 
 The branch was then rebased onto `main` on 2026-10-02. The replay renumbered
 this plan's ADR to 019 (the identifier collision noted in the Decision Log),
