@@ -298,6 +298,48 @@ def test_broken_pipe_policy_members_are_the_documented_spellings() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "FullCapture",
+        "BoundedCapture",
+        "FileBackedCapture",
+        "CapturedStream",
+        "CapturePolicyKind",
+    ],
+)
+def test_capture_policy_types_are_public_surface(name: str) -> None:
+    """Every capture type a caller names is exported from both packages.
+
+    Issue #443's contract is that a caller configures capture by naming a
+    policy, so each policy type has to be reachable from ``cuprum`` and
+    ``cuprum.sh`` rather than only from the module that defines it.
+    """
+    assert name in c.__all__, f"cuprum.__all__ must export {name}"
+    assert name in c.sh.__all__, f"cuprum.sh.__all__ must export {name}"
+    assert hasattr(c, name), f"cuprum must expose {name}"
+    assert hasattr(c.sh, name), f"cuprum.sh must expose {name}"
+
+
+def test_capture_policy_kind_is_public_surface() -> None:
+    """``CapturePolicyKind`` is exported because it types a public field.
+
+    ``CapturedStream.policy`` is annotated with the kind, so a caller matching
+    on the reported vocabulary — or writing that annotation down in their own
+    code — needs the name reachable from both packages rather than only from
+    the module that defines it.
+    """
+    assert "CapturePolicyKind" in c.__all__, (
+        "the vocabulary typing CapturedStream.policy must be exported"
+    )
+    assert "CapturePolicyKind" in c.sh.__all__, (
+        "the vocabulary typing CapturedStream.policy must be exported"
+    )
+    assert c.CapturePolicyKind is c.sh.CapturePolicyKind, (
+        "both packages must expose the same enum, not two copies"
+    )
+
+
 def test_broken_pipe_policy_does_not_take_a_positional_slot() -> None:
     """``broken_pipe_policy`` must stay keyword-only on RunOutputOptions.
 
@@ -397,9 +439,16 @@ def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
         "relay_fallbacks must be the last positional field, so the generated "
         f"signature keeps it trailing, got positional={positional}"
     )
-    assert fields[-1] == "relay_fallbacks", (
-        "relay_fallbacks must stay last so existing positional callers keep "
-        f"binding stdout and stderr, got {fields}"
+    # ``captures`` is declared after ``relay_fallbacks`` and is keyword-only,
+    # so it may take the declaration tail but never the positional one. Pinning
+    # both together is what stops a later field from quietly becoming
+    # positional and rebinding the seventh argument.
+    assert fields[-1] == "captures", (
+        "captures must be declared last as the additive tail; it is "
+        f"keyword-only and takes no positional slot, got {fields}"
+    )
+    assert "captures" not in positional, (
+        f"captures must stay keyword-only, got positional={positional}"
     )
     result = c.CommandResult(
         c.Program(c.ECHO),  # program
@@ -464,6 +513,10 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         f"{hints['relay_fallbacks']!r}"
     )
     assert hints["stdout"] == str | None
+    assert hints["captures"] == tuple[c.CapturedStream, ...], (
+        "the annotation must resolve to the public record, got "
+        f"{hints['captures']!r}"
+    )
 
 
 @pytest.mark.parametrize(

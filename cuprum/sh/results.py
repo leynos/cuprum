@@ -15,6 +15,7 @@ output survives a round trip through values that are not valid UTF-8. The
 # eagerly and ``Program`` and ``RelayFallback`` are genuine runtime imports.
 import dataclasses as dc
 
+from cuprum.capture_policy import CapturedStream
 from cuprum.echo_events import RelayFallback
 from cuprum.program import Program
 
@@ -92,6 +93,13 @@ class CommandResult:
         reconstruct chronological interleaving between the two streams. Empty
         when no echo write was handled as failed, and an echo failure does not
         change ``exit_code`` or ``ok``.
+    captures:
+        One record per captured stream, in stdout-then-stderr order, saying
+        which policy the run applied, how many bytes the child wrote, how many
+        the policy discarded, and where the retained bytes are. Empty when the
+        run captured nothing. A file-backed record reports ``storage`` of
+        ``"file"``: its text is at ``path`` rather than on
+        ``stdout``/``stderr``, which are ``None`` for that stream.
 
     """
 
@@ -121,6 +129,12 @@ class CommandResult:
     # the same ordering the generated signature uses.
     resolved_path: str | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
+    # ``kw_only`` for the same reason every field after ``stderr`` is: the
+    # seventh positional slot belongs to ``relay_fallbacks``, which main
+    # established and ``test_public_api`` pins. Declared *after* it rather than
+    # before it, because a trailing declaration reads as the additive tail
+    # this is; ``relay_fallbacks`` keeps the positional slot either way.
+    captures: tuple[CapturedStream, ...] = dc.field(default=(), kw_only=True)
 
     @property
     def ok(self) -> bool:
@@ -276,6 +290,22 @@ class PipelineResult:
             capture was disabled.
         """
         return self.final.stdout
+
+    @property
+    def captures(self) -> tuple[CapturedStream, ...]:
+        """Capture metadata for the final pipeline stage's streams.
+
+        Only the final stage's streams are captured for a caller; interior
+        stages relay their stdout to the next stage instead, so their bytes
+        are never retained. This is the same stage :attr:`stdout` reads.
+
+        Returns
+        -------
+        tuple[CapturedStream, ...]
+            The final stage's capture records, in stdout-then-stderr order,
+            empty when that stage captured nothing.
+        """
+        return self.final.captures
 
 
 @dc.dataclass(frozen=True, slots=True)

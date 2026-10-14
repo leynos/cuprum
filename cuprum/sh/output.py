@@ -18,6 +18,12 @@ import typing as typ
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
+from cuprum.capture_policy import (
+    BoundedCapture,
+    CapturePolicy,
+    FileBackedCapture,
+    FullCapture,
+)
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh._convenience_sink import (
     _validate_convenience_flags,
@@ -58,6 +64,20 @@ class RunOutputOptions:
         Store stdout and stderr on the returned result. Capture is independent
         of echoing, so a captured stream can remain silent and an echoed stream
         can be left uncaptured.
+    capture_stdout : CapturePolicy | bool | None, keyword-only, default=None
+        How stdout is captured. ``None`` inherits ``capture``; a policy is
+        used as given; ``True`` and ``False`` are the shorthand's spelling for
+        a complete capture and no capture. A
+        :class:`~cuprum.capture_policy.BoundedCapture` retains the most recent
+        ``max_bytes`` of the stream and reports the exact dropped byte count,
+        and a :class:`~cuprum.capture_policy.FileBackedCapture` spills to a
+        temporary file past a threshold, reporting the path instead of the
+        text. The policy governs the capture tap only: bytes a pipeline stage
+        relays to the next stage are never affected.
+    capture_stderr : CapturePolicy | bool | None, keyword-only, default=None
+        How stderr is captured, resolved exactly as ``capture_stdout`` is and
+        independently of it, so the two streams can be configured differently
+        in one run.
     echo : bool, default=False
         Shorthand for enabling both ``echo_stdout`` and ``echo_stderr`` unless
         either stream has an explicit override.
@@ -185,6 +205,13 @@ class RunOutputOptions:
     """
 
     capture: bool = True
+    # Keyword-only although they read beside ``capture``: ``RunOutputOptions``
+    # is a public, non-``kw_only`` dataclass whose first six fields are
+    # positional, and ``test_public_api`` pins them. Declaring these two
+    # positionally would take the slots of ``max_echo_line_bytes`` and
+    # ``on_line`` and rebind every existing positional caller.
+    capture_stdout: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
+    capture_stderr: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
@@ -224,7 +251,25 @@ class RunOutputOptions:
     )
 
     def __post_init__(self) -> None:
-        """Resolve the echo shorthand and synthesize a sink from the flags."""
+        """Resolve the echo and capture shorthands, then synthesize any sink."""
+        object.__setattr__(
+            self,
+            "capture_stdout",
+            _resolve_capture(
+                shorthand=self.capture,
+                declared=self.capture_stdout,
+                field="capture_stdout",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "capture_stderr",
+            _resolve_capture(
+                shorthand=self.capture,
+                declared=self.capture_stderr,
+                field="capture_stderr",
+            ),
+        )
         object.__setattr__(
             self,
             "echo_stdout",
@@ -281,6 +326,40 @@ class RunOutputOptions:
         return _parse_broken_pipe_policy(self.broken_pipe_policy)
 
     @property
+    def resolved_capture(self) -> tuple[CapturePolicy | None, CapturePolicy | None]:
+        """The resolved ``(capture_stdout, capture_stderr)`` policies.
+
+        ``__post_init__`` turns each stream's field into a policy — inheriting
+        ``capture`` where the caller named none, mapping ``True`` to
+        :class:`~cuprum.capture_policy.FullCapture` and ``False`` to ``None``
+        — so the returned pair is always concrete and says exactly what the
+        run will do. ``None`` means that stream is not captured at all.
+
+        Returns
+        -------
+        tuple[CapturePolicy | None, CapturePolicy | None]
+            The stdout and stderr policies, in that order, each either a
+            policy object or ``None`` for a stream that is not captured.
+
+        Examples
+        --------
+        >>> RunOutputOptions().resolved_capture
+        (FullCapture(), FullCapture())
+        >>> RunOutputOptions(capture=False).resolved_capture
+        (None, None)
+        >>> RunOutputOptions(capture=False, capture_stderr=True).resolved_capture
+        (None, FullCapture())
+        """
+        # The declared field types stay ``CapturePolicy | bool | None`` because
+        # the caller may spell a stream as the shorthand bool; only the
+        # constructor's resolution narrows them, which the declared types
+        # cannot express to a type checker.
+        return (  # ty: ignore[invalid-return-type]
+            self.capture_stdout,
+            self.capture_stderr,
+        )
+
+    @property
     def resolved_echo(self) -> tuple[bool, bool]:
         """The resolved ``(echo_stdout, echo_stderr)`` gates.
 
@@ -293,3 +372,46 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
+
+
+def _resolve_capture(
+    *,
+    shorthand: bool,
+    declared: CapturePolicy | bool | None,
+    field: str,
+) -> CapturePolicy | None:
+    """Resolve one stream's capture field against the ``capture`` shorthand.
+
+    ``None`` inherits the shorthand, which is how ``echo_stdout`` and
+    ``echo_stderr`` already resolve from ``echo``; ``True`` and ``False`` are
+    accepted as the shorthand's spelling for the two ends of the range, so a
+    caller can write ``capture_stderr=False`` without naming a policy class
+    for the stream they want off.
+
+    A value that is neither a policy nor a ``bool`` is rejected here rather
+    than at the drain, so a caller learns from a ``ValueError`` before
+    anything is spawned instead of from a child that ran and captured
+    something unintended.
+
+    Returns
+    -------
+    CapturePolicy | None
+        The policy this stream resolves to, or ``None`` when the stream is
+        not captured.
+
+    Raises
+    ------
+    ValueError
+        If the value is not ``None``, a ``bool``, or a capture policy.
+    """
+    if declared is None:
+        return FullCapture() if shorthand else None
+    if isinstance(declared, bool):
+        return FullCapture() if declared else None
+    if isinstance(declared, FullCapture | BoundedCapture | FileBackedCapture):
+        return declared
+    msg = (
+        f"RunOutputOptions {field} must be a capture policy, a bool, or None, "
+        f"got {declared!r}"
+    )
+    raise ValueError(msg)
