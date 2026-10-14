@@ -880,3 +880,49 @@ just that quoting fails the reinstall case. The narrower test reported green
 over a recipe that was still broken: an unquoted executable only breaks when
 its own path contains the space, so a test that spaces a *different* path
 variable cannot see it.
+
+### Clearing the third assessment (2026-10-14)
+
+A third assessment read the branch at `4b8c6fcb7` and closed all five findings
+above in the inspected source, while distinguishing what it had verified from
+what it had not: it independently reproduced the 50-entry manifest count and
+said plainly that it had **not** reproduced the 62-family scan. That
+distinction is the useful part of the reading and is preserved here rather than
+flattened — the family count is a measurement of this tree by this detector,
+not something an inspection of the source alone can confirm.
+
+It raised no blocking implementation defect and two non-blocking comment
+corrections, both of which were real.
+
+**The scope contract stated the floor direction backwards.** The comment
+justified the equality assertion by saying the floor direction "only guards
+against narrowing" and accepts widening. It is the other way round. Equality
+replaced a `>=` comparison, and `>=` would have guarded against *lowering*
+while accepting any *raising* — and raising **narrows**, because families below
+the floor are never reported. The comment also said a silent change "shrinks
+the surface", which is wrong for the lowering direction, which widens it. Both
+directions move the surface, neither is adjudicated by the gate, and that is
+precisely why the assertion is equality rather than a bound. The corrected
+comment carries the direction and measured figures: `min-size` 16 admits 104
+families, 24 admits 62, and 40 admits 43, re-measured against `nose 0.20.0`
+using the gate's own argv rather than carried over from prose.
+
+**The Makefile comment named an interface the recipe does not have.** It read
+`FIRST/SECOND/REASON`; the recipe implements `FIRST/MEMBERS/REASON`. The
+adjacent paragraph explaining why there is no repeated `SECOND` was also wrong
+in its own right: it claimed `SECOND=a SECOND=b` "never reaches the recipe",
+when GNU Make does reach the recipe having silently kept only the last
+occurrence — so a three-member family recorded that way would cover two. The
+hazard is a silent drop, not a missing invocation, and the comment now says so.
+
+Both corrections are comment-only. That is verified rather than asserted: every
+changed line in `4b8c6fcb7..a6dfbffd1` is a comment, with no recipe, assertion,
+or configuration change. The commit count the assessment checked was confirmed
+independently — `git rev-list --count 8c78a5b7..4b8c6fcb7` is 24, matching the
+reported figure — and the plan continues not to claim that the four named
+repair commits are the current increment.
+
+The third assessment read a head that both corrections have now superseded, so
+its acceptance is candidate-bound and does not transfer. Hosted checks were
+restarted on `a6dfbffd1` and are the live evidence for it; the earlier
+candidate's results are **not** carried forward.
