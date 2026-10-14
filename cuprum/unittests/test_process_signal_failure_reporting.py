@@ -63,7 +63,7 @@ class _ExpectedOutcome:
     They travel together because they are one outcome, not three independent
     expectations: which signals reached the child, whether the escalation was
     tried, and whether any reaping wait returned. Carrying them as a record
-    keeps the parametrisation table readable and stops the case list from
+    keeps the parametrization table readable and stops the case list from
     growing an argument per fact.
     """
 
