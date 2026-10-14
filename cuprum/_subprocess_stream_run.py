@@ -47,7 +47,6 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -56,13 +55,17 @@ from cuprum._subprocess_wait import (
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum._subprocess_wait_types import _DrainContext, _RunTaskOwnership
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamPayload, _StreamPayloadPair
+    from cuprum._subprocess_wait_types import (
+        _DrainContext,
+        _RunTaskOwnership,
+        _StreamPayload,
+        _StreamPayloadPair,
+    )
 
 
 async def _settle_owned_group_before_draining(
