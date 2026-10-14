@@ -569,6 +569,13 @@ full_name = [
 ]
 reason = "Reached only by self-dispatch: _TupleRegistration.__init__ calls self._append() and the inherited detach() calls self._release(), and each is overridden on the same hook-tuple path, so Skylos cannot follow the MRO to the override that runs. Only the override is reported, never the base it shadows. Traced executing through PumpHookRegistration, EchoHookRegistration, StreamOperationHookRegistration, LineStreamHookRegistration, and ControlHookRegistration."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum.capture_policy._is_positive_int",
+]
+reason = "Called by BoundedCapture.__post_init__ and FileBackedCapture.__post_init__ and by nothing else. The reference graph does not traverse a dataclass __post_init__ body at all, so a helper whose only callers live there reads as unreferenced; a probe against skylos 4.33.2 confirmed it follows a plain __init__ and an explicit dataclass __init__, but not __post_init__, with slots and frozen ruled out as the trigger. Both policies reject a non-positive bound through this helper, covered by test_bounded_capture_rejects_a_non_positive_bound and test_file_backed_capture_rejects_a_non_positive_threshold."
+
 # The code-duplication gate. `make duplication` and `make lint` run the pinned
 # `nose` binary through `scripts/duplication_gate.py` with these settings.
 #
@@ -1028,6 +1035,7 @@ reason = "A two-line `if <field> is None: return` guard in two unrelated modules
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py", "cuprum/_group_teardown.py"]
 reason = "`if <field> is None: return` over an observation (three times, in three modules), native file descriptors, a session, and a teardown report: each is a same-module early return guarding a different optional collaborator, and the shared text is the guard idiom rather than a shared operation. Grown from four locations to five by `main`, which added the `_group_teardown.py` report guard while this branch was rebasing. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"
