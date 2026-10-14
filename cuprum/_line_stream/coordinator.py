@@ -30,6 +30,7 @@ import dataclasses as dc
 import typing as typ
 from time import perf_counter
 
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.drain import _drain_after_exit
 from cuprum._line_stream.spawn import (
@@ -373,6 +374,13 @@ async def _run_to_command_result(
             ),
             exc,
         )
+
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
 
     run.telemetry.emit(LineStreamPhase.COMPLETED)
     _emit_exit_event(

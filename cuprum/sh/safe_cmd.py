@@ -26,6 +26,7 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
+import functools
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
 from cuprum._bytes_run import _require_command_result
@@ -257,17 +258,14 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         )
         observation = _prepare_execution_observation(self, state, tracking)
 
-        return LineStream(
-            _iter_line_events(
-                _build_subprocess_execution(
-                    self,
-                    state,
-                    observation=observation,
-                    sink_bracket=tracking.sink_bracket,
-                ),
-                tracking,
-            ),
+        execution_factory = functools.partial(
+            _build_subprocess_execution,
+            self,
+            state,
+            observation=observation,
+            sink_bracket=tracking.sink_bracket,
         )
+        return LineStream(_iter_line_events(execution_factory, tracking))
 
     @typing.overload
     def run_sync(

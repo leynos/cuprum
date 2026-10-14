@@ -280,6 +280,7 @@ class _DeliveryWorker:
                 return
             with self._condition:
                 self._active_item = None
+                # An in-flight write may finish after close reports it as UNDELIVERED.
                 if self._abandoned:
                     return
                 self._condition.notify_all()

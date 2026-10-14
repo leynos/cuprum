@@ -1871,6 +1871,10 @@ stderr chunks from a command or pipeline share one FIFO in the order the run
 loop enqueues them. Any queued output discarded after a worker failure is also
 reported as `UNDELIVERED`.
 
+The same guarantees apply to `SafeCmd.lines()`: delivery setup is deferred
+until iteration begins, and its worker closes before the final result is
+published or during stream cleanup.
+
 At shutdown, Cuprum lets the worker drain for 0.25 seconds by default. Set
 `drain_grace_s` to a finite, non-negative number to choose another bound. If a
 write is still blocked when that grace expires, Cuprum abandons the worker as a

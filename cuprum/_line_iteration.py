@@ -16,6 +16,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -114,7 +115,7 @@ class LineStream:
 
 
 async def _iter_line_events(
-    execution: _SubprocessExecution,
+    execution_factory: cabc.Callable[[], _SubprocessExecution],
     tracking: _ExecutionTracking,
 ) -> cabc.AsyncGenerator[LineEvent | CommandResult, None]:
     """Yield each ``LineEvent``, then the run's ``CommandResult``.
@@ -132,6 +133,8 @@ async def _iter_line_events(
         One ``LineEvent`` per decoded output line, then the run's
         ``CommandResult`` once the subprocess has exited.
     """
+    execution: _SubprocessExecution = execution_factory()
+
     from cuprum._line_stream import _line_event_queue
     from cuprum._pipeline_types import _EventDetails
 
@@ -179,12 +182,20 @@ async def _iter_line_events(
         failure = error
         raise
     finally:
-        await _reconcile_line_stream(
-            coordinator,
-            result_future,
-            tracking,
-            _LineStreamFinalization(execution, result, failure),
-        )
+        try:
+            await _reconcile_line_stream(
+                coordinator,
+                result_future,
+                tracking,
+                _LineStreamFinalization(execution, result, failure),
+            )
+        finally:
+            await _shielded_cleanup(
+                _close_delivery_worker(
+                    execution.delivery_worker,
+                    drain_grace_s=execution.delivery_grace_s,
+                ),
+            )
 
 
 def _emit_line_stream_error(
