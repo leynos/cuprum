@@ -12,6 +12,7 @@ import pytest
 
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._streams_pump import _pump_stream
+from cuprum.capture_policy import CapturePolicy, FullCapture
 from cuprum.stream_events import (
     StreamOperation,
     StreamOperationEvent,
@@ -74,10 +75,16 @@ class _Writer:
         """Accept writer close completion."""
 
 
-def _drain_config(*, capture_output: bool = True) -> _StreamConfig:
+# The default policy for these drain tests: one shared, immutable instance,
+# because a call in a default argument is banned and a fresh object per call
+# would allocate for no reason.
+_FULL_CAPTURE = FullCapture()
+
+
+def _drain_config(*, capture: CapturePolicy | None = _FULL_CAPTURE) -> _StreamConfig:
     """Build a minimal stream configuration for observation tests."""
     return _StreamConfig(
-        capture_output=capture_output,
+        capture=capture,
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -98,7 +105,7 @@ def test_non_none_observer_return_is_warned_and_does_not_change_drain(
                 typ.cast("asyncio.StreamReader", _PayloadReader(b"payload")),
                 _drain_config(),
             )
-        )
+        ).payload
 
     assert captured == "payload", "an observer return must not change draining"
     assert [record.__dict__.get("cuprum_action") for record in caplog.records] == [
@@ -171,7 +178,7 @@ async def _run_cancelled_drain(_: _Writer) -> None:
     """Run the direct drain cancellation case."""
     await _drain(
         typ.cast("asyncio.StreamReader", _CancelledReader()),
-        _drain_config(capture_output=False),
+        _drain_config(capture=None),
     )
 
 

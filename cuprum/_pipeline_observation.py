@@ -64,7 +64,7 @@ def _build_pipeline_observations(
             tags=_merge_tags(
                 _base_stage_tags(
                     cmd,
-                    capture=config.capture,
+                    capture=config.captures_any_stream,
                     echo_stdout=config.echo_stdout,
                     echo_stderr=config.echo_stderr,
                 ),

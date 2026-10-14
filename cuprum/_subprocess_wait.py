@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._stream_drain import (
     _CAPTURE_EOF_GRACE_S,
@@ -51,8 +52,8 @@ from cuprum._subprocess_wait_types import _ConsumerPair, _DrainContext
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import (
+        _DrainPair,
         _RunTaskOwnership,
-        _StreamPayload,
     )
 
 
@@ -79,17 +80,18 @@ def _drain_context(
     tasks: _RunTaskOwnership,
     pid: int | None,
     *,
-    capture: bool,
+    preserve: bool,
 ) -> _DrainContext:
     """Build the drain context for one reconciliation of *tasks*.
 
     Every reconciliation route a streamed run has needs the same four values,
-    and the only one they disagree about is *capture*: the expiry routes
-    preserve the text their ``TimeoutExpired`` will report, while a route
-    re-raising some other error discards it rather than spending the capture
-    grace on text nobody will read. Building the bundle at each site instead is
-    how a route drifts from the others, so the one value that legitimately
-    differs is the one asked for here.
+    and the only one they disagree about is whether output is preserved: the
+    expiry routes keep the text their ``TimeoutExpired`` will report, while a
+    route re-raising some other error discards it rather than spending the
+    capture grace on text nobody will read. Building the bundle at each site
+    instead is how a route drifts from the others, so the one value that
+    legitimately differs is the one asked for here. A discarding route reports
+    ``(None, None)``, the pair that says no stream is being captured at all.
 
     It sits beside :func:`_reconcile_run_tasks`, its only consumer, because the
     context exists to serve that one reconciliation and reads its cancellation
@@ -104,9 +106,20 @@ def _drain_context(
     _DrainContext
         The context that reconciliation, and the drain beneath it, read their
         capture choice, pid, observation, and cancellation policy from.
+
+    Examples
+    --------
+    A discarding route reports no policies at all, which is how the drain knows
+    to skip the capture grace::
+
+        context = _drain_context(execution, tasks, pid, preserve=False)
     """
     return _DrainContext(
-        capture=capture,
+        captures=(
+            (execution.capture_stdout, execution.capture_stderr)
+            if preserve
+            else (None, None)
+        ),
         capture_bytes=execution.capture_bytes,
         pid=pid,
         observation=execution.observation,
@@ -117,7 +130,7 @@ def _drain_context(
 async def _reconcile_run_tasks(
     tasks: _RunTaskOwnership,
     context: _DrainContext,
-) -> tuple[_StreamPayload | None, _StreamPayload | None]:
+) -> _DrainPair:
     """Stop the idle heartbeat, cancel the stdin writer, then drain the streams.
 
     The stream consumers drain with ``return_exceptions=True``, so their
@@ -125,11 +138,14 @@ async def _reconcile_run_tasks(
     performs: a cancelled reader keeps the fallback it recorded before it was
     cancelled.
 
-    The halves are one unit so a caller can run them under
+    Every half of the teardown is one unit so a caller can run them under
     :func:`_shielded_cleanup` and know all of them finish: draining first would
     leave a writer blocked on a pipe nobody is reading, and shielding them
     separately would let a cancellation landing between two of them strand the
-    rest.
+    rest. The accumulator cleanup below belongs to that unit for the same
+    reason, and it is placed here rather than inside the drain because a
+    *drain-local* ``finally`` would not run when the drain task is cancelled
+    mid-await — which is precisely the case a spill file has to survive.
 
     The heartbeat goes first. Reconciliation runs once the run is already
     ending, and a keepalive announcing that a terminated child is "still
@@ -138,19 +154,23 @@ async def _reconcile_run_tasks(
 
     Returns
     -------
-    tuple[_StreamPayload | None, _StreamPayload | None]
-        The stdout and stderr payloads, as produced by
+    _DrainPair
+        The stdout and stderr results, as produced by
         :func:`_drain_stream_consumers`.
     """
     await _stop_idle_monitor(tasks.idle)
     await _cancel_stdin_writer(tasks.stdin_task)
-    stdout_text, stderr_text = await _drain_stream_consumers(
+    stdout_drain, stderr_drain = await _drain_stream_consumers(
         tasks.consumers,
         context,
     )
+    # After the drain, not before: a reader still running is still appending,
+    # and closing the file underneath it would turn the tail of a spilled
+    # capture into a storage failure that the run then has to report.
+    await _finalize_capture_handles((stdout_drain, stderr_drain), tasks.captures)
     for diagnostics in tasks.relay_diagnostics:
         diagnostics.settle()
-    return stdout_text, stderr_text
+    return stdout_drain, stderr_drain
 
 
 __all__ = [

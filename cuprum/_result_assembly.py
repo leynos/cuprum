@@ -36,6 +36,7 @@ from cuprum.events import CaptureMode
 if typ.TYPE_CHECKING:
     from cuprum._rusage import ChildResourceUsage, _ChildRusageSnapshot
     from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum.capture_policy import CapturedStream
     from cuprum.echo_events import RelayFallback
 
 _LOGGER = logging.getLogger(__name__)
@@ -201,8 +202,41 @@ def _require_captured_text(
     return text
 
 
+def _recorded_captures(
+    captures: tuple[CapturedStream | None, CapturedStream | None],
+) -> tuple[CapturedStream, ...]:
+    """Flatten a run's per-stream capture records into its result's tuple.
+
+    A result reports one record per stream it actually captured, in
+    stdout-then-stderr order, and nothing for a stream it did not. Draining the
+    optional pair here rather than at each construction site is what keeps
+    ``CommandResult.captures`` from being ``(None, None)`` for a run that
+    captured one stream and ``(record,)`` for a run that captured both — the
+    shape a caller would have to know the config to unpick.
+
+    Parameters
+    ----------
+    captures : tuple[CapturedStream | None, CapturedStream | None]
+        The stdout and stderr records, either of which is ``None`` when that
+        stream was not captured.
+
+    Returns
+    -------
+    tuple[CapturedStream, ...]
+        The records that exist, in stream order.
+
+    Examples
+    --------
+    A run that captured only stderr reports one record::
+
+        _recorded_captures((None, stderr_record))
+    """
+    return tuple(record for record in captures if record is not None)
+
+
 __all__ = [
     "_RunMeasurements",
+    "_recorded_captures",
     "_require_bytes",
     "_require_captured_text",
     "_require_text",

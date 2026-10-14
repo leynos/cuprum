@@ -59,6 +59,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._stdio_plan import _ResolvedStdio
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
@@ -84,7 +85,14 @@ class _SubprocessExecution:
 
     cmd: SafeCmd
     ctx: ExecutionContext
-    capture: bool
+    # The resolved per-stream capture policies, mirroring how ``echo_stdout``
+    # and ``echo_stderr`` already differ per stream. ``None`` for a stream the
+    # run does not capture, so a single field pair expresses every combination
+    # of the two streams rather than one flag both must share.
+    capture_stdout: CapturePolicy | None
+
+    capture_stderr: CapturePolicy | None
+
     echo_stdout: bool
     echo_stderr: bool
     max_echo_line_bytes: int | None
@@ -150,7 +158,7 @@ class _SubprocessExecution:
         The ``is_pipe`` test is asked first and short-circuits the rest.
         """
         return self.stdio.stdout.is_pipe and (
-            self.capture
+            self.capture_stdout is not None
             or self.echo_stdout
             or self.idle is not None
             or self.on_line is not None
@@ -160,7 +168,7 @@ class _SubprocessExecution:
     def consumes_stderr(self) -> bool:
         """Whether the parent must consume stderr, rather than discard it."""
         return self.stdio.stderr.is_pipe and (
-            self.capture
+            self.capture_stderr is not None
             or self.echo_stderr
             or self.idle is not None
             or self.on_line is not None

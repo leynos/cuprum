@@ -21,6 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import (
     BrokenPipePolicy,
     EchoErrorCategory,
@@ -136,7 +137,7 @@ def _config(
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for broken-pipe tests."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -160,7 +161,7 @@ def test_best_effort_completes_capture_when_sink_pipe_is_broken() -> None:
         _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
     )
 
-    assert captured == b"".join(chunks).decode("utf-8"), (
+    assert captured.payload == b"".join(chunks).decode("utf-8"), (
         "capture must complete even when the echo sink's pipe is broken for "
         f"chunks={chunks!r}, captured={captured!r}"
     )
@@ -200,7 +201,7 @@ def test_best_effort_recovers_from_text_write_and_flush_failures(
 
     captured = asyncio.run(_drain(_reader(chunks), _config(sink)))
 
-    assert captured == "payload", (
+    assert captured.payload == "payload", (
         "capture must complete whether the text write or its flush broke for "
         f"mode={mode!r}, captured={captured!r}"
     )
@@ -225,7 +226,7 @@ def test_best_effort_recovers_from_binary_buffer_failures(
         _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink)))
     )
 
-    assert captured == "payload", (
+    assert captured.payload == "payload", (
         f"capture must complete for mode={mode!r}, captured={captured!r}"
     )
     assert b"".join(sink.buffer.raw) == buffer, (
@@ -324,7 +325,7 @@ def test_strict_is_the_default_policy() -> None:
     """A config that names no policy runs the strict path."""
     assert (
         _StreamConfig(
-            capture_output=True,
+            capture=FullCapture(),
             echo_output=True,
             sink=typ.cast("typ.IO[str]", _BrokenPipeSink()),
             encoding="utf-8",
@@ -373,7 +374,7 @@ def test_flush_after_broken_pipe_does_not_reattempt_the_write() -> None:
 
     captured, sink = asyncio.run(run_case())
 
-    assert captured == "hello \N{REPLACEMENT CHARACTER}", (
+    assert captured.payload == "hello \N{REPLACEMENT CHARACTER}", (
         "capture must flush the decoder tail after echo is disabled for "
         f"captured={captured!r}"
     )
@@ -396,7 +397,7 @@ def test_broken_pipe_on_the_final_decoder_flush_is_recovered() -> None:
 
     captured = asyncio.run(run_case())
 
-    assert captured == "\N{REPLACEMENT CHARACTER}", (
+    assert captured.payload == "\N{REPLACEMENT CHARACTER}", (
         f"capture must survive a flush-side break, got captured={captured!r}"
     )
     assert sink.attempts == ["\N{REPLACEMENT CHARACTER}"], (

@@ -6,6 +6,13 @@ tasks, these helpers gather their results, cancel the consumer tasks during
 cleanup, and surface any unexpected pipe failures. They deliberately hold no
 knowledge of how the tasks were created or which backend pumps the bytes; they
 operate purely on the resulting :class:`asyncio.Task` objects.
+
+Each consumer task settles to a whole
+:class:`~cuprum._stream_drain_finish._CapturedDrain`, not to a bare payload, and
+the gathering helpers report what the tasks produced rather than narrowing it.
+The payload is one of three things a drain result carries — the capture record
+and the spill handle travel with it — so a helper that returned only the
+payload would discard a record naming a file nobody could then remove.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ import asyncio
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_wait_types import _StreamConsumerTask
 
 
@@ -41,17 +49,20 @@ async def _cancel_stream_tasks(
 
 async def _gather_optional_text_tasks(
     tasks: list[_StreamConsumerTask | None],
-) -> tuple[str | bytes | None, ...]:
+) -> tuple[_CapturedDrain | None, ...]:
     """Await optional capture tasks, returning a tuple aligned with inputs.
 
-    A task carries whatever its stream config captured, so each slot is text in
-    the ordinary mode and the child's bytes untouched in the byte-exact one.
+    Each slot holds the whole drain result its task settled to, so the payload,
+    the capture record, and any spill handle stay together — which is what lets
+    a later stage report how the stream was retained and close the file it
+    left. A slot is ``None`` where no task was supplied, which is a stream the
+    spawn never attached a consumer to.
 
     Returns
     -------
-    tuple[str | bytes | None, ...]
-        One slot per input task, in the same order, holding that task's
-        captured payload or ``None`` where no task was supplied.
+    tuple[_CapturedDrain | None, ...]
+        One slot per input task, in the same order, holding that task's drain
+        result or ``None`` where no task was supplied.
     """
     return tuple(
         await asyncio.gather(

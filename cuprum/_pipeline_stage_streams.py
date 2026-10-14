@@ -22,6 +22,7 @@ from cuprum._streams import _consume_stream, _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
+    from cuprum._capture_types import CaptureSinkRegistry
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_wait_types import _StreamConsumerTask
@@ -89,6 +90,7 @@ class _StageCaptureRequest:
     observation: _StageObservation
     is_last_stage: bool
     started_at: float
+    captures: CaptureSinkRegistry
 
 
 def _create_stage_capture_tasks(
@@ -119,14 +121,16 @@ def _create_stage_capture_tasks(
     )
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
     if config.consumes_stderr:
+        stderr_config = dc.replace(
+            config.stderr_stream_config,
+            stream=EchoStream.STDERR,
+        )
+        request.captures.register(stderr_config.capture_sink)
         stderr_relay_diagnostics = _RelayDiagnostics()
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
-                dc.replace(
-                    config.stderr_stream_config,
-                    stream=EchoStream.STDERR,
-                ),
+                stderr_config,
                 on_line=stderr_on_line,
                 relay_diagnostics=stderr_relay_diagnostics,
             ),
@@ -149,6 +153,7 @@ def _create_stage_capture_tasks(
 
     stdout_relay_diagnostics: _RelayDiagnostics | None = None
     if config.consumes_stdout:
+        request.captures.register(config.stream_config.capture_sink)
         stdout_relay_diagnostics = _RelayDiagnostics()
         stdout_task = asyncio.create_task(
             _consume_stream(

@@ -253,7 +253,9 @@ async def _attach_run_tasks(
         started has been reclaimed.
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever building the tasks raised
     # Built first: this is the step that can fail without having started
-    # anything, so failure here needs no cleanup.
+    # anything, so failure here needs no cleanup. The preparation helper
+    # resolves both stream configs, which is what keeps each stream's capture
+    # accumulator reachable from reconciliation.
     spawn = _prepare_stream_spawn(execution, process.pid)
     started: list[asyncio.Task[typ.Any]] = []
     try:
@@ -278,6 +280,7 @@ async def _attach_run_tasks(
         discard_on_cancel=spawn.discard_on_cancel,
         relay_diagnostics=spawn.relay_diagnostics,
         idle=execution.idle,
+        captures=spawn.spawn_context.captures,
     )
 
 

@@ -16,7 +16,7 @@ DEFAULT_ECHO_MAX_LINE_BYTES = 64 * 1024
 # output in memory, where the caller reads it from ``stdout``/``stderr`` as
 # before, while still bounding what a genuinely noisy child can cost the parent.
 # The threshold is a memory decision, never a content one: a stream that stays
-# below it is finalised exactly as ``FullCapture`` would finalise it.
+# below it is finalized exactly as ``FullCapture`` would finalize it.
 DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES = 1024 * 1024
 
 # Error policy a byte-exact run's *views* decode under. A view is any decode

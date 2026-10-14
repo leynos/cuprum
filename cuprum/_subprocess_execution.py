@@ -23,6 +23,7 @@ from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import (
+    _recorded_captures,
     _require_bytes,
     _require_captured_text,
     _require_text,
@@ -66,6 +67,7 @@ if typ.TYPE_CHECKING:
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum.capture_policy import CapturedStream
     from cuprum.echo_events import RelayFallback
 
 
@@ -101,16 +103,22 @@ def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
 class _DirectCompletion:
     """The settled facts of a direct run, once its streams have reconciled.
 
-    ``stdout_text``, ``stderr_text``, and ``relay_diagnostics`` stay ``None``
-    on the direct path, which captures nothing; the stream path overwrites all
-    three. Returning them as one record keeps the waiting and the result
-    assembly in separate helpers, so neither accumulates enough locals to trip
-    the repository's ``too-many-locals`` ceiling.
+    ``stdout_text``, ``stderr_text``, ``captures``, and ``relay_diagnostics``
+    stay ``None`` (or, for ``captures``, empty) on the direct path, which
+    captures nothing; the stream path overwrites all four. Returning them as
+    one record keeps the waiting and the result assembly in separate helpers,
+    so neither accumulates enough locals to trip the repository's
+    ``too-many-locals`` ceiling.
 
     The two payload fields are typed ``str | bytes`` because the drain reports
     whichever the run's mode asked for. Nothing here inspects the type: the
     mode is read once, at the seam that chooses which result class to build,
     so the payload reaches its field unexamined.
+
+    ``captures`` carries the drain's own records, in stdout-then-stderr order,
+    and travels beside the payloads rather than being read off the drain a
+    second time: the drain happens exactly once per run, and only its result
+    knows how each policy retained its stream.
     """
 
     exit_code: int
@@ -118,6 +126,7 @@ class _DirectCompletion:
     stdout_text: _StreamPayload | None
     stderr_text: _StreamPayload | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
+    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
 
 
 def _relay_fallbacks_for_result(
@@ -152,19 +161,23 @@ async def _await_direct_completion(
     stdout_text: _StreamPayload | None = None
     stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
+    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
     try:
         if execution.consumes_stdout or execution.consumes_stderr:
             (
                 exit_code,
                 exited_at,
-                stdout_text,
-                stderr_text,
+                stdout_drain,
+                stderr_drain,
                 relay_diagnostics,
             ) = await _run_subprocess_with_streams(
                 process,
                 execution,
                 pid=pid,
             )
+            stdout_text = stdout_drain.payload
+            stderr_text = stderr_drain.payload
+            captures = (stdout_drain.capture, stderr_drain.capture)
         else:
             exit_code, exited_at = await _run_subprocess_without_streams(
                 process,
@@ -193,6 +206,7 @@ async def _await_direct_completion(
         stdout_text=stdout_text,
         stderr_text=stderr_text,
         relay_diagnostics=relay_diagnostics,
+        captures=captures,
     )
 
 
@@ -257,9 +271,16 @@ def _build_command_result(
     keeps every measurement — duration, rusage, the relay diagnostics — from
     being computed twice under two names, which is how a binary run would come
     to report figures that a text run of the same command did not. The two
-    constructions differ only in the class and in the narrowing of the captured
-    payloads, and both narrowing rules are read from
-    :mod:`cuprum._result_assembly` rather than restated here.
+    constructions differ in the class, in the narrowing of the captured
+    payloads, and in the capture records the class can carry; both narrowing
+    rules are read from :mod:`cuprum._result_assembly` rather than restated
+    here.
+
+    Only the text result carries ``captures``. ``BytesCommandResult`` mirrors
+    ``CommandResult``'s captured-output fields but not this one, so a byte run
+    reports how its stream was retained by its type and its payload alone; the
+    records are the metadata a text caller reads, and the byte entry points
+    were never part of this change.
 
     Returns
     -------
@@ -304,6 +325,7 @@ def _build_command_result(
         stdout=_require_text(completion.stdout_text, "stdout"),
         stderr=_require_text(completion.stderr_text, "stderr"),
         **measurements.as_kwargs(),
+        captures=_recorded_captures(completion.captures),
     )
 
 

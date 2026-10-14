@@ -21,6 +21,10 @@ from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
+from cuprum.unittests._stream_drain_support import (
+    _BOTH_CAPTURED,
+    _NONE_CAPTURED,
+)
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
     _ExitedProcess,
@@ -150,7 +154,7 @@ def test_teardown_drain_failure_emits_observe_event() -> None:
         await _drain_stream_consumers(
             (consumer, completed),
             _DrainContext(
-                capture=False,
+                captures=_NONE_CAPTURED,
                 pid=5678,
                 observation=typ.cast("_StageObservation", observation),
             ),
@@ -199,7 +203,7 @@ def test_capture_eof_grace_expiry_emits_observe_event() -> None:
         await _drain_stream_consumers(
             (asyncio.create_task(never_reaches_eof()), completed),
             _DrainContext(
-                capture=True,
+                captures=_BOTH_CAPTURED,
                 eof_grace_waiter=expire_immediately,
                 pid=5678,
                 observation=typ.cast("_StageObservation", recorder),
@@ -246,7 +250,7 @@ def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
                 asyncio.create_task(asyncio.sleep(0, result="stderr")),
             ),
             _DrainContext(
-                capture=True,
+                captures=_BOTH_CAPTURED,
                 eof_grace_waiter=wait_for_readers,
                 observation=typ.cast("_StageObservation", recorder),
             ),
@@ -275,7 +279,7 @@ def test_non_capturing_drain_emits_no_grace_expiry_event() -> None:
                 asyncio.create_task(never_reaches_eof()),
             ),
             _DrainContext(
-                capture=False,
+                captures=_NONE_CAPTURED,
                 observation=typ.cast("_StageObservation", recorder),
             ),
         )
@@ -319,7 +323,7 @@ def test_failing_grace_observer_cannot_replace_cancellation() -> None:
             await _drain_stream_consumers(
                 consumers,
                 _DrainContext(
-                    capture=True,
+                    captures=_BOTH_CAPTURED,
                     eof_grace_waiter=expire_immediately,
                     observation=typ.cast("_StageObservation", _CancellingObservation()),
                 ),

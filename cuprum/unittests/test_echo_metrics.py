@@ -21,6 +21,7 @@ from cuprum.adapters.echo_metrics import (
     EchoMetricsHook,
     echo_metrics_hook,
 )
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import (
     BrokenPipePolicy,
     EchoErrorCategory,
@@ -57,7 +58,7 @@ def _drain_config(
 ) -> _StreamConfig:
     """Build a UTF-8 config for one named output stream."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         sink=sink,
         encoding="utf-8",
@@ -159,7 +160,7 @@ def test_successful_bounded_truncation_increments_its_own_series() -> None:
     collector = RecordingCollector()
     sink = io.StringIO()
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         echo_max_line_bytes=50,
         sink=sink,
@@ -259,7 +260,7 @@ def test_failing_collector_does_not_break_the_drain() -> None:
             _drain(_echo_reader(chunks), _drain_config(sink, EchoStream.STDOUT)),
         )
 
-    assert captured == "plain ś plain ń", (
+    assert captured.payload == "plain ś plain ń", (
         f"capture must survive a broken collector, found captured={captured!r}"
     )
 
@@ -311,7 +312,7 @@ def _broken_pipe_config(
 ) -> _StreamConfig:
     """Build a config whose sink will report a broken pipe."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         sink=sink,
         encoding="utf-8",

@@ -360,6 +360,32 @@ class RunOutputOptions:
         )
 
     @property
+    def captures_any_stream(self) -> bool:
+        """Whether either stream is captured under the resolved policies.
+
+        The one-bool reading of ``resolved_capture``: the observation tags
+        report capture as a single flag, and this keeps that flag meaning what
+        it always did now that the policies differ per stream. A run that
+        captures anything at all is a capturing run.
+
+        Returns
+        -------
+        bool
+            ``True`` when either stream has a policy, ``False`` when neither
+            does.
+
+        Examples
+        --------
+        >>> RunOutputOptions().captures_any_stream
+        True
+        >>> RunOutputOptions(capture=False).captures_any_stream
+        False
+        >>> RunOutputOptions(capture=False, capture_stderr=True).captures_any_stream
+        True
+        """
+        return self.capture_stdout is not None or self.capture_stderr is not None
+
+    @property
     def resolved_echo(self) -> tuple[bool, bool]:
         """The resolved ``(echo_stdout, echo_stderr)`` gates.
 
