@@ -47,20 +47,31 @@ import typing as typ
 
 from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
+from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stdin_reclaim import (
     _cancel_stdin_writer,
     _settle_stdin_writer,
 )
-from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
     # ``__all__`` below keeps that path open. ``_reconcile_shielded`` is *not*
     # re-imported, because it is reached only from inside the exit module and a
     # second binding here would be one no call path resolves.
-    _wait_for_streamed_process_exit,
+    _wait_for_streamed_process_exit as _wait_for_streamed_process_exit,
+)
+from cuprum._subprocess_stream_post_exit import (
+    # Re-imported, not moved outright: ``_await_stdin_writer`` and
+    # ``_settle_owned_group_before_draining`` are still called from this
+    # module's own helpers below, and those calls resolve the names from *this*
+    # module's globals. Keeping them bound here is what lets the teardown
+    # tests go on patching them where the production call path reads them.
+    _await_stdin_writer as _await_stdin_writer,
+)
+from cuprum._subprocess_stream_post_exit import (
+    _settle_owned_group_before_draining as _settle_owned_group_before_draining,
 )
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -76,43 +87,11 @@ from cuprum._subprocess_wait_types import (
     _DrainPair,
     _RunTaskOwnership,
 )
-from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
-
-
-async def _settle_owned_group_before_draining(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> None:
-    """Terminate the run's owned group so the drain that follows can reach EOF.
-
-    Once the direct child has exited, this module still has stream consumers to
-    collect. For an owning run that exit is not settlement: a descendant the
-    child left behind is still in the group, still holds the write end of the
-    run's pipes, and no signal aimed at the leader can reach it. Draining first
-    would spend the bounded capture grace on readers that cannot reach EOF and
-    then discard output the descendant was still producing. The teardown is
-    shielded like every other one on a failure path, so a cancellation arriving
-    during its grace period cannot skip the escalation.
-
-    A run that does not own its group has nothing to do here — its only
-    teardown target is the direct child, which has already exited on every path
-    reaching this helper — so the call is skipped rather than made a no-op.
-    """
-    if not execution.owns_process_group:
-        return
-    await _terminate_all_shielded(
-        (process,),
-        _TeardownPolicy(
-            execution.ctx.cancel_grace,
-            owns_group=True,
-        ),
-        observations=(execution.observation,),
-    )
 
 
 async def _run_subprocess_without_streams(
@@ -162,37 +141,6 @@ async def _run_subprocess_without_streams(
     # :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`.
     await _settle_stdin_writer(stdin_task)
     return exit_code, exited_at
-
-
-async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
-    """Await the stdin writer, letting a failure reach the run's cleanup.
-
-    The writer must finish before the consumers are gathered: it is what closes
-    the child's stdin, and a consumer waiting on a child still blocked reading
-    is a consumer waiting for a write that has not happened. A failure or
-    cancellation here propagates to the caller's post-exit boundary, which owns
-    the whole cleanup — group teardown included. Cleaning up here instead would
-    be the narrower repair that leaves the group unsettled.
-
-    The wait is shielded. Awaiting the writer task makes it this await's
-    ``_fut_waiter``, and ``Task.cancel()`` forwards — so without the shield the
-    boundary is woken only after the writer has finished dying, including the
-    close grace it bounds. The shield returns the cancellation at once instead.
-    It is a latency improvement and *not* what makes the run terminate: the
-    writer's own bounded settle does that (ADR 021 records the measurements).
-
-    The shielded await is a *settle* rather than a bare await of the task, and
-    that is what supplies the bound the shield only protects. The writer's
-    ``_close_stdin`` grace bounds a write already in flight, but it is reached
-    only once the producer has finished producing; a producer parked in
-    ``anext`` never gets there, so a bare await would sit on this line with the
-    child already reaped and outlast the run's own deadline. The settle window
-    plus the cancel it falls back to is what makes the wait terminate in that
-    case, and it reclaims the task rather than leaving it parked.
-    """
-    if tasks.stdin_task is None:
-        return
-    await asyncio.shield(_settle_stdin_writer(tasks.stdin_task))
 
 
 async def _settle_group_and_reconcile_consumers(

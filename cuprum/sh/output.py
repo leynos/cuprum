@@ -18,13 +18,8 @@ import typing as typ
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
-from cuprum.capture_policy import (
-    BoundedCapture,
-    CapturePolicy,
-    FileBackedCapture,
-    FullCapture,
-)
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
 from cuprum.sh._convenience_sink import (
     _validate_convenience_flags,
     synthesize_sink,
@@ -46,6 +41,11 @@ from cuprum.sinks import base as sinks  # ruff: ignore[typing-only-first-party-i
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    # Type-only like ``LineHook`` below: the capture policies appear in field
+    # and property annotations and in docstring examples, never in run-time
+    # expressions — ``__post_init__`` delegates the resolution that used them
+    # to :mod:`cuprum.sh._capture_options`.
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import LineHook
 
 __all__ = [
@@ -398,46 +398,3 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
-
-
-def _resolve_capture(
-    *,
-    shorthand: bool,
-    declared: CapturePolicy | bool | None,
-    field: str,
-) -> CapturePolicy | None:
-    """Resolve one stream's capture field against the ``capture`` shorthand.
-
-    ``None`` inherits the shorthand, which is how ``echo_stdout`` and
-    ``echo_stderr`` already resolve from ``echo``; ``True`` and ``False`` are
-    accepted as the shorthand's spelling for the two ends of the range, so a
-    caller can write ``capture_stderr=False`` without naming a policy class
-    for the stream they want off.
-
-    A value that is neither a policy nor a ``bool`` is rejected here rather
-    than at the drain, so a caller learns from a ``ValueError`` before
-    anything is spawned instead of from a child that ran and captured
-    something unintended.
-
-    Returns
-    -------
-    CapturePolicy | None
-        The policy this stream resolves to, or ``None`` when the stream is
-        not captured.
-
-    Raises
-    ------
-    ValueError
-        If the value is not ``None``, a ``bool``, or a capture policy.
-    """
-    if declared is None:
-        return FullCapture() if shorthand else None
-    if isinstance(declared, bool):
-        return FullCapture() if declared else None
-    if isinstance(declared, FullCapture | BoundedCapture | FileBackedCapture):
-        return declared
-    msg = (
-        f"RunOutputOptions {field} must be a capture policy, a bool, or None, "
-        f"got {declared!r}"
-    )
-    raise ValueError(msg)
