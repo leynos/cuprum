@@ -17,6 +17,9 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook
 
 
+_DEFAULT_MASK = "[REDACTED]"
+
+
 def _substitute_pattern(pattern: re.Pattern[str], value: str, mask: str) -> str:
     """Substitute matches with *mask* as literal text."""
     return pattern.sub(lambda _match: mask, value)
@@ -52,7 +55,7 @@ class RedactionError(RuntimeError):
         )
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(frozen=True, slots=True, init=False)
 class RedactionPolicy:
     """Apply configured literal and regular-expression masks to exports.
 
@@ -80,7 +83,19 @@ class RedactionPolicy:
 
     literals: tuple[str, ...] = ()
     patterns: tuple[re.Pattern[str], ...] = ()
-    mask: str = "[REDACTED]"
+    mask: str = _DEFAULT_MASK
+
+    def __init__(
+        self,
+        literals: str | cabc.Iterable[str] = (),
+        patterns: re.Pattern[str] | cabc.Iterable[re.Pattern[str]] = (),
+        mask: str = _DEFAULT_MASK,
+    ) -> None:
+        """Normalize supported rule inputs into immutable field values."""
+        object.__setattr__(self, "literals", literals)
+        object.__setattr__(self, "patterns", patterns)
+        object.__setattr__(self, "mask", mask)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         """Coerce rule collections and validate their element types."""

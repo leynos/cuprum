@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted. Redaction is an explicit projection policy configured independently
-for each export destination.
+Accepted. The policy primitive and explicit observation wrapper are
+implemented. Direct adapter and sink configuration remains planned as part of
+issue #442.
 
 ## Date
 
@@ -72,13 +73,20 @@ export policy into execution. This option was rejected.
 ## Decision outcome / proposed direction
 
 Provide an inert-by-default `RedactionPolicy` with caller-supplied literal
-strings, compiled text patterns, and a replacement mask. Structured logging,
-tracing, plain-text logging, the GitHub Actions group title, and consumers
-wrapped with `redacting_hook` apply the policy at their own export boundary.
-Event consumers receive a copy. Plain-text logging applies the policy to its
-argv projection directly, and the presentation sink applies it to the derived
-title. The raw event, executed argv, child environment, and captured result
-remain unchanged.
+strings, compiled text patterns, and a replacement mask. The implemented
+`redacting_hook` wrapper gives explicitly wrapped `ExecEvent` consumers
+sanitized copies. Structured logging and tracing can currently use that wrapper
+before registration with `observe()`.
+
+The selected follow-on integration will add policy configuration directly to
+structured logging, tracing, plain-text logging, and the GitHub Actions sink.
+Plain-text logging will apply it to the argv projection, and the presentation
+sink will apply it to the derived group title. Those direct configuration paths
+are planned, rather than implemented, at this milestone; plain-text logging and
+GitHub Actions titles currently remain unchanged.
+
+Across both the implemented wrapper and planned integrations, the raw event,
+executed argv, child environment, and captured result remain unchanged.
 
 An error while applying a pattern raises `RedactionError` with rule metadata.
 The error omits the source value and the underlying exception text. Export
