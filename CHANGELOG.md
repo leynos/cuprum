@@ -373,6 +373,16 @@ _Applications upgrading from 0.1 should follow the
   upgrade checklist covering every breaking change since 0.1
   ([#634](https://github.com/leynos/cuprum/pull/634)).
 
+<!-- markdownlint-disable-next-line MD024 -->
+### Fixed
+
+- **Native-wheel CI suppresses Maturin's missing `build-backend` warning:**
+  `uv_build` remains the PEP 517 backend for the pure-Python wheel, while the
+  Linux, macOS, and Windows CI lanes invoke Maturin directly for native wheels.
+  Those invocations now suppress only the intentional backend mismatch warning,
+  leaving other Maturin diagnostics visible
+  ([#430](https://github.com/leynos/cuprum/issues/430)).
+
 ## [0.2.0-beta1] - 2026-09-24
 
 <!-- markdownlint-disable-next-line MD024 -->

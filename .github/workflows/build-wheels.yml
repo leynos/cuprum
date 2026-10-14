@@ -19,6 +19,8 @@ env:
 
 jobs:
   build-native-wheels:
+    env:
+      MATURIN_NO_MISSING_BUILD_BACKEND_WARNING: "1"
     # Unchanged placement. GitHub spells matrix values into the check name, so
     # both `ubuntu-latest` legs are named verbatim in the `main-required-checks`
     # ruleset; moving either renames a required context, and nine steps here
@@ -95,6 +97,7 @@ jobs:
           maturin-version: ${{ env.MATURIN_VERSION }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
+          docker-options: -e MATURIN_NO_MISSING_BUILD_BACKEND_WARNING
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml
@@ -127,6 +130,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           container: ${{ env.MANYLINUX_AARCH64_CONTAINER }}
+          docker-options: -e MATURIN_NO_MISSING_BUILD_BACKEND_WARNING
           command: build
           args: >-
             --release --out wheelhouse --manifest-path rust/cuprum-rust/Cargo.toml

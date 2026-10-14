@@ -62,6 +62,7 @@ runs:
       env:
         WHEELHOUSE: ${{ inputs.wheelhouse }}
         TARGET: ${{ inputs.target }}
+        MATURIN_NO_MISSING_BUILD_BACKEND_WARNING: "1"
       run: |
         set -euo pipefail
         args=(
