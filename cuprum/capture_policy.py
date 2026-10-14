@@ -331,11 +331,13 @@ def _is_positive_int(value: object) -> bool:
 
 
 @typ.overload
-def policy_kind(policy: CapturePolicy) -> CapturePolicyKind: ...
+def policy_kind(policy: CapturePolicy) -> CapturePolicyKind:  # ruff: ignore[overload-with-docstring] - the `interrogate --fail-under 100` gate counts every function, so an undocumented overload stub fails it.
+    """Report the kind a resolved policy carries."""
 
 
 @typ.overload
-def policy_kind(policy: None) -> None: ...
+def policy_kind(policy: None) -> None:  # ruff: ignore[overload-with-docstring] - same conflict as the overload above; the interrogate gate admits no undocumented function.
+    """Report ``None`` for an uncaptured stream, so the record carries no kind."""
 
 
 def policy_kind(policy: CapturePolicy | None) -> CapturePolicyKind | None:
