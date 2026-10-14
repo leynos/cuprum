@@ -28,7 +28,13 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_stream_run, _subprocess_wait, scoped
+from cuprum import (
+    ScopeConfig,
+    _subprocess_stream_run,
+    _subprocess_streams,
+    _subprocess_wait,
+    scoped,
+)
 from cuprum.sh import (
     ExecutionContext,
     ProcessGroupPolicy,
@@ -220,14 +226,27 @@ class SpawnedWriter:
     satisfied by the group signal that releases the writer anyway. Use
     :attr:`task` for the precondition that the writer was live, and pin
     settlement where nothing else can stand in for it.
+
+    The spawn is rebound on *two* modules, because the run has two paths and
+    each resolves the name in its own globals: ``_subprocess_stream_run``
+    spawns it for the direct run, and ``_subprocess_streams`` spawns it for the
+    streamed run after the shared spawn construction moved there. Rebinding
+    only the stream-run module would watch a name the streamed path never
+    reads, and the test would report a run that spawned no writer rather than
+    the missed seam it is.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Rebind the spawn so the task it creates is retained here."""
+        """Rebind the spawn wherever a run resolves it, retaining the task."""
         self.task: asyncio.Task[None] | None = None
         self._spawn = _subprocess_stream_run._spawn_stdin_writer
         monkeypatch.setattr(
             _subprocess_stream_run,
+            "_spawn_stdin_writer",
+            self._watching_spawn,
+        )
+        monkeypatch.setattr(
+            _subprocess_streams,
             "_spawn_stdin_writer",
             self._watching_spawn,
         )

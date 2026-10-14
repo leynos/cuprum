@@ -18,6 +18,7 @@
       'cuprum/_constants.py',
       'cuprum/_context_policy.py',
       'cuprum/_echo_truncation.py',
+      'cuprum/_enum_parse.py',
       'cuprum/_event_taxonomy.py',
       'cuprum/_execution_tracking.py',
       'cuprum/_group_teardown.py',
