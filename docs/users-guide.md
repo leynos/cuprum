@@ -1288,6 +1288,17 @@ closes is cancelled, but keeps whatever it had already read. This happens when
 a grandchild process inherited the pipe and holds it open; the window is fixed
 because teardown must never wait on a pipe that may never close.
 
+A timeout also covers reading the child's streams, not only waiting for it to
+exit. A child that has exited still counts against the deadline if something
+else keeps the run's pipes open — a descendant that inherited them, which is
+the same situation
+[process-group ownership](#reclaim-a-descendant-with-process-group-ownership)
+addresses. In that case the timeout expires as normal, settling the process
+group rather than merely giving up on the readers, so the descendant is
+reclaimed and the run reports `TimeoutExpired` just as it would have if the
+child itself had overrun. Without this, a timeout on an owning run would have
+covered only the wait for the child and not the reading that follows it.
+
 #### Where a timeout comes from
 
 Cuprum uses the first of these that is set:
@@ -1342,6 +1353,127 @@ the same capture rules as a successful run. Expiry is reported per stage: each
 stage gets a `timeout` event, a `cuprum.timeout` record with its `pid`, and one
 `cuprum_timeouts_total` increment. The fields and `timeout_mode` values match
 the single-command case.
+
+#### Reclaim a descendant with process-group ownership
+
+When a command whose deadline expires has spawned descendants of its own,
+terminating the direct child does not terminate them. Cuprum then gives the run
+a brief window to observe end of file, cancels whatever is still waiting when
+it closes, and raises `TimeoutExpired` — correct, but the work the timeout was
+meant to stop continues in the background, holding the pipe open.
+
+`ExecutionContext.process_group` addresses that. It defaults to
+`ProcessGroupPolicy.INHERIT`, which tears down the direct child only; set it to
+`ProcessGroupPolicy.OWN_GROUP` to have the child lead a new session and process
+group, so teardown can signal the whole group and every descendant still in it:
+
+<!-- tested-example: process-group-ownership -->
+
+```python
+import sys
+
+from cuprum import ExecutionContext, ProcessGroupPolicy, Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="process-group")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import os, sys; print(os.getpgrp() == os.getpid())"
+)
+owned = ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)
+assert owned.process_group is ProcessGroupPolicy.OWN_GROUP
+assert command.run_sync(context=owned).stdout == "True\n"
+assert ExecutionContext().process_group is ProcessGroupPolicy.INHERIT
+```
+
+That last assertion is the compatibility promise: a context that says nothing
+about the policy keeps the child in the caller's group, so no existing run is
+affected. Only a caller that names `OWN_GROUP` gets a new group.
+
+Under `OWN_GROUP` the child's process-group identifier equals its PID, because
+the spawn made it a session and process-group leader. Teardown signals exactly
+that group — never the caller's — so an unrelated process or an outer group is
+untouched. The two-phase grace is unchanged: `SIGTERM`, wait for
+`cancel_grace`, then `SIGKILL` on the same group. A descendant that ignores
+`SIGTERM` and keeps a pipe open is therefore reached by the escalation, and the
+run settles instead of waiting out the EOF window.
+
+For an owning run, settlement is decided by the group rather than by the direct
+child. A run whose child has already exited — even one already reaped — is
+still torn down, and the group is signalled again, for as long as the group
+holds a member. That is what reaches a descendant the child left behind before
+teardown began: the child's exit alone settles nothing while its group outlives
+it. `INHERIT` keeps the old rule, where a completed direct child settles the
+run and no group signal is involved at all.
+
+Session leadership also detaches the child from the controlling terminal, and
+that trade-off is worth stating because it is not obvious from the name.
+`INHERIT` leaves the child in the caller's session, so a terminal interrupt
+(`SIGINT`) or `SIGHUP` reaches the child and its descendants; under `OWN_GROUP`
+they do not arrive from the terminal at all, and the run is reachable only
+through Cuprum's own teardown. An abrupt parent death can therefore leave the
+group running where `INHERIT` would have let the terminal end it. A child that
+needs a terminal — one that opens `/dev/tty`, or that prompts — cannot get one.
+
+The guarantee is bounded, and the bound is a property of the kernel rather than
+of this option: a descendant that calls `setsid()` or `setpgid()` leaves the
+group deliberately, and no non-privileged mechanism can contain it. Ancestors
+and siblings are outside the group for the same reason. Containment of
+processes that actively escape needs a supervisor, a cgroup, or a container; a
+command runner cannot promise it.
+
+`OWN_GROUP` raises `ValueError` on Windows, where POSIX process groups do not
+exist. The nearest equivalent, a Job Object, cannot be assigned atomically with
+process creation, so containment there could begin only after the child had a
+chance to spawn a descendant. Cuprum refuses rather than accepting the option
+and delivering no containment. `INHERIT` works everywhere and remains the
+default on every platform.
+
+**Do not signal a process group the run does not lead.** Under `INHERIT` the
+child stays in the caller's group, and the documented limitation applies in the
+other direction too: signalling that group reaches the caller's own process and
+its siblings. Ownership is what makes the group signal safe, which is why it is
+not the default.
+
+#### Cleanup diagnostics
+
+A teardown reports the outcomes it cannot resolve, so a run that left something
+behind is visible rather than silent. The available records depend on the
+policy: `cuprum.teardown_signal_failed` is raised under either policy, because
+a direct child can refuse a signal too, while the two `process_group` records
+can only come from a run that owns its group. Each record goes to the
+`cuprum._group_teardown` logger at `WARNING`:
+
+- `cuprum.teardown_signal_failed` — a signal the kernel refused for a target
+  the run still believed was running. It names the signal, so a refused
+  `SIGTERM` (a process never asked to leave) is distinguishable from a refused
+  `SIGKILL` (a process asked and unmoved). A target that had already gone is
+  not a failure and is not recorded. This one is recorded for any teardown,
+  owned or not: a direct child can refuse a signal too.
+- `cuprum.process_group_settlement_timeout` — the bounded wait after the
+  escalation expired with group members still outstanding. Recorded only for a
+  run that owns its group, since only an owned group can be left outstanding.
+- `cuprum.process_group_unsignalable` — the group holds members this process
+  may not signal, so it was reported unreachable rather than settled. Also
+  recorded only for a run that owns its group.
+
+A refused signal therefore reads as `cuprum.teardown_signal_failed`, carrying
+`pid`, `signal`, `owns_group`, and `error` fields — for example
+`pid=4319 signal=9 owns_group=True`. The trailing clause states the
+consequence: the target was not signalled, so a process the run believes is
+running may have outlived its teardown.
+
+The records propagate to the root logger, so an application that configures
+logging receives them with no further setup; with no handler configured,
+Python's last-resort handler still prints them to standard error.
+
+Each record is also published as a `group_teardown` observe event when the run
+has an observation to report against, so an adapter can count a failed teardown
+rather than leave it in a log. The event carries a bounded outcome category,
+not the record's prose — the metrics adapter turns that into
+`cuprum_group_teardowns_total{outcome=…}`, plus a `cuprum_group_settle_seconds`
+observation on the settlement timeout alone, which is the only outcome that
+measured a wait. A run that reaches teardown with no execution to report
+against — a spawn failure, or a run already abandoned — keeps the log record
+alone; see the developers' guide for why.
 
 #### Timeout diagnostics
 
@@ -1600,6 +1732,12 @@ The hook collects:
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
+- `cuprum_group_teardowns_total`: Counter incremented for each
+  `group_teardown` event, labelled by `outcome`, including direct-child signal
+  refusals and owning group teardowns
+- `cuprum_group_settle_seconds`: Histogram of how long the capped
+  post-`SIGKILL` group wait had run when it expired, observed only on the
+  `settlement_timeout` outcome
 - `cuprum_resource_usage_measurements_total`: Counter incremented once per
   terminal `exit` event that recorded a `resource_usage_mode`, including
   `unavailable`

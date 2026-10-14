@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_process, _wait4_spawn
 from cuprum.unittests._wait4_process_coordination_support import (
     _OBSERVE_TIMEOUT,
     _WINDOW_OBSERVATION,
@@ -76,7 +76,7 @@ def test_send_signal_waits_for_a_collection_in_flight(
 
     async def deliver_into_the_window() -> None:
         """Open the window, deliver into it, then let the collection finish."""
-        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        process = await _wait4_spawn.spawn_wait4_process(_exiting_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -150,7 +150,7 @@ def test_send_signal_does_not_wait_on_a_published_child() -> None:
 
     async def refuse_after_the_reap() -> None:
         """Signal a child whose reaper has already published its code."""
-        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        process = await _wait4_spawn.spawn_wait4_process(_exiting_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )

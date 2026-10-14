@@ -131,6 +131,10 @@ def test_exec_id_keeps_its_positional_slot() -> None:
         "exec_id must directly follow error_type so existing positional callers "
         f"keep binding it, got {fields}"
     )
+    # The published index is pinned absolutely by ``_TERMINAL_OUTCOME_INDEX``
+    # in ``test_terminal_outcome_public_api``, which catches a field inserted
+    # ahead of ``error_type`` — a case this order-relative check cannot see,
+    # because both indices shift together and the ordering still holds.
     exec_id = new_exec_id()
     event = c.ExecEvent(
         "start",  # phase

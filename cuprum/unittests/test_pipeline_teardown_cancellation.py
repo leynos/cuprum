@@ -17,10 +17,12 @@ import typing as typ
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
-from cuprum._process_lifecycle import (
+from cuprum._pipeline_teardown import (
+    _StageHandle,
     _terminate_pipeline_remaining_stages,
     _terminate_timed_out_stages,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.sh import ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
@@ -101,7 +103,8 @@ def test_timeout_teardown_completes_despite_caller_cancellation() -> None:
         process = _SignallingImmuneProcess()
         task = asyncio.create_task(
             _terminate_timed_out_stages(
-                [typ.cast("asyncio.subprocess.Process", process)], 0.2
+                [typ.cast("asyncio.subprocess.Process", process)],
+                _TeardownPolicy(0.2),
             )
         )
         await process.signalled.wait()
@@ -144,7 +147,8 @@ def test_teardown_completes_despite_a_second_caller_cancellation() -> None:
         process = _SignallingImmuneProcess()
         task = asyncio.create_task(
             _terminate_timed_out_stages(
-                [typ.cast("asyncio.subprocess.Process", process)], _LONG_GRACE
+                [typ.cast("asyncio.subprocess.Process", process)],
+                _TeardownPolicy(_LONG_GRACE),
             )
         )
         await process.signalled.wait()
@@ -286,12 +290,17 @@ def test_fail_fast_teardown_completes_despite_caller_cancellation() -> None:
         task = asyncio.create_task(
             _terminate_pipeline_remaining_stages(
                 [
-                    typ.cast("asyncio.subprocess.Process", failed),
-                    typ.cast("asyncio.subprocess.Process", survivor),
+                    _StageHandle(
+                        process=typ.cast("asyncio.subprocess.Process", failed),
+                        wait_task=wait_tasks[0],
+                    ),
+                    _StageHandle(
+                        process=typ.cast("asyncio.subprocess.Process", survivor),
+                        wait_task=wait_tasks[1],
+                    ),
                 ],
-                wait_tasks,
+                _TeardownPolicy(0.2),
                 0,
-                cancel_grace=0.2,
             )
         )
         await survivor.signalled.wait()

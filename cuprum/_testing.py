@@ -21,13 +21,13 @@ from cuprum._pipeline_internals import (
     _enforce_allowlist,
     _run_pipeline,
 )
+from cuprum._pipeline_records import _StageWaitContext
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _pump_stream_dispatch,
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
 )
-from cuprum._pipeline_types import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import _terminate_process
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending

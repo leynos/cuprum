@@ -13,8 +13,9 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_wait, _process_lifecycle
+from cuprum import _pipeline_teardown, _pipeline_wait
 from cuprum._pipeline_wait_records import _completion_log_fields
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._pipeline_wait_support import (
     advancing_clock,
     apply_completions,
@@ -27,16 +28,31 @@ from cuprum.unittests._pipeline_wait_support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_teardown import _StageHandle
     from cuprum._pipeline_wait import _PipelineWaitState
 
 
 class _TerminationProcess:
-    """Process double that confirms termination by completing its wait future."""
+    """Process double that confirms termination by completing its wait future.
 
-    def __init__(self, waiter: asyncio.Future[int], order: list[str]) -> None:
+    The pid is present because teardown reads it: a refusal is reported against
+    the execution whose process was signalled, and an owning run's probe names
+    the group by it. A double without one raises on that read, and the teardown
+    gather absorbs the exception into a ``False`` outcome — so the absence would
+    show up as a target that merely 'did not settle' rather than as the missing
+    attribute it is.
+    """
+
+    def __init__(
+        self,
+        waiter: asyncio.Future[int],
+        order: list[str],
+        pid: int = 4321,
+    ) -> None:
         """Keep the wait future and shared event order for this process."""
         self._waiter = waiter
         self._order = order
+        self.pid = pid
         self.terminate_calls = 0
         self.kill_calls = 0
 
@@ -134,37 +150,32 @@ async def _run_late_settled_termination(
     scenario = _make_termination_scenario()
     fields = _completion_log_fields(scenario.state, 0, 4, 12.5)
     outcomes: list[tuple[bool, ...]] = []
-    select_targets = _process_lifecycle._stages_to_terminate
+    select_targets = _pipeline_teardown._stages_to_terminate
     terminate_stages = _pipeline_wait._terminate_pipeline_remaining_stages
 
     def settle_after_selection(
         failure_index: int,
         done: list[bool],
+        *,
+        owns_group: cabc.Sequence[bool] = (),
     ) -> list[int]:
         """Settle the second target after its selection snapshot."""
-        targets = select_targets(failure_index, done)
+        targets = select_targets(failure_index, done, owns_group=owns_group)
         scenario.late_waiter.set_result(0)
         return targets
 
     async def capture_outcomes(
-        processes: list[asyncio.subprocess.Process],
-        wait_tasks: list[asyncio.Task[int]],
+        stages: cabc.Sequence[_StageHandle],
+        policy: _TeardownPolicy,
         failure_index: int,
-        *,
-        cancel_grace: float,
     ) -> tuple[bool, ...]:
         """Run the real teardown and retain each selected target outcome."""
-        result = await terminate_stages(
-            processes,
-            wait_tasks,
-            failure_index,
-            cancel_grace=cancel_grace,
-        )
+        result = await terminate_stages(stages, policy, failure_index)
         outcomes.append(result)
         return result
 
     monkeypatch.setattr(
-        _process_lifecycle,
+        _pipeline_teardown,
         "_stages_to_terminate",
         settle_after_selection,
     )
@@ -176,7 +187,7 @@ async def _run_late_settled_termination(
     await _pipeline_wait._terminate_and_report(
         scenario.state,
         scenario.processes,
-        0.25,
+        _TeardownPolicy(0.25),
         fields,
     )
     return outcomes[0], scenario

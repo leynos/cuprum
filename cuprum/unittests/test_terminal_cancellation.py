@@ -172,6 +172,9 @@ def test_repeated_cancellation_settles_one_command_once(
         await gate.release.wait()
         return await real_drain(consumers, context)
 
+    # Bound where the drain is called: ``_reconcile_run_tasks`` lives in
+    # ``_subprocess_wait`` and reads its own module global, so this is the
+    # binding the run actually resolves.
     monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
     async def run_case() -> None:

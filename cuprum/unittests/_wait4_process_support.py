@@ -26,7 +26,7 @@ import types
 
 import pytest
 
-from cuprum import _process_exit, _wait4_process
+from cuprum import _process_exit, _wait4_process, _wait4_spawn
 from tests.helpers.process_state import process_state
 
 __all__ = [
@@ -80,7 +80,7 @@ class _FakeUsage(types.SimpleNamespace):
         super().__init__(ru_maxrss=4, ru_utime=0.5, ru_stime=0.25)
 
 
-def _sleep_config() -> _wait4_process.DirectProcessConfig:
+def _sleep_config() -> _wait4_spawn.DirectProcessConfig:
     """Build spawn inputs for a child that stays alive until signalled.
 
     Returns
@@ -88,7 +88,7 @@ def _sleep_config() -> _wait4_process.DirectProcessConfig:
     DirectProcessConfig
         Inputs that request no pipes, keeping the spawn free of stream setup.
     """
-    return _wait4_process.DirectProcessConfig(
+    return _wait4_spawn.DirectProcessConfig(
         argv=_SLEEP_FOREVER,
         stdin=None,
         stdout=None,
@@ -98,9 +98,9 @@ def _sleep_config() -> _wait4_process.DirectProcessConfig:
     )
 
 
-def _exiting_config() -> _wait4_process.DirectProcessConfig:
+def _exiting_config() -> _wait4_spawn.DirectProcessConfig:
     """Build spawn inputs for a child that exits at once with ``_EXITED``."""
-    return _wait4_process.DirectProcessConfig(
+    return _wait4_spawn.DirectProcessConfig(
         argv=(sys.executable, "-c", f"import sys; sys.exit({_EXITED})"),
         stdin=None,
         stdout=None,

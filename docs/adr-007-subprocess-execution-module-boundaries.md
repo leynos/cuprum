@@ -265,6 +265,12 @@ them, while non-capturing cleanup settles promptly without that window and
 discards output. Cancellation during capture grace still settles the consumers
 before propagating, so process cleanup cannot leave stream readers pending.
 
+> **Superseded by the 2026-10-03 addendum.** The removal recorded here is of the
+> _earlier_ `_subprocess_drain.py`, the withdrawn compatibility boundary. The
+> name was reinstated later for a different seam, so `_subprocess_wait.py` is no
+> longer the single owner of the drain implementation. Read that addendum before
+> treating this section as the current module layout.
+
 ## Addendum (2026-09-15): streamed relay diagnostics ownership
 
 The per-command echo fallback diagnostics introduced a small refinement to the
@@ -529,6 +535,41 @@ definitions in one arm — or two methods in one class body — are reported. Th
 rule is deliberately structural and said so in its own docstring, so a future
 reader can tell which redefinitions it refuses and which it permits.
 
+## Addendum (2026-10-03): reinstate `_subprocess_drain` on a real seam
+
+The 2026-08-30 addendum read as though `_subprocess_drain.py` had been removed
+for good. In fact, it records the removal of the _earlier_ module of that name
+— the withdrawn compatibility boundary, which duplicated the drain helpers
+behind a second import path. The name returns here for a different reason and a
+different seam.
+
+> **Superseded by the 2026-10-14 addendum.** The module described here never
+> reached the target branch: a concurrent change had already split the same
+> drain helpers onto `cuprum/_stream_drain.py` under its own name, and that
+> module is the one the merged tree carries. Read the 2026-10-14 addendum for
+> the layout that actually landed; the reasoning below still explains why the
+> drain does not belong to a compatibility boundary.
+
+Carrying opt-in process-group ownership through teardown pushed
+`_subprocess_wait.py` past the 400-line module ceiling. The split is by
+responsibility rather than by line count: `_subprocess_wait` keeps the wait
+half of ending a run — applying the deadline and terminating the process — while
+`_subprocess_drain.py` owns what happens to the tasks a run leaves behind:
+`_drain_stream_consumers`, `_cancel_pending_consumers`, `_reconcile_run_tasks`,
+`_await_capture_eof_grace`, `_settle_consumers`, and their supporting types
+`_RunTaskOwnership`, `_DrainContext`, and `_EofGraceWaiter`. No compatibility
+re-export is left on the old path, matching the `_pipeline_spawn` and
+`_subprocess_streams` splits: importers name the module that defines what they
+use.
+
+The capture-aware teardown contract is unchanged by the move. A capturing drain
+still gives terminated-process readers the bounded `_CAPTURE_EOF_GRACE_S`
+window before settling them, non-capturing cleanup still settles promptly and
+discards output, and cancellation during capture grace still settles the
+consumers before propagating. Reconciliation remains one shielded unit.
+
+No public API changes, and the module-size suppression is still unnecessary.
+
 ## Addendum (2026-10-11): typed `sh.make` argument contract
 
 The 2026-09-25 addendum's inventory is historical for two entries.
@@ -544,6 +585,33 @@ Publishing the alias is what lets callers annotate their own wrappers with the
 same domain the builders enforce, without repeating the union or reaching for
 `object`. The contract itself, including which values are rejected at run time,
 is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
+
+## Addendum (2026-10-11): the pipeline wait state split from its orchestration
+
+The `_PipelineWaitState` command/query seam was drawn across two modules rather
+than kept inside one. `cuprum/_pipeline_wait_state.py` now owns the pure
+transition — `record_completion`, `should_terminate_others`, and the
+`from_processes` constructor — while `cuprum/_pipeline_wait.py` keeps the
+asyncio orchestration around it (`_wait_for_pipeline`,
+`_process_completed_task`, and the `asyncio.wait` batch tie-break).
+
+Two constraints met on the same line, which is why the split is drawn there and
+not elsewhere. The module-size ceiling forced a decomposition:
+`_pipeline_wait.py` stood at 415 lines against the repository's 400-line
+`max-module-lines` limit. The command/query seam was already the natural
+boundary, because the transition has different readers and different
+verification needs from the orchestration — it has no I/O, no signals, and no
+clock of its own, so Hypothesis and CrossHair can drive it directly where the
+asyncio machinery around it cannot be cheaply exercised by those tools.
+
+The compatibility rule is about the import target, not the definition.
+`_PipelineWaitState` is imported into `cuprum/_pipeline_wait.py` from the state
+module, so existing importers — `cuprum/_pipeline_wait_records.py` and the
+symbolic, state-machine, async, batch, examples, and process-exit test modules
+— continue to reach it through `cuprum._pipeline_wait` unchanged. That name is
+retained for callers written before the split; new code imports from
+`cuprum._pipeline_wait_state` directly, and re-exporting through the
+orchestration module is not the preferred entry point going forward.
 
 ## Addendum (2026-10-12): `Pipeline` moves to its own module
 
@@ -636,3 +704,61 @@ instead of borrowing half of it from the command module.
 an un-slotted mixin would donate a `__dict__` to the slotted dataclass that
 inherits it, so the empty declaration is what keeps `SafeCmd` a slotted
 dataclass with the field set its callers already rely on.
+
+## Addendum (2026-10-14): the drain lands in `_stream_drain.py`
+
+Two changes drew the same boundary at the same place while neither could see
+the other, and the merged tree keeps the one whose module already existed. The
+branch proposed reinstating `cuprum/_subprocess_drain.py` (2026-10-03
+addendum); the target branch had already moved the same helpers to
+`cuprum/_stream_drain.py` under the byte-exact work (2026-10-01 addendum). Both
+splits are by responsibility and both name the same responsibility, so the
+surviving module is the pre-existing one and `cuprum/_subprocess_drain.py` does
+not exist in this tree.
+
+`cuprum/_stream_drain.py` owns the consumer-side half of ending a run —
+`_CAPTURE_EOF_GRACE_S`, `_drain_stream_consumers`, `_await_capture_eof_grace`,
+`_await_eof_grace`, `_settle_consumers`, `_cancel_pending_consumers`,
+`_decode_consumer_result`, and `_report_drain_failures`. Its three rules are
+about _finishing_ rather than reading: what an absent reader reports, how a
+capturing drain's bounded grace behaves when it expires, and how a reader
+failure is reported without replacing the error that ended the run.
+
+The 2026-10-03 addendum's own reasoning survives the rescoping. It argued the
+drain must not return to a mere compatibility boundary, and that the ceiling on
+`_subprocess_wait.py` — not a preference for a particular filename — is what
+forces the split. Both hold: the confinement is inward from `cuprum/_streams`,
+which owns the reading machinery the drain drives, and neither module
+re-exports the other's names.
+
+The wait half is what `cuprum/_subprocess_wait.py` keeps, and it kept more than
+the 2026-08-30 addendum expected. `_wait_for_exit_code`,
+`_wait_for_exit_code_within_timeout`, `_deadline_for_collection`,
+`_drain_context`, and `_reconcile_run_tasks` all define there.
+`_deadline_for_collection` and `_drain_context` are new since the 2026-08-30
+addendum and are placed beside `_reconcile_run_tasks`, its only consumer,
+because the context exists to serve that one reconciliation. The two supporting
+types live in `cuprum/_subprocess_wait_types.py`, which the 2026-08-30 addendum
+already establishes as the shared home for `_RunTaskOwnership`,
+`_DrainContext`, and `_EofGraceWaiter`.
+
+The import path is what the split changes, and it does so deliberately rather
+than by compatibility shim. `cuprum/_subprocess_wait.py` imports
+`_CAPTURE_EOF_GRACE_S`, `_await_eof_grace`, and `_drain_stream_consumers` from
+`cuprum/_stream_drain.py` and keeps them bound in its own namespace, because
+callers still import them by that path — but importing from there is supported
+while _patching_ there is not. The drain resolves each name from its own
+module's globals, so rebinding the copy in `_subprocess_wait` is invisible to
+it. A test that needs to replace the grace waiter patches
+`cuprum._stream_drain._await_eof_grace`; a test that needs to hold the drain
+open patches `_drain_stream_consumers` on whichever module its entry point
+resolves the name from, which for the streamed `run()` path is
+`cuprum._subprocess_wait`, where `_reconcile_run_tasks` calls it.
+
+The drain's log records are emitted under the historical channel name
+`cuprum._subprocess_wait`, spelled explicitly in `_stream_drain` rather than
+derived from `__name__`, so moving the code did not move the channel operators
+filter on.
+
+No public API changes, and no module in this tree needs a module-size
+suppression.

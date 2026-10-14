@@ -42,6 +42,16 @@ A fence with no marker, or with a marker for the other kind of block, fails the
 suite. That way a Python example cannot be marked as a shell example to avoid
 being run.
 
+Separately, the contract tests that assert on documentation prose read whole
+sections through `tests/helpers/markdown.py::extract_markdown_subsection`,
+which returns a section body up to the next heading of the same or a higher
+level. That boundary is fence-aware: a `#` line inside a fenced code block is
+comment or shell syntax, not a heading, and does not close the section. Before
+that, such a line truncated the section silently, and the contract failed as a
+*missing clause* — pointing whoever read the failure at the prose rather than
+at the extractor. A section whose extracted length looks wrong is worth
+checking against that helper first.
+
 ## Boundary compilation selections
 
 [`scripts/boundary_compile.py`](../scripts/boundary_compile.py) defines named
@@ -1488,6 +1498,249 @@ exceptions, and cancellation. Tests cover this contract at four levels:
   `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
   enforcement, before/after/observe hooks, and async observe-task scheduling
 
+## Opt-in process-group ownership internals
+
+`ProcessGroupPolicy` rides on `ExecutionContext.process_group` and is read as
+`resolved_process_group`. The field accepts a policy member or its spelling;
+`__post_init__` resolves the string through the `StrEnum`, and an unknown
+spelling raises `ValueError` rather than degrading to `INHERIT`. Consumers
+inside the package read the resolved view, never the raw field.
+
+`OWN_GROUP` spawns the child with `start_new_session=True`, which makes the
+child both session leader and process-group leader, so its group identifier is
+its own pid and teardown needs no `os.getpgid` lookup. Ownership is recorded
+per spawn — one flag for a single command, one flag per stage for a pipeline —
+and teardown reads that record rather than re-deriving it from the policy. A
+spawn path that forgets to record ownership therefore degrades to the
+direct-child route, which is why the record, not the policy, is the source of
+truth at teardown time.
+
+The conversion from policy to spawn arguments is `_ownership_spawn_kwargs`
+(`cuprum/_subprocess_context.py`), beside `_cwd_arg`. It is the single place a
+policy becomes `start_new_session=True`, and it is applied at the two spawn
+sites rather than duplicated: `_subprocess_execution.py` for a single command
+and `_pipeline_spawn.py` for a pipeline. A third spawn route that did not call
+it would leave its children unowned whatever the caller asked for, so the
+function exists to make that omission a missing call rather than a divergent
+copy of the keyword.
+
+Table 1: process-group ownership modules and their responsibilities
+
+| Module                   | Owns                                                                |
+| ------------------------ | ------------------------------------------------------------------- |
+| `_process_group.py`      | The liveness probe, the backoff poll, and the capped wait           |
+| `_process_signal.py`     | The signal target and the settlement decision                       |
+| `_group_teardown.py`     | Signal delivery refusal and the unsettled-teardown reports          |
+| `_teardown_policy.py`    | The grace period and the per-process ownership record               |
+| `_process_lifecycle.py`  | The two-phase escalation and the fail-fast stage selection          |
+| `_subprocess_context.py` | The policy-to-spawn-argument conversion (`_ownership_spawn_kwargs`) |
+
+### The liveness probe
+
+`_probe_group(pgid)` answers a null signal to the group, reporting one of
+`_GroupProbe`'s three outcomes. The kernel keeps a group addressable while it
+has a member, so while the probe answers, the name — the leader's pid — names
+*some* live group. What it knows that the direct child's waiter cannot is
+whether a descendant is still inside the group the run created.
+
+The guarantee is one-directional, and the difference is worth stating. The
+probe is a **veto, never a licence**:
+
+- A probe that has **stopped** answering is conclusive. No group holds the
+  number, so it certainly is not this run's group, and no signal may be sent.
+- A probe that **still answers** is necessary but not sufficient. It proves
+  only that some group holds the number. This run's group could have emptied
+  and the kernel could have recycled the number *before* the probe ran, in
+  which case the answering group is a stranger's.
+
+So the probe can forbid a signal; it can never authorize one, because no probe
+can attribute a live name to this run. Two windows follow, and they are
+separate hazards rather than one. The larger is reuse **before** the probe: the
+group empties, the kernel recycles the number onto an unrelated group, and the
+next probe answers for the stranger exactly as it would for this run's own.
+Nothing here can detect that. The smaller is reuse **between** the probe and
+the signal: they are two separate syscalls, so a group that empties in the gap
+is signalled under a name the kernel may already have recycled.
+
+Neither window is closable here. A lifetime-safe handle on the target would
+close both, which is what `pidfd` gives for a single process, but `pidfd` is
+per-pid — `os.pidfd_open` and `signal.pidfd_send_signal` take a process
+identifier — and no process-group equivalent exists on this platform. The
+residual is the one `Popen` documents between its own liveness check and its
+`os.kill` (bpo-38630), bounded in practice by how long the kernel takes to
+recycle an identifier.
+
+`ProcessLookupError` means the group has emptied. `PermissionError` means
+members exist that this process may not signal: neither the grace period nor
+the escalation could reach them, so waiting longer cannot settle the group and
+the probe reports it as having no reachable members. Those two answers are not
+the same, and only the permission case leaves a member running past teardown;
+the probe reports that case as `UNSIGNALABLE`. `_probe_group` is a query and
+keeps them apart without judging them: it returns `EMPTY` or `UNSIGNALABLE` and
+leaves both the decision and the diagnostic to its caller. The teardown command
+is where the two are separated — an unsignalable group is logged as
+`cuprum.process_group_unsignalable` before being reported as unsettled —
+because moving the log into the probe would give a read an externally visible
+side-effect, and because the caller that acts on the answer is the one that
+owns the reporting.
+
+### Observability of group teardown
+
+Process-group cleanup is observable through diagnostic log records, a
+`group_teardown` execution event, and two metric series. The log record is what
+a developer reads while debugging one run; the event is what an adapter
+consumes, so a teardown that left a process behind becomes a countable series
+rather than a line in a log nobody is tailing. The series are what the metrics
+adapter builds from that event:
+
+- `cuprum_group_teardowns_total`, labelled by the closed `GroupTeardownOutcome`
+  category. The category is what keeps the series bounded — a pid would not be,
+  and is deliberately not a label.
+- `cuprum_group_settle_seconds`, observed only on the `settlement_timeout`
+  outcome. A refusal and an unsignalable group never reached a wait, so a zero
+  recorded for them would drag every percentile toward a figure that was never
+  taken.
+
+The counter is deliberately absent from `_PHASE_COUNTERS` and resolves through
+`_group_teardown_operations` instead, so its name keeps exactly one definition.
+
+What the routes do *not* all have is an observation to report against, and that
+is the attribution limit the event and the metric both inherit. The pipeline
+fail-fast path *does* carry a `_StageObservation` —
+`_terminate_pipeline_remaining_stages` is given a stage index and its caller
+holds the observation it emits `cuprum_terminated_stage_count` through. The
+spawn-failure and abandoned-run routes reach `_terminate_all_shielded` from
+callers that have already abandoned the run, and what they would have to hand
+down is a group signal that belongs to the run rather than to any one stage.
+They therefore keep the log record alone rather than inventing an attribution;
+`_group_teardown.py` skips the event when no observation is available, and the
+metric is derived from the event, so those two routes reach no counter either.
+
+That omission is per route, not blanket: the log record covers every route, the
+event and the metric cover the routes that can name an execution. The event
+carries the closed `GroupTeardownOutcome` category rather than the record's
+prose, so no pid, error string, or path can reach a metric label, and
+`settle_s` rides along only on the outcome that measured one.
+
+The records, all at WARNING because each one reports an abnormal outcome:
+
+- `cuprum.process_group_unsignalable` (`_group_teardown.py`) — the teardown
+  command found a group holding members this process may not signal, so the
+  group is reported unreachable rather than settled.
+- `cuprum.process_group_settlement_timeout` (`_group_teardown.py`) — the capped
+  post-`SIGKILL` wait expired with members still outstanding.
+- `cuprum.teardown_signal_failed` (`_group_teardown.py`) — a signal the kernel
+  refused with an `OSError` wider than the tolerated race, naming the signal so
+  a refused graceful signal is distinguishable from a refused escalation.
+
+The first two are emitted only for a run that owns its group, since only an
+owned group can be left unreachable or unsettled. The third is emitted on both
+routes: a refused signal is reported for a direct child as well, because the
+wrapper is shared and the default policy is the one that inherits. Both are
+reported through `_group_teardown.py`, which owns the report, the log record,
+and the `group_teardown` observe event together.
+
+The last of those is the subtle one, and the reason `signal_target_or_report`
+exists as a wrapper rather than the two signal sites each growing their own
+handler. Both ways a signal can fail to arrive reach the caller as the same
+`False` — "nothing left to do here" — so the value itself conflates a teardown
+that found nothing with one that failed. `ProcessLookupError` is the tolerated
+race and stays silent; a wider `OSError` is a process this run believes is
+running and could not signal, so it is reported before it is passed over.
+
+Reporting is diagnosis, not arithmetic. The fail-fast path reduces teardown
+outcomes with `outcome is True` (`cuprum/_process_lifecycle.py`), so a refused
+signal has always contributed zero to `cuprum_terminated_stage_count` — exactly
+as an absent target does. Nothing about the tally changes; what changes is that
+the two are no longer indistinguishable to a reader.
+`cuprum/unittests/test_process_signal_failure_reporting.py` pins both
+directions and both routes: that the benign race stays quiet, that a refused
+signal is recorded once and names the signal — once through `os.killpg` under
+`owns_group=True`, and once through the direct route under `owns_group=False`,
+since the wrapper is shared and the default policy is the one that inherits.
+The direct case refuses with a plain `OSError` rather than a
+`ProcessLookupError`, because on that route `Popen.send_signal` suppresses the
+latter itself before the wrapper could see it.
+
+### Settlement
+
+`_settlement_of` decides whether a teardown target has anything left to signal,
+and it is the one place that decision is made. An owning run asks the group
+probe; a run that does not own its group, and a child that never had a pid,
+keep the `is_done()` short-circuit byte for byte. Every teardown route reads
+this helper, and it is `_terminate_process_with_wait` that reads it — including
+for the pipeline stages, which reach that function by two different chains:
+partial-spawn, timeout, and error cleanup arrive through
+`_terminate_all_shielded` and `_terminate_process`, while fail-fast arrives
+through `_terminate_pipeline_remaining_stages` and
+`_terminate_process_via_wait_task`. The rule is stated once, in the helper, so
+the entry point holds no settlement condition of its own to audit.
+
+The answer is the probe's three-way `_GroupProbe` rather than a boolean, and
+`_report_teardown` is the companion that reports it. Splitting observation from
+reporting is what keeps the query free of side effects: a query that logs
+cannot be asserted on independently of a log capture, and it makes an
+environmental permission failure look like an answer about the group. The
+command boundary calls the two in sequence — query, report, then act on the
+answer — in `_terminate_process_with_wait`, `_escalate_after_grace`, and
+`_settle_after_escalation`.
+
+`_await_group_exit` polls because a process group has no completion event to
+await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`
+so a group that takes seconds to die is not re-probed at full frequency. The
+post-`SIGKILL` wait is capped by `_POST_KILL_SETTLEMENT_S` and deliberately not
+derived from `cancel_grace`: an adopted descendant whose parent died first
+cannot exit until an init process reaps it, and waiting unbounded there would
+strand the teardown. When the cap expires the group is reported with
+`cuprum.process_group_settlement_timeout`.
+
+`owns_group` is mandatory on the wait helper and explicit at every direct
+caller. With the settlement rule in one place, the flag selecting between its
+two routes is the thing a caller can get wrong, so an omitted keyword is a
+`TypeError` at the call site rather than a silently lost guarantee.
+
+### Identity guarantee coverage
+
+`cuprum/unittests/test_process_signal_identity.py` pins the one-directional
+probe guarantee above as deterministic tests rather than leaving it as prose.
+The hazard it guards is a teardown that signals on the strength of the name
+having been this run's at spawn time, rather than on a live probe: once the
+group has emptied, the identifier is an ordinary free slot and `killpg` under
+it would reach a group this run never created.
+
+Each case has the probe's answer as the only input, so the signalled names are
+read directly and no timing is involved:
+
+- a group whose probe no longer answers is never signalled under its name, by
+  either the graceful phase or the escalation, and the direct route is not
+  substituted for the group route;
+- a group whose probe still answers *is* signalled, and the probe is asserted
+  to have run first — not because a live answer licenses the signal, which it
+  never does, but because it is the last thing consulted before one; the leader
+  in this case has already been reaped, which a direct-child-only teardown
+  would mistake for settlement;
+- reuse before the probe is pinned as a **witness** rather than a prohibition:
+  the double models the kernel faithfully, so when a stranger's group holds the
+  number the signal reaches the stranger, and the test asserts that outcome.
+  The witness covers the signalling, not the reasoning — a teardown that read a
+  live answer as proof of ownership would send the same signals to the same
+  name, so the suite cannot adjudicate between the readings and the claim rests
+  on the prose above;
+- a group that empties during the grace period is not escalated into. Every
+  poll the grace took was answered live, so the escalation is reached on an
+  answer that has since stopped being true; the fresh check before the
+  escalation is what notices, and it is the one place a second probe buys
+  something the first could not;
+- an inherited run reaches its target through the process handle alone, with
+  neither the probe nor a group signal touched. The child is `SIGTERM`-immune
+  so both phases of the direct route run, making "no group was used" a
+  statement about both signals rather than only the first.
+
+The double models a group signal killing the direct child, because the child is
+a member of its own group. Without that, a signal sent down the wrong route
+presents as a hang rather than as a failed assertion, and the diagnostic is
+lost.
+
 ## Timeout and fail-fast reducer verification
 
 The temporal, branch-heavy subprocess-timeout and pipeline-cleanup paths are
@@ -1770,6 +2023,30 @@ have succeeded into a failure. `cuprum/unittests/test_pump_observation.py` and
 `cuprum/_pipeline_wait.py` splits completion handling on the same command-query
 line, so the fail-fast ordering rules can be verified without processes or a
 clock.
+
+The seam is also a module boundary. `cuprum/_pipeline_wait_state.py` owns the
+pure `_PipelineWaitState` transition — the command, the query, and the
+`from_processes` constructor that builds the wait tasks — while
+`cuprum/_pipeline_wait.py` owns the asyncio orchestration around it
+(`_wait_for_pipeline`, `_process_completed_task`, and the `asyncio.wait` batch
+tie-break below). The class is imported into `_pipeline_wait.py` from the state
+module rather than defined there, and that import is the compatibility surface:
+existing importers — including `_pipeline_wait_records.py` and the symbolic,
+state-machine, and async test modules — keep reaching `_PipelineWaitState`
+through `cuprum._pipeline_wait`, so the split moved the definition without
+moving the import target. New code should import it from
+`cuprum._pipeline_wait_state` directly; the `_pipeline_wait` name is retained
+for callers and tests written before the split, not as the preferred entry
+point.
+
+The split has two reasons, and they reinforce each other. The first is
+verification: the state module has no I/O, no signals, and no clock of its own,
+which is what lets Hypothesis and CrossHair drive it directly, and folding it
+back into `_pipeline_wait.py` would put it behind the asyncio machinery those
+tools cannot cheaply exercise. The second is module size: `_pipeline_wait.py`
+had grown to 415 lines against the repository's 400-line `max-module-lines`
+limit, so the seam drawn on the command-query line is also the line the
+decomposition had to follow. See the addendum to ADR-007.
 
 - `_PipelineWaitState.record_completion(completed_idx, exit_code, *, ended_at)`
   is a **command**. It writes the completed stage's exit code and the injected
@@ -6360,21 +6637,21 @@ The implementation boundaries are deliberately narrow:
 
 Table 1: Line-observation implementation boundaries
 
-| Module                                                               | Responsibility                                                                                                                                          |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cuprum/_line_stream/`                                               | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
-| `cuprum/_line_stream/coordinator.py`                                 | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
-| `cuprum/_line_stream/telemetry.py`                                   | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
-| `cuprum/_line_stream/line_queue.py`                                  | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
-| `cuprum/_line_stream/spawn.py`                                       | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
-| `cuprum/_line_stream/drain.py`                                       | Drains a line stream's settled consumers once the child has exited.                                                                                     |
-| `cuprum/_line_iteration.py`                                          | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
-| `cuprum/_line_callbacks.py`                                          | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
-| `cuprum/_subprocess_streams.py`                                      | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |
-| `cuprum/_execution_tracking.py`                                      | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                         |
-| `cuprum/_subprocess_execution.py` and `cuprum/_subprocess_wait.py`   | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                 |
-| `cuprum/_process_lifecycle.py`                                       | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                       |
-| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py` | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                 |
+| Module                                                                                         | Responsibility                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_line_stream/`                                                                         | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
+| `cuprum/_line_stream/coordinator.py`                                                           | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
+| `cuprum/_line_stream/telemetry.py`                                                             | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
+| `cuprum/_line_stream/line_queue.py`                                                            | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
+| `cuprum/_line_stream/spawn.py`                                                                 | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
+| `cuprum/_line_stream/drain.py`                                                                 | Drains a line stream's settled consumers once the child has exited.                                                                                     |
+| `cuprum/_line_iteration.py`                                                                    | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
+| `cuprum/_line_callbacks.py`                                                                    | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
+| `cuprum/_subprocess_streams.py`                                                                | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |
+| `cuprum/_execution_tracking.py`                                                                | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                         |
+| `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                 |
+| `cuprum/_process_lifecycle.py`                                                                 | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                       |
+| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py`                           | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                 |
 
 Changes to line delivery should keep both public entry points on the shared
 consumer path. Changes to termination or task ownership belong in the shared
@@ -6448,31 +6725,38 @@ are kept, and `verdict.txt` carries a header saying which is standing. Because
 The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
 `cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. Pipeline
-startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
-stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
-termination and the shared `_shielded_cleanup` primitive. The two
-idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
-`cuprum/_idle_diagnostic.py`, are private to the same seam. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_wait.py`, and
+`cuprum/_stream_drain.py`. Pipeline startup has its own boundary in
+`cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
+spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
+`_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
+decisions teardown makes about a single process — what a signal is delivered
+to, and what a completed teardown waits for. The two idle-heartbeat modules,
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
-`_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
-terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; choosing each mirrored stream's destination and
-single-command stream-consumer construction — the stdout `_StreamConfig`, the
-stderr config derived from it, and the consumer tasks that drain into it —
-belong in `_subprocess_streams`; orchestration that coordinates them —
-spawning, deciding which streams are consumed, and assembling the result —
-belongs in `_subprocess_execution`. On the pipeline side, starting stages — and
-cleaning up whatever a failed startup left running — belongs in
-`_pipeline_spawn`, while terminating stages that are already running belongs in
-`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
-belongs in `_idle_heartbeat` and its rendering and write-failure policy in
-`_idle_diagnostic`.
+`_subprocess_timeout`; the rules for *ending* a run — applying the deadline and
+terminating the process — belong in `_subprocess_wait`, while draining the
+stream consumers exactly once belongs in `_stream_drain`; choosing each
+mirrored stream's destination and single-command stream-consumer construction —
+the stdout `_StreamConfig`, the stderr config derived from it, and the consumer
+tasks that drain into it — belong in `_subprocess_streams`; orchestration that
+coordinates them — spawning, deciding which streams are consumed, and
+assembling the result — belongs in `_subprocess_execution`. On the pipeline
+side, starting stages — and cleaning up whatever a failed startup left running
+— belongs in `_pipeline_spawn`, while terminating stages that are already
+running belongs in `_process_lifecycle` alongside `_shielded_cleanup`. Deciding
+*when* to signal — the two-phase grace and its escalation — is
+`_process_lifecycle`'s; deciding *what* the signal reaches
+(`signal_target_or_report`, which lives in `_group_teardown` and is called from
+`_process_signal`), and what a completed teardown waits for (`_settlement`,
+`_terminate_process_with_wait`, `_settle_after_escalation`), belongs in
+`_process_signal`. The idle heartbeat's timing belongs in `_idle_heartbeat` and
+its rendering and write-failure policy in `_idle_diagnostic`.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
 `_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
@@ -6553,14 +6837,14 @@ so callers and the tests that monkeypatch them by module path resolve the same
 names as before.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
-`_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
-`_cancel_pending_consumers`, and `_reconcile_run_tasks` (see the wait-path
-detail below). The drain interface is explicit: `_RunTaskOwnership` bundles the
-optional stdin-writer task with the stdout and stderr consumer tasks,
-`_DrainContext` carries capture, observability, and the optional
-`discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)` cancels
-stdin before settling both consumers. The reconciliation is one unit for
-shielded cleanup. A capturing context gives readers the bounded EOF-grace
+`_wait_for_exit_code_within_timeout`, `_drain_context`, and
+`_reconcile_run_tasks` (see the wait-path detail below); the drain half lives in
+`cuprum/_stream_drain.py`. The drain interface is explicit:
+`_RunTaskOwnership` bundles the optional stdin-writer task with the stdout and
+stderr consumer tasks, `_DrainContext` carries capture, observability, and the
+optional `discard_on_cancel` event, and `_reconcile_run_tasks(tasks, context)`
+cancels stdin before settling both consumers. The reconciliation is one unit
+for shielded cleanup. A capturing context gives readers the bounded EOF-grace
 window and renders absent output as the mode's empty value, while a
 non-capturing context settles promptly and discards output.
 `_await_capture_eof_grace` uses an injected waiter when supplied and otherwise
@@ -6656,7 +6940,8 @@ non-positive timeout is special-cased to expire immediately and
 deterministically, because `asyncio.timeout()` alone would let a fast,
 already-exited process race past a zero or negative deadline; this preserves
 the behaviour of the previous `asyncio.wait_for()` implementation and is
-guarded by regression tests in `cuprum/unittests/test_subprocess_timeout.py`.
+guarded by regression tests in
+`cuprum/unittests/test_subprocess_wait_teardown.py`.
 
 Neither wait helper terminates unconditionally, and neither drains.
 `_wait_for_exit_code` terminates the process only when the wait is cancelled —
@@ -6673,16 +6958,93 @@ consumers exactly once via `_drain_stream_consumers` (see the stdin-injection
 sequence below), and terminating the process before that drain is what lets it
 reach EOF.
 
-The drain boundary carries an important teardown policy. Only the timeout path
-passes `capture=True`, allowing the fixed `_CAPTURE_EOF_GRACE_S` window to
-preserve text that is about to arrive at EOF. Cancellation, stdin-writer
-failure, and consumer-failure cleanup pass `capture=False`, so they cancel and
-settle promptly without waiting for that window or retaining output. The
-timeout and cancellation reconciliations run under `_shielded_cleanup`; if
-cancellation arrives during capture grace, both consumer tasks are settled
-before `CancelledError` is re-raised. Keep these choices at the drain boundary:
-moving capture draining into generic cleanup changes both timeout output and
-cancellation latency.
+A configured timeout covers **all** of a streamed run after its exit, not only
+the exit wait. The direct child exiting settles the wait and nothing else: for
+an owning run a descendant the child left behind can still hold the run's
+inherited pipes, so the consumers never see EOF and the run would otherwise
+wait past its own deadline — the timeout silently covering only the first half.
+`_collect_stream_output` in `cuprum/_subprocess_stream_run.py` therefore puts
+the whole post-exit boundary under one `asyncio.timeout`, whose argument is
+`_deadline_for_collection`: what remains of the same `perf_counter`-based
+budget the exit wait was scheduled against, or `None` for an unconfigured
+timeout, keeping a run without a deadline unbounded here exactly as everywhere
+else.
+
+The deadline is passed as the `asyncio.timeout` argument rather than read into
+a local, so it is measured immediately before the scope it bounds. Computing a
+duration first and reusing it would let the awaits before the gather spend part
+of the budget and still hand the gather the whole of it, so the run would
+outlast the timeout it was given. Bounding the heartbeat stop and the writer
+await matters as much as bounding the gather: a descendant that inherits the
+child's stdin without reading it leaves the writer parked in `drain` on a full
+pipe, and a timeout starting after that await would never be reached at all.
+
+Bounding the scope is necessary but not sufficient, because a deadline can
+expire and still never reach its handler inside it. Cancelling a task suspended
+on `await other_task` cancels the *inner* task and delivers the
+`CancelledError` outward only once that task finishes, so an await parked
+somewhere it will not finish defers the expiry meant to interrupt it. That was
+observed directly: the run at `cancelling() == 1` with the writer parked at
+`wait_closed` for as long as the probe ran. The writer's close in
+`cuprum/_subprocess_stdin.py` is therefore bounded by `_CLOSE_GRACE_S` — the
+reader end may never drain, so `wait_closed` cannot be awaited unbounded — and
+the writer await in `_await_stdin_writer` is additionally shielded so the
+cancellation returns to the boundary immediately rather than after the writer
+has spent that grace. Measured against a 1.0 s deadline with a parked writer,
+the expiry lands at 1.52 s shielded and 2.02 s unshielded.
+
+The shield is a latency improvement, not the fix, and the distinction is worth
+keeping because the intuitive reading is the wrong one. With `wait_closed` left
+unbounded, shielding the await still left the run hanging past a 90 s cap: the
+shield returns the cancellation to the boundary at once, but the expiry
+handler's reconciliation then calls `_cancel_stdin_writer`, whose `gather`
+waits for the cancelled writer — which never finishes. The hang moved into the
+cleanup rather than disappearing. The bounded close is what makes the run
+terminate on its deadline under both policies; the shield only shortens the
+path to that termination under `OWN_GROUP`.
+
+Expiry takes the ordinary error route rather than a special one:
+`_settle_group_and_reconcile_consumers` settles the group — precisely what
+releases the pipes the descendant held — before `_handle_stream_timeout` raises
+the internal `_SubprocessTimeoutError`, which `_subprocess_execution.py`
+converts into the public `TimeoutExpired` just as it does for a deadline
+expiring during the exit wait. One failure contract covers both halves, and no
+expiry path leaves the group unsettled.
+
+The three post-exit awaits — stopping the idle monitor, awaiting the stdin
+writer, and the gather — sit inside **one** boundary, and the cleanup that
+follows a cancellation in any of them is **one** shielded unit.
+`_shielded_cleanup` finishes its task and then re-raises the caller's
+cancellation, so two sequential shielded calls are not one shielded sequence: a
+second cancel arriving during the group settlement would exit before
+reconciliation was ever awaited. `_settle_group_and_reconcile_consumers`
+composes the two phases into a single coroutine held under one shield for
+exactly that reason.
+
+That cleanup reconciles **every** task the run still owns, not the consumers
+alone, because a cancellation can arrive before the writer was ever awaited.
+Settling the group releases the child's stdin, but releasing a pipe is not the
+same as having settled the task that was writing to it, and under `INHERIT`
+there is no group signal to release it at all. The phase therefore calls
+`_reconcile_run_tasks`, which stops the monitor, cancels and collects the stdin
+writer, drains the consumers, and settles the diagnostics.
+
+The drain boundary carries an important teardown policy. The routes that reach
+the caller as a `TimeoutExpired` pass `capture=True`, allowing the fixed
+`_CAPTURE_EOF_GRACE_S` window to preserve text that is about to arrive at EOF.
+There are two such routes, and they must agree: a deadline expiring during the
+*exit wait* drains from `_wait_for_streamed_process_exit`, and one expiring
+*after* the child has exited — in the post-exit boundary the module docstring
+describes — drains from `_settle_group_and_reconcile_consumers`. Both pass
+`execution.capture` and hand the drained text to `_handle_stream_timeout`, so a
+capturing run reports its output whichever half of the run the deadline landed
+in. Cancellation, stdin-writer failure, and consumer-failure cleanup pass
+`capture=False`, so they cancel and settle promptly without waiting for that
+window or retaining output. The timeout and cancellation reconciliations run
+under `_shielded_cleanup`; if cancellation arrives during capture grace, both
+consumer tasks are settled before `CancelledError` is re-raised. Keep these
+choices at the drain boundary: moving capture draining into generic cleanup
+changes both timeout output and cancellation latency.
 
 All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,

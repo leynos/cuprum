@@ -72,7 +72,7 @@ class _RunMeasurements:
 
     ``rusage`` accepts either of the two shapes the measurement seam produces:
     the pre-spawn snapshot a ``wait4`` bracket takes, or the aggregate
-    :func:`~cuprum._wait4_process.resource_usage_for` falls back to when the
+    :func:`~cuprum._wait4_spawn.resource_usage_for` falls back to when the
     direct child cannot be reaped through that interface. Both report the same
     three figures and both allow a missing ``max_rss_bytes``, so accepting the
     union here is what lets the caller pass the measurement on rather than

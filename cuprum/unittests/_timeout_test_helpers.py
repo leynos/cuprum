@@ -107,15 +107,51 @@ class _RaisingObservation:
 
 
 @dc.dataclass(slots=True)
+class _ClockObservation:
+    """Observation double whose monotonic clock a test drives by hand.
+
+    ``reads`` counts every consultation of the clock, so a query that is
+    supposed to leave the deadline alone can be shown not to have consulted it
+    at all rather than merely to have reached the same answer.
+    """
+
+    reading: float = 0.0
+    reads: int = 0
+    events: list[tuple[str, _EventDetails]] = dc.field(default_factory=list)
+
+    def monotonic_clock(self) -> float:
+        """Return the reading the test has set, counting the consultation."""
+        self.reads += 1
+        return self.reading
+
+    def emit(self, phase: str, details: _EventDetails) -> None:
+        """Record an emitted observe event."""
+        self.events.append((phase, details))
+
+
+@dc.dataclass(slots=True)
 class _DeadlineExecution:
-    """Execution stand-in exposing only the fields the waiter reads."""
+    """Execution stand-in exposing only the fields the waiter reads.
+
+    ``owns_process_group`` mirrors the property the real bundle derives from
+    its ``process_group`` policy. It defaults to ``False`` because every
+    stand-in here stands for an inherited-group run, which is the default the
+    teardown must keep signalling directly.
+
+    ``started_at`` is the monotonic reference a deadline is a remainder from,
+    and is a recorded reading rather than a clock because the production bundle
+    stores exactly that: one sample taken at spawn, not a live source.
+    """
 
     ctx: ExecutionContext
     timeout: float | None
     observation: _Observation = dc.field(default_factory=_RecordingObservation)
+    owns_process_group: bool = False
+    started_at: float = 0.0
 
 
 __all__ = [
+    "_ClockObservation",
     "_DeadlineExecution",
     "_ExitedProcess",
     "_RaisingObservation",

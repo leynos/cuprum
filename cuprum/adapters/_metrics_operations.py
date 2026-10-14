@@ -70,6 +70,10 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "capture_eof_grace_expired": "cuprum_capture_eof_grace_expired_total",
     "pipeline_fail_fast": "cuprum_pipeline_fail_fast_total",
     "settled": "cuprum_terminal_outcomes_total",
+    # ``group_teardown`` is deliberately absent: its counter carries a bounded
+    # outcome label, so it is built by ``_group_teardown_operations`` rather
+    # than by the unit-counter path this mapping feeds. Listing it here as well
+    # would give the metric name two definitions that could drift apart.
 })
 
 # The unit-counter phases whose counter describes the execution as a whole and
@@ -219,6 +223,38 @@ def _settled_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     return tuple(operations)
 
 
+def _group_teardown_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return counter and duration ops for a ``group_teardown`` event.
+
+    The counter is labelled by the bounded outcome category so an operator can
+    separate a group this run could not signal from one it could not reap; the
+    pid is deliberately not a label, since it is unbounded across a process's
+    lifetime and would shatter one series into thousands.
+
+    The settle duration is observed only on the outcome that measured one. A
+    refused signal never reached a wait, and recording a zero for it would drag
+    every percentile toward a figure that was never taken.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The bounded counter every teardown yields, plus the settle histogram
+        on the one outcome that measured a wait.
+    """
+    outcome = event.group_outcome
+    if outcome is None:
+        # The event contract requires a category on this phase; an event
+        # without one is malformed, and the phase counter is still the right
+        # answer rather than a KeyError from the metrics hook.
+        return (_CounterOp("cuprum_group_teardowns_total", 1.0),)
+    operations: list[_MetricOp] = [
+        _CounterOp("cuprum_group_teardowns_total", 1.0, {"outcome": str(outcome)})
+    ]
+    if event.settle_s is not None:
+        operations.append(_HistogramOp("cuprum_group_settle_seconds", event.settle_s))
+    return tuple(operations)
+
+
 def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     """Map an execution event to the metric operations it should produce."""
     # The pure event-to-operation reducer behind ``MetricsHook.__call__``: the
@@ -236,22 +272,49 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
             if event.byte_count is None:
                 return ()
             return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
-        case "exit":
-            # Duration and failure metrics now come from ``settled``. The
-            # existing ``exit`` event remains the resource-measurement carrier.
-            return _resource_operations(event)
-        case "settled":
-            return _settled_operations(event)
-        case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
-            # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
-            # than repeated as a literal alternation, so the metric names have
-            # exactly one definition.
-            labels = (
-                _execution_mode_labels(event) if phase in _EXECUTION_MODE_PHASES else {}
-            )
-            return (_CounterOp(counter_name, 1.0, labels),)
         case _:
-            raise _UnhandledMetricsPhaseError(phase)
+            # Every phase that contributes more than a unit counter, or that
+            # needs a label decision, is resolved by name in the helper below
+            # rather than as repeated literal arms here.
+            return _phase_operations(event, phase)
+
+
+def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
+    """Return the metric operations a non-trivial phase yields.
+
+    Split from :func:`_metric_operations` so neither reducer carries more
+    answers than a reader can hold at once: this one holds the phases that
+    resolve to their own helper or need a label decision, while the caller
+    keeps the empty, unit and contract-violation cases.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The operations *phase* yields.
+
+    Raises
+    ------
+    _UnhandledMetricsPhaseError
+        If *phase* is neither a helper-backed phase nor a known unit counter.
+    """
+    if phase == "exit":
+        # Duration and failure metrics now come from ``settled``. The existing
+        # ``exit`` event remains the resource-measurement carrier.
+        return _resource_operations(event)
+    if phase == "settled":
+        return _settled_operations(event)
+    if phase == "group_teardown":
+        return _group_teardown_operations(event)
+    counter_name = _PHASE_COUNTERS.get(phase)
+    if counter_name is None:
+        raise _UnhandledMetricsPhaseError(phase)
+    # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather than
+    # repeated as a literal alternation, so the metric names have exactly one
+    # definition. Both per-execution modes are carried, not only ``env_mode``:
+    # a unit counter that named one mode and not the other could not separate
+    # a byte-exact run from a text one, which is the pair ``start`` describes.
+    labels = _execution_mode_labels(event) if phase in _EXECUTION_MODE_PHASES else {}
+    return (_CounterOp(counter_name, 1.0, labels),)
 
 
 __all__ = [
@@ -264,6 +327,8 @@ __all__ = [
     "_env_mode_label",
     "_execution_mode_labels",
     "_exit_operations",
+    "_group_teardown_operations",
     "_metric_operations",
+    "_phase_operations",
     "_resource_operations",
 ]

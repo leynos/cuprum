@@ -29,7 +29,7 @@ import sys
 
 import pytest
 
-from cuprum import _wait4_process
+from cuprum import _wait4_process, _wait4_spawn
 from cuprum._process_exit import _child_was_collected
 from cuprum.unittests._process_exit_child_support import (
     _OBSERVED_EXIT_CODE,
@@ -184,7 +184,7 @@ def test_send_signal_refuses_from_the_guard_before_any_kill(
 
     async def spawn_child() -> _wait4_process._Wait4Process:
         """Spawn the child whose status a foreign reaper will collect."""
-        config = _wait4_process.DirectProcessConfig(
+        config = _wait4_spawn.DirectProcessConfig(
             argv=(sys.executable, "-c", f"raise SystemExit({_OBSERVED_EXIT_CODE})"),
             stdin=None,
             stdout=None,
@@ -192,7 +192,7 @@ def test_send_signal_refuses_from_the_guard_before_any_kill(
             env=None,
             cwd=None,
         )
-        process = await _wait4_process.spawn_wait4_process(config)
+        process = await _wait4_spawn.spawn_wait4_process(config)
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )

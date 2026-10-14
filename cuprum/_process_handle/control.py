@@ -40,14 +40,17 @@ from cuprum._process_handle_errors import (
 )
 from cuprum._process_lifecycle import (
     _shielded_cleanup,
-    _terminate_process_with_wait,
+    _terminate_process,
     _TerminationOutcome,
 )
+from cuprum._process_signal import _escalate_after_grace, _SettlementTarget
 from cuprum._subprocess_timeout import _get_exit_code
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import asyncio
 
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._process_handle.tasks import _HandleRun
 
 __all__ = [
@@ -146,9 +149,34 @@ def _deliver_signal(run: _HandleRun, signal_number: int) -> None:
         ) from None
 
 
+def _settlement_target(process: asyncio.subprocess.Process) -> _SettlementTarget:
+    """Return the direct child as this module's teardown target.
+
+    The handle owns one child rather than a pipeline, so the target is always
+    the same one: the child is done when its status is published, and waiting
+    for it is the reap ``_await_process_exit`` performs. It is named once
+    because both stop paths build it, and an ownership-aware teardown that
+    disagreed with itself about what it was settling would be the defect the
+    process-group policy exists to prevent.
+
+    Returns
+    -------
+    _SettlementTarget
+        The direct child as a target, done when its status is published and
+        waited on through the same reap the exit wait performs.
+    """
+    return _SettlementTarget(
+        is_done=lambda: process.returncode is not None,
+        wait_for_exit=lambda: _await_process_exit(process),
+    )
+
+
 async def _terminate_shielded(
     process: asyncio.subprocess.Process,
     grace: float,
+    *,
+    owns_group: bool = False,
+    observation: _StageObservation | None = None,
 ) -> _TerminationOutcome:
     """Escalate from ``SIGTERM`` to ``SIGKILL`` where cancellation cannot interrupt.
 
@@ -157,6 +185,20 @@ async def _terminate_shielded(
     owns the handle, say — must not leave the child running with nobody
     holding it. The helper waits through the cancellation and the caller's
     cancellation is re-raised afterwards.
+
+    *owns_group* forwards the policy the child was spawned under, so a handle
+    started with ``OWN_GROUP`` stops its whole group rather than the leader
+    alone. That distinction is the point of the policy: a descendant the child
+    left behind is not reachable by any signal aimed at the leader, and it is
+    exactly what holds the run's inherited pipes open. Defaulting to ``False``
+    keeps every existing caller on the direct-child route it already had,
+    rather than silently widening a stop that was never asked to be a group
+    stop.
+
+    *observation* correlates a target that could not be signalled with the run
+    it belongs to, so the refusal is reported against that run's span and
+    metric rather than as an unattributed event. It is optional because a
+    handle is not always settling as part of an observed stage.
 
     The outcome is returned rather than discarded so an observing caller can
     tell a child that stopped when asked from one that had to be compelled.
@@ -170,17 +212,18 @@ async def _terminate_shielded(
         What the escalation did to the child, and how the wait for its exit
         ended.
     """
+    policy = _TeardownPolicy(grace, owns_group=owns_group)
     return await _shielded_cleanup(
-        _terminate_process_with_wait(
-            process,
-            grace_period=grace,
-            is_done=lambda: process.returncode is not None,
-            wait_for_exit=lambda: _await_process_exit(process),
-        ),
+        _terminate_process(process, policy, observation=observation)
     )
 
 
-async def _kill_shielded(process: asyncio.subprocess.Process) -> _TerminationOutcome:
+async def _kill_shielded(
+    process: asyncio.subprocess.Process,
+    *,
+    owns_group: bool = False,
+    observation: _StageObservation | None = None,
+) -> _TerminationOutcome:
     """Compel the child to exit, and reap it, where cancellation cannot interrupt.
 
     The delivery tolerates a child that died between the liveness check and the
@@ -195,12 +238,30 @@ async def _kill_shielded(process: asyncio.subprocess.Process) -> _TerminationOut
     ``escalated`` here would describe a stop that sent ``SIGTERM`` first, which
     is the operation this one exists to avoid.
 
+    An owning handle compels the whole group through
+    :func:`~cuprum._process_signal._escalate_after_grace`, which asks the group
+    again before signalling and waits for it afterwards. That is what makes
+    ``kill()`` on an owning handle a group kill rather than a leader kill. An
+    inherited-group handle keeps ``process.kill()``: it has no group to reach,
+    so going through the group route would construct a target it would only
+    ever resolve back to the same direct child.
+
     Returns
     -------
     _TerminationOutcome
         Whether the forced signal reached the child, whether a grace window was
         exhausted, and whether this caller waited for the exit.
     """
+    if owns_group:
+        delivered = await _shielded_cleanup(
+            _escalate_after_grace(
+                process,
+                _settlement_target(process),
+                observation=observation,
+                owns_group=True,
+            )
+        )
+        return _KILLED_AND_REAPED if delivered else _NO_STOP
     if process.returncode is not None:
         return _NO_STOP
     try:

@@ -27,7 +27,7 @@ import asyncio
 import signal
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_process, _wait4_spawn
 from cuprum.unittests._wait4_process_coordination_support import (
     _OBSERVE_TIMEOUT,
     _WINDOW_OBSERVATION,
@@ -74,7 +74,7 @@ def test_reap_without_a_probe_still_collects_the_child(
 
     async def reap_through_the_fallback() -> None:
         """Spawn, signal, and let the fallback route reap the child."""
-        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        process = await _wait4_spawn.spawn_wait4_process(_sleep_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -129,7 +129,7 @@ def test_fallback_reap_is_coordinated_against_delivery(
 
     async def deliver_into_the_window() -> None:
         """Open the window, deliver into it, then let the collection finish."""
-        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        process = await _wait4_spawn.spawn_wait4_process(_exiting_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -198,7 +198,7 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
 
     async def deliver_between_polls() -> None:
         """Signal the child from outside while the pump is parked between polls."""
-        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        process = await _wait4_spawn.spawn_wait4_process(_sleep_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )

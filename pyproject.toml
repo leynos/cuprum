@@ -519,6 +519,13 @@ full_name = [
 ]
 reason = "Shared private helper names are resolved globally by the scanner: the two modules define _discard_hook_result each, and the emit/discard pair each is reached only from its own module's completion chain, so neither survives the collision. Both chains are exercised by test_control_observation and test_stream_operation_observation_hooks."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "class"
+full_name = [
+    "cuprum._wait4_process._Wait4InvariantError",
+]
+reason = "Raised by _Wait4Process._reap, whose only remaining caller travels the ownership-aware teardown: _terminate_all_shielded awaits _terminate_process, which builds wait_for_exit=lambda: _await_process_exit(process) and so calls process.wait() from a lambda no source line names. The class was visible only through the explicit await that spawn failure used to make before that path delegated to the shared teardown."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

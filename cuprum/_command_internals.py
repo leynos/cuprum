@@ -120,7 +120,9 @@ def _prepare_execution_observation(
         env_overlay=env_overlay,
         tags=tags,
         pending_tasks=tracking.pending_tasks,
+        # Resolved here, not at the class-creation field default a patch misses.
         wall_clock=time.time,
+        monotonic_clock=time.perf_counter,
         env_mode=env_mode,
         resolved_path=resolved_path,
         capture_mode=CaptureMode.BYTES if state.capture_bytes else CaptureMode.TEXT,
@@ -148,7 +150,10 @@ def _build_subprocess_execution(
     the spawn unable to make that choice. The sink session travels with it
     for the same reason: stream wiring routes mirrored output through the
     session's log, so it has to be part of the bundle before the consumers
-    are built.
+    are built. The process-group policy is read from the context into the
+    bundle for the complementary reason: the spawn and the teardown must
+    agree about whether the child's group belongs to this run, and a single
+    bundle field is what makes that agreement structural.
 
     Returns
     -------
@@ -186,6 +191,9 @@ def _build_subprocess_execution(
                 sys.stderr,
             ),
         ),
+        # Read from the context here so the bundle's spawn and teardown stages
+        # share one decision instead of each consulting the context separately.
+        process_group=state.context.resolved_process_group,
     )
 
 

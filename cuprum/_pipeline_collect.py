@@ -21,23 +21,22 @@ import time
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._pipeline_records import (
+    _PipelineOutputs,
+    _PipelineSpawnResult,
+    _PipelineStageResultInputs,
+)
 from cuprum._pipeline_stream_results import (
     _gather_optional_text_tasks,
     _reconcile_pipe_tasks,
 )
 from cuprum._pipeline_streams import _create_pipe_tasks
-from cuprum._pipeline_types import (
-    _ExecutionInvariantError,
-    _PipelineOutputs,
-    _PipelineSpawnResult,
-    _PipelineStageResultInputs,
-)
+from cuprum._pipeline_teardown import _terminate_timed_out_stages
+from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._pipeline_wait import _wait_for_pipeline
-from cuprum._process_lifecycle import (
-    _shielded_cleanup,
-    _terminate_timed_out_stages,
-)
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import types
@@ -99,8 +98,11 @@ async def _await_pipeline_wait_result(
     pipeline_wait = _wait_for_pipeline(
         spawn.processes,
         pipe_tasks=pipe_tasks,
-        cancel_grace=config.ctx.cancel_grace,
         stages=spawn.stages,
+        policy=_TeardownPolicy(
+            config.ctx.cancel_grace,
+            owns_group=spawn.owns_group,
+        ),
     )
     try:
         if wait_timeout is None:
@@ -251,7 +253,14 @@ async def _collect_pipeline_inputs(
             pipe_tasks=pipe_tasks,
         )
     except TimeoutError as exc:
-        await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
+        await _terminate_timed_out_stages(
+            spawn.processes,
+            _TeardownPolicy(
+                config.ctx.cancel_grace,
+                owns_group=spawn.owns_group,
+            ),
+            observations=spawn.stages.observations,
+        )
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)

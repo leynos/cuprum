@@ -17,13 +17,14 @@ inputs, and process probes live in
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 import typing as typ
 
 import pytest
 
-from cuprum import _wait4_process
+from cuprum import _wait4_process, _wait4_spawn
 from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._process_exit import _observed_exit_code
 from cuprum._wait4_process_errors import _Wait4InvariantError
@@ -37,9 +38,17 @@ from cuprum.unittests._wait4_process_support import (
     _sleep_config,
     _wait4_only,
 )
+from tests.helpers.timeouts import (
+    pipe_holding_child_argv,
+    process_is_running,
+    python_interpreter,
+    wait_for_pid_file,
+    wait_for_process_death,
+)
 
 if typ.TYPE_CHECKING:
     import types
+    from pathlib import Path
 
 
 @_wait4_only
@@ -68,7 +77,7 @@ def test_pipe_connection_failure_kills_and_reaps_the_child(
     async def spawn_and_fail() -> None:
         """Require the attachment failure to reach the caller."""
         with pytest.raises(OSError, match="simulated pipe attachment failure"):
-            await _wait4_process.spawn_wait4_process(_sleep_config())
+            await _wait4_spawn.spawn_wait4_process(_sleep_config())
 
     asyncio.run(spawn_and_fail())
 
@@ -116,7 +125,7 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         _ChildOwnership,
     ]:
         """Spawn a real child, then reap it through a mismatching ``wait4``."""
-        process = await _wait4_process.spawn_wait4_process(_exiting_config())
+        process = await _wait4_spawn.spawn_wait4_process(_exiting_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -189,7 +198,7 @@ def test_reap_publishes_the_status_before_it_returns() -> None:
     from the child's command: ``comm`` in procfs is parenthesized, and the
     probe must not depend on parsing it.
     """
-    process = asyncio.run(_wait4_process.spawn_wait4_process(_exiting_config()))
+    process = asyncio.run(_wait4_spawn.spawn_wait4_process(_exiting_config()))
     assert isinstance(process, _wait4_process._Wait4Process), (
         "the POSIX path must yield the wait4-owning process"
     )
@@ -227,7 +236,7 @@ def test_send_signal_reports_a_child_reaped_outside_this_owner() -> None:
     used to hide. The reaped status is checked independently so the case
     cannot pass by signalling a child that was still alive.
     """
-    process = asyncio.run(_wait4_process.spawn_wait4_process(_exiting_config()))
+    process = asyncio.run(_wait4_spawn.spawn_wait4_process(_exiting_config()))
     assert isinstance(process, _wait4_process._Wait4Process), (
         "the POSIX path must yield the wait4-owning process"
     )
@@ -263,7 +272,7 @@ def test_send_signal_still_delivers_to_a_live_child() -> None:
 
     async def signal_and_reap() -> tuple[int, int]:
         """Signal a live child, then reap it and report how it ended."""
-        process = await _wait4_process.spawn_wait4_process(_sleep_config())
+        process = await _wait4_spawn.spawn_wait4_process(_sleep_config())
         assert isinstance(process, _wait4_process._Wait4Process), (
             "the POSIX path must yield the wait4-owning process"
         )
@@ -279,3 +288,117 @@ def test_send_signal_still_delivers_to_a_live_child() -> None:
         f"a live child must still be signalled and report {-signal.SIGTERM}, "
         f"got {status}"
     )
+
+
+def _abandon_descendant(pid: int, pgid: int) -> None:
+    """Best-effort cleanup for a descendant this test spawned indirectly.
+
+    ``_abandon`` cannot serve here: it decides ownership with ``waitpid``, and a
+    grandchild is nobody's direct child, so that probe would report every
+    descendant as already collected and skip the kill. Group membership answers
+    instead, and it doubles as the recycled-pid guard — a pid the kernel handed
+    to an unrelated process will not be sitting in this run's group.
+    """
+    try:
+        current_group = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    if current_group != pgid:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def _owned_holder_config(marker: Path) -> _wait4_spawn.DirectProcessConfig:
+    """Build spawn inputs for an owned child that leaves a pipe-holding grandchild.
+
+    The child is asked for a new session, which is the ownership fact the
+    cleanup under test reads, and it starts a descendant before failing its own
+    attachment — so the descendant is genuinely in the group by the time the
+    cleanup runs.
+
+    Returns
+    -------
+    DirectProcessConfig
+        Inputs whose only non-default is the ownership request.
+    """
+    return _wait4_spawn.DirectProcessConfig(
+        argv=(python_interpreter(), *pipe_holding_child_argv(marker)),
+        stdin=None,
+        stdout=None,
+        stderr=None,
+        env=None,
+        cwd=None,
+        start_new_session=True,
+    )
+
+
+@_wait4_only
+def test_owned_pipe_connection_failure_reaches_the_whole_group(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed attachment must reclaim an owned leader's group, not just its leader.
+
+    The direct-child cleanup this replaced could kill and reap the leader and
+    still leave everything the leader started running: the group outlives the
+    process that named it, and a descendant holding the run's pipes is exactly
+    what a direct-child-only teardown cannot reach. The assertion is on the
+    descendant, because the leader's death is what the old behaviour already
+    achieved.
+    """
+    marker = tmp_path / "owned-holder.pid"
+    spawned: list[int] = []
+    descendant_pid: int | None = None
+
+    def failing_after_descendant(
+        self: _wait4_process._Wait4Process,
+    ) -> typ.NoReturn:
+        """Wait for the descendant to exist, then fail as a broken pipe would."""
+        spawned.append(self.pid)
+        wait_for_pid_file(
+            marker,
+            context="an owned child's descendant before its attachment failed",
+        )
+        msg = "simulated pipe attachment failure"
+        raise OSError(msg)
+
+    monkeypatch.setattr(
+        _wait4_process._Wait4Process,
+        "connect_pipes",
+        failing_after_descendant,
+    )
+
+    async def spawn_and_fail() -> None:
+        """Require the attachment failure to reach the caller."""
+        with pytest.raises(OSError, match="simulated pipe attachment failure"):
+            await _wait4_spawn.spawn_wait4_process(_owned_holder_config(marker))
+
+    try:
+        asyncio.run(spawn_and_fail())
+        assert spawned, "the spawn must have produced a child before the failure"
+        descendant_pid = wait_for_pid_file(
+            marker,
+            context="the descendant whose survival is being asserted on",
+        )
+        wait_for_process_death(
+            descendant_pid,
+            context="an owned group's teardown after a failed pipe attachment",
+        )
+        assert not process_is_running(descendant_pid), (
+            "the cleanup of an owned spawn failure must reclaim the leader's "
+            "whole group, not only the leader it was handed"
+        )
+    finally:
+        # Only this test knows the group, and the leader is already gone by the
+        # time the assertion runs, so the pid file is the sole route back to a
+        # descendant that leaked. Read it directly rather than through the
+        # helper so a failure inside the try cannot be compounded by a second
+        # wait on the same missing file.
+        if descendant_pid is None and marker.exists():
+            with contextlib.suppress(ValueError):
+                descendant_pid = int(marker.read_text(encoding="utf-8").strip())
+        if descendant_pid is not None:
+            _abandon_descendant(descendant_pid, spawned[0])
+        for pid in spawned:
+            _abandon(pid)

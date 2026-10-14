@@ -24,6 +24,10 @@ if typ.TYPE_CHECKING:
 
     from cuprum.unittests._stream_drain_support import ConsumerTask
 
+# The drain moved to ``cuprum._stream_drain``, but its logger name did not:
+# ``_stream_drain`` still logs under ``cuprum._subprocess_wait`` so existing log
+# routing keeps matching. Capturing the module path instead would leave these
+# assertions watching a logger nothing emits to.
 _DRAIN_LOGGER = "cuprum._subprocess_wait"
 
 

@@ -198,6 +198,9 @@ class TestSingleCommandRun:
             await gate.release.wait()
             return await real_drain(consumers, context)
 
+        # Bound on ``_subprocess_wait``, which is where the drain is *called*:
+        # ``_reconcile_run_tasks`` lives there and reads its own module global,
+        # so rebinding the name here replaces the call the run actually makes.
         monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
 
         async def run_case() -> None:

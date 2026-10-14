@@ -195,7 +195,12 @@ async def _start_handle_run(
         # is transactional, so a partial set of tasks is never what reaches
         # here; whatever it managed to start before failing it has already
         # reclaimed.
-        await _terminate_shielded(process, execution.ctx.cancel_grace)
+        await _terminate_shielded(
+            process,
+            execution.ctx.cancel_grace,
+            owns_group=execution.owns_process_group,
+            observation=execution.observation,
+        )
         raise
     return _HandleRun(
         process=process,

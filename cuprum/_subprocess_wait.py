@@ -10,6 +10,12 @@ Termination goes through ``_terminate_all_shielded`` rather than
 period cannot skip the ``SIGKILL`` escalation and strand a child. The task
 reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
 so its callers can run it under ``_shielded_cleanup`` as one unit.
+
+Teardown routes the termination through the run's *owns_group* flag, so a
+caller that omits it silently reduces an owning run to the direct-child signal
+and lets the group survive. Requiring the keyword makes an omitted ownership
+value a ``TypeError`` at the call site instead of a lost guarantee, and every
+caller that targets the child alone must say so.
 """
 
 from __future__ import annotations
@@ -29,9 +35,11 @@ from cuprum._stream_drain import (
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._subprocess_wait_types import _DrainContext
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum._timeout_reporting import _report_timeout_expiry
 
 if typ.TYPE_CHECKING:
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import (
         _RunTaskOwnership,
@@ -50,11 +58,18 @@ if typ.TYPE_CHECKING:
 # resolves each name from its own module's globals, so rebinding the copy in
 # this namespace is invisible to it. Tests that need to replace the grace
 # waiter must patch ``cuprum._stream_drain._await_eof_grace``.
+#
+# The drain's own log records are emitted under the historical channel name
+# ``"cuprum._subprocess_wait"``, spelled explicitly in ``_stream_drain``, so
+# moving the code did not move the channel operators filter on.
 
 
 async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
+    *,
+    owns_group: bool,
+    observation: _StageObservation | None = None,
 ) -> tuple[int, float]:
     """Wait for a subprocess exit code, terminating it on expiry or cancel.
 
@@ -62,6 +77,12 @@ async def _wait_for_exit_code(
     consumers belong to the caller, which drains them exactly once when the wait
     fails (see :func:`_run_subprocess_with_streams`); terminating the process
     here lets those consumers reach EOF during that drain.
+
+    *observation* is the run being waited on, carried through to that teardown
+    so a group it could not reach publishes the ``group_teardown`` event
+    against the execution it belongs to. One process is waited on, so one
+    execution is named; the default is ``None`` for the callers with no
+    execution in hand, which keep the log record alone.
 
     Callers also own the deadline: wrap the call in ``async with
     asyncio.timeout(...)`` to bound the wait. A deadline expiry cancels this
@@ -94,7 +115,14 @@ async def _wait_for_exit_code(
         # expiry has already consumed one cancellation, so the caller's next
         # ``cancel()`` lands on the grace-period wait here and would skip the
         # ``SIGKILL`` escalation, leaving a ``SIGTERM``-immune child running.
-        await _terminate_all_shielded((process,), ctx.cancel_grace)
+        # ``_Wait4Process`` holds its pipes even once it exits, so the group
+        # teardown is what lets a descendant release the drain this wait is
+        # unwinding from.
+        await _terminate_all_shielded(
+            (process,),
+            _TeardownPolicy(ctx.cancel_grace, owns_group=owns_group),
+            observations=(observation,) if observation is not None else (),
+        )
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
@@ -117,8 +145,8 @@ async def _wait_for_exit_code_within_timeout(
     :class:`TimeoutError` is raised.
 
     Stream consumers belong to the caller, which drains them exactly once via
-    :func:`_drain_stream_consumers`; terminating the process here lets those
-    consumers reach EOF during that drain.
+    :func:`cuprum._stream_drain._drain_stream_consumers`; terminating the
+    process here lets those consumers reach EOF during that drain.
 
     Both expiry routes emit a structured ``cuprum.timeout`` log record and a
     best-effort ``timeout`` observe event tagged with the timeout mode
@@ -142,7 +170,14 @@ async def _wait_for_exit_code_within_timeout(
     if timeout is not None and timeout <= 0:
         # Shielded for the same reason as the cancellation branch above: a
         # caller cancelling here would otherwise skip the reap.
-        await _terminate_all_shielded((process,), execution.ctx.cancel_grace)
+        await _terminate_all_shielded(
+            (process,),
+            _TeardownPolicy(
+                execution.ctx.cancel_grace,
+                owns_group=execution.owns_process_group,
+            ),
+            observations=(execution.observation,),
+        )
         _report_timeout_expiry(
             execution.observation,
             pid=process.pid,
@@ -152,7 +187,12 @@ async def _wait_for_exit_code_within_timeout(
         raise TimeoutError
     try:
         async with asyncio.timeout(timeout):
-            return await _wait_for_exit_code(process, execution.ctx)
+            return await _wait_for_exit_code(
+                process,
+                execution.ctx,
+                owns_group=execution.owns_process_group,
+                observation=execution.observation,
+            )
     except TimeoutError as exc:
         # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
         # _wait_for_exit_code has already terminated the process, and the caller
@@ -164,6 +204,83 @@ async def _wait_for_exit_code_within_timeout(
             mode="elapsed_deadline",
         )
         raise
+
+
+def _deadline_for_collection(execution: _SubprocessExecution) -> float | None:
+    """Return the seconds left for the post-exit boundary, or ``None`` unbounded.
+
+    The awaits this bounds are reached only once the exit wait has returned, so
+    a run whose deadline was already consumed has no budget left for them. It is
+    a remainder from the same reference the exit wait was scheduled against, and
+    it is measured where it is used rather than earlier on purpose: a duration
+    computed before the awaits it bounds would let them spend part of the budget
+    and still hand the whole of it to what follows. The caller passes this
+    straight to one ``asyncio.timeout`` covering all three awaits a streamed run
+    has left after its child exited. Returning ``None`` for an unconfigured
+    timeout keeps a run without a deadline unbounded here, exactly as it is
+    everywhere else.
+
+    The clock is the execution's own ``monotonic_clock`` rather than a direct
+    read, so a test can hold the deadline still and assert the remainder the
+    boundary is actually given instead of racing a real one. It is the same
+    callable the run's ``started_at`` was sampled from, which is what makes the
+    subtraction a duration rather than a difference between two clocks.
+
+    It lives here, beside the exit wait, because the remainder is only
+    meaningful against the reference that wait was scheduled from — splitting
+    the two would leave the subtraction with no way to state which start it is
+    measured from.
+
+    Returns
+    -------
+    float | None
+        The seconds remaining before the run's deadline, possibly negative if
+        the exit wait overran it, or ``None`` when no timeout is configured.
+    """
+    if execution.timeout is None:
+        return None
+    elapsed = execution.observation.monotonic_clock() - execution.started_at
+    return execution.timeout - elapsed
+
+
+def _drain_context(
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    pid: int | None,
+    *,
+    capture: bool,
+) -> _DrainContext:
+    """Build the drain context for one reconciliation of *tasks*.
+
+    Every reconciliation route a streamed run has needs the same four values,
+    and the only one they disagree about is *capture*: the expiry routes
+    preserve the text their ``TimeoutExpired`` will report, while a route
+    re-raising some other error discards it rather than spending the capture
+    grace on text nobody will read. Building the bundle at each site instead is
+    how a route drifts from the others, so the one value that legitimately
+    differs is the one asked for here.
+
+    It sits beside :func:`_reconcile_run_tasks`, its only consumer, because the
+    context exists to serve that one reconciliation and reads its cancellation
+    policy from the tasks it is given.
+
+    ``capture_bytes`` is passed through from the execution rather than
+    defaulted, so an absent reader under a byte-exact run is handed ``b""``
+    and never the text-mode ``""``.
+
+    Returns
+    -------
+    _DrainContext
+        The context that reconciliation, and the drain beneath it, read their
+        capture choice, pid, observation, and cancellation policy from.
+    """
+    return _DrainContext(
+        capture=capture,
+        capture_bytes=execution.capture_bytes,
+        pid=pid,
+        observation=execution.observation,
+        discard_on_cancel=tasks.discard_on_cancel,
+    )
 
 
 async def _reconcile_run_tasks(
@@ -209,6 +326,8 @@ __all__ = [
     "_CAPTURE_EOF_GRACE_S",
     "_DrainContext",
     "_await_eof_grace",
+    "_deadline_for_collection",
+    "_drain_context",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
     "_wait_for_exit_code",

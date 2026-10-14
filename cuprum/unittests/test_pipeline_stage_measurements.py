@@ -23,17 +23,19 @@ import types
 import typing as typ
 
 from cuprum import ECHO, sh
+from cuprum._pipeline_records import (
+    _PipelineSpawnResult,
+    _PipelineStageResultInputs,
+    _PipelineWaitResult,
+    _StageWaitContext,
+)
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
 from cuprum._pipeline_types import (
     _ExecutionHooks,
-    _PipelineSpawnResult,
-    _PipelineStageResultInputs,
-    _PipelineWaitResult,
     _StageObservation,
-    _StageWaitContext,
 )
 
 if typ.TYPE_CHECKING:

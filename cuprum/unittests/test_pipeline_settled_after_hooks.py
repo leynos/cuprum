@@ -16,13 +16,15 @@ from cuprum._pipeline_internals import (
     _finalize_pipeline_execution,
     _finalize_pipeline_run_failure,
 )
+from cuprum._pipeline_records import (
+    _PipelineObservers,
+    _PipelineSpawnResult,
+    _StageWaitContext,
+)
 from cuprum._pipeline_types import (
     _EventDetails,
     _ExecutionHooks,
-    _PipelineObservers,
-    _PipelineSpawnResult,
     _StageObservation,
-    _StageWaitContext,
 )
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._testing import _prepare_pipeline_config

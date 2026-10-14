@@ -42,9 +42,9 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
 from cuprum._result_assembly import _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
@@ -54,15 +54,49 @@ from cuprum._subprocess_wait import (
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_spawn import _SubprocessExecution
+    from cuprum._subprocess_wait_types import _StreamPayloadPair
     from cuprum.sh import CommandResult
 
 __all__ = [
     "_finalize_settled_run",
     "_settle_handle_run",
 ]
+
+
+async def _settle_owned_group_before_draining(run: _HandleRun) -> None:
+    """Terminate the run's owned group so the drain that follows can reach EOF.
+
+    A handle on a child it does not own has nothing to do here: its only
+    teardown target is the direct child, which has already exited on every
+    path that reaches this helper, so the call is skipped rather than made a
+    no-op.
+
+    An owning handle is a different question, and the same one the streamed
+    run answers. The direct child has exited, but the group it led may not
+    have: a descendant it left behind is still a member, still holds the write
+    end of the run's inherited pipes, and no signal aimed at the leader can
+    reach it. Draining first would spend the capture grace on readers that
+    cannot reach end-of-file and then discard output the descendant was still
+    producing.
+
+    Ownership is read from the bundle rather than taken as a parameter, so
+    this decision and the spawn's are read from one field and cannot fall out
+    of step.
+    """
+    if not run.execution.owns_process_group:
+        return
+    await _terminate_process(
+        run.process,
+        _TeardownPolicy(
+            run.execution.ctx.cancel_grace,
+            owns_group=True,
+        ),
+        observation=run.execution.observation,
+    )
 
 
 async def _finalize_settled_run(
@@ -73,11 +107,18 @@ async def _finalize_settled_run(
 ) -> tuple[str | None, str | None]:
     """Reconcile an ended run's tasks, keeping its output if asked.
 
-    ``_reconcile_run_tasks`` stops the watchdog, cancels the stdin writer,
-    drains the consumers, and settles the relay diagnostics — the sequence
-    every exit path in the library uses. It runs shielded so a cancellation
-    arriving now cannot strand half the tasks, and it is idempotent, so the
-    several routes into it do not have to coordinate.
+    An owned group is settled first, because the drain below is what it would
+    otherwise block: ``_reconcile_run_tasks`` stops the watchdog, cancels the
+    stdin writer, drains the consumers, and settles the relay diagnostics —
+    and a descendant holding the pipes open is what stops those consumers
+    reaching end-of-file. The sequence is otherwise the one every exit path in
+    the library uses.
+
+    Both phases run under **one** shield: ``_shielded_cleanup`` finishes its
+    task and then re-raises the caller's cancellation, so two sequential
+    shielded calls would not be one shielded sequence — a cancellation during
+    the first would exit before the second was awaited. Composing them into
+    one coroutine makes the shield cover the pair.
 
     The drain is what makes the captured output available to whoever reports
     the run's end — the settled result, or the expiry a caller's deadline is
@@ -99,8 +140,11 @@ async def _finalize_settled_run(
     tuple[str | None, str | None]
         The decoded stdout and stderr; both ``None`` when *capture* is false.
     """
-    drained = await _shielded_cleanup(
-        _reconcile_run_tasks(
+
+    async def settle_then_reconcile() -> _StreamPayloadPair:
+        """Settle the owned group, then reconcile the run's tasks, as one unit."""
+        await _settle_owned_group_before_draining(run)
+        return await _reconcile_run_tasks(
             run.ownership,
             _DrainContext(
                 capture=capture,
@@ -108,8 +152,9 @@ async def _finalize_settled_run(
                 observation=execution.observation,
                 discard_on_cancel=run.ownership.discard_on_cancel,
             ),
-        ),
-    )
+        )
+
+    drained = await _shielded_cleanup(settle_then_reconcile())
     # A handle always runs in text mode: ``start()`` forces capture on and never
     # offers the byte-exact entry points, so the drain's widened payload is
     # text here. Narrowing through ``_require_text`` re-establishes that
@@ -212,7 +257,7 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
     # Reporting nothing at all was the wrong default for the backend that can
     # answer: it left ``max_rss_bytes`` unavailable on a handle result while
     # ``run()`` reported it for the same command.
-    rusage = _wait4_process.resource_usage_for(run.process, None)
+    rusage = _wait4_spawn.resource_usage_for(run.process, None)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

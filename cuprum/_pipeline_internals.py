@@ -20,6 +20,7 @@ result mapping), ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from cuprum._context_policy import (
@@ -50,6 +51,11 @@ from cuprum._pipeline_observation import (
     _build_pipeline_observations,
     _emit_plan_events_and_run_before_hooks,
 )
+from cuprum._pipeline_records import (
+    _PipelineObservers,
+    _PipelineSpawnResult,
+    _StageWaitContext,
+)
 from cuprum._pipeline_results import (
     _build_pipeline_result,
     _build_pipeline_stage_results,
@@ -65,11 +71,14 @@ from cuprum._pipeline_types import (
 from cuprum._pipeline_types import (
     _ExecutionHooks as _ExecutionHooks,
 )
-from cuprum._pipeline_types import (
-    _PipelineObservers,
-    _PipelineSpawnResult,
+
+# Re-exported rather than annotation-only: ``cuprum._subprocess_stdin``
+# imports this name from here at runtime. Splitting the records out of
+# ``_pipeline_types`` left it the sole name in this statement, so the
+# annotation use below would otherwise move it into the block and drop
+# that consumer.
+from cuprum._pipeline_types import (  # ruff: ignore[typing-only-first-party-import] - runtime re-export,
     _StageObservation,
-    _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_error
@@ -208,26 +217,16 @@ async def _spawn_and_drive_pipeline(
             pending_tasks=pending_tasks,
         )
         _emit_plan_events_and_run_before_hooks(observations)
-        (
-            processes,
-            stderr_tasks,
-            stdout_task,
-            started_at,
-            wall_clock_started_at,
-            relay_diagnostics_by_stage,
-        ) = await _spawn_pipeline_processes(
+        spawned = await _spawn_pipeline_processes(
             parts,
             config,
             observations=observations,
         )
-        spawn = _PipelineSpawnResult(
-            processes=processes,
-            stderr_tasks=stderr_tasks,
-            stdout_task=stdout_task,
-            relay_diagnostics_by_stage=tuple(relay_diagnostics_by_stage),
+        spawn = dc.replace(
+            spawned,
             stages=_StageWaitContext(
-                started_at=tuple(started_at),
-                wall_clock_started_at=tuple(wall_clock_started_at),
+                started_at=spawned.stages.started_at,
+                wall_clock_started_at=spawned.stages.wall_clock_started_at,
                 observations=observations,
             ),
             idle=config.idle,

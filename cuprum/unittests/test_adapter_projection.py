@@ -26,6 +26,7 @@ from cuprum.events import (
     CaptureMode,
     ExecEvent,
     ExecPhase,
+    GroupTeardownOutcome,
     ResourceUsageMode,
     TerminalOutcome,
     new_exec_id,
@@ -45,7 +46,14 @@ _ANCILLARY_PHASES = {
     "timeout": "wait",
     "teardown_error": "drain",
     "capture_eof_grace_expired": "drain",
+    "group_teardown": "teardown_signal_15",
 }
+# The outcome the ``group_teardown`` representative carries. Named here rather
+# than inline because a reader comparing the projection to
+# ``report_group_teardown``'s contract needs to know which of the three
+# outcomes the snapshot locks: the refusal, the only one that also carries a
+# signal rather than a settle duration.
+_GROUP_OUTCOME = GroupTeardownOutcome.SIGNAL_REFUSED
 
 
 class TestAdapterProjection:
@@ -135,6 +143,7 @@ class TestAdapterProjection:
         is_timeout = phase == "timeout"
         is_grace_expiry = phase == "capture_eof_grace_expired"
         is_fail_fast = phase == "pipeline_fail_fast"
+        is_teardown = phase == "group_teardown"
         ancillary = phase in _ANCILLARY_PHASES
         return ExecEvent(
             phase=typ.cast("ExecPhase", phase),
@@ -200,6 +209,17 @@ class TestAdapterProjection:
             # exception — the decision event describes no stage's execution,
             # but the mode is the pipeline's own, decided before it started.
             capture_mode=CaptureMode.BYTES,
+            # Only the teardown phase, on the same rule as every other
+            # phase-specific group: a field present on unrelated phases would
+            # make the snapshot assert a projection no producer can emit.
+            # ``settle_s`` is left at its default for two reasons that agree:
+            # no other phase carries it, and the refusal — the outcome this
+            # representative locks — is the one that measured no wait. The
+            # snapshot therefore pins the omission as well as the presence,
+            # which is the half a "present when measured" rule can silently
+            # get wrong.
+            owns_group=True if is_teardown else None,
+            group_outcome=_GROUP_OUTCOME if is_teardown else None,
         )
 
     @staticmethod

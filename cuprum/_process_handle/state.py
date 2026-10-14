@@ -284,7 +284,11 @@ class RunningCommand:
         """
         return await self._observed_stop(
             ControlOperation.KILL,
-            _kill_shielded(self._run.process),
+            _kill_shielded(
+                self._run.process,
+                owns_group=self._run.execution.owns_process_group,
+                observation=self._run.execution.observation,
+            ),
         )
 
     async def _observed_stop(
@@ -386,4 +390,6 @@ class RunningCommand:
             return await _terminate_shielded(
                 self._run.process,
                 self._run.execution.ctx.cancel_grace if grace is None else grace,
+                owns_group=self._run.execution.owns_process_group,
+                observation=self._run.execution.observation,
             )

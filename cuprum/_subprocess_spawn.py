@@ -24,15 +24,16 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum._context_policy import _merge_env
 from cuprum._pipeline_types import _EventDetails
-from cuprum._subprocess_context import _cwd_arg
+from cuprum._subprocess_context import _cwd_arg, _ownership_spawn_kwargs
 
-# Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
-# dataclass's own default value, so the name must resolve when the class body
+# Imported at runtime, not under ``TYPE_CHECKING``: the policies below are this
+# dataclass's own default values, so the names must resolve when the class body
 # executes.
 from cuprum.echo_events import BrokenPipePolicy
+from cuprum.sh.execution import ProcessGroupPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
@@ -66,6 +67,10 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
     on_line: _LineHookFn | None = None
+    # Mirrors ``ExecutionContext.process_group``. Carried on the bundle so the
+    # spawn and the teardown of the same run cannot disagree about whether the
+    # child's group belongs to this run.
+    process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT
     # Whether this run's captured streams are reported as bytes rather than
     # decoded text. Defaulted for the tests that build this bundle directly and
     # for every text-mode caller; only the binary entry points set it.
@@ -78,6 +83,18 @@ class _SubprocessExecution:
     # once at spawn so every line of a run shares one time base.
     started_at: float = 0.0
     idle: _IdleMonitor | None = None
+
+    @property
+    def owns_process_group(self) -> bool:
+        """Whether this run owns the child's process group.
+
+        Derived from ``process_group`` rather than stored again, so the spawn
+        decision and every teardown decision are read from one field and
+        cannot fall out of step. False for a child that was never spawned
+        under ``OWN_GROUP``, which is also the answer for a platform where
+        that policy was rejected before any child existed.
+        """
+        return self.process_group is ProcessGroupPolicy.OWN_GROUP
 
     @property
     def consumes_stdout(self) -> bool:
@@ -112,8 +129,8 @@ async def _spawn_subprocess(
     """Spawn an async subprocess with configured I/O and environment."""
     # ``consumes_stdout``/``consumes_stderr`` fold in the idle monitor as well as
     # capture and echo, so a run the watchdog narrates keeps its pipes.
-    return await _wait4_process.spawn_direct_process(
-        _wait4_process.DirectProcessConfig(
+    return await _wait4_spawn.spawn_direct_process(
+        _wait4_spawn.DirectProcessConfig(
             argv=(execution.observation.argv0, *execution.cmd.argv),
             stdout=(
                 asyncio.subprocess.PIPE
@@ -128,6 +145,10 @@ async def _spawn_subprocess(
             stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
             env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
             cwd=_cwd_arg(execution.ctx.cwd),
+            # Raises before spawning when the platform cannot honour the
+            # policy, so the failure names the option rather than arriving as
+            # a run that quietly contained nothing.
+            **_ownership_spawn_kwargs(execution.process_group),
         )
     )
 

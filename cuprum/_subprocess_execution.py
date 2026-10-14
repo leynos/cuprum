@@ -9,7 +9,7 @@ run loop that waits for exit and reconciles the consumer tasks lives in
 lives in ``cuprum._subprocess_streams``, and the spawn seam itself lives in
 ``cuprum._subprocess_spawn``. All three are re-exported here so importers of
 this module keep working unchanged. Timing and child resource usage are
-measured here, with ``cuprum._wait4_process`` owning the direct child's
+measured here, with ``cuprum._wait4_spawn`` owning the direct child's
 ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps the three
 pre-spawn readings together so their shared ordering cannot drift.
 """
@@ -17,10 +17,9 @@ pre-spawn readings together so their shared ordering cannot drift.
 from __future__ import annotations
 
 import dataclasses as dc
-import time
 import typing as typ
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import (
@@ -90,8 +89,9 @@ class _DirectRunStart:
 def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
     """Take the pre-spawn readings, in the order the timing tests pin."""
     return _DirectRunStart(
-        rusage_before=_wait4_process.capture_resource_before_spawn(),
-        monotonic_started_at=time.perf_counter(),
+        rusage_before=_wait4_spawn.capture_resource_before_spawn(),
+        # The deadline is a remainder from this clock, so both come from it.
+        monotonic_started_at=observation.monotonic_clock(),
         wall_clock_started_at=observation.wall_clock(),
     )
 
@@ -216,7 +216,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandRes
         started_at=started_at,
     )
 
-    rusage = _wait4_process.resource_usage_for(process, run_start.rusage_before)
+    rusage = _wait4_spawn.resource_usage_for(process, run_start.rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

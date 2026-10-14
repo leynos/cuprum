@@ -29,7 +29,7 @@ from cuprum._subprocess_timeout import _SubprocessInvariantError
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
-    from cuprum._pipeline_types import _PipelineSpawnResult
+    from cuprum._pipeline_records import _PipelineSpawnResult
     from cuprum.sh import SafeCmd
 
 
@@ -108,11 +108,16 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
 
     # The guarded branch needs only the pipe-task inputs and timed-out stage
     # termination target. Empty processes and observations keep both no-ops.
+    # ``owns_group`` is read while building the teardown policy, so it is part
+    # of what the stand-in has to provide; the ``cast`` that presents this as a
+    # spawn result would otherwise hide its absence from the type checker and
+    # leave the branch to fail with an ``AttributeError`` at runtime.
     spawn = typ.cast(
         "_PipelineSpawnResult",
         types.SimpleNamespace(
             processes=[],
             relay_diagnostics_by_stage=(),
+            owns_group=(),
             stages=types.SimpleNamespace(observations=()),
         ),
     )

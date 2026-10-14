@@ -35,11 +35,11 @@ from cuprum.sh.results import BytesCommandResult
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_types import (
+    from cuprum._pipeline_records import (
         _PipelineSpawnResult,
         _PipelineStageResultInputs,
-        _StageObservation,
     )
+    from cuprum._pipeline_types import _StageObservation
     from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback

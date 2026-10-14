@@ -28,6 +28,7 @@ from cuprum._subprocess_streams import (
     _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_wait_types import _RunTaskOwnership
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
@@ -63,7 +64,14 @@ async def _abandon_unstarted_run(
 
     await _stop_idle_monitor(execution.idle)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    await _terminate_all_shielded((run.process,), execution.ctx.cancel_grace)
+    await _terminate_all_shielded(
+        (run.process,),
+        _TeardownPolicy(
+            execution.ctx.cancel_grace,
+            owns_group=execution.owns_process_group,
+        ),
+        observations=(execution.observation,),
+    )
     await _discard_drain(run, run.process.pid, execution)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
 

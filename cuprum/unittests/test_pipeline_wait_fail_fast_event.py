@@ -294,14 +294,16 @@ class TestFailFastEventOrdering:
         pin_clock(monkeypatch, 12.5)
 
         async def noting_terminate(
-            processes: object,
-            wait_tasks: object,
+            stages: object,
+            policy: object,
             failure_index: int,
-            *,
-            cancel_grace: float,
         ) -> tuple[bool, ...]:
-            """Record that termination started instead of signalling anything."""
-            del processes, wait_tasks, failure_index, cancel_grace
+            """Record that termination started, mirroring the real signature."""
+            # The parameters mirror the real helper's, so a change to how
+            # termination is asked for shows up as a mismatch here rather than
+            # being absorbed by a permissive stand-in. The empty return is the
+            # mirror's answer, not an outcome: nothing was signalled.
+            del stages, policy, failure_index
             # Yield like the real helper does, so the recorded order reflects
             # a genuine await point rather than a synchronous call.
             await asyncio.sleep(0)

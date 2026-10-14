@@ -22,32 +22,62 @@ with the caller rather than being duplicated into every cleanup.
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
 error cleanup. Starting that pipeline — and cleaning up the resources left by
-a partial spawn — belongs to ``cuprum._pipeline_spawn``.
+a partial spawn — belongs to ``cuprum._pipeline_spawn``. What a teardown
+signal is delivered to, and what a completed teardown waits for, belongs to
+``cuprum._process_signal``: this module decides *when* to signal, that one
+decides *what* the signal reaches.
+
+``_terminate_process_with_wait`` sequences the two. It reports a
+:class:`_TerminationOutcome` rather than a bare flag, because the stops a
+process handle performs — ``cuprum._process_handle``, which compels a child
+with no group question to ask — read three of its four facts independently.
+Only the pipeline's own selection needs ``waiter_completed`` alone, which is
+the single ``bool`` the earlier signature returned.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 import typing as typ
 
-from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
+from cuprum._group_teardown import (
+    signal_target_or_report,
+    unsignalable_report,
+)
 from cuprum._process_exit import _await_process_exit
+from cuprum._process_group import _GroupProbe
+from cuprum._process_signal import (
+    _escalate_after_grace,
+    _report_teardown,
+    _settlement,
+    _settlement_of,
+    _SettlementTarget,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum._teardown_policy import _TeardownPolicy
+
 
 async def _terminate_process(
     process: asyncio.subprocess.Process,
-    grace_period: float,
+    policy: _TeardownPolicy,
+    *,
+    observation: _StageObservation | None = None,
 ) -> _TerminationOutcome:
     """Terminate a running process, escalating to kill after the grace period."""
     return await _terminate_process_with_wait(
         process,
-        grace_period=grace_period,
-        is_done=lambda: process.returncode is not None,
-        wait_for_exit=lambda: _await_process_exit(process),
+        policy=policy,
+        target=_SettlementTarget(
+            is_done=lambda: process.returncode is not None,
+            wait_for_exit=lambda: _await_process_exit(process),
+        ),
+        observation=observation,
     )
 
 
@@ -127,30 +157,113 @@ three facts disagree here.
 async def _terminate_process_with_wait(
     process: asyncio.subprocess.Process,
     *,
-    grace_period: float,
-    is_done: cabc.Callable[[], bool],
-    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    policy: _TeardownPolicy,
+    target: _SettlementTarget,
+    observation: _StageObservation | None = None,
 ) -> _TerminationOutcome:
-    """Terminate a process and report what the stop did to it."""
-    grace_period = max(0.0, grace_period)
-    if is_done():
+    """Terminate a process and report what the stop did to it.
+
+    The two-phase grace is unchanged whether the run owns the child's group or
+    not: the first phase asks every member of the target to exit, the second
+    compels whichever of them outlived the grace period. Only the target of
+    those signals, and of the settlement they wait on, differs.
+    :func:`~cuprum._group_teardown.signal_target_or_report` delivers to it and
+    :func:`~cuprum._process_signal._settlement` waits on it, so those are the
+    two places that decide which target this run has.
+
+    Settled is decided by
+    :func:`~cuprum._process_signal._settlement_of` rather than by the target's
+    *is_done* alone. For an inherited-group run the two are the same question,
+    but an owning run's target is the child's whole group, and that group
+    survives the child that led it: a descendant left holding an inherited pipe
+    is still a member after the child has been reaped. Short-circuiting on the
+    child alone would leave that descendant running and the run's pipes held
+    open, which is the failure this policy exists to prevent.
+
+    *observation* is the execution this teardown is acting for, so a target
+    that could not be reached is reported against the span and the metric of
+    the run it belongs to. It defaults to ``None`` because several teardown
+    routes have no execution to correlate with — the spawn-failure and
+    abandoned-run paths reach here before any observation exists — and those
+    keep the log record without inventing an identity for the event.
+
+    Returns
+    -------
+    _TerminationOutcome
+        What the stop did to the target. The group route adds a second way to
+        deliver nothing: a probe that reports the group settled vetoes the
+        signal before it is sent, and one that finds the group unsignalable
+        leaves a refusal to report. Both are ``delivered=False`` without being
+        a ``refused=True``, which only a raising delivery sets.
+    """
+    grace_period = max(0.0, policy.grace_period)
+    owns_group = policy.owns_group_for(0)
+    settled = _settlement_of(process, owns_group=owns_group, target=target)
+    _report_teardown(observation, unsignalable_report(settled, process.pid))
+    if settled is not _GroupProbe.MEMBERS:
         return _NO_STOP
-    try:
-        process.terminate()
-    except (ProcessLookupError, OSError):
+    if not signal_target_or_report(
+        process,
+        observation=observation,
+        owns_group=owns_group,
+        group_signal=signal.SIGTERM,
+    ):
         return _NO_STOP
     # Past this point the graceful signal reached the child, whatever happens
     # to the waiter below.
     try:
-        await asyncio.wait_for(wait_for_exit(), grace_period)
+        await asyncio.wait_for(
+            _settlement(
+                process,
+                target,
+                observation=observation,
+                owns_group=owns_group,
+            ),
+            grace_period,
+        )
     except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
-        try:
-            process.kill()
-        except (ProcessLookupError, OSError):
-            return _KILLED_AFTER_GRACE_UNWAITED
-        await wait_for_exit()
-        return _KILLED_AFTER_GRACE
+        return await _escalate_after_grace_outcome(
+            process,
+            target,
+            observation=observation,
+            owns_group=owns_group,
+        )
     return _TERMINATED_IN_GRACE
+
+
+async def _escalate_after_grace_outcome(
+    process: asyncio.subprocess.Process,
+    target: _SettlementTarget,
+    *,
+    observation: _StageObservation | None,
+    owns_group: bool,
+) -> _TerminationOutcome:
+    """Compel a target that outlived its grace, and report that as an outcome.
+
+    :func:`~cuprum._process_signal._escalate_after_grace` already answers the
+    only question a signal can be refused over — whether the escalation was
+    delivered — so this adds the two facts an outcome carries and that answer
+    does not. The graceful signal that opened the window reached the child, and
+    the window did run out; what remains is whether the escalation's own reap
+    returned, which is exactly the distinction between the two forced endings
+    an outcome names.
+
+    Returns
+    -------
+    _TerminationOutcome
+        ``_KILLED_AFTER_GRACE`` when the escalation was delivered and its reap
+        returned, or ``_KILLED_AFTER_GRACE_UNWAITED`` when the signal could not
+        be delivered, so no wait was ever started to return.
+    """
+    delivered = await _escalate_after_grace(
+        process,
+        target,
+        observation=observation,
+        owns_group=owns_group,
+    )
+    if not delivered:
+        return _KILLED_AFTER_GRACE_UNWAITED
+    return _KILLED_AFTER_GRACE
 
 
 async def _settle_shielded[T](task: asyncio.Task[T]) -> T | None:
@@ -250,142 +363,30 @@ async def _await_teardown_shielded(
 
 async def _terminate_all_shielded(
     processes: cabc.Iterable[asyncio.subprocess.Process],
-    cancel_grace: float,
-) -> None:
-    """Terminate every process before re-raising caller cancellation."""
-    await _await_teardown_shielded(
-        _terminate_process(process, cancel_grace) for process in processes
-    )
-
-
-async def _cleanup_pipeline_on_error(
-    processes: list[asyncio.subprocess.Process],
-    pipe_tasks: list[asyncio.Task[None]],
-    cancel_grace: float,
-) -> list[object]:
-    """Clean up pipeline resources after an error or cancellation."""
-    # Terminate every process, then cancel and collect the pipe tasks owned by
-    # the caller. This delivers cancellation to a native pump before waiting
-    # for it to return descriptor ownership. Stream consumer tasks remain
-    # owned by the caller (``_run_pipeline``), not by this helper.
-    await _terminate_all_shielded(processes, cancel_grace)
-    return await _reconcile_pipe_tasks(pipe_tasks)
-
-
-async def _terminate_process_via_wait_task(
-    process: asyncio.subprocess.Process,
-    wait_task: asyncio.Task[int],
-    grace_period: float,
-) -> bool:
-    """Terminate a process and report whether its provided waiter completed."""
-    outcome = await _terminate_process_with_wait(
-        process,
-        grace_period=grace_period,
-        is_done=wait_task.done,
-        wait_for_exit=lambda: asyncio.shield(wait_task),
-    )
-    return outcome.waiter_completed
-
-
-def _stages_to_terminate(
-    failure_index: int,
-    done: cabc.Sequence[bool],
-) -> list[int]:
-    """Return the stage indices to terminate after a fail-fast, each once."""
-    # This is the pure selection behind _terminate_pipeline_remaining_stages.
-    # Every stage is scheduled at most once — indices come from a single
-    # enumeration — and two stages are never scheduled: the failed stage, which
-    # owns its own exit, and any already-finished stage, which needs no
-    # termination. Cleanup is therefore idempotent: a second pass over settled
-    # stages (all ``done``) selects nothing.
-    return [
-        idx for idx, is_done in enumerate(done) if idx != failure_index and not is_done
-    ]
-
-
-async def _terminate_timed_out_stages(
-    processes: cabc.Sequence[asyncio.subprocess.Process],
-    cancel_grace: float,
-) -> None:
-    """Terminate every still-running stage after a pipeline deadline expires.
-
-    ``_wait_for_pipeline`` normally performs this teardown itself when the
-    deadline cancels it. A non-positive deadline gives ``asyncio.wait_for`` a
-    zero timeout, and it then cancels that coroutine before it ever runs, so
-    nothing terminates the stages and they are left orphaned for the rest of
-    their natural life. Terminating here covers that route.
-
-    Running on both routes is safe and deliberate: ``_terminate_process``
-    returns immediately for a stage that has already exited. Doing it before
-    the output gather also lets the stage pipes reach EOF, so a captured
-    pipeline cannot block waiting on a producer that is still running.
-
-    Failures are absorbed — this runs while a timeout is already propagating,
-    and must not replace the ``TimeoutExpired`` the caller awaits.
-    """
-    await _terminate_all_shielded(processes, cancel_grace)
-
-
-def _has_stages_to_terminate(
-    failure_index: int,
-    wait_tasks: cabc.Sequence[asyncio.Task[int]],
-) -> bool:
-    """Report whether a fail-fast at ``failure_index`` has anything to stop.
-
-    Asks the same reducer `_terminate_pipeline_remaining_stages` picks its
-    targets with, so a caller that announces the decision before requesting the
-    teardown cannot disagree with it about whether a stage was left running.
-
-    Returns
-    -------
-    bool
-        Whether at least one stage remains to terminate.
-    """
-    return bool(
-        _stages_to_terminate(
-            failure_index,
-            [wait_task.done() for wait_task in wait_tasks],
-        ),
-    )
-
-
-async def _terminate_pipeline_remaining_stages(
-    processes: list[asyncio.subprocess.Process],
-    wait_tasks: list[asyncio.Task[int]],
-    failure_index: int,
+    policy: _TeardownPolicy,
     *,
-    cancel_grace: float,
-) -> tuple[bool, ...]:
-    """Terminate all still-running stages after a stage fails.
+    observations: cabc.Sequence[_StageObservation] = (),
+) -> None:
+    """Terminate every process before re-raising caller cancellation.
 
-    Once a stage exits non-zero, Cuprum applies fail-fast semantics by
-    terminating the remaining pipeline stages. This prevents pipelines from
-    hanging on long-running producers/consumers when downstream work is no
-    longer meaningful.
+    *policy* carries the per-process ownership flags, so each process is
+    signalled the way it was spawned. A policy whose sequence is shorter than
+    ``processes`` leaves the rest on the direct-child route.
 
-    Returns
-    -------
-    tuple[bool, ...]
-        One outcome for each selected termination target. ``True`` means the
-        process accepted termination and its waiter completed; ``False`` means
-        it had already settled or could not be signalled.
+    *observations* carries the executions these processes belong to, in the
+    same order, so each termination is reported against the execution whose
+    process it signalled. Pairing is by index and the sequence is not passed
+    on whole: a run-level report drawn from the front of the sequence would
+    attribute every stage's refusal to the first execution, which is a
+    different run from the one that was signalled. The default is empty for
+    the routes with no execution to correlate with; those keep the log record
+    alone.
     """
-    targets = set(
-        _stages_to_terminate(
-            failure_index,
-            [wait_task.done() for wait_task in wait_tasks],
+    await _await_teardown_shielded(
+        _terminate_process(
+            process,
+            policy.for_index(index),
+            observation=observations[index] if index < len(observations) else None,
         )
+        for index, process in enumerate(processes)
     )
-    termination_tasks = [
-        asyncio.create_task(
-            _terminate_process_via_wait_task(process, wait_task, cancel_grace),
-        )
-        for idx, (process, wait_task) in enumerate(
-            zip(processes, wait_tasks, strict=True),
-        )
-        if idx in targets
-    ]
-    if not termination_tasks:
-        return ()
-    outcomes = await _await_teardown_shielded(termination_tasks)
-    return tuple(outcome is True for outcome in outcomes)

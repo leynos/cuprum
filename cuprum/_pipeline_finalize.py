@@ -40,11 +40,11 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum._pipeline_types import (
-        _ExecutionHooks,
+    from cuprum._pipeline_records import (
         _PipelineObservers,
         _PipelineSpawnResult,
     )
+    from cuprum._pipeline_types import _ExecutionHooks
     from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import SafeCmd
 

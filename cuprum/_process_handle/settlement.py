@@ -287,7 +287,12 @@ class _Settlement:
             # streams, so walking away here would strand both.
             return await self._await_settlement()
         async with run.stop_lock:
-            await _terminate_shielded(run.process, run.execution.ctx.cancel_grace)
+            await _terminate_shielded(
+                run.process,
+                run.execution.ctx.cancel_grace,
+                owns_group=run.execution.owns_process_group,
+                observation=run.execution.observation,
+            )
         # Unbounded: the child is already stopping, and the task is the only
         # thing that reaps it, so waiting here is what guarantees the child
         # this caller gave up on does not outlive the error it is owed.

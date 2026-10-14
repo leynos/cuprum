@@ -10,11 +10,9 @@ concurrent resource figures cannot be attributed to individual stages.
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import functools
 import os
 import signal
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated path owns wait4 reaping.
 import threading
 import time
 import typing as typ
@@ -27,12 +25,8 @@ from cuprum._process_exit import (
 )
 from cuprum._rusage import (
     ChildResourceUsage,
-    _ChildRusageSnapshot,
     _Wait4Usage,
-    capture_child_rusage,
-    child_rusage_delta,
     resource_usage_from_wait4,
-    wait4_resource_measurement_available,
 )
 from cuprum._wait4_process_errors import (
     _DeliveryRefusedError,
@@ -40,7 +34,8 @@ from cuprum._wait4_process_errors import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    import subprocess
+
 
 #: Backoff for the fallback reap, whose wait becomes a poll because collecting
 #: is the only way such a platform can observe the child. The cap is set far
@@ -52,18 +47,6 @@ if typ.TYPE_CHECKING:
 #: non-blocking syscall made off the event loop, so a tight cap is cheap.
 _REAP_POLL_INITIAL_INTERVAL = 0.01
 _REAP_POLL_MAX_INTERVAL = 0.05
-
-
-@dc.dataclass(frozen=True, slots=True)
-class DirectProcessConfig:
-    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths."""
-
-    argv: tuple[str, ...]
-    stdin: int | None
-    stdout: int | None
-    stderr: int | None
-    env: cabc.Mapping[str, str] | None
-    cwd: str | None
 
 
 def _close_waiter(
@@ -314,72 +297,3 @@ class _Wait4Process(asyncio.subprocess.Process):
     async def _reap(self) -> int:
         """Perform the one blocking child reap in an executor thread."""
         return await asyncio.to_thread(self._reap_blocking)
-
-
-def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
-    """Spawn the validated command synchronously before connecting its pipes."""
-    # ruff: ignore[subprocess-without-shell-equals-true] - argv validated; shell=False.
-    return subprocess.Popen(
-        config.argv,
-        stdin=config.stdin,
-        stdout=config.stdout,
-        stderr=config.stderr,
-        env=config.env,
-        cwd=config.cwd,
-        shell=False,
-    )
-
-
-async def spawn_wait4_process(
-    config: DirectProcessConfig,
-) -> asyncio.subprocess.Process:
-    """Spawn a direct POSIX child that owns its ``wait4`` resource usage."""
-    loop = asyncio.get_running_loop()
-    process = _Wait4Process(_spawn_popen(config), loop)
-    try:
-        await process.connect_pipes()
-    except BaseException:
-        process.kill()
-        await process.wait()
-        raise
-    return process
-
-
-async def spawn_direct_process(
-    config: DirectProcessConfig,
-) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
-    if wait4_resource_measurement_available():
-        return await spawn_wait4_process(config)
-    return await asyncio.create_subprocess_exec(
-        *config.argv,
-        stdin=config.stdin,
-        stdout=config.stdout,
-        stderr=config.stderr,
-        env=config.env,
-        cwd=config.cwd,
-    )
-
-
-def capture_resource_before_spawn() -> _ChildRusageSnapshot | None:
-    """Capture aggregate fallback usage only when ``wait4`` is unavailable."""
-    return None if wait4_resource_measurement_available() else capture_child_rusage()
-
-
-def resource_usage_for(
-    process: asyncio.subprocess.Process,
-    before: _ChildRusageSnapshot | None,
-) -> ChildResourceUsage | None:
-    """Return owned ``wait4`` usage or the aggregate CPU-only fallback delta."""
-    direct_usage = (
-        process.resource_usage if isinstance(process, _Wait4Process) else None
-    )
-    return direct_usage or child_rusage_delta(before, capture_child_rusage())
-
-
-__all__ = [
-    "DirectProcessConfig",
-    "capture_resource_before_spawn",
-    "resource_usage_for",
-    "spawn_direct_process",
-]

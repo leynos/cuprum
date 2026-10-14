@@ -7,9 +7,9 @@ import typing as typ
 
 from cuprum import sh
 from cuprum._pipeline_internals import _finalize_pipeline_execution
+from cuprum._pipeline_records import _PipelineObservers
 from cuprum._pipeline_types import (
     _EventDetails,
-    _PipelineObservers,
     _StageObservation,
 )
 from cuprum._sink_lifecycle import _SinkBracket

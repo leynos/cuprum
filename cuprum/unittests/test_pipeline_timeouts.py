@@ -25,6 +25,7 @@ from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
@@ -181,7 +182,60 @@ async def _assert_immediate_timeout_reconciles_pumps(
                 "nothing reconciled the pumps the caller owns"
             )
     finally:
-        await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
+        await _terminate_all_shielded(timed_out_processes, _TeardownPolicy(0.0))
+
+
+class _PumpRecorder:
+    """Stand-in for ``_create_pipe_tasks`` that records what it was handed.
+
+    The recording is what lets the test inspect the pumps and stages after the
+    deadline has fired, so it is kept separate from the assertions that read it.
+    """
+
+    def __init__(
+        self,
+        real_create: cabc.Callable[..., list[asyncio.Task[None]]],
+    ) -> None:
+        """Wrap the real creator, keeping the pumps and stages it produces."""
+        self.created: list[asyncio.Task[None]] = []
+        self.timed_out_processes: list[asyncio.subprocess.Process] = []
+        self._real_create = real_create
+
+    def __call__(
+        self,
+        processes: list[asyncio.subprocess.Process],
+        *,
+        observations: tuple[_StageObservation, ...],
+        native_pump_cleanup_grace: float,
+    ) -> list[asyncio.Task[None]]:
+        """Record the created pumps and stages for assertions and local cleanup."""
+        tasks = self._real_create(
+            processes,
+            observations=observations,
+            native_pump_cleanup_grace=native_pump_cleanup_grace,
+        )
+        self.created.extend(tasks)
+        self.timed_out_processes.extend(processes)
+        return tasks
+
+
+async def _no_termination(
+    processes: cabc.Sequence[asyncio.subprocess.Process],
+    policy: _TeardownPolicy,
+    *,
+    observations: cabc.Sequence[_StageObservation] = (),
+) -> None:
+    """Stand in for stage termination without settling anything.
+
+    The parameters mirror the real helper's, keyword-only ones included, so a
+    change to how termination is asked for shows up here as a mismatch rather
+    than being absorbed by a permissive stand-in. The call sites pass the stage
+    observations positionally and by keyword respectively; accepting both is
+    what keeps this stub shape-compatible with the real one rather than merely
+    call-compatible with today's caller.
+    """
+    del processes, policy, observations
+    await asyncio.sleep(0)
 
 
 def test_zero_timeout_reconciles_pipe_tasks(
@@ -203,34 +257,8 @@ def test_zero_timeout_reconciles_pipe_tasks(
     get_stream_backend.cache_clear()
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
-    created: list[asyncio.Task[None]] = []
     events: list[ExecEvent] = []
-    timed_out_processes: list[asyncio.subprocess.Process] = []
-    real_create = _pipeline_collect._create_pipe_tasks
-
-    def spy(
-        processes: list[asyncio.subprocess.Process],
-        *,
-        observations: tuple[_StageObservation, ...],
-        native_pump_cleanup_grace: float,
-    ) -> list[asyncio.Task[None]]:
-        """Record the created pumps and stages for assertions and local cleanup."""
-        tasks = real_create(
-            processes,
-            observations=observations,
-            native_pump_cleanup_grace=native_pump_cleanup_grace,
-        )
-        created.extend(tasks)
-        timed_out_processes.extend(processes)
-        return tasks
-
-    async def no_termination(
-        processes: cabc.Iterable[asyncio.subprocess.Process],
-        cancel_grace: float,
-    ) -> None:
-        """Stand in for stage termination without settling anything."""
-        del processes, cancel_grace
-        await asyncio.sleep(0)
+    recorder = _PumpRecorder(_pipeline_collect._create_pipe_tasks)
 
     pipeline = python(
         "-c", "import sys, time; sys.stdout.write('x' * 10_000_000); time.sleep(30)"
@@ -238,9 +266,9 @@ def test_zero_timeout_reconciles_pipe_tasks(
 
     try:
         with (
-            mock.patch.object(_pipeline_collect, "_create_pipe_tasks", spy),
+            mock.patch.object(_pipeline_collect, "_create_pipe_tasks", recorder),
             mock.patch.object(
-                _pipeline_collect, "_terminate_timed_out_stages", no_termination
+                _pipeline_collect, "_terminate_timed_out_stages", _no_termination
             ),
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),
@@ -248,8 +276,8 @@ def test_zero_timeout_reconciles_pipe_tasks(
             asyncio.run(
                 _assert_immediate_timeout_reconciles_pumps(
                     pipeline,
-                    created=created,
-                    timed_out_processes=timed_out_processes,
+                    created=recorder.created,
+                    timed_out_processes=recorder.timed_out_processes,
                 )
             )
     finally:

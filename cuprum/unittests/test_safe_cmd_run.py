@@ -22,7 +22,7 @@ from cuprum import (
     _rusage,
     _subprocess_execution,
     _subprocess_spawn,
-    _wait4_process,
+    _wait4_spawn,
     observe,
     sh,
 )
@@ -149,9 +149,12 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
         """Return the next controlled accounting boundary."""
         return snapshots.pop(0)
 
-    monkeypatch.setattr(_wait4_process, "capture_child_rusage", capture_snapshot)
+    # Bound where production resolves the name: the spawn module reads both
+    # helpers from its own globals, so patching the handle module would watch
+    # names no run consults.
+    monkeypatch.setattr(_wait4_spawn, "capture_child_rusage", capture_snapshot)
     monkeypatch.setattr(
-        _wait4_process,
+        _wait4_spawn,
         "wait4_resource_measurement_available",
         lambda: False,
     )
@@ -261,11 +264,10 @@ def test_records_start_times_before_subprocess_spawn(
         await asyncio.sleep(0)
         return 0, 13.0
 
-    monkeypatch.setattr(_subprocess_execution.time, "perf_counter", monotonic_clock)
-    # The observation builder installs ``time.time`` as the stage's
-    # ``wall_clock`` callable, so the injected wall clock must be patched where
-    # that attribute is read from — not in ``sh``, which no longer imports
-    # ``time`` now that observation construction lives in ``_command_internals``.
+    # Both start clocks are resolved at the observation's construction site, so
+    # patching this module's ``time`` is what injects them; the field default
+    # binds at class-creation time and would ignore the patch.
+    monkeypatch.setattr(_command_internals.time, "perf_counter", monotonic_clock)
     monkeypatch.setattr(_command_internals.time, "time", wall_clock)
     # Patched on the module that owns the spawn, not on
     # ``_subprocess_execution``: ``_start_owned_process`` resolves this name

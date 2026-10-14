@@ -1,16 +1,22 @@
 """Internal data structures shared across pipeline execution helpers.
 
-These small dataclasses model the hooks, per-stage observation state, and
-captured results threaded through pipeline coordination. They live apart from
+These dataclasses model the hooks, per-stage observation state, and event
+details threaded through pipeline coordination. They live apart from
 ``cuprum._pipeline_internals`` so the coordination logic stays within the
 project file-size ceiling and so spawn-side modules can import them at the
 top level without import cycles; ``cuprum._pipeline_internals`` re-exports
 them for backwards compatibility.
+
+The aggregate records those phases exchange — a spawn's processes, a wait's
+exit codes, a pipeline's captured output — live in
+``cuprum._pipeline_records``, which is split out for the same ceiling and
+depends on the observation types defined here.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
+import time
 import types
 import typing as typ
 
@@ -19,6 +25,7 @@ from cuprum.events import (
     CaptureMode,
     ExecEvent,
     ExecPhase,
+    GroupTeardownOutcome,
     ResourceUsageMode,
     TerminalOutcome,
     TimeoutMode,
@@ -35,20 +42,12 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum._idle_heartbeat import _IdleMonitor
-
-    # ``_PipelineWaitResult`` is defined here, not imported: ``_pipeline_wait``
-    # imports this module, so taking the record back from it would close a
-    # cycle. The other direction is the reason the record lives here.
-    from cuprum._streams import _RelayDiagnostics
-    from cuprum._subprocess_wait_types import _StreamConsumerTask, _StreamPayload
     from cuprum.context import AfterHook, BeforeHook
 
     # Annotation-only, as in ``cuprum.events``: ``env_mode`` is read as a value
     # off the event, never resolved as a hint, so the names stay out of the
     # runtime scope.
     from cuprum.context.env_overlay import EnvMode, EnvOverlay
-    from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
 
@@ -99,6 +98,12 @@ class _EventDetails:
     user_cpu_seconds: float | None = None
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
+    # Appended so every existing positional construction keeps its slots; see
+    # the note on ``ExecEvent``. ``group_outcome`` is the closed enum rather
+    # than a string because it labels a bounded metric.
+    owns_group: bool | None = None
+    group_outcome: GroupTeardownOutcome | None = None
+    settle_s: float | None = None
 
 
 @dc.dataclass(slots=True)
@@ -112,6 +117,16 @@ class _StageObservation:
     env_overlay: EnvOverlay | None
     pending_tasks: list[asyncio.Task[None]]
     wall_clock: cabc.Callable[[], float]
+    # The monotonic counterpart of ``wall_clock``, and the seam a run's own
+    # deadline is measured through: the start reference and the remaining-time
+    # query both read it, so a timeout can be driven by an injected clock
+    # rather than by the machine's. Both production builders resolve it at
+    # their construction site rather than relying on this default, which binds
+    # when the class is created and would ignore a patched ``time``. A
+    # construction that supplies no clock still gets a usable one.
+    # Line stamps keep their own seam in ``cuprum.lines``, which the two paths
+    # already share.
+    monotonic_clock: cabc.Callable[[], float] = time.perf_counter
     # Minted once per stage observation so every lifecycle event this object
     # emits shares one correlation token, distinguishing this execution from
     # any other that happens to reuse the same PID.
@@ -202,6 +217,9 @@ class _StageObservation:
             user_cpu_seconds=details.user_cpu_seconds,
             system_cpu_seconds=details.system_cpu_seconds,
             resource_usage_mode=details.resource_usage_mode,
+            owns_group=details.owns_group,
+            group_outcome=details.group_outcome,
+            settle_s=details.settle_s,
             env_mode=self.env_mode,
             resolved_path=self.resolved_path,
             capture_mode=self.capture_mode,
@@ -296,100 +314,3 @@ class _StageObservation:
             self.pending_tasks.extend(exc.scheduled_tasks)
             raise exc.error from exc
         self.pending_tasks.extend(scheduled_tasks)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineWaitResult:
-    """Exit codes and timing captured once a pipeline finishes waiting."""
-
-    exit_codes: tuple[int, ...]
-    failure_index: int | None
-    started_at: tuple[float, ...]
-    ended_at: tuple[float | None, ...]
-    wall_clock_started_at: tuple[float, ...]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineStageResultInputs:
-    """Aggregated wait outcome and captured output for stage results.
-
-    ``relay_fallbacks_by_stage`` holds one tuple per pipeline stage, in stage
-    order. A stage's tuple lists its stdout diagnostics first (final stage
-    only, matching the single-command result order) and then its stderr
-    diagnostics, so every stage result owns the records of its own streams.
-    """
-
-    wait_result: _PipelineWaitResult
-    stderr_by_stage: tuple[_StreamPayload | None, ...]
-    final_stdout: _StreamPayload | None
-    relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StageWaitContext:
-    """Per-stage data the wait path reads, all indexed by stage.
-
-    Every field is immutable, so the context stays a snapshot the wait path can
-    only read. ``_PipelineWaitState`` copies ``started_at`` into its own list
-    rather than aliasing it, which is what stops its live bookkeeping writing
-    back through this supposedly frozen record.
-
-    ``started_at`` is the monotonic time stage durations are measured from;
-    ``wall_clock_started_at`` is the corresponding public result timestamp.
-    ``observations`` provides the wait path with the hook set and stage
-    execution token for the fail-fast report. It remains optional so transition
-    tests and the symbolic model can construct a context without observability
-    state.
-    """
-
-    started_at: tuple[float, ...]
-    wall_clock_started_at: tuple[float, ...] = ()
-    observations: tuple[_StageObservation, ...] = ()
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineObservers:
-    """Per-stage observations and the observe-hook tasks they schedule.
-
-    The tasks live alongside the observations because every stage shares one
-    list: :meth:`_StageObservation.emit` appends to it, and the runner drains
-    that single collection on the way out however the pipeline ends.
-    """
-
-    observations: tuple[_StageObservation, ...]
-    pending_tasks: list[asyncio.Task[None]]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineSpawnResult:
-    """Processes and output tasks produced when spawning a pipeline."""
-
-    processes: list[asyncio.subprocess.Process]
-    stderr_tasks: list[_StreamConsumerTask | None]
-    stdout_task: _StreamConsumerTask | None
-    relay_diagnostics_by_stage: tuple[
-        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
-        ...,
-    ]
-    stages: _StageWaitContext
-    idle: _IdleMonitor | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineOutputs:
-    """Captured outputs from pipeline execution.
-
-    ``relay_fallbacks_by_stage`` mirrors
-    :class:`_PipelineStageResultInputs` so the timeout path can raise with
-    whatever was already recorded before the wait failed.
-    """
-
-    stderr_by_stage: tuple[_StreamPayload | None, ...]
-    final_stdout: _StreamPayload | None
-    capture: bool
-    # Whether the captured payloads are bytes rather than decoded text. Read
-    # only where the ``TimeoutExpired`` is built, because that is the one
-    # payload this path has to *combine* rather than pass through: joining
-    # stage stderr needs the empty value of the mode it is joining in.
-    capture_bytes: bool = False
-    relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...] = ()

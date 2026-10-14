@@ -1934,35 +1934,40 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
-- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
-  deadline, terminating the process (through `_terminate_all_shielded`, so a
-  caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation), and draining the stream consumers exactly once. Its explicit
-  drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
-  task with the stdout and stderr consumer tasks, `_DrainContext` to carry
-  capture and observability settings, and
+- `cuprum/_subprocess_wait.py` owns the wait half of *ending* a run: applying
+  the deadline and terminating the process (through `_terminate_all_shielded`,
+  so a caller cancelling during the grace period cannot skip the `SIGKILL`
+  escalation). It keeps `_drain_context` beside `_reconcile_run_tasks`, its
+  only consumer, because the context exists to serve that one reconciliation
+  and reads its cancellation policy from the tasks it is given.
+  `cuprum/_stream_drain.py` owns the other half: draining the stream consumers
+  exactly once. Its explicit drain interface uses `_RunTaskOwnership` to bundle
+  the optional stdin-writer task with the stdout and stderr consumer tasks,
+  `_DrainContext` to carry capture and observability settings, and
   `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
-  consumers as one shielded cleanup unit. A capturing drain gives readers a
+  consumers as one shielded cleanup unit. The two shared types live in
+  `cuprum/_subprocess_wait_types.py`, which is what lets the wait module import
+  them without reaching into the drain. A capturing drain gives readers a
   bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
   maps an absent reader result to the empty value of the run's capture mode,
   and therefore keeps captured timeout output deterministic; non-capturing
-  drains skip the window and retain `None`. Split out of
+  drains skip the window and retain `None`. Both were split out of
   `_subprocess_execution` so that module stays about orchestration — spawning,
   wiring streams, assembling the result.
-- When that window expires with readers still pending, `_subprocess_wait` uses
-  `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
-  `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
-  `operation="drain"`, `eof_grace_s`, and `pending_readers`. `MetricsHook`
-  projects it to `cuprum_capture_eof_grace_expired_total` with only `program`
-  and `project` labels, while `TracingHook` adds a
-  `cuprum.capture_eof_grace_expired` event to the matching span. No captured
-  stream payload is emitted in that event. Unexpected reader failures remain
-  separately reported as `teardown_error`.
+- When the `_CAPTURE_EOF_GRACE_S` window expires with readers still pending,
+  `_stream_drain` uses `_timeout_reporting` to emit one correlated
+  `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
+  `exec_id` and `pid`, `operation="drain"`, `eof_grace_s`, and
+  `pending_readers`. `MetricsHook` projects it to
+  `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
+  labels, while `TracingHook` adds a `cuprum.capture_eof_grace_expired` event
+  to the matching span. No captured stream payload is emitted in that event.
+  Unexpected reader failures remain separately reported as `teardown_error`.
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
-period. The wait logic asks consumers to read chunks; if EOF arrives within
-grace, the captured payload is returned. If grace expires while readers remain
+period. The drain asks consumers to read chunks; if EOF arrives within grace,
+the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
@@ -1970,21 +1975,21 @@ Figure 9: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
-    participant Wait as _subprocess_wait
+    participant Drain as _stream_drain
     participant Consumers as Stream consumers
     participant Reader as StreamReader
     participant Telemetry as Exec telemetry
 
-    Wait->>Consumers: _drain_stream_consumers(consumers, context)
-    Wait->>Consumers: _await_capture_eof_grace(consumers, context)
+    Drain->>Consumers: _drain_stream_consumers(consumers, context)
+    Drain->>Consumers: _await_capture_eof_grace(consumers, context)
     Consumers->>Reader: read(_READ_SIZE)
     alt EOF observed within grace
         Reader-->>Consumers: empty chunk
-        Consumers-->>Wait: captured payload
+        Consumers-->>Drain: captured payload
     else grace expires with readers pending
-        Wait->>Telemetry: _report_capture_eof_grace_expiry(...)
-        Wait->>Consumers: _settle_consumers(consumers, discard_on_cancel)
-        Consumers-->>Wait: deterministic captured result
+        Drain->>Telemetry: _report_capture_eof_grace_expiry(...)
+        Drain->>Consumers: _settle_consumers(consumers, discard_on_cancel)
+        Consumers-->>Drain: deterministic captured result
     end
 ```
 
@@ -1995,8 +2000,10 @@ sequenceDiagram
   the surface is shared: both the single-command wait path and the pipeline
   deadline path report through it, and the pipeline caller cannot import
   `_subprocess_timeout` without closing an import cycle.
-- `cuprum/_subprocess_context.py` owns small shared context helpers
-  (`_cwd_arg`, `_sh_module`) used across the subprocess modules.
+- `cuprum/_subprocess_context.py` owns small shared context helpers used across
+  the subprocess modules (`_cwd_arg`, `_sh_module`, and
+  `_ownership_spawn_kwargs`, which converts a process-group policy into the
+  spawn keyword `start_new_session` for both spawn routes).
 
 Pipeline spawning applies the same ownership rule per stage. `_pipeline_spawn`
 uses `_SpawnedPipelineStages` to retain started processes, capture tasks, start
@@ -2012,8 +2019,15 @@ stages, arms the idle heartbeat once the first stage is actually running, and
 owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
 `cuprum/_process_lifecycle.py` keeps the subprocess handles and the shared
 `_shielded_cleanup` primitive, and executes the fail-fast, timeout, and error
-teardown decisions the waiter makes. Splitting startup from termination keeps
-each module within the Pylint module ceiling while leaving every helper that
+teardown decisions the waiter makes. It delegates the two per-process questions
+teardown asks — what a signal is delivered to, and what a completed teardown
+waits for — to `cuprum/_process_signal.py`, which is the only module that has
+to know whether a run owns its child's process group. The second question is
+answered per policy: an inherited-group run settles when its direct child does,
+while an owning run settles only when the group its child led has emptied, so a
+descendant left running after the child exits — the child having been reaped
+included — is still reached. Splitting startup from termination keeps each
+module within the Pylint module ceiling while leaving every helper that
 existing importers reach importable from its previous definition site.
 
 The runner composes the specialized modules; neither specialized module owns
@@ -2152,7 +2166,18 @@ Deciding *which* completion triggers that termination is separated from the
 asyncio machinery that observes it, so the ordering rules can be verified
 without processes or a clock. `cuprum/_pipeline_wait.py` splits the decision
 into a command and a query on `_PipelineWaitState`, following the project's
-command/query segregation rule:
+command/query segregation rule.
+
+That seam is also a module boundary. `cuprum/_pipeline_wait_state.py` owns the
+pure `_PipelineWaitState` transition — the command, the query, and the
+`from_processes` constructor — while `cuprum/_pipeline_wait.py` owns the
+asyncio orchestration (`_wait_for_pipeline`, `_process_completed_task`, and the
+`asyncio.wait` batch tie-break). The class is imported into `_pipeline_wait.py`
+from the state module, and the existing importers — `_pipeline_wait_records.py`
+and the symbolic, state-machine, and async test modules — keep reaching it
+through `cuprum._pipeline_wait`, so the compatibility surface is the import
+target rather than the definition. New code imports it from
+`cuprum._pipeline_wait_state` directly.
 
 - `record_completion(completed_idx, exit_code, *, ended_at)` is the command. It
   stamps the stage's exit code and end time — the clock is injected rather than
@@ -2429,10 +2454,16 @@ design decisions guide these adapters:
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
   `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`,
-  `cuprum_resource_usage_measurements_total`) are incremented on the
-  corresponding event phases. The EOF-grace counter has only the low-cardinality
-  `program` and `project` labels; duration and pending-reader count remain
-  event fields, not labels. The resource-measurement counter belongs to the
+  `cuprum_group_teardowns_total`, `cuprum_resource_usage_measurements_total`)
+  are incremented on the corresponding event phases. The EOF-grace counter has
+  only the low-cardinality `program` and `project` labels; duration and
+  pending-reader count remain event fields, not labels. The group-teardown
+  counter adds the closed `GroupTeardownOutcome` category as an `outcome` label
+  — bounded by construction, so a teardown left holding a process is countable
+  without the pid, which would shatter the series. It and the
+  `cuprum_group_settle_seconds` histogram are built by
+  `_group_teardown_operations` rather than the unit-counter path, so the metric
+  name keeps one definition. The resource-measurement counter belongs to the
   resource series and therefore carries `resource_usage_mode` alongside
   `program` and `project`.
 - The `cuprum_duration_seconds` histogram and terminal-category/failure
