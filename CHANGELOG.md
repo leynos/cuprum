@@ -123,6 +123,15 @@ _Applications upgrading from 0.1 should follow the
 
 ### Added
 
+- **Opt-in telemetry redaction:** `RedactionPolicy` applies caller-configured
+  literal and regular-expression rules to selected text in structured logging,
+  tracing, plain-text start records, argv-derived GitHub Actions group titles,
+  and observation consumers wrapped with `redacting_hook`. It is inert unless
+  configured, does not discover unconfigured secrets, and never changes command
+  execution or captured results. Each destination opts in independently;
+  redaction failures raise `RedactionError` without falling back to raw text.
+  Metrics remain unchanged with bounded labels
+  ([#442](https://github.com/leynos/cuprum/issues/442)).
 - **Scoped executable bindings:**
   `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
   catalogued program to the executable it should run inside the enclosing

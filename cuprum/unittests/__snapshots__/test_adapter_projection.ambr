@@ -1,4 +1,52 @@
 # serializer version: 1
+# name: TestAdapterProjection.test_configured_redaction_locks_sanitized_exports
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        '[REDACTED]',
+      ),
+      'cuprum_line': '[REDACTED]',
+      'cuprum_phase': 'stdin_error',
+      'cuprum_program': 'echo',
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'observer_export': dict({
+      'argv': tuple(
+        'echo',
+        '[REDACTED]',
+      ),
+      'env': dict({
+        'TOKEN': '[REDACTED]',
+      }),
+      'note': '[REDACTED]',
+      'tags': dict({
+        'credential': '[REDACTED]',
+        'pipeline_stages': '[REDACTED]',
+        'project': 'proj',
+      }),
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        '[REDACTED]',
+      ]),
+      'cuprum.line': '[REDACTED]',
+      'cuprum.pipeline_stages': '[REDACTED]',
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': dict({
+      'line': '[REDACTED]',
+      'name': 'cuprum.stdin_error',
+      'note': '[REDACTED]',
+      'operation': 'write',
+    }),
+  })
+# ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[capture_eof_grace_expired]
   dict({
     'logging_extra': dict({
