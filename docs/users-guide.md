@@ -452,6 +452,9 @@ being written can be in flight separately. If a chunk would exceed the bound,
 Cuprum drops that presentation chunk without blocking the loop and reports its
 byte count as `DROPPED`. Captured output remains complete.
 
+A single chunk larger than `max_queued_bytes` is dropped even when the queue is
+empty. Choose a bound at least as large as the largest expected output chunk.
+
 ## Supply input, environment, and a deadline
 
 `StdinInput(text=...)` uses the context's encoding. Use `StdinInput(data=...)`

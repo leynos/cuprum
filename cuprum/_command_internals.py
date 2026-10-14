@@ -157,6 +157,8 @@ async def _execute_with_hooks(
         )
         if execution.relay_diagnostics is not None:
             stdout_diagnostics, stderr_diagnostics = execution.relay_diagnostics
+            # _execute_subprocess snapshots before delivery closes; rebuild to
+            # include failures and undelivered bytes appended during close.
             result = dc.replace(
                 result,
                 relay_fallbacks=(

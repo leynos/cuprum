@@ -33,7 +33,9 @@ class BoundedDelivery:
     max_queued_bytes : int
         Positive upper bound for payload bytes waiting in the run's shared
         stdout/stderr delivery queue. A chunk that does not fit is dropped
-        from presentation and reported; capture remains complete.
+        from presentation and reported; capture remains complete. A chunk
+        larger than this bound is dropped even when the queue is empty, so
+        choose a bound at least as large as the largest chunk to deliver.
     drain_grace_s : float | None, default=None
         Maximum time spent draining the worker during shutdown. ``None`` uses
         the library default. A blocked writer is abandoned as a daemon thread
@@ -234,7 +236,8 @@ class _DeliveryWorker:
             self._condition.notify_all()
         self._thread.join(grace)
         with self._condition:
-            if self._thread.is_alive():
+            worker_stopped_early = self._active_item is not None
+            if self._thread.is_alive() or worker_stopped_early:
                 self._abandoned = True
                 if self._active_item is not None:
                     self._add_undelivered(
@@ -242,8 +245,9 @@ class _DeliveryWorker:
                         self._active_item.payload.source_bytes,
                         self._active_item.diagnostics,
                     )
-                self._discard_queued()
-                self._condition.notify_all()
+                    self._active_item = None
+            self._discard_queued()
+            self._condition.notify_all()
             self._close_result = _DeliveryCloseResult(
                 failures=tuple(self._failures),
                 undelivered_bytes=self._undelivered_snapshot(),
@@ -263,7 +267,7 @@ class _DeliveryWorker:
         while (item := self._next_item()) is not None:
             try:
                 self._deliver(item)
-            except Exception:  # ruff: ignore[blind-except] - sink errors stay categorical.
+            except BaseException:  # ruff: ignore[blind-except] - contain sink exits.
                 with self._condition:
                     if self._abandoned:
                         return
