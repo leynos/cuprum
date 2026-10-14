@@ -212,18 +212,24 @@ def test_a_failing_child_wait_leaves_no_group_poller_behind() -> None:
                 "the group must still be open, or this test cannot observe a "
                 "stranded poller"
             )
+            # Read the leftover set while the group is still open and before
+            # the leader is reaped. A stranded poller is pending at this point
+            # by construction. Reaping first would put the answer at the mercy
+            # of scheduling: the scan below performs no ``await``, so it sees
+            # the same set today, but any later edit that awaited there would
+            # let a leaked poller observe the empty group, finish, and drop out
+            # of ``all_tasks`` — passing this test while leaking.
+            leftovers = [
+                task
+                for task in asyncio.all_tasks()
+                if not task.done() and task is not asyncio.current_task()
+            ]
+            assert not leftovers, (
+                "a failed exit waiter must not strand a group poller; found "
+                f"{leftovers!r}"
+            )
         finally:
             leader.kill()
             leader.wait()
-
-        # Anything the teardown left polling would still be running here.
-        leftovers = [
-            task
-            for task in asyncio.all_tasks()
-            if not task.done() and task is not asyncio.current_task()
-        ]
-        assert not leftovers, (
-            f"a failed exit waiter must not strand a group poller; found {leftovers!r}"
-        )
 
     asyncio.run(run_case())
