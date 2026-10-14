@@ -229,17 +229,19 @@ class _SettlementHarness:
             # by cancellation alone, which is the one path the handle exists to
             # prevent.
             self._drive(self._stack.aclose())
-        settling = self._handle._settlement._task
         # The teardown only cancels these and never reads a value, so they are
         # collected under the value-blind task type: the waiters carry a
         # ``CommandResult`` and the stream consumers carry a payload, and
         # ``Task`` is invariant in its result type.
         tasks: list[asyncio.Task[typ.Any]] = [
-            task for task in (self._waiter, settling) if task is not None
+            task for task in (self._waiter,) if task is not None
         ]
-        # A run owns consumer tasks, and one abandoned mid-drain still holds
-        # them: collected here so nothing is reported unawaited at close.
+        # Rules can replace the current handle while its shielded settlement
+        # is still draining. Every handle remains owned by this model.
         for handle in self._handles:
+            settling = handle._settlement._task
+            if settling is not None:
+                tasks.append(settling)
             tasks.extend(handle._run.ownership.consumers)
         for task in tasks:
             task.cancel()

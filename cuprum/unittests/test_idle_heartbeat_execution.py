@@ -270,7 +270,7 @@ def test_a_shared_sink_keeps_the_keepalive_on_its_own_line(
         "sys.stdout.flush()\n",
     )
 
-    asyncio.run(
+    result = asyncio.run(
         command.run(
             output=RunOutputOptions(
                 echo=True,
@@ -288,6 +288,11 @@ def test_a_shared_sink_keeps_the_keepalive_on_its_own_line(
             "the keepalive must begin its own line rather than continue the "
             f"child's unfinished one: {line!r}"
         )
-    assert sink.getvalue().startswith("partial\n"), (
-        f"the child's own bytes must be unchanged: {sink.getvalue()!r}"
+    # Startup can itself be idle long enough to emit a heartbeat before the
+    # child's first write. Only line separation, not the first writer, matters.
+    assert "partial" in sink.getvalue().splitlines(), (
+        f"the child's text must occupy its own line: {sink.getvalue()!r}"
+    )
+    assert result.stdout == "partial\n", (
+        f"capture must retain the child's own bytes: {result.stdout!r}"
     )
