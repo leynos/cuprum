@@ -36,9 +36,11 @@ from cuprum.echo_events import BrokenPipePolicy
 from cuprum.sh.execution import ProcessGroupPolicy
 
 if typ.TYPE_CHECKING:
+    from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum.lines import _LineHookFn
+    from cuprum._streams import _RelayDiagnostics
     from cuprum.sh import ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
 
@@ -83,6 +85,9 @@ class _SubprocessExecution:
     # once at spawn so every line of a run shares one time base.
     started_at: float = 0.0
     idle: _IdleMonitor | None = None
+    delivery_worker: _DeliveryWorker | None = None
+    delivery_grace_s: float | None = None
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
 
     @property
     def owns_process_group(self) -> bool:

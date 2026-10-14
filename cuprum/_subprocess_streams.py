@@ -257,6 +257,7 @@ def _build_stream_config(
         capture_bytes=execution.capture_bytes,
         broken_pipe_policy=execution.broken_pipe_policy,
         sink=stdout_sink,
+        delivery=execution.delivery_worker,
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,

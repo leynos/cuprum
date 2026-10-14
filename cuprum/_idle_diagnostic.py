@@ -60,6 +60,7 @@ class _IdleDiagnostic:
     subject: str
     destination: cabc.Callable[[], typ.IO[str]]
     is_line_open: cabc.Callable[[], bool] = _never_open
+    delivery: cabc.Callable[[str], None] | None = None
 
     def write(self, *, elapsed_total: float, elapsed_idle: float) -> None:
         """Flush one keepalive line to the parent's diagnostic sink."""
@@ -72,6 +73,9 @@ class _IdleDiagnostic:
             # Presentation only: start on a fresh line rather than becoming the
             # tail of an unfinished mirrored one. Capture is untouched.
             line = f"\n{line}"
+        if self.delivery is not None:
+            self.delivery(line)
+            return
         sink = self.destination()
         sink.write(line)
         sink.flush()

@@ -339,6 +339,7 @@ class SafeCmd(_OwnedStart):
                     self,
                     state,
                     observation=observation,
+                    sink_bracket=tracking.sink_bracket,
                 ),
                 tracking,
             ),

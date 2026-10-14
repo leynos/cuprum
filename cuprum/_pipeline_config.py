@@ -11,15 +11,19 @@ sink, encoding, and error configuration consumed by pipeline stream tasks.
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import sys
 import typing as typ
 
+from cuprum._bounded_delivery import _DeliveryWorker
+from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
-from cuprum._idle_heartbeat import _build_idle_monitor
+from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
 from cuprum._sink_lifecycle import _SinkBracket
+from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
-from cuprum.echo_events import BrokenPipePolicy
+from cuprum.echo_events import BrokenPipePolicy, EchoStream
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
@@ -66,6 +70,12 @@ class _PipelineRunConfig:
     capture_bytes: bool = False
 
     idle: _IdleMonitor | None = None
+
+    delivery_worker: _DeliveryWorker | None = None
+
+    delivery_grace_s: float | None = None
+
+    idle_delivery_diagnostics: _RelayDiagnostics | None = None
 
     @property
     def consumes_stdout(self) -> bool:
@@ -132,6 +142,7 @@ class _PipelineRunConfig:
             echo_max_line_bytes=self.max_echo_line_bytes,
             broken_pipe_policy=self.broken_pipe_policy,
             sink=framed,
+            delivery=self.delivery_worker,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             capture_bytes=self.capture_bytes,
@@ -213,6 +224,29 @@ def _prepare_pipeline_config(
         output.sink,
         sinks.SessionStart(label="pipeline", argv=()),
     )
+    delivery_worker = (
+        None
+        if output.delivery is None
+        else _DeliveryWorker(
+            destinations={
+                EchoStream.STDOUT: sink_bracket.resolve_destination(stdout_sink),
+                EchoStream.STDERR: sink_bracket.resolve_destination(stderr_sink),
+            },
+            max_queued_bytes=output.delivery.max_queued_bytes,
+        )
+    )
+    idle_delivery_diagnostics = (
+        _RelayDiagnostics() if delivery_worker is not None else None
+    )
+    idle_delivery = (
+        None
+        if delivery_worker is None or idle_delivery_diagnostics is None
+        else functools.partial(
+            _queue_idle_diagnostic,
+            delivery_worker,
+            idle_delivery_diagnostics,
+        )
+    )
     return _PipelineRunConfig(
         ctx=ctx,
         capture=output.capture,
@@ -225,6 +259,11 @@ def _prepare_pipeline_config(
         stderr_sink=stderr_sink,
         sink_bracket=sink_bracket,
         capture_bytes=capture_bytes,
+        delivery_worker=delivery_worker,
+        delivery_grace_s=(
+            None if output.delivery is None else output.delivery.drain_grace_s
+        ),
+        idle_delivery_diagnostics=idle_delivery_diagnostics,
         on_line=output.on_line,
         # One aggregate heartbeat for the whole pipeline, labelled for what it
         # actually observes: the parent-facing output, not the health of every
@@ -238,6 +277,9 @@ def _prepare_pipeline_config(
             # outside the group the run is claiming. One resolution, not two,
             # because _echo_mirror recognizes the diagnostic by comparing the
             # resolved destinations.
-            sink_bracket.resolve_destination(stderr_sink),
+            _IdleSinkConfig(
+                sink=sink_bracket.resolve_destination(stderr_sink),
+                delivery=idle_delivery,
+            ),
         ),
     )

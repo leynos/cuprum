@@ -94,7 +94,7 @@ async def _prepare_owned_command(
             cmd,
             state,
             observation=observation,
-            sink_session=sink_bracket.session,
+            sink_bracket=sink_bracket,
         )
     except BaseException as run_error:
         await _finalize_prepared_command_failure(tracking, observation, run_error)

@@ -91,6 +91,15 @@ def test_one_byte_over_the_limit_reserves_marker_and_ending() -> None:
     assert finished.dropped_bytes > 0, "one-byte overflow must omit child bytes"
 
 
+def test_truncated_payload_keeps_original_source_byte_count() -> None:
+    """Delivery accounting excludes marker bytes added to the echoed payload."""
+    source = b"x" * 80
+    finished = _finish(source, bound=40)
+
+    assert finished.source_bytes == len(source) + 1
+    assert len(finished.payload) + finished.dropped_bytes > finished.source_bytes
+
+
 @pytest.mark.parametrize(
     ("line", "expected"),
     [(b"x" * 273, 98), (b"x" * 274, 100)],

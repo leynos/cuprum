@@ -14,6 +14,7 @@ import dataclasses as dc
 import typing as typ
 import warnings
 
+from cuprum._bounded_delivery import BoundedDelivery, _validate_delivery_options
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
@@ -32,6 +33,7 @@ if typ.TYPE_CHECKING:
     from cuprum.lines import LineHook
 
 __all__ = [
+    "BoundedDelivery",
     "IOOptions",
     "RunOutputOptions",
 ]
@@ -146,6 +148,11 @@ class RunOutputOptions:
         and composes with it: either flag alone synthesizes the adapter with
         only its own half enabled. Values other than ``bool`` raise
         ``ValueError``.
+    delivery : BoundedDelivery | None, keyword-only, default=None
+        Opt into one run-owned daemon worker for echoed output. The worker
+        shares a byte-bounded FIFO across stdout and stderr, drops and reports
+        chunks that exceed its capacity, and drains only for the configured
+        grace at shutdown. ``None`` keeps synchronous writes and flushes.
 
     Notes
     -----
@@ -209,6 +216,7 @@ class RunOutputOptions:
     sink: sinks.OutputSink | None = None
     group: bool = False
     annotate_failure: bool = False
+    delivery: BoundedDelivery | None = dc.field(default=None, kw_only=True)
     # `dataclasses.replace` forwards init fields. Keep the generated identity
     # separate so reusing its sink in a new options object remains explicit.
     _synthesized_sink: sinks.OutputSink | None = dc.field(
@@ -236,6 +244,11 @@ class RunOutputOptions:
             self,
             "idle_after",
             _validate_idle_options(self.idle_after, self.on_idle),
+        )
+        object.__setattr__(
+            self,
+            "delivery",
+            _validate_delivery_options(self.delivery),
         )
         # Normalized rather than merely checked, so the drain compares against
         # a member even when the caller spelled the policy as a string, and an
