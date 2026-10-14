@@ -73,10 +73,9 @@ export policy into execution. This option was rejected.
 ## Decision outcome / proposed direction
 
 Provide an inert-by-default `RedactionPolicy` with caller-supplied literal
-strings, compiled text patterns, and a replacement mask. The implemented
-`redacting_hook` wrapper gives explicitly wrapped `ExecEvent` consumers
-sanitized copies. Structured logging and tracing can currently use that wrapper
-before registration with `observe()`.
+strings, compiled text patterns, and a replacement mask. Other observation
+consumers use the `redacting_hook` wrapper to receive sanitized `ExecEvent`
+copies before registration with `observe()`.
 
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
