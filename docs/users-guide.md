@@ -405,9 +405,52 @@ seconds without outward output, then once per further silent interval. The
 default is off. The built-in notification goes to the configured stderr sink or
 `sys.stderr`; it is not captured child output. A pipeline monitors its final
 stdout and all stage stderr streams. `on_idle(total, idle)` replaces the
-built-in notification. Keep the callback and sink writes prompt: they run on
-the command's event loop. A heartbeat reports silence, not a deadlock, and does
-not alter the deadline or exit status.
+built-in notification. Without bounded delivery, the renderer's sink write and
+flush run on the command's event loop; keep them prompt. `on_idle` is always
+called synchronously on that loop, even when bounded delivery is enabled, so
+the callback must also stay prompt. A heartbeat reports silence, not a
+deadlock, and does not alter the deadline or exit status.
+
+To move the built-in heartbeat write off the loop, opt in to bounded delivery
+through `RunOutputOptions`:
+
+<!-- tested-example: bounded-delivery-idle -->
+
+```python
+import io
+import sys
+
+from cuprum import (
+    BoundedDelivery,
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    sh,
+)
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="idle-delivery")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+heartbeat_log = io.StringIO()
+result = python("-c", "import time; time.sleep(0.08)").run_sync(
+    output=RunOutputOptions(
+        idle_after=0.02,
+        delivery=BoundedDelivery(max_queued_bytes=64 * 1024),
+    ),
+    context=ExecutionContext(stderr_sink=heartbeat_log),
+)
+
+assert result.ok
+assert heartbeat_log.getvalue().startswith("[cuprum] still running")
+```
+
+The same option moves echoed child output to one run-owned daemon worker. Its
+single FIFO preserves the order in which the loop enqueues stdout and stderr
+chunks, including in pipelines. `max_queued_bytes` bounds queued payload bytes,
+accounted from each original output chunk before decoding; one payload already
+being written can be in flight separately. If a chunk would exceed the bound,
+Cuprum drops that presentation chunk without blocking the loop and reports its
+byte count as `DROPPED`. Captured output remains complete.
 
 ## Supply input, environment, and a deadline
 
@@ -1259,6 +1302,64 @@ result = python("-c", "print('building')").run_sync(
 assert result.ok and result.stdout == "building\n"
 assert workflow_log.getvalue().startswith("::group::Build")
 ```
+
+#### Keep blocking writes off the run loop
+
+Sink writes and flushes are synchronous by default. A slow destination can
+therefore delay stream reads, timeouts, and cancellation. Select
+`BoundedDelivery` to move echoed output writes and flushes to a shared worker
+for the run:
+
+<!-- tested-example: bounded-delivery-sink -->
+
+```python
+import io
+import sys
+
+from cuprum import (
+    BoundedDelivery,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    sh,
+)
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="bounded-delivery")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+workflow_log = io.StringIO()
+sink = GitHubActionsSink(workflow_log, title="Build", force=True)
+
+result = python("-c", "print('building')").run_sync(
+    output=RunOutputOptions(
+        echo=True,
+        sink=sink,
+        delivery=BoundedDelivery(
+            max_queued_bytes=256 * 1024,
+            drain_grace_s=0.5,
+        ),
+    ),
+)
+assert result.ok and result.stdout == "building\n"
+assert workflow_log.getvalue().startswith("::group::Build")
+```
+
+When `delivery` is omitted, the current synchronous behaviour is unchanged. The
+queue drops and reports a chunk that cannot fit as `DROPPED`; capture and the
+command's exit status are unaffected. A worker `write` or `flush` exception
+disables further delivery and is reported as `DELIVERY_ERROR`, with the
+affected stream identified and no exception text included. The stdout and
+stderr chunks from a command or pipeline share one FIFO in the order the run
+loop enqueues them. Any queued output discarded after a worker failure is also
+reported as `UNDELIVERED`.
+
+At shutdown, Cuprum lets the worker drain for 0.25 seconds by default. Set
+`drain_grace_s` to a finite, non-negative number to choose another bound. If a
+write is still blocked when that grace expires, Cuprum abandons the worker as a
+daemon thread and reports queued and in-flight bytes as `UNDELIVERED`. Python
+cannot forcibly stop a running worker thread, so it may remain alive until the
+destination returns. The run does not close caller-owned destinations; keep a
+destination valid if an abandoned write might later return.
 
 ## Operational reference
 
