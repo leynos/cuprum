@@ -206,10 +206,10 @@ Thresholds that trigger escalation when breached.
   `Verification plan`, O7).
 - [x] (2026-10-14) Task 2: capture accumulators, `capture_events.py`,
   `capture_observation.py`, and the drain-loop wiring. The accumulators landed
-  as `cuprum/_capture_accumulators.py`, `_capture_file.py`, `_capture_decode.py`,
-  and `_capture_types.py` rather than the single `_capture_sink.py` the source
-  plan named, because the module-length ceiling binds; the split seams are
-  recorded in `Decision log`.
+  as `cuprum/_capture_accumulators.py`, `_capture_file.py`,
+  `_capture_decode.py`, and `_capture_types.py` rather than the single
+  `_capture_sink.py` the source plan named, because the module-length ceiling
+  binds; the split seams are recorded in `Decision log`.
 - [x] (2026-10-14) Task 3: thread policies through the single-command and
   pipeline paths; materialize results; cleanup on success/failure/timeout/
   cancellation; storage-failure handling. Landed across
@@ -410,16 +410,16 @@ Thresholds that trigger escalation when breached.
 
 - Observation (M4, gate): the Pylint classic gate runs its *test-target* pass
   over `cuprum/unittests`, so the enabled `C1803`/`C1804`
-  (`use-implicit-booleaness-not-comparison` and its string sibling) and
-  `R0913` apply to the new capture test modules. Eleven findings, all
-  introduced here; exit 24 (16 convention + 8 refactor). A local run that
-  omitted `--disable=too-many-lines` also reported `C0302`, which is **not** a
-  gate failure — `Makefile:449` passes that flag for `PYLINT_TEST_TARGETS`,
-  whose targets are `cuprum/unittests scripts/tests tests/behaviour
-  tests/features`. Impact: `_spill` in `test_capture_spill.py` was restructured
-  to take the `FileBackedCapture` it was already repacking, dropping it to four
-  arguments rather than suppressing `R0913`. Date/Author: 2026-10-15,
-  implementation agent.
+  (`use-implicit-booleaness-not-comparison` and its string sibling) and `R0913`
+  apply to the new capture test modules. Eleven findings, all introduced here;
+  exit 24 (16 convention + 8 refactor). A local run that omitted
+  `--disable=too-many-lines` also reported `C0302`, which is **not** a gate
+  failure — `Makefile:449` passes that flag for `PYLINT_TEST_TARGETS`, whose
+  targets are `cuprum/unittests scripts/tests tests/behaviour tests/features`.
+  Impact: `_spill` in `test_capture_spill.py` was restructured to take the
+  `FileBackedCapture` it was already repacking, dropping it to four arguments
+  rather than suppressing `R0913`. Date/Author: 2026-10-15, implementation
+  agent.
 
 - Observation (M4, gate): the classic Pylint pass runs under **PyPy 8.0.0 /
   Python 3.12**, not CPython — `verify-classic-pylint` asserts
@@ -431,13 +431,19 @@ Thresholds that trigger escalation when breached.
   2026-10-15, implementation agent.
 
 - Observation (M4, gate): the spelling gate caught Oxford violations that the
-  earlier draft introduced — `-ise`/`-isation` forms (`finalise`,
-  `materialisation`), plus `artifact`, `childs`, and `hand-written`. Verified
-  against this branch's merge base rather than against a probe worktree: the
-  sibling worktree available for comparison sat *ahead* of `8c78a5b7`, so its
-  clean result measured a different tree and could not have supported the
-  claim that these findings were pre-existing. Date/Author: 2026-10-15,
-  implementation agent.
+  earlier draft introduced. Four British spellings were written for verbs and
+  nouns whose ending must be `-ize`/`-ization`, and three further words were
+  the American or non-standard choice where the style guide requires the
+  British one: the noun for a build output, the plural of "child", and the
+  compound adjective formed from "hand" and "written". Naming the exact tokens
+  here is what this note did at first, and that re-tripped the gate on its own
+  text — the gate matches literal tokens, so a quoted violation is still a
+  violation. The note therefore describes the classes rather than listing them.
+  Verified against this branch's merge base rather than against a probe
+  worktree: the sibling worktree available for comparison sat *ahead* of
+  `8c78a5b7`, so its clean result measured a different tree and could not have
+  supported the claim that these findings were pre-existing. Date/Author:
+  2026-10-15, implementation agent.
 
 ## Decision log
 
@@ -621,8 +627,8 @@ rather than as a capture nothing compares against.
 
 Retrospective. Three lessons are worth carrying forward.
 
-The first is that a gate's *exit code* is the evidence, not its summary line.
-A Pylint run can print nonzero findings and still report `10.00/10`, and the
+The first is that a gate's *exit code* is the evidence, not its summary line. A
+Pylint run can print nonzero findings and still report `10.00/10`, and the
 classic pass runs under PyPy — not the CPython the same command selects by
 default. Reading the score would have shipped a failing gate.
 
