@@ -312,13 +312,15 @@ rather than a ranked prefix of them.
   default view of 30, and `top = all` and `top = -1` are both rejected. The
   schema module now refuses a report whose `summary.shown` is below
   `summary.families`, so any truncating bound fails the gate loudly instead of
-  being adjudicated as the whole surface. Verified on this branch: `top=0`
-  reports 63 families shown of 63; `top=30` reports 30 shown of 63 and is
+  being adjudicated as the whole surface. Verified on this branch then: `top=0`
+  reported 63 families shown of 63; `top=30` reported 30 shown of 63 and was
   refused. Re-measured after the extraction that removed the last blocking
-  families, and again after the re-adjudication recorded above: 63 families,
-  all 63 allowed by reasoned exceptions, 0 blocking, 0 stale — and at
-  `top = 30`, 30 families with 23 stale entries, which is the false-deletion
-  count the check exists to refuse.
+  families: 63 families, all 63 allowed by reasoned exceptions, 0 blocking, 0
+  stale. The re-adjudication recorded below then performed one deferred
+  extraction and dropped the entry describing it, so the surface is 62 families
+  under 50 entries, all allowed, 0 blocking and 0 stale; at `top = 30` that
+  report emits 30 of the 62 and reports 23 of the 50 entries stale, which is
+  the false-deletion count the check exists to refuse.
 - A gate launched as a script path resolves its sibling modules through the
   `scripts` namespace package, which a development install of the application
   also contributes. The entry point pins its own tree to `sys.path` before
