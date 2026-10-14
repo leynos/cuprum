@@ -74,7 +74,9 @@ export policy into execution. This option was rejected.
 Provide an inert-by-default `RedactionPolicy` with caller-supplied literal
 strings, compiled text patterns, and a replacement mask. Other observation
 consumers use the `redacting_hook` wrapper to receive sanitized `ExecEvent`
-copies before registration with `observe()`.
+copies before registration with `observe()`. Rule normalization and application
+remain private to the policy; adapters and sinks reuse the policy rather than
+duplicating rule handling.
 
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
