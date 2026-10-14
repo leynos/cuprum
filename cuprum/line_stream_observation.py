@@ -19,7 +19,9 @@ import typing as typ
 from contextvars import ContextVar
 
 from cuprum._scope_registration import _IdentityTupleRegistration
-from cuprum.line_stream_events import LineStreamEvent, LineStreamHook
+
+if typ.TYPE_CHECKING:
+    from cuprum.line_stream_events import LineStreamEvent, LineStreamHook
 
 _LOGGER = logging.getLogger(__name__)
 

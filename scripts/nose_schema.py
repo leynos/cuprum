@@ -215,6 +215,75 @@ def require_positive_int(value: object, *, context: str) -> int:
     )
 
 
+def _is_non_negative_integer(value: object) -> typ.TypeIs[int]:
+    """Report whether ``value`` is an integer of at least zero.
+
+    Distinct from :func:`_is_positive_integer` because nose's summary counts
+    are legitimately zero: a clean scan reports ``families: 0, shown: 0``.
+
+    Returns
+    -------
+    typ.TypeIs[int]
+        Whether *value* is an ``int`` of at least zero.
+    """
+    return _is_integer(value) and value >= 0
+
+
+def require_non_negative_int(value: object, *, context: str) -> int:
+    """Validate one required non-negative count read from a report summary."""
+    return _require(
+        value,
+        predicate=_is_non_negative_integer,
+        requirement="a non-negative integer",
+        context=context,
+    )
+
+
+def require_untruncated_surface(report: object) -> None:
+    """Refuse a report whose families array was capped by nose's ranking bound.
+
+    nose reports every family it found in ``summary.families`` but emits only
+    the first ``top`` of them in the ``families`` array, recording how many it
+    emitted in ``summary.shown``. The two disagree only when a bound is
+    binding, and an adjudicating caller must not read a truncated surface as a
+    whole one: the families the cap hides are never matched against an allow
+    list, so ``partition_findings`` reports their entries as stale and
+    instructs the maintainer to delete reasoned exceptions whose duplication is
+    still present. Refusing is what keeps the gate's own stale-entry advice
+    from becoming a wrong instruction.
+
+    Parameters
+    ----------
+    report : object
+        Decoded ``nose query --format json`` report.
+
+    Raises
+    ------
+    GateConfigError
+        If the report does not match the expected schema, or if ``summary``
+        shows the surface was capped.
+    """
+    summary = require_table(
+        require_table(report, context="nose report").get("summary"),
+        context="nose report summary",
+    )
+    total = require_non_negative_int(
+        summary.get("families"), context="nose report summary.families"
+    )
+    shown = require_non_negative_int(
+        summary.get("shown"), context="nose report summary.shown"
+    )
+    if shown < total:
+        msg = (
+            f"nose reported {total} families but emitted only {shown}: "
+            "`tool.nose.top` has saturated the ranked surface, so "
+            f"{total - shown} families were never adjudicated. Raise `top` "
+            f"above {total} (or remove it) and re-run; do not read any stale "
+            "allow entry as an instruction to delete it."
+        )
+        raise GateConfigError(msg)
+
+
 def normalize_findings(report: object) -> list[Finding]:
     """Convert one validated nose report into ordered gate findings.
 

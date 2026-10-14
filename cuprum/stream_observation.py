@@ -66,7 +66,9 @@ def current_stream_operation_hooks() -> tuple[StreamOperationHook, ...]:
     return _stream_operation_hooks.get()
 
 
-class StreamOperationHookRegistration(_IdentityTupleRegistration["StreamOperationHook"]):
+class StreamOperationHookRegistration(
+    _IdentityTupleRegistration["StreamOperationHook"]
+):
     """Registration handle for a stream-operation observation hook.
 
     Detach removes only this handle's own hook by identity rather than

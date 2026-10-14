@@ -113,6 +113,10 @@ _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum._pipeline_stream_fds._BlockingModeGuard.restore",
     "cuprum.control_observation._ControlMeasurement.complete",
     "cuprum.stream_observation._StreamOperationMeasurement.complete",
+    "cuprum._scope_registration._TokenTupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._release",
+    "cuprum._scope_registration._IdentityTupleRegistration._release",
+    "cuprum.pump_span_observation.PumpHopSpanRegistration._release",
 })
 _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters._tracing_line_stream._line_stream_attributes",
