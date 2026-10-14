@@ -5450,6 +5450,7 @@ function. Reusing a shape the rule tolerates is usually cheaper than the
 suppression would have been, because a double whose body does real work, or a
 clock shared from an existing helper, is clearer as well as unremarkable to the
 rule.
+
 ### Code-duplication gate
 
 `make lint` (and the standalone `make duplication` target) runs
