@@ -66,8 +66,10 @@ class RedactionPolicy:
     ----------
     literals:
         Literal strings to replace. A single string or any iterable of strings
-        is coerced to an immutable tuple. Empty strings are rejected because
-        replacing them would insert a mask between every character.
+        is coerced to an immutable tuple, ordered longest first to avoid
+        partially masking a longer literal through its shorter prefix. Empty
+        strings are rejected because replacing them would insert a mask
+        between every character.
     patterns:
         Compiled text regular expressions to replace. A single pattern or any
         iterable of patterns is coerced to an immutable tuple.
@@ -126,7 +128,9 @@ class RedactionPolicy:
             msg = "mask must be a string"
             raise TypeError(msg)
 
-        object.__setattr__(self, "literals", literals)
+        object.__setattr__(
+            self, "literals", tuple(sorted(literals, key=len, reverse=True))
+        )
         object.__setattr__(self, "patterns", patterns)
 
     def apply_text(self, value: str) -> str:
