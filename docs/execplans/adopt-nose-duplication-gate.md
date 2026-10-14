@@ -95,7 +95,14 @@ repository rather than re-derived here.
       ranking budget by measurement rather than assumption.
 - [x] (2026-09-26) Characterized the production duplication cohort.
 - [x] (2026-09-26) Ported the five gate modules with `scripts.`-qualified
-      sibling imports and PEP 723 headers declaring `>=3.14`.
+      sibling imports. One PEP 723 header, on the entry point
+      `scripts/duplication_gate.py`, declares `>=3.14`; the other four are
+      headerless, because a header suppresses `ty`'s resolution of their
+      sibling imports (see Surprises & Discoveries), and `uv run` reads inline
+      metadata only from a script named on the command line, so the entry
+      point is the only module that needs one. The claim here that all five
+      carried headers was never true of a delivered revision; corrected
+      2026-10-14.
 - [x] (2026-09-26) Added `[tool.nose]` and `[tool.duplication_gate]`
       configuration, with the root-relative exclusion glob the detector
       actually honours.

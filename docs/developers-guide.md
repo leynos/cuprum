@@ -1686,6 +1686,18 @@ command boundary calls the two in sequence — query, report, then act on the
 answer — in `_terminate_process_with_wait`, `_escalate_after_grace`, and
 `_settle_after_escalation`.
 
+`_members_remain_to_signal` is that sequence as one helper, beside the probe
+and reporter it uses. Its two callers — `_terminate_process_with_wait` in the
+lifecycle module, for the grace period's first signal, and
+`_escalate_after_grace` here, for the escalation after it — ask exactly this
+question and act on the same answer, so the probe, the diagnostic and the veto
+stay in one frame; a probe taken twice to answer two of the parts separately
+could report on a group that had changed in between. `False` means the target
+had already settled, or holds members this process may not signal and can never
+settle by waiting. The second case has a report attached, while the first has
+nothing to report: a target that is simply gone is the ordinary case rather
+than a failure of the run.
+
 `_await_group_exit` polls because a process group has no completion event to
 await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`
 so a group that takes seconds to die is not re-probed at full frequency. The
@@ -2829,6 +2841,16 @@ importing the private modules directly.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
   `Tracer` protocols. `tracing_adapter` re-exports both;
   `_tracing_protocols.py` remains a compatibility re-export only.
+- `cuprum/_enum_parse.py` — `parse_enum_member` coerces a policy given as
+  either its enum member or its string spelling, and rejects an unknown
+  spelling with a `ValueError` naming the field and the accepted values. It is
+  a leaf importing nothing from `cuprum`, because its two callers sit on
+  opposite sides of the package's layering and neither may import the other:
+  `cuprum.echo_events._parse_broken_pipe_policy` coerces `BrokenPipePolicy`
+  from a module the `cuprum.sh` package itself imports, while
+  `cuprum.sh.execution._parse_process_group_policy` coerces the
+  `ProcessGroupPolicy` that module defines, so importing the one from the other
+  would close a cycle rather than share a helper.
 
 Benchmarks (`benchmarks/`):
 
@@ -6976,12 +6998,14 @@ running belongs in `_process_lifecycle` alongside `_shielded_cleanup`. Deciding
 `_process_signal`. The idle heartbeat's timing belongs in `_idle_heartbeat` and
 its rendering and write-failure policy in `_idle_diagnostic`.
 
-`cuprum/_subprocess_execution.py` stays the composition root. It is what calls
-`_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
-a change in *which* streams a run consumes is an orchestration change and
-belongs there, while a change to how one `_StreamConfig` is assembled or how
-its consumer task is created belongs in `_subprocess_streams`. The split is
-what keeps the execution module under the Pylint module ceiling now that the
+`cuprum/_subprocess_execution.py` stays the composition root. It spawns through
+`_start_owned_process`, decides in `_await_direct_completion` which streams to
+consume, and assembles the result in `_build_command_result`;
+`_build_stream_config` and `_spawn_stream_consumers` it only re-exports, so a
+change in *which* streams a run consumes is an orchestration change and belongs
+there, while a change to how one `_StreamConfig` is assembled or how its
+consumer task is created belongs in `_subprocess_streams`. The split is what
+keeps the execution module under the Pylint module ceiling now that the
 idle-heartbeat wiring reaches into the stream configs; see the
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
@@ -7039,7 +7063,13 @@ path, and final `CommandResult` assembly, re-exporting stream-consumer
 construction and stream configuration from `_subprocess_streams`.
 `_StreamConsumerSpawnContext` is the private bundle of stream configuration,
 PID, and the stdout/stderr diagnostics collectors that the streamed run creates
-before handing those values to the consumer tasks.
+before handing those values to the consumer tasks. `_reconcile_shielded` is the
+reconciliation both pre-gather exit routes owe: it drains the consumers under
+one `_shielded_cleanup`, and takes the run's capture setting rather than
+deciding for itself, because the routes disagree about what the drained text is
+for — the exit-wait deadline hands it to the caller's `TimeoutExpired`, while
+the route re-raising some other failure settles promptly and keeps
+`capture=False` so the capture grace is not spent on text nobody will read.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
@@ -7053,6 +7083,18 @@ reader tasks. It was split out of `_subprocess_execution` to keep both modules
 within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
 so callers and the tests that monkeypatch them by module path resolve the same
 names as before.
+
+`_StreamSpawnInputs` is the value that construction passes on, and
+`_prepare_stream_spawn` is what builds it: it reads the execution, allocates
+the discard latch and the two relay-diagnostics collectors, and returns them
+alongside the spawn context. Building those inputs is deliberately infallible,
+because every streamed run reaches the call with a live child and nothing else
+started, so a failure here would leave a spawned child unwired rather than a
+run to unwind. `_build_run_task_ownership` starts the stdin writer and both
+consumers as one owned set; only the direct run and the line iterator call it,
+because neither has anything to reclaim afterwards, while the owned handle
+builds its equivalent inline — attaching there is all-or-nothing, and it must
+record which tasks it started so it can reclaim them when a later start fails.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_context`, and
@@ -7420,6 +7462,19 @@ the settle's failure can be ranked against it, and the cancellation has to be
 re-raised even when the block itself is already failing. Absorbing either
 inside the helper would decide too early; raising would abandon the settle and
 leave a handle whose `result` stays `None`.
+
+`_arbitrate` is the ranking rule those two callers share, stated once rather
+than written out per caller now that the steps report their failures as values.
+The one clause that differs between them is whether an ordinary failure is
+suppressed when the block already failed, and that difference is passed as the
+presence of a pending exception rather than as a strategy flag: the deferred
+case is a fact about the caller's own state, so a caller cannot select
+suppression without also supplying the exception it is suppressing for. The
+rank is otherwise unchanged — cancellation outranks an ordinary failure and is
+never suppressible, and the stop's failure outranks the settle's. The helper
+raises what it owes rather than returning it, because every caller either
+raises it or leaves it to the caller above, and a returned exception invites
+one to be dropped.
 
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
