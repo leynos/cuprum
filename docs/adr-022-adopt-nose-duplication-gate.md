@@ -215,12 +215,12 @@ rather than a ranked prefix of them.
   (`SKYLOS_PRODUCTION_TARGETS`, `SKYLOS_EXCLUDE_FOLDERS`) rather than
   introducing a second convention.
 - An unbounded surface makes re-adjudication a recurring cost, not a
-  one-off: `main`'s own growth re-enters the branch's scan, and the entry
-  count is a snapshot rather than a fixed budget. The gate was re-adjudicated
-  a second time when this ADR's branch was rebased onto a `main` that had
-  added families the original 24 entries never described. Four extractions
-  and four exception changes followed, and the surface settled at 63 families
-  under 51 entries. The extractions were:
+  one-off: `main`'s own growth re-enters the branch's scan, and the entry count
+  is a snapshot rather than a fixed budget. The gate was re-adjudicated a
+  second time when this ADR's branch was rebased onto a `main` that had added
+  families the original 24 entries never described. Four extractions and four
+  exception changes followed, and the surface settled at 63 families under 51
+  entries. The extractions were:
   - the whitelist-field rendering shared by the two drill-down log records
     in `cuprum/adapters/logging_adapter.py`;
   - the enum coercion behind `cuprum.echo_events._parse_broken_pipe_policy`
@@ -238,12 +238,13 @@ rather than a ranked prefix of them.
   `None` guard, a two-module import prologue, the 26-location
   `if typ.TYPE_CHECKING:` family, and a two-line `None` guard. The
   `cuprum/_process_handle/control.py::_terminate_shielded ~
-  cuprum/_process_lifecycle.py::_terminate_process` entry was removed rather
-  than widened: `main` had changed `_terminate_process_with_wait` to take a
-  `_SettlementTarget` value, which moved the two inlined predicate pairs into
-  separate functions and dissolved the window they shared. The same three-way
-  check the previous consequence describes applies — the removal records that
-  the window went away, not that the call sites stopped resembling each other.
+  cuprum/_process_lifecycle.py::_terminate_process`
+  entry was removed rather than widened: `main` had changed
+  `_terminate_process_with_wait` to take a `_SettlementTarget` value, which
+  moved the two inlined predicate pairs into separate functions and dissolved
+  the window they shared. The same three-way check the previous consequence
+  describes applies — the removal records that the window went away, not that
+  the call sites stopped resembling each other.
 
 ## Rejected alternatives
 
