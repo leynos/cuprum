@@ -830,3 +830,48 @@ three lists that would otherwise silently drop the module — the `ty` exclude
 set, `DUPLICATION_TEST_TARGETS`, and `DUPLICATION_TEST_SOURCES` — and a silent
 drop is exactly the failure mode here: 28 tests collect across the two files
 with no duplicate node IDs (21 in the detector module, 7 in the new one).
+
+### Closing the second assessment's findings (2026-10-14)
+
+A second ExecPlan assessment re-read the branch and returned findings that
+split it into assessed-and-operational but not complete against this plan.
+
+**The fill guard did not cover the stream's own closure.** `_filled_temporary`
+entered the temporary with `with ... as stream:` and guarded only the body, so a
+`__exit__` that raised while flushing or closing escaped with the temporary
+still on disk. The path is now read off the stream before the fill starts and
+the guard wraps the `with`, which closes the interval without widening the
+outer guard's obligation. The new case is a *close*-failure stream, not a
+second write-failure stream: reverting the guard to its inner position fails
+only the `[close]` parametrization, and the `[write]` case still passes, so the
+new coverage discriminates rather than duplicating.
+
+**`_arbitrate` kept the promised shape and broke the promised semantics.** The
+extraction recorded above passed `suppress_failure=True` from the teardown and
+`False` from the public stop. That is a policy flag, not the pending exception
+being handed over, and it answers wrongly for any third caller whose flag and
+block exception disagree. It now takes `pending: BaseException | None` and
+derives suppression from its presence. Both directions are mutation-checked
+against `cuprum/unittests/test_settle_arbitration.py`: a teardown passing
+`None` fails
+`test_an_ordinary_failure_is_suppressed_when_the_block_already_failed`, and a
+public stop passing a sentinel fails `test_the_stops_failure_is_the_one_raised`.
+
+**The installer probes interpolated the executable path unquoted.** A first
+repair quoted `NOSE_BIN` in both probes and covered it with a test that put the
+spaces in `NOSE_TOOLS_DIR`. CodeScene then flagged `_run_install_nose` as a
+Large Method (71 lines against a 70-line threshold) and over its argument limit
+(5 against 4) — both introduced by the `tools_directory_name` parameter that
+test needed. Setting the scratch root itself as the spaced directory measures
+the same thing, because the recipe only ever sees the absolute path, and
+repeating the `mkdir` in the two tests removes the parameter and both findings.
+
+That rewrite then found a defect the first version had masked. Spacing the
+scratch root puts a space in `CARGO_BINSTALL` as well as `NOSE_BIN`, and the
+recipe interpolated the installer unquoted, so the shell split it into two
+words and exited 127 with `/bin/sh: .../nose: No such file or directory`. The
+installer is now quoted through the same `shell_quote` macro, and reverting
+just that quoting fails the reinstall case. The narrower test reported green
+over a recipe that was still broken: an unquoted executable only breaks when
+its own path contains the space, so a test that spaces a *different* path
+variable cannot see it.
