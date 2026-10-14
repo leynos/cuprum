@@ -20,6 +20,32 @@ if typ.TYPE_CHECKING:
 _DEFAULT_MASK = "[REDACTED]"
 
 
+def _normalize_literals(literals: str | cabc.Iterable[str]) -> tuple[str, ...]:
+    """Validate literal rules and order longer matches before their prefixes."""
+    values = (literals,) if isinstance(literals, str) else tuple(literals)
+    if any(not isinstance(value, str) for value in values):
+        msg = "literals must contain only strings"
+        raise TypeError(msg)
+    if any(not value for value in values):
+        msg = "literals must not contain empty strings"
+        raise ValueError(msg)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _normalize_patterns(
+    patterns: re.Pattern[str] | cabc.Iterable[re.Pattern[str]],
+) -> tuple[re.Pattern[str], ...]:
+    """Validate compiled text rules while preserving their configured order."""
+    values = (patterns,) if isinstance(patterns, re.Pattern) else tuple(patterns)
+    if any(
+        not isinstance(pattern, re.Pattern) or not isinstance(pattern.pattern, str)
+        for pattern in values
+    ):
+        msg = "patterns must contain compiled text regular expressions"
+        raise TypeError(msg)
+    return values
+
+
 def _substitute_pattern(pattern: re.Pattern[str], value: str, mask: str) -> str:
     """Substitute matches with *mask* as literal text."""
     return pattern.sub(lambda _match: mask, value)
@@ -53,6 +79,28 @@ class RedactionError(RuntimeError):
         super().__init__(
             f"Redaction {rule_kind} rule {rule_index} failed ({error_type})",
         )
+
+
+def _apply_pattern_rules(
+    patterns: tuple[re.Pattern[str], ...], value: str, mask: str
+) -> str:
+    """Apply ordered pattern rules, raising only safe failure metadata."""
+    redacted = value
+    for index, pattern in enumerate(patterns):
+        error_type: str | None = None
+        try:
+            redacted = _substitute_pattern(pattern, redacted, mask)
+        except Exception as error:  # ruff: ignore[blind-except] - any rule failure must stop export
+            # Keep only safe type metadata; the exception text can include
+            # the value being redacted.
+            error_type = type(error).__name__
+        if error_type is not None:
+            raise RedactionError(
+                rule_kind="pattern",
+                rule_index=index,
+                error_type=error_type,
+            ) from None
+    return redacted
 
 
 @dc.dataclass(frozen=True, slots=True, init=False)
@@ -103,34 +151,13 @@ class RedactionPolicy:
 
     def __post_init__(self) -> None:
         """Coerce rule collections and validate their element types."""
-        literals = (
-            (self.literals,) if isinstance(self.literals, str) else tuple(self.literals)
-        )
-        if any(not isinstance(value, str) for value in literals):
-            msg = "literals must contain only strings"
-            raise TypeError(msg)
-        if any(not value for value in literals):
-            msg = "literals must not contain empty strings"
-            raise ValueError(msg)
-
-        patterns = (
-            (self.patterns,)
-            if isinstance(self.patterns, re.Pattern)
-            else tuple(self.patterns)
-        )
-        if any(
-            not isinstance(pattern, re.Pattern) or not isinstance(pattern.pattern, str)
-            for pattern in patterns
-        ):
-            msg = "patterns must contain compiled text regular expressions"
-            raise TypeError(msg)
+        literals = _normalize_literals(self.literals)
+        patterns = _normalize_patterns(self.patterns)
         if not isinstance(self.mask, str):
             msg = "mask must be a string"
             raise TypeError(msg)
 
-        object.__setattr__(
-            self, "literals", tuple(sorted(literals, key=len, reverse=True))
-        )
+        object.__setattr__(self, "literals", literals)
         object.__setattr__(self, "patterns", patterns)
 
     def apply_text(self, value: str) -> str:
@@ -150,9 +177,12 @@ class RedactionPolicy:
         ------
         TypeError
             If *value* is not a string.
-        RedactionError
-            If a regular-expression substitution fails. The error identifies
-            the rule without retaining or formatting the source text.
+
+        Notes
+        -----
+        Regular-expression substitution failures propagate as
+        :class:`RedactionError`. The error identifies the rule without
+        retaining or formatting the source text.
         """
         if not isinstance(value, str):
             msg = "value must be a string"
@@ -163,21 +193,7 @@ class RedactionPolicy:
         redacted = value
         for literal in self.literals:
             redacted = str.replace(redacted, literal, self.mask)
-        for index, pattern in enumerate(self.patterns):
-            error_type: str | None = None
-            try:
-                redacted = _substitute_pattern(pattern, redacted, self.mask)
-            except Exception as error:  # ruff: ignore[blind-except] - any rule failure must stop export
-                # Keep only safe type metadata; the exception text can include
-                # the value being redacted.
-                error_type = type(error).__name__
-            if error_type is not None:
-                raise RedactionError(
-                    rule_kind="pattern",
-                    rule_index=index,
-                    error_type=error_type,
-                ) from None
-        return redacted
+        return _apply_pattern_rules(self.patterns, redacted, self.mask)
 
     def redact_event(self, event: ExecEvent) -> ExecEvent:
         """Return a sanitized event copy for an opted-in consumer.
