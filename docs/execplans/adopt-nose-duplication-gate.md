@@ -926,3 +926,46 @@ The third assessment read a head that both corrections have now superseded, so
 its acceptance is candidate-bound and does not transfer. Hosted checks were
 restarted on `a6dfbffd1` and are the live evidence for it; the earlier
 candidate's results are **not** carried forward.
+
+### Re-anchoring the assessment and entering review (2026-10-14)
+
+The two comment corrections and this record moved the head twice more, so the
+assessment was re-anchored rather than assumed to have carried over. That is
+the same discipline the earlier staleness findings taught: an approval is bound
+to a commit, and a commit that moves without the approval following it leaves
+the approval behind.
+
+**The re-anchor succeeded on the delta, and the reply draws the right line.**
+CodeRabbit verified the two-commit comparison itself through the GitHub API
+rather than accepting the description, confirmed the three-file diff was the
+two comment corrections plus this 46-line record, re-anchored its static
+assessment to `af95e2cfe`, and kept the 50-entry-manifest versus 62-family-scan
+distinction intact. It then declined to claim more than it had done: it did not
+inspect checks, run tests, or reproduce the detector measurements. That is a
+statement about *its* inspection, not a finding about the branch, and the two
+are kept separate here deliberately — reading the second as if it were the
+first is exactly how an unverified claim gets promoted to evidence.
+
+**Hosted CI on `af95e2cfe` is terminal and green.** Asserted against the exact
+head SHA rather than inherited: 25 check runs, 22 `success`, 3 `skipped`, none
+non-terminal, and no conclusion outside those two. The skips are
+`Kody Code Review`, `automerge`, and `extended`, recorded as skipped and not
+folded into a pass. `coverage` and `benchmark-ratchet` both appeared late
+because they wait on their `needs` jobs, and both ended `success`; `coverage`
+is the strongest single control because it executes the full suite on the
+revision it ran against. `mergeStateStatus` moved from `BLOCKED` to `CLEAN`.
+
+**Readiness did what the plan predicted.** The PR was marked ready under the
+normal lifecycle identity, reading back `isDraft=false` with base and head
+unchanged. The formal review then began on its own: the previously observed
+CodeRabbit status was "Review skipped: draft pull request", and within the same
+minute of readiness it became "Review in progress". That confirms the draft
+skip described in the assessment conversation was about the *formal* review and
+never about the assessment replies, which had been answered throughout on a
+draft. It also means no `comenq-coderabbit` dispatch is warranted while that
+review is in flight — adding one would be the duplicate request the process
+forbids.
+
+One limit carried forward without change: CodeScene's approval arrives
+automatically per commit, so its `APPROVED` on this head is corroboration
+rather than an independent review of the plan.
