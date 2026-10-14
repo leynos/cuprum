@@ -165,7 +165,6 @@ def _run_install_nose(
     installed_version: str | None,
     installed_after: str = NOSE_VERSION,
     binstall_exit_code: int = 0,
-    tools_directory_name: str = "tools",
 ) -> InstallerInvocation:
     """Run the real target against stubbed detector and installer binaries.
 
@@ -182,9 +181,6 @@ def _run_install_nose(
         delivered the wrong detector.
     binstall_exit_code : int
         The stub installer's exit status. Non-zero models a failed install.
-    tools_directory_name : str
-        The basename of the directory holding the detector. A value containing
-        spaces exercises the recipe's quoting of the executable path.
 
     Returns
     -------
@@ -199,7 +195,7 @@ def _run_install_nose(
     # single-case test still gets the `tmp_path` it asked for, by the same rule.
     scratch = _next_scratch_root(tmp_path)
 
-    tools = scratch / tools_directory_name
+    tools = scratch / "tools"
     tools.mkdir()
     (scratch / "payload").mkdir()
     nose_bin = tools / "nose"
@@ -318,15 +314,14 @@ class TestMakeInstallNose:
         """A cached detector under a path with spaces is still found and run.
 
         The recipe's probes invoke the executable through the shell, so an
-        unquoted ``NOSE_BIN`` splits a directory name containing a space into
-        two words. The probe then runs a binary that does not exist, reads no
-        version, and reports the cached detector as absent.
+        unquoted ``NOSE_BIN`` splits a path containing a space into two words.
+        The probe then runs a binary that does not exist, reads no version, and
+        reports the cached detector as absent. A spaced ancestor is enough to
+        provoke that: the recipe sees the whole absolute path either way.
         """
-        invocation = _run_install_nose(
-            tmp_path,
-            installed_version=NOSE_VERSION,
-            tools_directory_name="nose tools",
-        )
+        spaced = tmp_path / "nose tools"
+        spaced.mkdir()
+        invocation = _run_install_nose(spaced, installed_version=NOSE_VERSION)
 
         assert invocation.result.returncode == 0, invocation.result.stderr
         assert "already installed" in invocation.result.stdout, (
@@ -341,11 +336,9 @@ class TestMakeInstallNose:
         self, tmp_path: Path
     ) -> None:
         """A reinstall into a path with spaces still verifies the pin."""
-        invocation = _run_install_nose(
-            tmp_path,
-            installed_version="0.19.0",
-            tools_directory_name="nose tools",
-        )
+        spaced = tmp_path / "nose tools"
+        spaced.mkdir()
+        invocation = _run_install_nose(spaced, installed_version="0.19.0")
 
         assert invocation.result.returncode == 0, (
             "Installing into a path containing spaces must succeed. "

@@ -548,7 +548,8 @@ install-nose: ## Install the pinned nose duplication detector
 	else \
 	  printf "Installing nose %s into %s\n" "$(NOSE_VERSION)" "$(NOSE_TOOLS_DIR)"; \
 	  mkdir -p "$(NOSE_TOOLS_DIR)"; \
-	  $(CARGO_BINSTALL) --no-confirm --disable-strategies compile,quick-install \
+	  $(call shell_quote,$(CARGO_BINSTALL)) \
+	    --no-confirm --disable-strategies compile,quick-install \
 	    --install-path "$(NOSE_TOOLS_DIR)" \
 	    --git https://github.com/corca-ai/nose 'nose-cli@$(NOSE_VERSION)' || exit $$?; \
 	  installed=$$($(call shell_quote,$(NOSE_BIN)) --version 2>/dev/null) || exit $$?; \
