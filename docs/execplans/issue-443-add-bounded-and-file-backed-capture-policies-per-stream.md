@@ -204,22 +204,34 @@ Thresholds that trigger escalation when breached.
   `uv run pytest --doctest-modules cuprum/capture_policy.py -q` reports
   `3 passed`; the per-stream independence property was mutation-checked (see
   `Verification plan`, O7).
-- [ ] Task 2: `_capture_sink.py` accumulators, `capture_events.py`,
-  `capture_observation.py`, and the drain-loop wiring in `_streams.py`.
-- [ ] Task 3: thread policies through the single-command and pipeline paths;
-  materialize results; cleanup on success/failure/timeout/cancellation;
-  storage-failure handling.
-- [ ] Task 4: unit tests, BDD feature and behaviour tests, documentation
-  updates. Tests landed and green: `test_capture_cleanup.py`,
+- [x] (2026-10-14) Task 2: capture accumulators, `capture_events.py`,
+  `capture_observation.py`, and the drain-loop wiring. The accumulators landed
+  as `cuprum/_capture_accumulators.py`, `_capture_file.py`, `_capture_decode.py`,
+  and `_capture_types.py` rather than the single `_capture_sink.py` the source
+  plan named, because the module-length ceiling binds; the split seams are
+  recorded in `Decision log`.
+- [x] (2026-10-14) Task 3: thread policies through the single-command and
+  pipeline paths; materialize results; cleanup on success/failure/timeout/
+  cancellation; storage-failure handling. Landed across
+  `_subprocess_stream_run.py`, `_subprocess_stream_post_exit.py`,
+  `_capture_cleanup.py`, `_pipeline_results.py`, and
+  `cuprum/sh/_capture_options.py`.
+- [x] (2026-10-15) Task 4: unit tests, BDD feature and behaviour tests,
+  documentation updates. Tests landed and green: `test_capture_cleanup.py`,
   `test_capture_accumulator.py`, `test_capture_spill.py`,
   `test_capture_spill_failure.py`, `test_capture_timeout.py`,
   `test_bounded_capture_drain.py`, `tests/behaviour/test_bounded_capture.py`
   with `tests/features/bounded_capture.feature`, and the runtime half of O9 in
   `test_public_api.py`. Non-vacuity measured for each (see
-  `Surprises & discoveries`). Remaining: `test_maturin_build.py` snapshot
-  regeneration, and the `docs/cuprum-design.md`, migration-guide, and roadmap
-  updates.
-- [ ] Push and open the draft pull request.
+  `Surprises & discoveries`). Documentation landed in `docs/users-guide.md`,
+  `docs/v0-2-0-migration-guide.md`, `docs/roadmap.md`, and
+  `docs/cuprum-design.md`.
+- [x] (2026-10-15) Clear the Pylint, spelling, and formatting findings the
+  capture work introduced. `make pylint-classic` exits 0 with both passes at
+  10.00/10; `make spelling`, `make check-fmt`, and `make markdownlint` each
+  exit 0.
+- [ ] Run the full commit-gate set through `scrutineer`, then push and open
+  the draft pull request.
 
 ## Surprises & discoveries
 
@@ -396,6 +408,37 @@ Thresholds that trigger escalation when breached.
   fails with `AttributeError` rather than passing vacuously. Date/Author:
   2026-10-14, implementation agent.
 
+- Observation (M4, gate): the Pylint classic gate runs its *test-target* pass
+  over `cuprum/unittests`, so the enabled `C1803`/`C1804`
+  (`use-implicit-booleaness-not-comparison` and its string sibling) and
+  `R0913` apply to the new capture test modules. Eleven findings, all
+  introduced here; exit 24 (16 convention + 8 refactor). A local run that
+  omitted `--disable=too-many-lines` also reported `C0302`, which is **not** a
+  gate failure — `Makefile:449` passes that flag for `PYLINT_TEST_TARGETS`,
+  whose targets are `cuprum/unittests scripts/tests tests/behaviour
+  tests/features`. Impact: `_spill` in `test_capture_spill.py` was restructured
+  to take the `FileBackedCapture` it was already repacking, dropping it to four
+  arguments rather than suppressing `R0913`. Date/Author: 2026-10-15,
+  implementation agent.
+
+- Observation (M4, gate): the classic Pylint pass runs under **PyPy 8.0.0 /
+  Python 3.12**, not CPython — `verify-classic-pylint` asserts
+  `("pypy", (3, 12), (8, 0, 0))` before the pass runs. Measuring with
+  `uv tool run --python 3.12` uses CPython 3.12, a different interpreter for a
+  gate that pins PyPy. The exit code is the signal, not the "rated at N/10"
+  line: a run can print nonzero findings and still read `10.00/10`, so a
+  citation of the score alone would have hidden a failing gate. Date/Author:
+  2026-10-15, implementation agent.
+
+- Observation (M4, gate): the spelling gate caught Oxford violations that the
+  earlier draft introduced — `-ise`/`-isation` forms (`finalise`,
+  `materialisation`), plus `artifact`, `childs`, and `hand-written`. Verified
+  against this branch's merge base rather than against a probe worktree: the
+  sibling worktree available for comparison sat *ahead* of `8c78a5b7`, so its
+  clean result measured a different tree and could not have supported the
+  claim that these findings were pre-existing. Date/Author: 2026-10-15,
+  implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -560,7 +603,49 @@ Thresholds that trigger escalation when breached.
 
 ## Outcomes & retrospective
 
-To be completed at the end of each milestone.
+Delivered: capture is a per-stream policy. `RunOutputOptions` gained
+`capture_stdout` and `capture_stderr`, each naming one of `FullCapture`,
+`BoundedCapture(max_bytes=N)`, or `FileBackedCapture(...)`, with a stream left
+at `None` inheriting the existing `capture` shorthand so every current caller
+resolves exactly as before. `CommandResult.captures` and
+`PipelineResult.captures` report what each stream's policy actually did —
+`policy`, `storage`, `total_bytes`, `dropped_bytes`, `truncated`, `path`,
+`owned`, `storage_failed` — and `capture_events.py` plus
+`capture_observation.py` expose the same facts as observable events.
+
+The acceptance criterion that drove the design is met and witnessed: a bound
+never reaches the relay. `tests/behaviour/test_bounded_capture.py` runs real
+two-stage pipelines and reads the *second* stage's verdict, so a bound that had
+leaked into what a stage hands downstream would show as a shortened count
+rather than as a capture nothing compares against.
+
+Retrospective. Three lessons are worth carrying forward.
+
+The first is that a gate's *exit code* is the evidence, not its summary line.
+A Pylint run can print nonzero findings and still report `10.00/10`, and the
+classic pass runs under PyPy — not the CPython the same command selects by
+default. Reading the score would have shipped a failing gate.
+
+The second is that a comparison tree must be *the* baseline, not merely *a*
+tree. A sibling worktree was available that appeared to be main, and measuring
+it produced a clean result that would have supported a false claim that the
+findings were pre-existing. It sat ahead of this branch's merge base, so it was
+a different tree; the claim was withdrawn and the findings fixed as this
+branch's own. The same trap had already been sprung twice earlier in this task
+(a wrong `ty` version, then an inherited diagnostic count), which is why the
+baseline is now named by commit rather than by an available checkout.
+
+The third is that document harnesses have blind spots worth knowing.
+`tests/behaviour/test_documentation_examples_behaviour.py` executes the
+`tested-example` fences in `README.md`, `docs/users-guide.md`, and
+`docs/v0-2-0-migration-guide.md`, but not those in `docs/cuprum-design.md` or
+`docs/roadmap.md`. Three documented claims about this feature were wrong and
+only running the code found them.
+
+Known limitation, documented rather than fixed: `FileBackedCapture` in
+byte-exact mode reads the whole spill file back to return the child's bytes,
+which is O(stream size) and so does not carry the bounded-memory guarantee that
+text mode does. This is stated in `docs/users-guide.md`.
 
 ## Context and orientation
 
