@@ -95,6 +95,8 @@ class RedactionPolicy:
         object.__setattr__(self, "literals", literals)
         object.__setattr__(self, "patterns", patterns)
         object.__setattr__(self, "mask", mask)
+        # init=False keeps constructor inputs broader than stored field types;
+        # dataclasses therefore leaves post-initialization to this constructor.
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -196,6 +198,7 @@ class RedactionPolicy:
             return event
 
         argv = tuple(self.apply_text(value) for value in event.argv)
+        # Non-string overlay values such as UNSET are deletion markers, not text.
         env = (
             None
             if event.env is None
