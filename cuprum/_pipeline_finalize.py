@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -110,6 +111,7 @@ def _run_pipeline_after_hooks(
 
 
 async def _reconcile_pipeline_run_failure(
+    config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
     pending_tasks: list[asyncio.Task[None]],
     run_error: BaseException,
@@ -123,6 +125,11 @@ async def _reconcile_pipeline_run_failure(
     the second set pending.
     """
     await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
+    await _close_delivery_worker(
+        config.delivery_worker,
+        drain_grace_s=config.delivery_grace_s,
+    )
+    config.sink_bracket.close(outcome=_outcome_for_error(run_error))
     after_process_cleanup()
     await _drain_tasks_during_cleanup(
         pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
@@ -137,9 +144,9 @@ async def _finalize_pipeline_run_failure(
 ) -> None:
     """Close the sink, settle spawned stages, and drain after run failure."""
     outcome = _outcome_for_error(run_error)
-    config.sink_bracket.close(outcome=outcome)
     await _shielded_cleanup(
         _reconcile_pipeline_run_failure(
+            config,
             spawn,
             observers.pending_tasks,
             run_error,
@@ -161,6 +168,12 @@ async def _finalize_pipeline_timeout(
 ) -> None:
     """Report a pipeline timeout and finalize its sink and observe tasks."""
     observations = observers.observations
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            config.delivery_worker,
+            drain_grace_s=config.delivery_grace_s,
+        ),
+    )
     config.sink_bracket.close(outcome=_outcome_for_error(timeout_error))
     _report_pipeline_timeout_expiry(
         observations,

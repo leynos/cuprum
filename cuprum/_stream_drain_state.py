@@ -3,9 +3,10 @@
 A drain of one subprocess stream owns three small pieces of mutable state:
 the collector for handled echo-disablement records that becomes
 ``CommandResult.relay_fallbacks``, the guard that stops further echo writes
-after the first handled failure, and the cursor recording whether a mirrored
-sink is mid-line for the idle heartbeat. ``cuprum._streams`` re-exports these
-names, so importers of that module keep working unchanged.
+after the first handled sink failure, and the cursor recording whether a
+mirrored sink is mid-line for the idle heartbeat. Bounded delivery may append
+multiple saturation records while leaving echo enabled. ``cuprum._streams``
+re-exports these names, so importers of that module keep working unchanged.
 """
 
 from __future__ import annotations
@@ -21,9 +22,9 @@ if typ.TYPE_CHECKING:
 class _RelayDiagnostics:
     """Per-drain collector for handled echo-disablement records.
 
-    One collector belongs to one command stream. Because the echo guard stops
-    any later echo write after the first handled failure, a drain appends at
-    most one :class:`~cuprum.echo_events.RelayFallback` here.
+    One collector belongs to one command stream. A synchronous handled sink
+    failure disables that drain, while bounded queue saturation can append a
+    record for each rejected chunk.
     """
 
     fallbacks: list[RelayFallback] = dc.field(default_factory=list)

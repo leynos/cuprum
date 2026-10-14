@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
+    BoundedDelivery,
     CommandResult,
     ExecutionContext,
     IOOptions,
@@ -859,6 +860,43 @@ def test_public_output_bound_reaches_echo_sink(
         result = _execute_bounded(target, is_sync=is_sync, case=case)
 
     _assert_bounded_public_echo(result, case)
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
+def test_pipeline_bounded_delivery_uses_shared_worker_for_echoed_streams(
+    is_sync: bool,
+) -> None:
+    """One pipeline worker delivers final stdout and every stage's stderr."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python(
+        "-c",
+        "import sys; sys.stdout.write('pipeline-out'); "
+        "sys.stderr.write('producer-err\\n')",
+    )
+    consumer = python("-c", "import sys; sys.stdout.write(sys.stdin.read())")
+    pipeline = producer | consumer
+    sink = io.StringIO()
+    options = RunOutputOptions(
+        capture=True,
+        echo=True,
+        delivery=BoundedDelivery(max_queued_bytes=256),
+    )
+    context = ExecutionContext(stdout_sink=sink, stderr_sink=sink)
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (
+            pipeline.run_sync(output=options, context=context)
+            if is_sync
+            else asyncio.run(pipeline.run(output=options, context=context))
+        )
+
+    assert result.ok is True
+    assert result.stdout == "pipeline-out"
+    assert result.stages[0].stderr == "producer-err\n"
+    assert "pipeline-out" in sink.getvalue()
+    assert "producer-err" in sink.getvalue()
+    assert all(stage.relay_fallbacks == () for stage in result.stages)
 
 
 # The producer names its streams so the final stage's stdout is distinguishable

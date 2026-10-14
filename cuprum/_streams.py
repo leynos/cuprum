@@ -64,6 +64,7 @@ if typ.TYPE_CHECKING:
     import codecs
     import collections.abc as cabc
 
+    from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum.stream_observation import _StreamOperationMeasurement
 
 
@@ -86,6 +87,8 @@ class _StreamConfig:
     errors: str
     # Profiled private read size; production callers use the default.
     read_size: int = _READ_SIZE
+    # Optional run-owned writer shared across stdout/stderr drains.
+    delivery: _DeliveryWorker | None = None
     # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
     # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
     # accepting a line past a size limit (GitHub Actions job logs end at a

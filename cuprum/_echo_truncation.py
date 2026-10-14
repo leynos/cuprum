@@ -64,10 +64,11 @@ def _validate_bounded_echo_encoding(encoding: str, errors: str) -> None:
 
 @dc.dataclass(frozen=True, slots=True)
 class _FinishedEchoLine:
-    """Bytes ready for one echo write and the source bytes omitted from it."""
+    """One bounded echo payload and its source-byte accounting."""
 
     payload: bytes
     dropped_bytes: int
+    source_bytes: int
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -167,7 +168,11 @@ class _EchoLineLimiter:
             else 0,
         )
         if source_line_bytes + len(ending) <= self.max_line_bytes:
-            return _FinishedEchoLine(line + finalization.ending, 0)
+            return _FinishedEchoLine(
+                line + finalization.ending,
+                0,
+                source_line_bytes + len(ending),
+            )
         settings = _EchoEncoding(encoding, errors, is_text_sink)
 
         retained, encoded = self._bounded_prefix(
@@ -189,7 +194,11 @@ class _EchoLineLimiter:
             dropped=dropped,
             settings=settings,
         )
-        return _FinishedEchoLine(encoded + marker + finalization.ending, dropped)
+        return _FinishedEchoLine(
+            encoded + marker + finalization.ending,
+            dropped,
+            source_line_bytes + len(ending),
+        )
 
     def _bounded_prefix(
         self,

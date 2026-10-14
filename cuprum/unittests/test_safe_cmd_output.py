@@ -15,7 +15,15 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, sh
-from cuprum.sh import CommandResult, ExecutionContext, IOOptions, RunOutputOptions
+from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream, RelayFallback
+from cuprum.echo_observation import observe_echo
+from cuprum.sh import (
+    BoundedDelivery,
+    CommandResult,
+    ExecutionContext,
+    IOOptions,
+    RunOutputOptions,
+)
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.execution import ExecuteFn, _RunKwargs, assert_capture_disabled
 
@@ -24,6 +32,27 @@ if typ.TYPE_CHECKING:
 
     from cuprum.lines import LineEvent
     from cuprum.sh import SafeCmd
+
+
+class _FailingDeliverySink(io.StringIO):
+    """Raise at one selected destination operation."""
+
+    def __init__(self, failure_site: str) -> None:
+        """Select whether ``write`` or ``flush`` fails."""
+        super().__init__()
+        self.failure_site = failure_site
+
+    def write(self, text: str, /) -> int:
+        """Fail the configured write, otherwise store the text."""
+        if self.failure_site == "write":
+            raise OSError
+        return super().write(text)
+
+    def flush(self) -> None:
+        """Fail the configured flush, otherwise flush the string buffer."""
+        if self.failure_site == "flush":
+            raise OSError
+        super().flush()
 
 
 def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
@@ -199,6 +228,141 @@ def test_bounded_stderr_echo_keeps_complete_capture(
     assert len(stderr_sink.getvalue().encode()) <= bound, (
         "the mirrored stderr bytes must not exceed max_echo_line_bytes"
     )
+
+
+def test_bounded_delivery_echoes_off_loop_and_preserves_capture(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """The opt-in worker delivers a command's output without changing capture."""
+    _, execute = execution_strategy
+    stdout_sink = io.StringIO()
+    command = python_builder("-c", 'import sys; sys.stdout.write("delivered")')
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=True,
+                echo_stdout=True,
+                echo_stderr=False,
+                delivery=BoundedDelivery(max_queued_bytes=128),
+            ),
+            "context": ExecutionContext(stdout_sink=stdout_sink),
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "delivered"
+    assert stdout_sink.getvalue() == "delivered"
+    assert result.relay_fallbacks == ()
+
+
+@pytest.mark.parametrize("failure_site", ["write", "flush"])
+def test_bounded_delivery_sink_failures_are_reported_without_failing_run(
+    python_builder: cabc.Callable[..., SafeCmd],
+    failure_site: str,
+) -> None:
+    """Worker sink errors stay categorical and leave command outcomes intact."""
+    sink = _FailingDeliverySink(failure_site)
+    events: list[EchoEvent] = []
+    command = python_builder("-c", 'import sys; sys.stdout.write("captured")')
+
+    with observe_echo(events.append):
+        result = command.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo_stdout=True,
+                echo_stderr=False,
+                delivery=BoundedDelivery(max_queued_bytes=128),
+            ),
+            context=ExecutionContext(stdout_sink=sink),
+        )
+
+    expected_fallback = RelayFallback(
+        stream=EchoStream.STDOUT,
+        error_category=EchoErrorCategory.DELIVERY_ERROR,
+    )
+    assert result.exit_code == 0
+    assert result.stdout == "captured"
+    assert result.relay_fallbacks == (expected_fallback,)
+    assert events == [
+        EchoEvent(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.DELIVERY_ERROR,
+        ),
+    ]
+
+
+def test_bounded_delivery_saturation_keeps_capture_and_reports_source_bytes(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A saturated delivery queue drops presentation but keeps full capture."""
+    _, execute = execution_strategy
+    payload = "queue overflow"
+    sink = io.StringIO()
+    events: list[EchoEvent] = []
+    command = python_builder("-c", f"import sys; sys.stdout.write({payload!r})")
+
+    with observe_echo(events.append):
+        result = execute(
+            command,
+            {
+                "output": RunOutputOptions(
+                    capture=True,
+                    echo_stdout=True,
+                    echo_stderr=False,
+                    delivery=BoundedDelivery(max_queued_bytes=1),
+                ),
+                "context": ExecutionContext(stdout_sink=sink),
+            },
+        )
+
+    assert result.stdout == payload
+    assert not sink.getvalue()
+    assert result.relay_fallbacks == (
+        RelayFallback(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.DROPPED,
+        ),
+    )
+    assert events == [
+        EchoEvent(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.DROPPED,
+            dropped_bytes=len(payload.encode()),
+        ),
+    ]
+
+
+def test_bounded_delivery_accounts_truncated_echo_by_original_bytes(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A truncation marker does not count as source output in the queue bound."""
+    payload = "x" * 80 + "\n"
+    sink = io.StringIO()
+    events: list[EchoEvent] = []
+    command = python_builder("-c", f"import sys; sys.stdout.write({payload!r})")
+
+    with observe_echo(events.append):
+        result = command.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo_stdout=True,
+                echo_stderr=False,
+                max_echo_line_bytes=40,
+                delivery=BoundedDelivery(max_queued_bytes=len(payload.encode())),
+            ),
+            context=ExecutionContext(stdout_sink=sink),
+        )
+
+    assert result.stdout == payload
+    assert sink.getvalue()
+    assert len(sink.getvalue().encode()) <= 40
+    assert [event.error_category for event in events] == [
+        EchoErrorCategory.TRUNCATED,
+    ]
 
 
 def test_echoes_when_requested(

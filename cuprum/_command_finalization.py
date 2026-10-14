@@ -19,8 +19,10 @@ which of the two it was.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -68,6 +70,20 @@ async def _execute_with_hooks(
     result: _AnyCommandResult | None = None
     try:
         result = await _execute_subprocess(execution)
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                execution.delivery_worker,
+                drain_grace_s=execution.delivery_grace_s,
+            ),
+        )
+        if execution.relay_diagnostics is not None:
+            stdout_diagnostics, stderr_diagnostics = execution.relay_diagnostics
+            result = dc.replace(
+                result,
+                relay_fallbacks=(
+                    stdout_diagnostics.snapshot() + stderr_diagnostics.snapshot()
+                ),
+            )
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
@@ -92,6 +108,12 @@ async def _finalize_command_run_failure(
     """Settle and drain an observed command after execution or hook failure."""
     # Close before the drain: its failure is grouped with the primary error.
     outcome = _outcome_for_error(run_error)
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
     tracking.sink_bracket.close(outcome=outcome)
     _safe_emit_terminal(
         execution.observation,
@@ -134,6 +156,12 @@ async def _finalize_command_run_success(
 ) -> None:
     """Settle a completed command, then drain every observe-hook task."""
     outcome = _outcome_for_result(result)
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
     tracking.sink_bracket.close(outcome=outcome)
     try:
         execution.observation.emit_terminal(

@@ -480,6 +480,11 @@ full_name = [
 reason = "Called structurally through _PipelineWaitReporter by _StageObservation.report_pipeline_wait."
 
 [[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = ["cuprum._bounded_delivery._DeliveryWorker.close"]
+reason = "Passed to asyncio.to_thread by _close_delivery_worker for bounded off-loop shutdown."
+
+[[tool.skylos.dead_code.entrypoints]]
 type = "function"
 full_name = [
     "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
