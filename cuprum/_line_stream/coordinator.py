@@ -16,40 +16,26 @@ shared reconciliation cancels and drains them exactly once on every exit
 path: completion, timeout, caller ``break``, generator close, and external
 cancellation alike.
 
-This module holds the run, teardown, and coordination steps. The queue
-plumbing, telemetry types, pre-return spawn machinery, and post-exit drain live
-in sibling modules of the ``cuprum._line_stream`` package, which re-exports all
-of them. Tests that replace a collaborator of these steps patch this module,
-because each function resolves those names through this module's globals.
+This module holds the exit wait, the teardown steps, and the coordination that
+turns a settled run into a result. The queue plumbing, telemetry types, the
+whole pre-return spawn phase, and the post-exit drain live in sibling modules of
+the ``cuprum._line_stream`` package, which re-exports all of them. Tests that
+replace a collaborator of these steps patch this module, because each function
+resolves those names through this module's globals.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.drain import _drain_after_exit
-from cuprum._line_stream.spawn import (
-    _abandon_unstarted_run,
-    _build_unstarted_run,
-    _with_line_sink_hooks,
-)
-from cuprum._line_stream.telemetry import (
-    _LineStreamEventDetails,
-    _LineStreamTelemetry,
-)
-from cuprum._pipeline_types import _EventDetails
+from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._stream_drain import _drain_stream_consumers
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
-from cuprum._subprocess_spawn import (
-    _spawn_subprocess,
-    _SubprocessExecution,
-)
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -73,6 +59,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
     from cuprum._stream_drain_finish import _CapturedDrain
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.capture_policy import CapturedStream
     from cuprum.sh import CommandResult
@@ -83,82 +70,8 @@ __all__ = [
     "_discard_drain",
     "_run_line_stream_teardown",
     "_run_to_command_result",
-    "_start_line_stream_run",
     "_wait_for_line_stream_exit",
 ]
-
-
-async def _start_line_stream_run(
-    execution: _SubprocessExecution,
-    queue: asyncio.Queue[_LineQueueItem],
-) -> _LineStreamRun:
-    """Spawn the subprocess and its queue-feeding consumers.
-
-    Mirrors the streamed-path setup in :func:`_run_subprocess_with_streams`:
-    spawn, record the start reference, start the stdin writer, then start the
-    consumers with capture and echo as configured.
-
-    Every step between the spawn and the return is owned by
-    :func:`_abandon_unstarted_run`, matching :func:`_spawn_pipeline_processes`.
-    The ``start`` event is not exempt: it invokes synchronous observe hooks
-    inline and re-raises their failures, so without that ownership a failing
-    ``start`` hook leaves the child running with undrained pipes, which a caller
-    that only drains observe tasks can never reclaim.
-
-    Returns
-    -------
-    _LineStreamRun
-        The spawned run, with the process, its task ownership, the queue,
-        and the monotonic start reference.
-
-    Whatever that setup raises propagates unchanged, once the child has been
-    stopped and reaped and its tasks drained.
-    """
-    telemetry = _LineStreamTelemetry(
-        exec_id=execution.observation.exec_id,
-        queue_capacity=queue.maxsize,
-    )
-    # Rebound, not passed straight to the spawn: the stream consumers read
-    # ``on_line`` off the execution too, so a chained hook that only reached
-    # ``_spawn_subprocess`` would leave the queue sink uninstalled and starve
-    # the iterator.
-    execution = _with_line_sink_hooks(execution, queue, telemetry)
-    # Sampled *before* the spawn await, matching ``_sample_run_start`` on the
-    # direct path. ``started_at`` is the reference ``duration_s`` and every
-    # per-line ``at`` stamp are measured against, and the exit event's
-    # ``started_at`` is published from it, so a reading taken afterwards would
-    # report a run shorter than the time it actually took — by however long the
-    # spawn blocked. Stamping the bundle reads no clock, so doing it first does
-    # not disturb the ordering this reference exists to establish.
-    # Rebuilt, not mutated: the stream consumers read ``started_at`` off the
-    # execution when stamping each ``LineEvent``. Left at its ``0.0`` default,
-    # every ``at`` would be the machine's monotonic uptime rather than seconds
-    # since this command started.
-    started_at = perf_counter()
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
-    pid = process.pid
-    run = _build_unstarted_run(process, execution, queue, telemetry)
-    try:
-        if execution.idle is not None:
-            # Armed here, once the child is running, exactly as the streamed
-            # ``run()`` path arms it: the catalogue checks and before hooks that
-            # preceded this spawn are the parent's work, not the child's
-            # silence.
-            execution.idle.launch()
-        telemetry.pid = pid
-        # Emitted after the consumers exist, which is sound because creating a
-        # task does not run it: nothing between that creation and this emit
-        # suspends, so ``start`` is still the first thing an observer of this
-        # execution sees. Owning every task before the first step that can fail
-        # is what lets the reclaim path drain a whole run rather than guess at
-        # how much of one exists.
-        execution.observation.emit("start", _EventDetails(pid=pid))
-        telemetry.emit(LineStreamPhase.SPAWNED)
-    except BaseException:
-        await _abandon_unstarted_run(run, execution)
-        raise
-    return run
 
 
 async def _wait_for_line_stream_exit(

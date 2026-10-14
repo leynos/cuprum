@@ -3,10 +3,10 @@
 This package owns the coordination behind ``SafeCmd.lines()``. The submodules
 split that work by responsibility:
 
-- ``coordinator`` starts the run, waits for exit, tears down, and hands the
-  result back.
+- ``coordinator`` waits for exit, tears down, and hands the result back.
 - ``line_queue`` holds the bounded queue plumbing and the spawned-run record.
-- ``spawn`` builds, and on failure unwinds, a run before it is handed back.
+- ``spawn`` starts, builds, and on failure unwinds a run before it is handed
+  back.
 - ``drain`` drains the settled stream consumers once the child has exited.
 - ``telemetry`` emits the correlated lifecycle events for one run.
 
@@ -22,7 +22,6 @@ from cuprum._line_stream.coordinator import (
     _discard_drain,
     _run_line_stream_teardown,
     _run_to_command_result,
-    _start_line_stream_run,
     _wait_for_line_stream_exit,
 )
 from cuprum._line_stream.drain import _drain_after_exit
@@ -37,6 +36,7 @@ from cuprum._line_stream.line_queue import (
 from cuprum._line_stream.spawn import (
     _abandon_unstarted_run,
     _build_unstarted_run,
+    _start_line_stream_run,
     _with_line_sink_hooks,
 )
 from cuprum._line_stream.telemetry import (

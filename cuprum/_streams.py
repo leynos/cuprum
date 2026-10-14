@@ -5,7 +5,9 @@ The pure-Python home for consuming a subprocess's stdout/stderr.
 tee each chunk to a sink, capture them, and emit decoded lines; the bounded echo
 renderer those two call into lives in ``cuprum._stream_echo``, and the
 line-boundary emitter that publishes decoded lines lives in
-``cuprum._stream_line_consumer``. Capture and line emission are independent
+``cuprum._stream_line_consumer``. What a drain is *handed* — the capture
+policy, echo destination, and decode settings for one stream — lives in
+``cuprum._stream_config``. Capture and line emission are independent
 channels: the drain's buffer keeps the child's own bytes, and only the line
 feeder decodes, so one drain serves both modes. The writer side that pumps one
 pipeline stage's stdout into the next stage's stdin lives in
@@ -13,10 +15,10 @@ pipeline stage's stdout into the next stage's stdin lives in
 and is re-exported here (``_pump_stream``, ``_close_stream_writer``,
 ``_write_to_stream_writer``, ``_WriteOutcome``,
 ``_drain_stream_reader_bounded``) so importers of this module keep working
-unchanged. Used by the pipeline and single-command execution layers, it mirrors
-the optional Rust backend ``cuprum._streams_rs``. ``_pump_stream`` closes any
-supplied writer once relay completes or when no reader is supplied, so callers
-must not reuse the writer afterwards.
+unchanged, as is ``_StreamConfig``. Used by the pipeline and single-command
+execution layers, it mirrors the optional Rust backend ``cuprum._streams_rs``.
+``_pump_stream`` closes any supplied writer once relay completes or when no
+reader is supplied, so callers must not reuse the writer afterwards.
 """
 
 from __future__ import annotations
@@ -25,13 +27,11 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._capture_accumulators import build_accumulator
-from cuprum._capture_decode import _DecodeSettings
-from cuprum._constants import OBSERVER_ERROR_POLICY
 from cuprum._echo_truncation import (
     _EchoLineLimiter,
     _validate_bounded_echo_encoding,
 )
+from cuprum._stream_config import _StreamConfig as _StreamConfig
 from cuprum._stream_drain_finish import _CapturedDrain, _empty_capture, _finish_drain
 from cuprum._stream_drain_state import _EchoGuard, _MirrorCursor, _RelayDiagnostics
 from cuprum._stream_echo import (
@@ -54,7 +54,6 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import BrokenPipePolicy, EchoStream
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
     _complete_stream_operation,
@@ -67,7 +66,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._capture_types import CaptureSink
-    from cuprum.capture_policy import CapturePolicy
     from cuprum.stream_observation import _StreamOperationMeasurement
 
 
@@ -77,85 +75,6 @@ if typ.TYPE_CHECKING:
 # it without limit. :func:`_stream_line_consumer._emit_line` bridges the two.
 type _LineSink = cabc.Callable[[str], cabc.Awaitable[None] | None]
 type _ChunkSink = cabc.Callable[[bytes], cabc.Awaitable[None] | None]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StreamConfig:
-    """Configuration for decoding and echoing a subprocess stream."""
-
-    # The resolved per-stream capture policy, or ``None`` for a stream this
-    # run does not capture. A policy rather than a bool so the drain can build
-    # the right accumulator once, at drain start, and never branch per chunk.
-    capture: CapturePolicy | None
-    echo_output: bool
-    sink: typ.IO[str]
-    encoding: str
-    errors: str
-    # Profiled private read size; production callers use the default.
-    read_size: int = _READ_SIZE
-    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
-    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
-    # accepting a line past a size limit (GitHub Actions job logs end at a
-    # 64 KiB line) while capture stays byte-for-byte complete.
-    echo_max_line_bytes: int | None = None
-    discard_on_cancel: asyncio.Event | None = None
-    # How a broken pipe on this stream's sink is handled. Defaults to strict
-    # propagation, so a config built without naming a policy keeps the
-    # behaviour every caller had before the policy existed.
-    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
-    # Which output stream this config drains, for bounded echo observability.
-    # Defaults to stdout because every production call site names the stderr
-    # config explicitly when it replaces the stdout one.
-    stream: EchoStream = EchoStream.STDOUT
-    # Whether the captured payload is reported as the child's own bytes rather
-    # than decoded text. Off by default, so every config built before byte-exact
-    # capture existed keeps decoding exactly as it did. When on, the drain still
-    # echoes through the ordinary renderer — a sink that accepts bytes gets
-    # them, a text sink decodes for display only — but the value handed back is
-    # never decoded, so arbitrary binary survives the round trip.
-    capture_bytes: bool = False
-    # Run-owned observers, both optional and both unable to change what is
-    # captured: ``activity`` reports that a non-empty chunk arrived, before any
-    # decoding, truncation, or line callback could drop it, and ``mirror``
-    # records where the echo sink ended up so a keepalive written later knows
-    # whether it would land mid-line.
-    activity: cabc.Callable[[], None] | None = None
-    mirror: _MirrorCursor | None = None
-    # The accumulator *capture* is retained in, derived from the policy, mode,
-    # and encoding above rather than passed in. Held on the config rather than
-    # built inside the drain because a drain cancelled while awaiting its line
-    # sink never reaches a drain result, and the sink would then be the last
-    # reference to a spill file nothing could remove. Deriving it here is what
-    # makes that reachable: the stderr config is built by replacing the stdout
-    # one, so it picks up an accumulator for its own policy without any caller
-    # having to remember to build one.
-    capture_sink: CaptureSink | None = dc.field(init=False, default=None)
-
-    def __post_init__(self) -> None:
-        """Build the accumulator this config's capture policy retains into."""
-        object.__setattr__(
-            self,
-            "capture_sink",
-            build_accumulator(
-                self.capture,
-                stream=self.stream.value,
-                settings=_DecodeSettings.from_config(self),
-            ),
-        )
-
-    @property
-    def view_errors(self) -> str:
-        """The error policy for a *view* of the child's bytes.
-
-        Line observation and echo render a view rather than the run's capture,
-        so in byte mode they replace undecodable input under
-        :data:`cuprum._constants.OBSERVER_ERROR_POLICY` and cannot end a run
-        whose bytes must reach the caller untouched. A text run keeps
-        :attr:`errors`, so its views raise under a strict policy exactly as
-        they did before byte mode existed. Deriving the choice here keeps the
-        two view decoders from deciding it twice.
-        """
-        return OBSERVER_ERROR_POLICY if self.capture_bytes else self.errors
 
 
 @dc.dataclass(frozen=True, slots=True)
