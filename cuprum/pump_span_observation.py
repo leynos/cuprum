@@ -23,7 +23,6 @@ from cuprum.pump_span_events import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from contextvars import Token
 
     from cuprum.tracing_protocols import Span, Tracer
 
@@ -53,22 +52,30 @@ class PumpHopSpanRegistration(_TokenTupleRegistration["Tracer"]):
     :meth:`_release` can compare it against the live one first.
     """
 
-    __slots__ = ("_registered", "_tracer")
+    __slots__ = ("_registered",)
 
     def __init__(self, tracer: Tracer) -> None:
         """Append ``tracer`` to the current context's hop tracers."""
-        self._tracer = tracer
-        self._detached = False
-        self._registered = (*_pump_span_tracers.get(), tracer)
-        self._token: Token[tuple[Tracer, ...]] = _pump_span_tracers.set(
-            self._registered,
-        )
+        super().__init__(_pump_span_tracers, tracer)
+
+    def _append(self) -> None:
+        """Install through the base, then keep the tuple that install created.
+
+        The base's install already sets the extended tuple and captures the
+        restore token, so the only thing left to record is the tuple itself:
+        :meth:`_release` compares it against the live one to refuse an
+        out-of-order detach. Re-deriving the install here instead, as this
+        handle once did from ``__init__``, skips the base initializer and
+        leaves the inherited hook state unset.
+        """
+        super()._append()
+        self._registered: tuple[Tracer, ...] = self._hook_var.get()
 
     def _release(self) -> None:
-        """Restore the tracers that preceded this registration."""
-        if _pump_span_tracers.get() is not self._registered:
+        """Refuse an out-of-order detach, then restore the prior tracers."""
+        if self._hook_var.get() is not self._registered:
             raise ValueError(_OUT_OF_ORDER_DETACH_MESSAGE)
-        _pump_span_tracers.reset(self._token)
+        super()._release()
 
 
 @dc.dataclass(frozen=True, slots=True)

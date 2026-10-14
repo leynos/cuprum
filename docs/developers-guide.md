@@ -5598,11 +5598,13 @@ one of its keys: a one-key entry's key is a path glob, so any family it still
 touches may equally be one the entry never described, and reporting that as
 growth would confidently instruct you to re-authorize duplication the entry
 never covered. A partial overlap on a multi-key entry is reported as a
-path-glob coincidence for the same reason. Because the gate adjudicates a
-ranked surface, absence from the report means "unmatched in this scan", not
-proof that the duplication is gone: never delete an entry merely because its
-family fell below the ranking cutoff, and never lower the enforced surface to
-obtain a green run.
+path-glob coincidence for the same reason. The scan is untruncated, so a stale
+entry means no family in it matched — but that is still not proof the
+duplication is gone, because the detector reports *windows* of tokens rather
+than the units you wrote, and an extraction can dissolve a window while leaving
+the resemblance it caught in place somewhere else. Confirm by reading the
+source before removing an entry, and never lower the enforced surface to obtain
+a green run.
 
 Allowlist updates take an advisory cross-process lock, so a concurrent writer
 waits until the current update completes. The lock coordinates processes that

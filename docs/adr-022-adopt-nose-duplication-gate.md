@@ -153,23 +153,25 @@ rather than a ranked prefix of them.
   never described, and reporting that as growth would confidently instruct the
   maintainer to re-authorize duplication the entry never covered. A partial
   overlap on a multi-key entry is reported as a path-glob coincidence for the
-  same reason. Because the gate adjudicates a ranked surface, absence from the
-  report means "unmatched in this scan", not proof that the duplication is
-  gone; an entry is not deleted merely because its family fell below the
-  ranking cutoff.
+  same reason. The scan is untruncated, so a stale entry does mean no family in
+  it matched; that is still not proof the duplication is gone, because the
+  detector reports windows of tokens rather than intentional units, so an entry
+  is not deleted without confirming the resemblance is absent from the source.
 - Adjudicating Cuprum's own cohort extracted genuine shared implementations
-  and left 24 reasoned entries covering the remaining 26 families. The
-  extracted units include the shared post-initialization normalization of the
-  scope dataclasses (`cuprum/context/_policy.py`), which had been retyped per
-  type; the shared scope-registration handle base
-  (`cuprum/_scope_registration.py`), which had been retyped per registration
-  channel; and the shared close-then-drain failure finalization
-  (`cuprum/_sink_lifecycle.py`), which five separate failure branches had each
-  restated. Removing one entry is part of that count: the extraction that
-  collapsed those five branches also shortened an import prologue below the
-  configured floor, so the entry covering it stopped matching anything and the
-  gate reported it stale. A later refactor added one back — see the
-  window-matching trade-off above — for a net 24 entries over 26 families.
+  and left 24 reasoned entries covering the remaining 26 families. Those are
+  the figures at first adjudication, not the current ones; the addendum below
+  records the surface after the later re-adjudications. The extracted units
+  include the shared post-initialization normalization of the scope dataclasses
+  (`cuprum/context/_policy.py`), which had been retyped per type; the shared
+  scope-registration handle base (`cuprum/_scope_registration.py`), which had
+  been retyped per registration channel; and the shared close-then-drain
+  failure finalization (`cuprum/_sink_lifecycle.py`), which five separate
+  failure branches had each restated. Removing one entry is part of that count:
+  the extraction that collapsed those five branches also shortened an import
+  prologue below the configured floor, so the entry covering it stopped
+  matching anything and the gate reported it stale. A later refactor added one
+  back — see the window-matching trade-off below — for a net 24 entries over 26
+  families.
 - `scripts/atomic_write.py` provides `atomic_write` for replacing generated
   files through a temporary sibling and `Path.replace`. It is a neutral
   persistence helper belonging to neither caller's domain; today its live
@@ -293,22 +295,26 @@ rather than a ranked prefix of them.
   The surface at the original adjudication was 26 families; measured on
   2026-10-14 it is 72 on `main` at `8c78a5b77` and 63 over this branch's
   adjudicated tree, so a bound of 30 would have emitted 30 of 63 and silently
-  excluded the tail. That exclusion is not benign, and the reason is structural
-  rather than a matter of how large the tail happened to be. The stale-entry
-  report is computed from the families the scan returned, and
-  `partition_findings` marks an entry stale when no returned family matches it,
-  so a family hidden below the bound leaves its reason matching nothing and the
-  gate instructs the maintainer to *delete* an exception whose duplication is
-  still present. Re-adjudicating this branch's own unbounded report at
-  `top = 30` falsely reports 23 of its 51 entries as stale — nearly half the
-  list, and each one a deletion instruction for duplication that is there.
-  `top = 0` is the unbounded spelling nose accepts — omitting the term falls
-  back to nose's default view of 30, and `top = all` and `top = -1` are both
-  rejected. The schema module now refuses a report whose `summary.shown` is
-  below `summary.families`, so any truncating bound fails the gate loudly
-  instead of being adjudicated as the whole surface. Verified on this branch:
-  `top=0` reports 63 families shown of 63; `top=30` reports 30 shown of 63 and
-  is refused. Re-measured after the extraction that removed the last blocking
+  excluded the tail. The 63-and-51 figures below are that same 2026-10-14
+  measurement taken before the addendum's extraction landed; the addendum
+  records the surface as 62 families under 50 entries afterwards.
+
+  That exclusion is not benign, and the reason is structural rather than a
+  matter of how large the tail happened to be. The stale-entry report is
+  computed from the families the scan returned, and `partition_findings` marks
+  an entry stale when no returned family matches it, so a family hidden below
+  the bound leaves its reason matching nothing and the gate instructs the
+  maintainer to *delete* an exception whose duplication is still present.
+  Re-adjudicating this branch's own unbounded report at `top = 30` falsely
+  reports 23 of its 51 entries as stale — nearly half the list, and each one a
+  deletion instruction for duplication that is there. `top = 0` is the
+  unbounded spelling nose accepts — omitting the term falls back to nose's
+  default view of 30, and `top = all` and `top = -1` are both rejected. The
+  schema module now refuses a report whose `summary.shown` is below
+  `summary.families`, so any truncating bound fails the gate loudly instead of
+  being adjudicated as the whole surface. Verified on this branch: `top=0`
+  reports 63 families shown of 63; `top=30` reports 30 shown of 63 and is
+  refused. Re-measured after the extraction that removed the last blocking
   families, and again after the re-adjudication recorded above: 63 families,
   all 63 allowed by reasoned exceptions, 0 blocking, 0 stale — and at
   `top = 30`, 30 families with 23 stale entries, which is the false-deletion

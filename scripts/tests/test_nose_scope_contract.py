@@ -42,9 +42,13 @@ WIDENED_SURFACE = "all"
 #: `partition_findings` marks an entry stale when no returned family matches it,
 #: and the returned families are the ranked ones the bound admits, so any
 #: positive bound hides the tail of the ranking and reports the entries
-#: covering that tail as removable. Measured on this tree, a bound of 30
-#: falsely reports 24 of the 52 entries as stale. A contract that required a
-#: positive bound would therefore require the failure mode.
+#: covering that tail as removable. The hidden tail is a large fraction of the
+#: list rather than a corner case — at `top = 30` on this tree roughly half the
+#: entries are reported stale, each one a deletion instruction for duplication
+#: that is present — which is why `scripts/nose_schema.py` refuses a truncated
+#: report outright. No count is recorded here: it moves whenever the surface or
+#: the manifest does, and a stale figure in a comment is worse than none. A
+#: contract that required a positive bound would require the failure mode.
 UNBOUNDED_TOP = 0
 
 

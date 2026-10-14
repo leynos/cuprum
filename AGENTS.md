@@ -116,9 +116,10 @@
     repository-wide wildcard, a mass-generated reason, or automatic allowlisting
     of a new scan's findings is not acceptable. `FIRST`, `MEMBERS`, and `REASON`
     are read only from the Make command line, never from the ambient
-    environment. Never delete a stale entry merely because its family fell below
-    the ranking cutoff: absence from a ranked report is not proof that the
-    duplication is gone.
+    environment. Never delete a stale entry merely because no family in the
+    scan matched it: the scan is untruncated, but absence from any report is not
+    proof that the duplication is gone, and a stale finding must be confirmed
+    against the source first.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).
