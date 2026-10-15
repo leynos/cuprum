@@ -21,21 +21,29 @@ the authoritative documentation import, a recorded applicability analysis, and
 the provenance trail that lets a future reader confirm both.
 
 The user-visible outcome is a documentation set in `docs/` that carries the
-upstream `rstest-bdd` v0.6.0 user guide and migration guides, byte-for-byte
-identical to the upstream release, with a provenance record and an
-applicability matrix stating precisely which v0.6.0 breaking changes this
-repository is exposed to and which are inapplicable. A reader can verify the
-import with the recorded checksums and can see, stated in one place, why no
-dependency edit was correct.
+upstream `rstest-bdd` v0.6.0 user guide and migration guides, matching the
+upstream release except for cross-file links, which are absolute so that they
+resolve from this repository and from any consumer the text is copied into. It
+carries a provenance record and an applicability matrix stating precisely which
+v0.6.0 breaking changes this repository is exposed to and which are
+inapplicable. A reader can verify the import against the recorded checksums and
+can see, stated in one place, why no dependency edit was correct.
 
 ## Constraints
 
 Hard invariants that must hold throughout implementation.
 
-- The imported upstream documents in `docs/` must remain byte-for-byte
-  identical to the blobs at upstream commit
-  `72fb22635670e456545ca368805ba4c1c9d7bd69`. No reformatting, no link
-  rewriting, no local annotation inside those files.
+- The imported upstream documents in `docs/` must match the blobs at upstream
+  commit `72fb22635670e456545ca368805ba4c1c9d7bd69` in every respect **except**
+  cross-file link targets, which are absolute GitHub URLs. **Superseded
+  2026-10-15.** This constraint originally read "must remain byte-for-byte
+  identical … No reformatting, no link rewriting, no local annotation inside
+  those files." A later instruction required all relative links in the imported
+  documentation to be converted to absolute, which overrides the
+  no-link-rewriting clause. The import-time digests are retained in the
+  provenance record alongside the current digests so both sides remain
+  auditable. No other divergence was introduced, and no local annotation was
+  added.
 - No dependency may be added that the repository does not need. Introducing an
   `rstest-bdd` dependency into a repository that has no BDD consumers would be
   an invented adoption task, not a migration.
@@ -110,7 +118,15 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-09-26 20:26Z) Ran the documentation gates; `make markdownlint` and
       `make check-fmt` both pass, and the imported files kept their exact
       digests through every formatting pass.
-- [ ] Commit the change.
+- [x] (2026-10-15) Rewrote all 16 cross-file relative links to absolute GitHub
+      URLs, on a later instruction. Verified every target file and every anchor
+      on `main` and at the pinned commit before adopting the base URL. Four
+      definitions and one prose line were re-wrapped to satisfy `make check-fmt`
+      after the longer URLs pushed them past 80 columns, and one footnote
+      definition needed the angle-bracket form to satisfy MD034. Both gates
+      re-run and pass. Recorded both sides' checksums in the provenance record
+      and superseded the no-link-rewriting constraint above.
+- [x] Commit the change.
 - [ ] (Optional, not started) Open a pull request.
 
 Remaining after the commit: the pull request, if the session's workflow asks

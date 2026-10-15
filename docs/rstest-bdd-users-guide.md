@@ -1906,8 +1906,7 @@ exclude tests annotated with `#[serial]`; the two attributes use different lock
 mechanisms. Use one cross-process convention consistently for tests that must
 exclude one another.
 
-[gpui-migration]:
-v0-6-0-migration-guide.md#migrate-a-stateful-gpui-test
+[gpui-migration]: https://github.com/leynos/rstest-bdd/blob/main/docs/v0-6-0-migration-guide.md#migrate-a-stateful-gpui-test
 
 ### Skipping scenarios
 
