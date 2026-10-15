@@ -26,6 +26,8 @@ import dataclasses as dc
 import enum
 import typing as typ
 
+from cuprum._enum_parse import parse_enum_member
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -126,13 +128,8 @@ def _parse_broken_pipe_policy(raw: BrokenPipePolicy | str) -> BrokenPipePolicy:
     ------
     ValueError
         If ``raw`` is not a known policy value.
-    """
-    try:
-        return BrokenPipePolicy(raw)
-    except ValueError:
-        valid = ", ".join(member.value for member in BrokenPipePolicy)
-        msg = f"invalid broken_pipe_policy {raw!r}; expected one of: {valid}"
-        raise ValueError(msg) from None
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from parse_enum_member
+    return parse_enum_member(BrokenPipePolicy, raw, field="broken_pipe_policy")
 
 
 @dc.dataclass(frozen=True, slots=True)

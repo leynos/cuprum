@@ -162,6 +162,39 @@ def _settlement_of(
     return _GroupProbe.EMPTY if target.is_done() else _GroupProbe.MEMBERS
 
 
+def _members_remain_to_signal(
+    process: asyncio.subprocess.Process,
+    target: _SettlementTarget,
+    *,
+    observation: _StageObservation | None,
+    owns_group: bool,
+) -> bool:
+    """Probe the teardown target, report it, and say whether it may be signalled.
+
+    The probe, the diagnostic and the veto are one decision, so they share a
+    frame rather than three that would have to agree on which probe each of
+    them is talking about. Both callers — the grace period's first signal and
+    the escalation after it — ask exactly this question and act on the same
+    answer, and a second probe taken to answer each part separately could
+    report on a group that has changed in between.
+
+    ``False`` means the target had already settled, or that its group holds
+    members this process may not signal and so can never settle by waiting.
+    The second case has a report attached; the first has nothing to report,
+    because a target that is simply gone is the ordinary case rather than a
+    failure of the run.
+
+    Returns
+    -------
+    bool
+        Whether the target may be signalled at all, and therefore whether the
+        caller has anything to deliver.
+    """
+    settled = _settlement_of(process, owns_group=owns_group, target=target)
+    _report_teardown(observation, unsignalable_report(settled, process.pid))
+    return settled is _GroupProbe.MEMBERS
+
+
 async def _settlement(
     process: asyncio.subprocess.Process,
     target: _SettlementTarget,
@@ -230,9 +263,12 @@ async def _escalate_after_grace(
         :func:`~cuprum._group_teardown.signal_target_or_report`; the others
         are silent by design.
     """
-    settled = _settlement_of(process, owns_group=owns_group, target=target)
-    _report_teardown(observation, unsignalable_report(settled, process.pid))
-    if settled is not _GroupProbe.MEMBERS:
+    if not _members_remain_to_signal(
+        process,
+        target,
+        observation=observation,
+        owns_group=owns_group,
+    ):
         return False
     if not signal_target_or_report(
         process,

@@ -18,6 +18,8 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._scope_registration import _IdentityTupleRegistration
+
 if typ.TYPE_CHECKING:
     from cuprum.line_stream_events import LineStreamEvent, LineStreamHook
 
@@ -29,54 +31,19 @@ _line_stream_hooks: ContextVar[tuple[LineStreamHook, ...]] = ContextVar(
 )
 
 
-class LineStreamHookRegistration:
+class LineStreamHookRegistration(_IdentityTupleRegistration["LineStreamHook"]):
     """Scoped registration handle for one line-stream lifecycle hook.
 
-    Attributes
-    ----------
-    _detached
-        Whether the registration has already removed its own hook.
-
-    Notes
-    -----
-    Entering the registration leaves its hook active in the current context.
-    Exiting the scope or calling :meth:`detach` removes exactly the hook this
-    handle registered, so detaching out of last-in-first-out order cannot
-    resurrect a stale hook that was already removed.
+    Detach removes exactly the hook this handle registered, by identity, so
+    detaching out of last-in-first-out order cannot resurrect a stale hook
+    that was already removed.
     """
 
-    __slots__ = ("_detached", "_hook")
+    __slots__ = ()
 
     def __init__(self, hook: LineStreamHook) -> None:
         """Append ``hook`` to the current line-stream observation scope."""
-        self._detached = False
-        self._hook = hook
-        _line_stream_hooks.set((*_line_stream_hooks.get(), hook))
-
-    def detach(self) -> None:
-        """Remove this registration's own hook without restoring stale state."""
-        if self._detached:
-            return
-        hooks = list(_line_stream_hooks.get())
-        for index in range(len(hooks) - 1, -1, -1):
-            if hooks[index] is self._hook:
-                del hooks[index]
-                break
-        _line_stream_hooks.set(tuple(hooks))
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the already-registered observation scope."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the hook as the observation scope exits."""
-        self.detach()
+        super().__init__(_line_stream_hooks, hook)
 
 
 def observe_line_stream(hook: LineStreamHook) -> LineStreamHookRegistration:

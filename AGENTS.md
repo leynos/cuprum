@@ -102,6 +102,24 @@
     inject `NAME` with the hostname.
     The target serializes allow-list updates with its ignored lock file, so
     concurrent invocations do not overwrite one another.
+  - **Duplication:** Passes the blocking nose code-duplication gate
+    (`make duplication`), which `make lint` runs. Treat every new finding as
+    copy-paste until proven otherwise: prefer extracting the smallest coherent
+    shared implementation at the correct architectural layer over suppressing
+    the report. Never manufacture a generic utility, an inheritance hierarchy,
+    a boolean-mode helper, or a cross-layer dependency to satisfy the detector,
+    and never lower the enforced surface or raise the size floor to obtain a
+    green run. Where the parallel structure is deliberate, record a
+    per-location reasoned exception with
+    `make duplication-allow FIRST='path[::name]' [MEMBERS='path[::name] ...'] REASON='...'`.
+    A single exception must cover *every* location of the family; a
+    repository-wide wildcard, a mass-generated reason, or automatic allowlisting
+    of a new scan's findings is not acceptable. `FIRST`, `MEMBERS`, and `REASON`
+    are read only from the Make command line, never from the ambient
+    environment. Never delete a stale entry merely because no family in the
+    scan matched it: the scan is untruncated, but absence from any report is not
+    proof that the duplication is gone, and a stale finding must be confirmed
+    against the source first.
   - **Formatting:** Adheres to formatting standards (`make check-fmt`; use
     `make fmt` to apply fixes).
   - **Typechecking:** Passes type checking (`make typecheck`).
@@ -135,7 +153,9 @@
   - **Long methods/functions:** functions that are excessively long or try to do
     too many things.
   - **Duplicated code:** identical or very similar code blocks appearing in
-    multiple places.
+    multiple places. The nose duplication gate in `make lint` reports these
+    mechanically; see the duplication bullet under "Change quality and
+    committing" for how to respond to a finding.
   - **Complex conditionals:** deeply nested or overly complex `if`/`else` or
     `switch` statements.
   - **Large code blocks for single values:** significant logic blocks dedicated

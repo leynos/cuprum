@@ -10,6 +10,12 @@ drives the run — waiting for exit, reconciling its tasks, and settling the
 per-stream relay diagnostics — and is what consumes these helpers, which the
 execution module re-exports for the runs it drives.
 
+``_prepare_stream_spawn`` is the shared entry point for that wiring. The direct
+run, the line iterator, and the owned handle all wire their consumers through
+it, because each documents the same requirement — that its consumers run
+exactly the configuration the others run — and three copies of that
+construction is how the requirement stops being true.
+
 The stderr config always carries the keepalive cursor, and the stdout config
 picks it up only when both resolved sinks are the same object, because that is
 the case where a newline-less echo can strand the diagnostic mid-line.
@@ -34,6 +40,8 @@ import typing as typ
 from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
@@ -106,6 +114,57 @@ class _StreamConsumerSpawnContext:
     stream_config: _StreamConfig
     pid: int | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StreamSpawnInputs:
+    """Everything a streamed run needs before it starts its consumers.
+
+    The three runs that own a child's streams — the direct run, the line
+    iterator, and the owned handle — build the same configuration, the same
+    diagnostics tuple, and the same spawn context. Bundling them here keeps
+    that construction in one place, because each caller documents the same
+    invariant: the consumers it starts must be wired exactly as the others
+    wire theirs, or the paths silently diverge on capture, echo, and sink
+    selection.
+
+    ``discard_on_cancel`` and ``relay_diagnostics`` are carried alongside the
+    context because the run retains both on its ``_RunTaskOwnership``: the
+    context is a value snapshot for the spawn, not a hand-off of ownership.
+    """
+
+    discard_on_cancel: asyncio.Event
+    spawn_context: _StreamConsumerSpawnContext
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+
+def _build_run_task_ownership(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    spawn: _StreamSpawnInputs,
+) -> _RunTaskOwnership:
+    """Start a run's stdin writer and stream consumers as one owned set.
+
+    The owned-handle path builds its equivalent inline rather than calling
+    this, because attaching there is all-or-nothing: it has to record which
+    tasks it started so it can reclaim them when a later start fails. The two
+    paths that have nothing to reclaim — the direct run and the line iterator
+    — both come through here.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The started tasks, plus the latch and collectors the run retains.
+    """
+    return _RunTaskOwnership(
+        stdin_task=_spawn_stdin_writer(
+            process, execution.stdin_data, execution.observation
+        ),
+        consumers=_spawn_stream_consumers(process, execution, spawn.spawn_context),
+        discard_on_cancel=spawn.discard_on_cancel,
+        relay_diagnostics=spawn.relay_diagnostics,
+        idle=execution.idle,
+    )
 
 
 def _spawn_stream_consumers(
@@ -206,10 +265,51 @@ def _build_stream_config(
     )
 
 
+def _prepare_stream_spawn(
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> _StreamSpawnInputs:
+    """Build the stream wiring a run needs before it starts any consumer.
+
+    Every streamed run reaches this point with a live child and nothing else
+    started, so the work here is deliberately infallible: it reads the
+    execution, allocates an event and two collectors, and builds a frozen
+    context. A caller can therefore build these inputs without risking a
+    half-started run, which is the property the direct-run and handle paths
+    both document.
+
+    Parameters
+    ----------
+    execution : _SubprocessExecution
+        The resolved run bundle the child was spawned from.
+    pid : int | None
+        The child's process id, or ``None`` when it was not reported.
+
+    Returns
+    -------
+    _StreamSpawnInputs
+        The discard latch, the spawn context, and the diagnostics collectors.
+    """
+    discard_on_cancel = asyncio.Event()
+    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    return _StreamSpawnInputs(
+        discard_on_cancel=discard_on_cancel,
+        relay_diagnostics=relay_diagnostics,
+        spawn_context=_StreamConsumerSpawnContext(
+            stream_config=_build_stream_config(execution, discard_on_cancel),
+            pid=pid,
+            relay_diagnostics=relay_diagnostics,
+        ),
+    )
+
+
 __all__ = [
     "_StreamConsumerSpawnContext",
+    "_StreamSpawnInputs",
+    "_build_run_task_ownership",
     "_build_stream_config",
     "_create_stream_callback",
+    "_prepare_stream_spawn",
     "_resolve_stream_sink",
     "_spawn_stream_consumers",
 ]

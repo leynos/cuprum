@@ -34,7 +34,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _subprocess_stream_run
+from cuprum import _subprocess_stream_run, _subprocess_streams
 from cuprum.sh import StdinInput
 from cuprum.unittests._post_exit_teardown_support import (
     PARKING_STDIN_BYTES,
@@ -191,7 +191,13 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
         spawned.append(task)
         return task
 
+    # Both spawn sites are rebound: the direct run resolves the name in
+    # ``_subprocess_stream_run``, and the streamed path resolves it in
+    # ``_subprocess_streams``, which is where the shared spawn construction
+    # lives. Patching only the former would leave this test watching a name
+    # the run under test never reads.
     monkeypatch.setattr(_subprocess_stream_run, "_spawn_stdin_writer", watching_spawn)
+    monkeypatch.setattr(_subprocess_streams, "_spawn_stdin_writer", watching_spawn)
     monkeypatch.setattr(
         _subprocess_stream_run,
         "_await_stdin_writer",

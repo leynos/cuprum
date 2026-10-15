@@ -73,12 +73,17 @@ _COMMAND_FINALIZATION_ERROR = "command finalization failed"
 class _ExecutionState:
     """One run's already-resolved inputs, carried as a unit.
 
-    Every field is resolved by ``SafeCmd.run`` before the sink session opens —
-    the allowlist is enforced, stdin is resolved against the context, and the
-    timeout precedence is settled — so the bundle changes nothing about when
-    those steps happen, only how many names the run's orchestration helpers
-    have to take. ``SafeCmd.run`` builds it and hands it on; nothing here
-    constructs it.
+    Every field is resolved before the sink session opens — the allowlist is
+    enforced, stdin is resolved against the context, and the timeout
+    precedence is settled — so the bundle changes nothing about when those
+    steps happen, only how many names the run's orchestration helpers have to
+    take.
+
+    The entries that start a run each build one and hand it on: ``SafeCmd``
+    for the foreground, background, and owned-handle paths, and
+    ``_spawn_owned_run`` for the handle's own start. Nothing in this module
+    constructs it, which is why the orchestrators here take it by reference
+    and never assemble a partial one.
     """
 
     context: ExecutionContext

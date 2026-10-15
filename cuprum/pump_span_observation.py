@@ -13,6 +13,7 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._scope_registration import _TokenTupleRegistration
 from cuprum.pump_span_events import (
     PUMP_HOP_OUTCOME_ATTRIBUTE,
     PUMP_HOP_SPAN_NAME,
@@ -22,7 +23,6 @@ from cuprum.pump_span_events import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from contextvars import Token
 
     from cuprum.tracing_protocols import Span, Tracer
 
@@ -38,46 +38,44 @@ _pump_span_tracers: ContextVar[tuple[Tracer, ...]] = ContextVar(
 )
 
 
-class PumpHopSpanRegistration:
+class PumpHopSpanRegistration(_TokenTupleRegistration["Tracer"]):
     """Registration handle for one Rust-pump hop tracer.
 
     The handle restores the precise preceding registration tuple when detached.
     It should therefore be detached in the :class:`~contextvars.Context` that
     created it and in last-in-first-out order when registrations nest.
+
+    Unlike the other registrations built on
+    :class:`~cuprum._scope_registration._TokenTupleRegistration`, this one
+    refuses an out-of-order detach rather than quietly discarding whatever a
+    later registration added: it keeps the tuple it installed so
+    :meth:`_release` can compare it against the live one first.
     """
 
-    __slots__ = ("_detached", "_registered", "_token", "_tracer")
+    __slots__ = ("_registered",)
 
     def __init__(self, tracer: Tracer) -> None:
         """Append ``tracer`` to the current context's hop tracers."""
-        self._tracer = tracer
-        self._detached = False
-        self._registered = (*_pump_span_tracers.get(), tracer)
-        self._token: Token[tuple[Tracer, ...]] = _pump_span_tracers.set(
-            self._registered,
-        )
+        super().__init__(_pump_span_tracers, tracer)
 
-    def detach(self) -> None:
-        """Restore the tracers that preceded this registration."""
-        if self._detached:
-            return
-        if _pump_span_tracers.get() is not self._registered:
+    def _append(self) -> None:
+        """Install through the base, then keep the tuple that install created.
+
+        The base's install already sets the extended tuple and captures the
+        restore token, so the only thing left to record is the tuple itself:
+        :meth:`_release` compares it against the live one to refuse an
+        out-of-order detach. Re-deriving the install here instead, as this
+        handle once did from ``__init__``, skips the base initializer and
+        leaves the inherited hook state unset.
+        """
+        super()._append()
+        self._registered: tuple[Tracer, ...] = self._hook_var.get()
+
+    def _release(self) -> None:
+        """Refuse an out-of-order detach, then restore the prior tracers."""
+        if self._hook_var.get() is not self._registered:
             raise ValueError(_OUT_OF_ORDER_DETACH_MESSAGE)
-        _pump_span_tracers.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the registration scope."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the tracer on scope exit."""
-        self.detach()
+        super()._release()
 
 
 @dc.dataclass(frozen=True, slots=True)

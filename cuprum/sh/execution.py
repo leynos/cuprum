@@ -15,6 +15,7 @@ import enum
 import typing as typ
 from pathlib import Path
 
+from cuprum._enum_parse import parse_enum_member
 from cuprum.context import EnvMode, UnsetType, _validate_timeout
 
 type _EnvMapping = cabc.Mapping[str, str | UnsetType] | None
@@ -90,13 +91,8 @@ def _parse_process_group_policy(
     ------
     ValueError
         If ``raw`` is not a known policy value.
-    """
-    try:
-        return ProcessGroupPolicy(raw)
-    except ValueError:
-        valid = ", ".join(member.value for member in ProcessGroupPolicy)
-        msg = f"invalid process_group {raw!r}; expected one of: {valid}"
-        raise ValueError(msg) from None
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from parse_enum_member
+    return parse_enum_member(ProcessGroupPolicy, raw, field="process_group")
 
 
 @dc.dataclass(frozen=True, slots=True)

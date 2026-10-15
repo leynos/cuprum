@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._scope_registration import _ScopeRegistration
 from cuprum.context.state import _reset_context, _set_context
 
 if typ.TYPE_CHECKING:
@@ -27,15 +28,20 @@ if typ.TYPE_CHECKING:
 __all__ = ["_TokenRegistration"]
 
 
-class _TokenRegistration:
+class _TokenRegistration(_ScopeRegistration):
     """Canonical base for ContextVar-backed scope-registration handles.
 
     All scope-registration handles (allowlist extensions, hook
     registrations, env overlays, executable bindings) derive from this base.
     Subclasses perform only the context-derivation step in ``__init__`` and
-    hand the derived context to :meth:`_install`; the token capture,
-    idempotent :meth:`detach`, and context-manager protocol live here so the
-    subtle restoration discipline cannot drift between handle types.
+    hand the derived context to :meth:`_install`; the token capture and the
+    detach protocol live here so the subtle restoration discipline cannot
+    drift between handle types.
+
+    The context-manager protocol and the once-only detach guard come from
+    :class:`~cuprum._scope_registration._ScopeRegistration`; this base supplies
+    only the *undo*, which for these handles is restoring a captured
+    :class:`~contextvars.Token`.
 
     Token-based Restoration
     -----------------------
@@ -55,35 +61,19 @@ class _TokenRegistration:
     raises :class:`ValueError`.
     """
 
-    __slots__ = ("_detached", "_token")
+    __slots__ = ("_token",)
 
     def __init__(self) -> None:
         """Initialize the handle in the attached, token-less state."""
-        self._detached = False
+        super().__init__()
         self._token: Token[CuprumContext] | None = None
 
     def _install(self, new_ctx: CuprumContext) -> None:
         """Set ``new_ctx`` as current and capture the restoration token."""
         self._token = _set_context(new_ctx)
 
-    def detach(self) -> None:
+    def _release(self) -> None:
         """Restore the original context via the captured token."""
-        if self._detached:
-            return
         if self._token is not None:
             _reset_context(self._token)
             self._token = None
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter context manager; the registration is already installed."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Exit context manager; detach the registration."""
-        self.detach()

@@ -145,11 +145,19 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
         # dev-fast-check and the Pylint verification targets stay real: they are
         # the cheap probes whose invocations are asserted below, and stubbing a
         # parent does not spare them.
-        ".PHONY: python-lint rust-lint lint-clippy lint-whitaker spelling\n"
+        #
+        # `install-nose` is stubbed for a different reason. It is a real
+        # prerequisite of `python-lint`, and stubbing the parent suppresses the
+        # parent's recipe only, so its recipe would otherwise provision the
+        # detector from the network — on a runner whose PATH has no
+        # `cargo-binstall`, which is every CI runner and no developer machine.
+        ".PHONY: python-lint rust-lint lint-clippy lint-whitaker spelling "
+        "install-nose\n"
         "python-lint:\n\t@:\nrust-lint:\n\t@:\n"
         "lint-clippy:\n\t@:\n"
         "lint-whitaker:\n\t@:\n"
-        "spelling:\n\t@:\n",
+        "spelling:\n\t@:\n"
+        "install-nose:\n\t@:\n",
         encoding="utf-8",
     )
 

@@ -54,6 +54,39 @@ dev = [
     "cyclopts>=4.0",
 ]
 
+[tool.ty.src]
+# The duplication gate is isolated tooling, not application code. Its entry
+# point declares `>=3.14` in a PEP 723 header, and the sibling modules it loads
+# run under that same interpreter; together they use `typing.TypeIs` and
+# `PurePosixPath.full_match`, which do not exist at this project's 3.12 floor,
+# so their tests carry the same floor. Already-excluded files stay checked when
+# named explicitly, so `make typecheck` runs them in their own pass at the
+# interpreter they actually target; excluding them here only keeps the
+# application pass honest about the floor the application itself supports.
+exclude = [
+    "scripts/atomic_write.py",
+    "scripts/duplication_allowlist.py",
+    "scripts/duplication_gate.py",
+    "scripts/nose_detector.py",
+    "scripts/nose_schema.py",
+    "scripts/tests/duplication_gate_test_support.py",
+    "scripts/tests/nose_detector_test_support.py",
+    "scripts/tests/test_atomic_write.py",
+    "scripts/tests/test_duplication_gate.py",
+    "scripts/tests/test_duplication_gate_blocking.py",
+    "scripts/tests/test_duplication_gate_commands.py",
+    "scripts/tests/test_duplication_gate_make.py",
+    "scripts/tests/test_duplication_gate_persistence.py",
+    "scripts/tests/test_duplication_gate_properties.py",
+    "scripts/tests/test_duplication_gate_seams.py",
+    "scripts/tests/test_make_install_nose.py",
+    "scripts/tests/test_nose_binary.py",
+    "scripts/tests/test_nose_detector.py",
+    "scripts/tests/test_nose_schema.py",
+    "scripts/tests/test_nose_scope_contract.py",
+    "scripts/tests/test_nose_settings.py",
+]
+
 [tool.ruff]
 line-length = 88
 preview = true
@@ -526,6 +559,475 @@ full_name = [
 ]
 reason = "Raised by _Wait4Process._reap, whose only remaining caller travels the ownership-aware teardown: _terminate_all_shielded awaits _terminate_process, which builds wait_for_exit=lambda: _await_process_exit(process) and so calls process.wait() from a lambda no source line names. The class was visible only through the explicit await that spawn failure used to make before that path delegated to the shared teardown."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._scope_registration._TokenTupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._release",
+    "cuprum._scope_registration._IdentityTupleRegistration._release",
+    "cuprum.pump_span_observation.PumpHopSpanRegistration._release",
+]
+reason = "Reached only by self-dispatch: _TupleRegistration.__init__ calls self._append() and the inherited detach() calls self._release(), and each is overridden on the same hook-tuple path, so Skylos cannot follow the MRO to the override that runs. Only the override is reported, never the base it shadows. Traced executing through PumpHookRegistration, EchoHookRegistration, StreamOperationHookRegistration, LineStreamHookRegistration, and ControlHookRegistration."
+
+# The code-duplication gate. `make duplication` and `make lint` run the pinned
+# `nose` binary through `scripts/duplication_gate.py` with these settings.
+#
+# `roots` is the shipped production package. Cuprum has no `src/` layout, so
+# `cuprum/` is the import package itself; `tests/`, `benchmarks/` and
+# `scripts/` are maintained but are not shipped, and are deliberately outside
+# this first gate.
+#
+# `exclude` is matched relative to each configured root, *not* to the
+# repository root: `unittests/**` excludes `cuprum/unittests`, while
+# `cuprum/unittests/**` would silently match nothing and leave those files in
+# the scan. See "Code-duplication gate" in docs/developers-guide.md.
+#
+# Every channel is named in `mode` so a change to nose's own defaults cannot
+# widen or narrow what this gate checks. `min-size` counts nose IL tokens, not
+# Python lines or AST nodes. `surface = "all"` reports the hidden-surface
+# families as well as the curated dashboard.
+#
+# `top = 0` is nose's unbounded spelling and adjudicates the whole surface.
+# It is not an empty request, and it is not the same as omitting the term:
+# omitting it falls back to nose's default view of 30, which truncates the
+# `families` array exactly as a small explicit bound does. The gate refuses a
+# truncated report outright rather than adjudicating it (see
+# `require_untruncated_surface`), so a bound that binds is a configuration
+# error instead of a silently narrowed scan.
+#
+# A bound is not merely a narrower view. The stale-entry report is computed
+# from the families the scan returned, so a family hidden below the bound
+# leaves its allow entry matching nothing and the gate tells the maintainer to
+# *delete* a reasoned exception whose duplication is still present. Measured on
+# this tree: the full surface is 62 families covered by 50 entries with nothing
+# stale, while re-adjudicating that same report at `top = 30` emits 30 of the
+# 62 and falsely reports 23 of those 50 entries as stale. `top = 0` is what
+# removes the failure mode, not a larger number. See ADR-022.
+[tool.nose]
+version = "0.20.0"
+roots = ["cuprum"]
+mode = "syntax,semantic,near"
+min-size = 24
+surface = "all"
+top = 0
+exclude = ["unittests/**"]
+
+# Reasoned exceptions to the duplication gate, applied after ranking.
+#
+# Each entry names locations by key, never by source line, so code moving above
+# a finding does not invalidate the entry. A key is a repository-relative glob
+# (`path`), optionally suffixed with `::name` to require nose's unit name as
+# well. An entry sets exactly one of:
+#
+#   unit = "path[::name]"      one location
+#   members = ["...", "..."]   two or more locations
+#
+# and silences a family only when EVERY reported location matches one of its
+# keys. A family that grows a member outside the entry's keys blocks again, and
+# a `::name` key never matches a fragment-level finding, which nose reports
+# without a name. Every entry needs a non-empty `reason`.
+#
+# Entries that match no finding are reported by the gate. With the surface
+# unbounded above, every family the scan found is matched against this list, so
+# a reported entry genuinely covers nothing. Confirm with source inspection
+# before deleting it anyway: a family can leave the surface on a refactor that
+# does not itself duplicate anything, and absence from one scan is not proof
+# the duplication is gone.
+[tool.duplication_gate]
+
+# --- Import declarations -------------------------------------------------
+#
+# Import statements cannot be factored into a shared helper. Re-importing the
+# same names from a common module would not remove the per-module binding, and
+# the only other "shared" form — a wildcard re-export — trades a reviewable
+# import list for an invisible one. Each block below is a distinct module's
+# declared dependency surface, so an entry names every module in the family.
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_finalize.py",
+    "cuprum/_line_callbacks.py",
+    "cuprum/_line_iteration.py",
+    "cuprum/_pipeline_collect.py",
+    "cuprum/_pipeline_native_pump_types.py",
+    "cuprum/_pipeline_records.py",
+    "cuprum/_pipeline_results.py",
+    "cuprum/_pipeline_types.py",
+    "cuprum/_process_handle/state.py",
+    "cuprum/_subprocess_context.py",
+    "cuprum/_subprocess_stream_run.py",
+    "cuprum/_line_stream/telemetry.py",
+    "cuprum/_result_types.py",
+    "cuprum/_subprocess_streams.py",
+    "cuprum/_subprocess_wait.py",
+    "cuprum/context/registration.py",
+    "cuprum/_line_stream/line_queue.py",
+    "cuprum/_observability.py",
+    "cuprum/_stream_drain.py",
+    "cuprum/_stream_line_consumer.py",
+    "cuprum/_subprocess_spawn.py",
+    "cuprum/_command_prepare.py",
+    "cuprum/_line_stream/spawn.py",
+    "cuprum/_pipeline_config.py",
+    "cuprum/_pipeline_spawn.py",
+    "cuprum/adapters/pump_metrics.py",
+    "cuprum/context/_scope.py",
+    "cuprum/events.py",
+]
+reason = "Twenty-eight modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match *every* key of an entry to be silenced. Widened again — from twenty-four to twenty-eight, a separate two-module entry having been folded in and `main`'s `_pipeline_records`, `_pipeline_results`, `_pipeline_types` and `_subprocess_stream_run` blocks surfacing as locations of the same family — so this entry alone now covers both the twenty-six-location family the detector reports and the `_pipeline_collect ~ _pipeline_spawn` pair that shares the idiom at two locations."
+
+
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/stream_observation.py",
+    "cuprum/adapters/stream_metrics.py",
+]
+reason = "Two modules importing the four names of the stream-event vocabulary. The shared block is the vocabulary's public surface, which both must bind to their own module."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_streams.py",
+    "cuprum/_streams_pump.py",
+]
+reason = "Two stream drivers that import the three stream-operation recorders plus the same type-only measurement import. The import list is the whole overlap; the drivers diverge immediately below it."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/__init__.py",
+    "cuprum/adapters/line_stream_metrics.py",
+]
+reason = "The package's public surface and an adapter's import of the same four line-stream names. The re-export is the package's documented purpose."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_line_stream/__init__.py",
+    "cuprum/_line_stream/coordinator.py",
+]
+reason = "A package re-export and its own coordinator importing the same submodule names. The `__init__` exists to re-export them; a coordinator that took them from the package would import itself."
+
+# --- Parallel structures -------------------------------------------------
+#
+# These are families whose members are genuinely similar in shape but are not
+# one implementation written twice: they carry different data, different
+# public contracts, or both. Extracting them would create the generic utility
+# or cross-layer dependency the adoption boundary forbids.
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/context/registration.py::before",
+    "cuprum/context/registration.py::after",
+    "cuprum/context/registration.py::observe",
+]
+reason = "Three registration factories whose one-line bodies call the same handle constructor. Each carries a distinct hook type and a distinct documented signature, and each is a public API entry point; a parameterized factory would erase the signatures the public API documents."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/adapters/control_metrics.py::__init__",
+    "cuprum/adapters/echo_metrics.py::__init__",
+    "cuprum/adapters/line_stream_metrics.py::__init__",
+    "cuprum/adapters/metrics_adapter.py::__init__",
+    "cuprum/adapters/pump_metrics.py::__init__",
+    "cuprum/adapters/stream_metrics.py::__init__",
+]
+reason = "Six adapter constructors that each bind their own collector to the name `_collector`. A shared base would put six unrelated adapters in one inheritance hierarchy to save six identical assignments. Widened from five after `main` added the control channel's adapter to the family."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/events.py::ExecEvent",
+    "cuprum/line_stream_events.py::LineStreamEvent",
+    "cuprum/_pipeline_types.py::_EventDetails",
+]
+reason = "Three distinct event schemas. The overlap is the shape every event record shares — an identifier, a phase, an optional payload — not one schema written three times. No field is interchangeable between them."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_config.py::_PipelineRunConfig",
+    "cuprum/_subprocess_spawn.py::_SubprocessExecution",
+]
+reason = "Two execution bundles whose overlapping fields are exactly the public run options — capture, echo, max_echo_line_bytes, timeout, on_line, idle — that the pipeline path and the direct-run path each independently require. Pipeline execution already depends on subprocess execution, so a shared base would deepen that layered dependency in the forbidden direction to remove field repetition. `_SubprocessExecution` moved from `cuprum/_subprocess_execution.py` to `cuprum/_subprocess_spawn.py` on `main`; the key follows the class, not the file it used to live in."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/builders/tar.py::tar_create",
+    "cuprum/builders/tar.py::tar_extract",
+]
+reason = "Two tar builders that share a docstring skeleton and a boolean-flag normalization. Their argv, option schemas (`TarCreateOptions` against `destination`/`allow_relative`) and return contracts differ; the visible overlap is the numpydoc shape every builder in the package uses."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/adapters/_support.py::_event_common_fields",
+    "cuprum/adapters/_support.py::_verbatim_fields",
+]
+reason = "Two halves of one projection, split on purpose: one yields the fields every event carries, the other the optional fields passed through unchanged. One is an iterator and one a tuple, and the split is what keeps the rendering rule — which fields are coerced, which pass through — visible in one place."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/echo_observation.py::_discard_echo_hook_result",
+    "cuprum/control_observation.py::_discard_hook_result",
+    "cuprum/stream_observation.py::_discard_hook_result",
+]
+reason = "Three hook-result reporters, one per observation channel. Each logs the channel's own event fields (`event.stream` against `event.operation`) under its own log action, and the family value has already fallen from the shared shape alone. Merging them would couple three channels whose log records are separately observable API. Widened after `main` added the control channel to the family."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/line_stream_observation.py",
+    "cuprum/pump_observation.py",
+]
+reason = "The same warning record — action, phase, result type — emitted by two observation channels. The log message and every `extra` key are per-channel, and both channels are separately observable, so the shared text is the house log format rather than a shared implementation."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/control_observation.py",
+    "cuprum/stream_observation.py",
+]
+reason = "The control and stream observation channels repeating one emit/report shape. Each names its own event type, its own log action and its own metric labels, and the two channels are separately observable API; a shared emitter would have to be parameterized by the event type it logs. This covers several reported spans of the pair — the import prologue, the completion reporter, the hook-result discarder and one emission body — which is why the keys are whole modules."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/control_observation.py::_emit_control_event",
+    "cuprum/stream_observation.py::_emit_stream_operation_event",
+]
+reason = "One emission body per observation channel, over each channel's own event type. The predicates, metric names and emitted fields are per-channel, so merging them would need a mode flag over which vocabulary to read."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/control_observation.py::_complete_control",
+    "cuprum/stream_observation.py::_complete_stream_operation",
+]
+reason = "One completion reporter per observation channel. Each records its own terminal event type under its own action name; the shared text is the call shape, not a shared operation."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_stream_fds.py::_close_rust_writer_fd",
+    "cuprum/_pipeline_stream_fds.py::_close_native_pump_worker_fd",
+    "cuprum/_pipeline_stream_fds.py::_close_rust_reader_fd",
+    "cuprum/_pipeline_stream_fds.py::_close_rust_state_fd",
+    "cuprum/_streams_rs.py::_close_writer_after_pre_native_failure",
+]
+reason = "Five one-line fd closers. Each names one descriptor's ownership boundary in its name and docstring, and four of the five are monkeypatch seams that the cleanup tests patch by name. A single closer parameterized by descriptor would delete the names the tests target."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_idle_heartbeat.py",
+    "cuprum/_pipeline_stream_fds.py",
+    "cuprum/_sink_lifecycle.py",
+    "cuprum/_subprocess_context.py",
+    "cuprum/context/_policy.py",
+    "cuprum/context/env_overlay.py",
+    "cuprum/context/executable_overlay.py",
+]
+reason = "`if <field> is None: return None` over seven different fields in seven modules: an interval, a stream, a sink, a subprocess executable, a timeout, an environment overlay, an executable overlay. The guard is the None-tolerance idiom this codebase uses at every optional-parameter boundary, not one shared operation. Widened from five after `main` added the subprocess and executable-overlay sites."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_types.py",
+    "cuprum/events.py",
+]
+reason = "The same `if <field> is None: return None` None-tolerance guard in the two event-record modules: one over an optional payload, one over an optional exit projection. The pair reads the same idiom as the entries above, not one shared operation."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_results.py",
+    "cuprum/_pipeline_types.py",
+]
+reason = "Two pipeline record modules repeating one optional-field guard. Each reads a different optional field of a different record type, and neither module owns the other's type, so the shared text is the guard idiom."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_line_iteration.py",
+    "cuprum/_timeout_reporting.py",
+]
+reason = "The same `if <field> is None: return None` guard over two unrelated optional boundaries: a line iterator and a timeout report. Recorded as an idiom, matching the None-tolerance entries above."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_types.py",
+    "cuprum/_streams_rs.py",
+    "cuprum/context/_policy.py",
+]
+reason = "Three modules that each repeat one two-line early return twice within themselves (`if not self.hooks.observe_hooks: return`, `if os.name != 'nt': return fd`/`writer_fd`, `if config is None: return parent`). Each pair is a same-file guard whose two instances read different fields; the detector groups the pairs, not one repeated implementation."
+
+# The three families below each group two findings that share one key, so the
+# entry is a `unit` even though the family has two members.
+[[tool.duplication_gate.allow]]
+unit = "cuprum/_pipeline_native_pump_types.py::__init__"
+reason = "Two exception constructors in one module that store the original error and pass its text to `super()`. Each is the initializer of a distinct exception type with a distinct docstring naming a distinct failure (descriptor duplication against blocking-mode refusal); a shared base class would make two unrelated errors related to save one line."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/sh/pipeline.py::__or__",
+    "cuprum/sh/safe_cmd.py::__or__",
+]
+reason = "`SafeCmd.__or__` and `Pipeline.__or__` both delegate to `Pipeline.concat`. The shared line is a fluent operator the public API documents on each type; routing both through a third helper would hide the delegation behind a name with no meaning of its own. This was recorded as a single `unit` key while the detector reported the family inside `safe_cmd.py` alone; it is a two-module family, so it is named as one."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/adapters/_metrics_operations.py::__init__",
+    "cuprum/catalogue.py::__init__",
+]
+reason = "Two exception constructors that build a message and pass it to `super()`. They store different attributes (`phase` against `project_name`), interpolate different text, and belong to modules that do not import each other."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/context/_scope.py::__post_init__",
+    "cuprum/context/core.py::__post_init__",
+]
+reason = "Two frozen dataclasses whose post-init validates and coerces the same two scope fields. Their bodies are now one-line delegations to `_normalize_scope_fields`. What the detector still matches is the delegation itself plus the shared docstring line; the class name each passes is the only difference, and it is what keeps each type's timeout diagnostic naming its own type."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/adapters/_tracing_native_pump_cleanup.py",
+    "cuprum/adapters/_tracing_line_stream.py",
+]
+reason = "Two tracing mixins that cast `self` to `TracingHook` and look up the active span before recording. The lookup is the already-shared helper; what remains is the per-channel guard that decides whether this event is worth recording at all, which differs between the two."
+
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_subprocess_stdin.py", "cuprum/adapters/tracing_adapter.py"]
+reason = "The `if <field> is None: return None` guard idiom over two more optional boundaries: a stdin payload a spawn either has or does not, and an execution correlation token. The token guard is also the type narrowing that `OrderedDict.move_to_end` requires, so it cannot be dropped to break the match. Same idiom as the two entries above for this shape, not one shared operation; a helper that returns None when handed None would be the meaningless indirection those entries reject."
+
+# --- Parallel structures landed with `main` ------------------------------
+#
+# The families below were already present in `main` when this branch was
+# rebased onto it. They are recorded here because widening the gate's surface
+# from its old bound of 30 ranked families to the whole surface exposed them:
+# at the old bound they were never adjudicated, and their absence from the
+# report was not evidence that they were gone. Each is a considered exception,
+# not a deferral.
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_process_exit.py::_await_child_waitable",
+    "cuprum/_process_exit.py::_child_was_collected",
+]
+reason = "Two child-reaping probes in one module sharing a `waitid(... P_PID ...)` call and the `_NON_REAPING_PROBE_AVAILABLE` short-circuit. They differ in the flag and in the polarity of the `ChildProcessError` mapping: the collected check answers `True` where the awaitable check answers `False`, and the module docstring names the four readings as a designed family. A shared probe would take the flag and the error polarity as parameters — a boolean-mode helper."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/builders/args.py",
+    "cuprum/executable_paths.py",
+]
+reason = "Two path classifiers that share a check order and a `_WINDOWS_ABS_PATTERN` but not their semantics. `classify_executable_path` parses a drive-letter string with `PureWindowsPath` before testing for `..`, with a comment explaining that a POSIX-only parse would accept a Windows path escaping its root; `classify_path_string` uses `PurePath` alone. The docstring saying the latter mirrors the former describes the check order, not the outcome. Merging needs a mode flag and would push Windows hardening into a public validator used for a different purpose; the two also carry distinct enums and distinct message text."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/sh/safe_cmd.py::lines",
+    "cuprum/sh/safe_cmd.py::run",
+]
+reason = "Two entry points on one class that resolve the same call inputs — context, allowlist enforcement, stdin, timeout — and then diverge completely: `run` buffers a result while `lines` streams an iterator under an execution tracker. The trailing divergence is the method, and a shared prologue would need the caller's own state construction handed back to it."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_bytes_run.py::_require_bytes_command_result",
+    "cuprum/_pipeline_results.py::_require_bytes_stage",
+]
+reason = "Two result narrowers that raise the same type error for a mismatched bytes mode. Each narrows a different result type and names a different subject (`command` against `stage`) in the diagnostic, so a shared narrower would need the subject threaded through to keep the messages distinct."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_stream_echo.py::_incremental_decoder",
+    "cuprum/_stream_line_consumer.py::_incremental_decoder",
+]
+reason = "Two incremental decoder closures, one per stream consumer. Each closes over its own buffer and its own emit callback, so the matched text is the closure skeleton rather than a shared operation; the decode step itself is the only line either would give up."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_streams.py::_native_pump_supported_on_platform",
+    "cuprum/_process_handle_errors.py::_arbitrary_signals_supported",
+]
+reason = "Two platform predicates whose bodies are both the `os.name != \"nt\"` test. The docstrings name different limitations — Windows Proactor overlapped handles cannot take synchronous native I/O, and Windows accepts only its own terminate/kill pairs — and each predicate sits beside the error it guards so the answer cannot drift. Both names are monkeypatch seams the tests patch by name. This is the platform-guard idiom an earlier entry already records."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/sh/safe_cmd.py::run_bytes_sync",
+    "cuprum/sh/safe_cmd.py::run_sync",
+]
+reason = "Two synchronous wrappers that are each one `asyncio.run(...)` over an async twin. The matched text is the public signature and its four keywords written out; a shared `_run_sync(awaitable)` would be a pure delegate that deletes the signatures the public API documents, the same shape the `__or__` entry above records."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/sh/pipeline.py",
+    "cuprum/sh/safe_cmd.py",
+]
+reason = "Three one-line `asyncio.run` wrappers spread across the two command types. Each gives one async entry point a synchronous twin with its own documented signature and its own return type; the matched text is the signature, not a shared implementation."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/executable_binding.py",
+    "cuprum/executable_paths.py",
+]
+reason = "Two raise sites that classify a path and raise `InvalidExecutableBindingError` with the rejection. The binding site branches on `os.PathLike` first and passes a program, the path site passes none; the `program` attribute each sets is asserted per call site. The shared part is a three-line call, and a helper would be a delegate."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_subprocess_context.py",
+    "cuprum/sh/factory.py",
+]
+reason = "Two resolvers implementing the same precedence — an explicit argument, then the current context, then a default — over two different settings: a timeout and a catalogue. The matched text is the precedence order, which each reads from a different context object; the idiom already has entries above."
+
+[[tool.duplication_gate.allow]]
+unit = "cuprum/_wait4_process.py"
+reason = "Two ownership checks in one module, `if pid != self.pid: raise _Wait4InvariantError(...)`. The two callers are deliberately different modes — a blocking `wait4` under a caller-guaranteed-waitable precondition and a non-blocking `wait4(..., WNOHANG)` under the settlement lock — and the waitable caller additionally returns early for pid zero first. A shared `_check_owner(pid)` would be a one-line delegate, the shape the wrapper-extraction rule rejects."
+
+[[tool.duplication_gate.allow]]
+unit = "cuprum/adapters/_metrics_operations.py"
+reason = "Two metric-emission blocks in one module sharing a failure counter and a duration histogram. One is the live `TerminalOutcome`-driven projection, the other a frozen compatibility shim kept for a documented direct-import contract and no longer on the routing path. A shared helper would have to be parameterized by the failure predicate — a boolean-mode helper — and would tie the frozen shim to current semantics."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/__init__.py",
+    "cuprum/adapters/control_metrics.py",
+    "cuprum/control_observation.py",
+]
+reason = "Three modules importing the four names of the control-event vocabulary. The shared block is the vocabulary's public surface, which each must bind into its own namespace: the package re-exports it, the adapter renders it as metrics, and the observer hook reports it. Same reading as the stream-vocabulary entry above."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/line_stream_events.py",
+    "cuprum/control_events.py",
+]
+reason = "Two closed event vocabularies whose import prologues — `collections.abc`, `dataclasses`, `enum`, `typing`, and the type-only `ExecId` — are the same. Their members, values and outcome enums differ entirely, and each module documents why its vocabulary is closed and separate. Import declarations cannot be factored."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/control_events.py",
+    "cuprum/stream_events.py",
+]
+reason = "Two more closed vocabularies importing the same prologue and declaring a `StrEnum` with the same keyword line. The member names, values and outcome enums are per-channel; the shared text is the module preamble and one class statement."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/context/core.py",
+    "cuprum/context/_scope.py",
+]
+reason = "Two scope modules binding the same overlay names and carrying the same type-only import block. The pair already has an entry for the `__post_init__` family, whose real overlap was extracted into `_normalize_scope_fields`; what remains here is the import prologue, which cannot be factored."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_bytes_run.py",
+    "cuprum/sh/__init__.py",
+]
+reason = "Two modules importing the same four result names. `_bytes_run` must take them from the results module directly rather than through the facade, because the facade imports it and reaching the facade would close an import cycle; the facade's own re-export is its documented purpose."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/adapters/control_metrics.py",
+    "cuprum/adapters/stream_metrics.py",
+]
+reason = "Two metric adapters whose import blocks and recorder-name lists overlap. Each adapter binds the names of its own event vocabulary and registers its own collector; the shared text is the import list, not a shared implementation."
+
+[[tool.duplication_gate.allow]]
+unit = "cuprum/sh/results.py"
+reason = "The buffered and bytes result records in one module: `CommandResult` and `BytesCommandResult`, whose field skeleton, keyword-only declarations and `ok` property are the same, with only the `stdout`/`stderr` element types differing. `_result_types.py` states that the bytes form deliberately does not subclass the buffered one, the public-API tests pin each type's `dc.fields()` order and positional slots, and the differing annotations are asserted. A shared base would re-order those fields and cap the annotations, and the only shared logic is a one-line `ok`."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_subprocess_stream_run.py", "cuprum/_process_handle/coordinator.py"]
+reason = "Two modules importing the same run-machinery surface — `_drain_context`, `_reconcile_run_tasks`, `_wait_for_exit_code_within_timeout` from `cuprum._subprocess_wait` and `_TeardownPolicy` from its own module — before each declares its own `if typ.TYPE_CHECKING:` block. Import declarations cannot be factored into a shared helper, for the reason the import-family entries above record, and the two blocks are each module's declared dependency surface rather than one operation written twice. The overlap is the prologue; the run loops below it diverge entirely."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_process_signal.py", "cuprum/adapters/_tracing_control_join.py"]
+reason = "A two-line `if <field> is None: return` guard in two unrelated modules: one declines to report a teardown for a run with no report to file, the other declines to record an event with no execution to attribute it to. The shared text is the None-tolerance guard this codebase uses at every optional-collaborator boundary — the same idiom the seven-module and two-module entries elsewhere in this list adjudicate — not a shared operation. Neither module has a collaborator to hand the guard, and collapsing them would mean one module importing the other only to restate two lines."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py", "cuprum/_group_teardown.py"]
+reason = "`if <field> is None: return` over an observation (three times, in three modules), native file descriptors, a session, and a teardown report: each is a same-module early return guarding a different optional collaborator, and the shared text is the guard idiom rather than a shared operation. Grown from four locations to five by `main`, which added the `_group_teardown.py` report guard while this branch was rebasing. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

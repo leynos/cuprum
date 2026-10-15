@@ -44,15 +44,12 @@ import typing as typ
 
 from cuprum._group_teardown import (
     signal_target_or_report,
-    unsignalable_report,
 )
 from cuprum._process_exit import _await_process_exit
-from cuprum._process_group import _GroupProbe
 from cuprum._process_signal import (
     _escalate_after_grace,
-    _report_teardown,
+    _members_remain_to_signal,
     _settlement,
-    _settlement_of,
     _SettlementTarget,
 )
 
@@ -172,13 +169,10 @@ async def _terminate_process_with_wait(
     two places that decide which target this run has.
 
     Settled is decided by
-    :func:`~cuprum._process_signal._settlement_of` rather than by the target's
-    *is_done* alone. For an inherited-group run the two are the same question,
-    but an owning run's target is the child's whole group, and that group
-    survives the child that led it: a descendant left holding an inherited pipe
-    is still a member after the child has been reaped. Short-circuiting on the
-    child alone would leave that descendant running and the run's pipes held
-    open, which is the failure this policy exists to prevent.
+    :func:`~cuprum._process_signal._members_remain_to_signal`, which owns the
+    probe, the diagnostic and the veto. It and the
+    :func:`~cuprum._process_signal._settlement_of` it consults state why a
+    reaped child is not settlement for an owning run.
 
     *observation* is the execution this teardown is acting for, so a target
     that could not be reached is reported against the span and the metric of
@@ -198,9 +192,12 @@ async def _terminate_process_with_wait(
     """
     grace_period = max(0.0, policy.grace_period)
     owns_group = policy.owns_group_for(0)
-    settled = _settlement_of(process, owns_group=owns_group, target=target)
-    _report_teardown(observation, unsignalable_report(settled, process.pid))
-    if settled is not _GroupProbe.MEMBERS:
+    if not _members_remain_to_signal(
+        process,
+        target,
+        observation=observation,
+        owns_group=owns_group,
+    ):
         return _NO_STOP
     if not signal_target_or_report(
         process,

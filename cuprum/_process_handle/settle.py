@@ -148,14 +148,43 @@ async def _settle_teardown[T](
     """
     stop_step = await _run_shielded_step(stop)
     settle_step = await _run_shielded_step(settle())
+    _arbitrate(stop_step, settle_step, pending=exc)
+
+
+def _arbitrate[U, V](
+    stop_step: _ShieldedStepFailure[U],
+    settle_step: _ShieldedStepFailure[V],
+    *,
+    pending: BaseException | None,
+) -> None:
+    """Raise the error the stop and settle steps owe the caller, if any.
+
+    The rule both callers share: a cancellation outranks an ordinary failure,
+    and the stop's failure outranks the settle's. A cancellation always
+    propagates — it is a request that the task stop, not a failure to report,
+    and swallowing it would leave the task marked cancelled with no matching
+    ``CancelledError`` for an enclosing timeout or task group to observe.
+
+    ``pending`` is the exception that already caused this exit, or ``None``
+    when nothing is in flight. It is the state, not a mode: a teardown calls
+    with the block's own exception and so defers an ordinary teardown failure
+    to it, while a public stop has nothing in flight and raises what it owes.
+    Reading the presence here rather than at the call site keeps the rule in
+    one place, and passing the exception itself means a caller cannot select
+    suppression without one — the flag could say "suppress" while the caller
+    had nothing to suppress for.
+
+    The failure is not returned. Every caller either raises it or leaves it to
+    the caller above, and a returned exception invites one to be dropped.
+    """
     cancellation = stop_step.cancellation or settle_step.cancellation
-    stop_error = (
+    failure = (
         stop_step.failure if stop_step.failure is not None else settle_step.failure
     )
     if cancellation is not None:
         raise cancellation
-    if stop_error is not None and exc is None:
-        raise stop_error
+    if failure is not None and pending is None:
+        raise failure
 
 
 async def _weigh[T, U](
@@ -176,12 +205,5 @@ async def _weigh[T, U](
         rather than taken from the step report, because a report's value may be
         absent while the caller is still owed a settled result.
     """
-    cancellation = stop_step.cancellation or settle_step.cancellation
-    stop_error = (
-        stop_step.failure if stop_step.failure is not None else settle_step.failure
-    )
-    if cancellation is not None:
-        raise cancellation
-    if stop_error is not None:
-        raise stop_error
+    _arbitrate(stop_step, settle_step, pending=None)
     return await settle()

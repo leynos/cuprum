@@ -35,16 +35,14 @@ import typing as typ
 from time import perf_counter
 
 from cuprum._pipeline_types import _EventDetails
-from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_streams import (
-    _build_stream_config,
+    _prepare_stream_spawn,
     _spawn_stream_consumers,
-    _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_wait_types import _RunTaskOwnership
 
@@ -253,16 +251,9 @@ async def _attach_run_tasks(
         Whatever building or starting the tasks raised, once any task already
         started has been reclaimed.
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever building the tasks raised
-    discard_on_cancel = asyncio.Event()
     # Built first: this is the step that can fail without having started
     # anything, so failure here needs no cleanup.
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
-    spawn_context = _StreamConsumerSpawnContext(
-        stream_config=stream_config,
-        pid=process.pid,
-        relay_diagnostics=relay_diagnostics,
-    )
+    spawn = _prepare_stream_spawn(execution, process.pid)
     started: list[asyncio.Task[typ.Any]] = []
     try:
         stdin_task = _spawn_stdin_writer(
@@ -272,7 +263,7 @@ async def _attach_run_tasks(
         )
         if stdin_task is not None:
             started.append(stdin_task)
-        consumers = _spawn_stream_consumers(process, execution, spawn_context)
+        consumers = _spawn_stream_consumers(process, execution, spawn.spawn_context)
         started.extend(consumers)
     except BaseException:
         await _detach_run_tasks(started)
@@ -280,8 +271,8 @@ async def _attach_run_tasks(
     return _RunTaskOwnership(
         stdin_task=stdin_task,
         consumers=consumers,
-        discard_on_cancel=discard_on_cancel,
-        relay_diagnostics=relay_diagnostics,
+        discard_on_cancel=spawn.discard_on_cancel,
+        relay_diagnostics=spawn.relay_diagnostics,
         idle=execution.idle,
     )
 

@@ -17,11 +17,10 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
-if typ.TYPE_CHECKING:
-    from cuprum.echo_events import EchoEvent, EchoHook
+from cuprum._scope_registration import _TokenTupleRegistration
 
 if typ.TYPE_CHECKING:
-    from contextvars import Token
+    from cuprum.echo_events import EchoEvent, EchoHook
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ _echo_hooks: ContextVar[tuple[EchoHook, ...]] = ContextVar(
 )
 
 
-class EchoHookRegistration:
+class EchoHookRegistration(_TokenTupleRegistration["EchoHook"]):
     """Registration handle for a stream-echo observation hook.
 
     Supports ``detach()`` and context-manager use. The handle captures a
@@ -46,36 +45,11 @@ class EchoHookRegistration:
     out of order restores a tuple that discards later registrations.
     """
 
-    __slots__ = ("_detached", "_hook", "_token")
+    __slots__ = ()
 
     def __init__(self, hook: EchoHook) -> None:
         """Append ``hook`` to the current context's echo hooks."""
-        self._hook = hook
-        self._detached = False
-        self._token: Token[tuple[EchoHook, ...]] = _echo_hooks.set((
-            *_echo_hooks.get(),
-            hook,
-        ))
-
-    def detach(self) -> None:
-        """Restore the echo hooks that preceded this registration."""
-        if self._detached:
-            return
-        _echo_hooks.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        super().__init__(_echo_hooks, hook)
 
 
 def observe_echo(hook: EchoHook) -> EchoHookRegistration:
