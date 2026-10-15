@@ -64,9 +64,10 @@ WORKSPACE_MANIFEST: typ.Final[Path] = Path("rust") / "Cargo.toml"
 #: cold build is. An override set to the profile's 300 s plus one second
 #: satisfies every relation this module checks while still terminating a
 #: healthy compile: the largest figure measured for these tests is
-#: 277.049 s, which a 301 s tier does not clear with the margin the gate
-#: runs actually need. The tier is ten 60 s periods.
-EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
+#: 277.049 s. A later uncached gate run also timed out `compile_time_ui` at
+#: 600 s while Cargo waited for the shared package cache, so the tier now
+#: grants fifteen 60 s periods.
+EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 15 * 60
 
 COMPILE_TEST_SOURCES: typ.Final[tuple[str, ...]] = (
     "rust/cuprum-rust/tests/compile_tests.rs",

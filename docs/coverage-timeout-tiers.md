@@ -21,7 +21,7 @@ _Table 1: Coverage timeout tiers._
 | Tier               | Configuration key or environment variable             | Value  | Scope                                        |
 | ------------------ | ----------------------------------------------------- | ------ | -------------------------------------------- |
 | Per-test allowance | `profile.default.slow-timeout`                        | 300 s  | One Rust test                                |
-| Compile-test tier  | `profile.default.overrides` (`binary(compile_tests)`) | 600 s  | The two `trybuild` UI tests                  |
+| Compile-test tier  | `profile.default.overrides` (`binary(compile_tests)`) | 900 s  | The two `trybuild` UI tests                  |
 | Whole-run budget   | `profile.default.global-timeout`                      | 1200 s | One nextest run                              |
 | Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`                         | 2700 s | One coverage action cargo call               |
 | Job ceiling        | `timeout-minutes`                                     | 65 m   | The `coverage` job and its trunk counterpart |
@@ -83,20 +83,25 @@ run on the same date killed it at the 300 s allowance —
 `TERMINATING [>300.000s]` — while it was still compiling a dependency, that is,
 while it was healthy.
 
-`terminate-after` is therefore raised to 10 for the `binary(compile_tests)`
-tests, giving them 600 s, and left at 5 for the other 123. The override is
-scoped by binary rather than by test name so both `trybuild` tests carry it:
-`cuprum-streams::compile_tests::transition_privacy` is the same species and
-measured 39.6 s from a warm scratch directory, and a bound that covered only
-the test that happened to time out first would leave its sibling as the next
-tripwire.
+`terminate-after` was initially raised to 10 for both `binary(compile_tests)`
+tests, giving them 600 s. It remained at 5 for the other 123 tests. The
+override is scoped by binary rather than by test name so both `trybuild` tests
+carry it: `cuprum-streams::compile_tests::transition_privacy` is the same
+species and measured 39.6 s from a warm scratch directory, and a bound that
+covered only the test that happened to time out first would leave its sibling
+as the next tripwire. On 2026-10-15, an uncached `make test` run timed out
+`cuprum-rust::compile_tests::compile_time_ui` at 600 s while Cargo reported
+package-cache lock waits and continued compiling its trybuild fixture. The
+compiler had not reported an error. This showed that shared package-cache
+contention can outlast the measured cold-build allowance, so the tier is now
+fifteen 60 s periods, or 900 s.
 
 `largest_per_test_allowance_seconds()` reads the maximum across the default
 profile and every override, not the profile alone. An override exists precisely
 to exceed the profile it overrides, so reading only the profile would
 understate the allowance and the containment assertions would pass while a test
 could still outlast the tier meant to contain it. The 1200 s global budget
-contains that 600 s allowance while remaining well inside the cargo watchdog.
+contains that 900 s allowance while remaining well inside the cargo watchdog.
 The 2700 s watchdog was sized from roughly fifty successful runs: the worst
 coverage step was 418 s in run 34071469378, the worst trunk coverage step was
 322 s in run 34062626757, and run 34067223641 measured the worst work outside

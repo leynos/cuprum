@@ -10,6 +10,9 @@ import pytest
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
 
+# Maturin invokes Cargo metadata, which can queue on the shared package cache.
+_MATURIN_SDIST_TIMEOUT_SECONDS = 600
+
 
 def _build_source_archive(backend: str, destination: Path) -> Path:
     """Build one real source archive using the repository's packaging frontend."""
@@ -38,9 +41,10 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
             str(destination),
         )
     )
+    timeout = _MATURIN_SDIST_TIMEOUT_SECONDS if backend == "maturin" else 180
     with scoped(ScopeConfig(allowlist=frozenset({program}))):
         result = command(*arguments).run_sync(
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=180)
+            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout)
         )
     assert result.exit_code == 0, f"source build failed: {result.stderr}"
     archives = list(destination.glob("*.tar.gz"))
@@ -48,8 +52,16 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
     return archives[0]
 
 
-@pytest.mark.timeout(240)
-@pytest.mark.parametrize("backend", ["uv", "maturin"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        pytest.param("uv", marks=pytest.mark.timeout(240)),
+        pytest.param(
+            "maturin",
+            marks=pytest.mark.timeout(_MATURIN_SDIST_TIMEOUT_SECONDS + 60),
+        ),
+    ],
+)
 def test_source_distribution_retains_native_workspace(
     backend: str,
     tmp_path: Path,
