@@ -130,6 +130,20 @@ def test_captures_and_echoes_stderr(
     assert captured.err.strip() == "err"
 
 
+def test_explicit_capture_returns_captured_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Explicit capture produces the narrowed result for both run methods."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "pass")
+
+    result = execute(command, {"output": RunOutputOptions(capture=True)})
+
+    assert isinstance(result, sh.CapturedResult)
+    assert (result.stdout, result.stderr) == ("", "")
+
+
 def test_bounded_stderr_echo_keeps_complete_capture(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -307,6 +321,7 @@ def test_allows_disabling_capture(
 
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
+    assert type(result) is CommandResult
     assert_capture_disabled(result)
 
 

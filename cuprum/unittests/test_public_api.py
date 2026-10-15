@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import dataclasses as dc
 import inspect
+import typing as typ
 
 import pytest
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 import cuprum as c
 from cuprum import (
@@ -464,6 +468,132 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         f"{hints['relay_fallbacks']!r}"
     )
     assert hints["stdout"] == str | None
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_captured_result_rejects_missing_streams(stream: str) -> None:
+    """A captured result cannot represent a stream that was not captured."""
+    from cuprum import sh
+
+    invalid_stdout = None if stream == "stdout" else "out"
+    invalid_stderr = None if stream == "stderr" else "err"
+    constructor = typ.cast("cabc.Callable[..., sh.CapturedResult]", sh.CapturedResult)
+    with pytest.raises(TypeError, match=stream):
+        constructor(
+            c.ECHO,
+            (),
+            0,
+            1,
+            invalid_stdout,
+            invalid_stderr,
+        )
+
+    result = sh.CapturedResult(c.ECHO, (), 0, 1, "out", "err")
+
+    with pytest.raises(TypeError, match=stream):
+        dc.replace(result, **{stream: None})
+
+
+def test_command_result_require_captured_copies_every_public_field() -> None:
+    """Narrowing a base result preserves execution and measurement fields."""
+    result = c.CommandResult(
+        c.ECHO,
+        ("argument",),
+        7,
+        4242,
+        "out",
+        "err",
+        started_at=12.5,
+        duration=0.75,
+        max_rss_bytes=1024,
+        user_cpu_seconds=0.25,
+        system_cpu_seconds=0.125,
+        resolved_path="/bin/echo",
+    )
+
+    captured = result.require_captured()
+
+    assert type(captured) is c.CapturedResult
+    assert captured.program is result.program
+    assert captured.argv == result.argv
+    assert captured.exit_code == result.exit_code
+    assert captured.pid == result.pid
+    assert captured.stdout == result.stdout
+    assert captured.stderr == result.stderr
+    assert captured.started_at == result.started_at
+    assert captured.duration == result.duration
+    assert captured.max_rss_bytes == result.max_rss_bytes
+    assert captured.user_cpu_seconds == result.user_cpu_seconds
+    assert captured.system_cpu_seconds == result.system_cpu_seconds
+    assert captured.resolved_path == result.resolved_path
+    assert captured.relay_fallbacks == result.relay_fallbacks
+    assert captured.require_captured() is captured
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "missing"),
+    [
+        (None, "err", "stdout"),
+        ("out", None, "stderr"),
+        (None, None, "stdout and stderr"),
+    ],
+)
+def test_command_result_require_captured_reports_missing_streams(
+    stdout: str | None,
+    stderr: str | None,
+    missing: str,
+) -> None:
+    """Narrowing without both streams gives a useful capture diagnostic."""
+    result = c.CommandResult(c.ECHO, (), 0, 1, stdout, stderr)
+
+    with pytest.raises(ValueError, match=missing) as exc_info:
+        result.require_captured()
+
+    assert "RunOutputOptions(capture=True)" in str(exc_info.value)
+
+
+def test_captured_result_preserves_the_command_result_layout() -> None:
+    """The narrowed subclass keeps the command result's public layout."""
+    from cuprum import sh
+
+    assert c.CapturedResult is sh.CapturedResult
+    assert "CapturedResult" in c.__all__
+    assert "CapturedResult" in sh.__all__
+
+    positional = [
+        field.name for field in dc.fields(sh.CapturedResult) if not field.kw_only
+    ]
+    assert positional == [
+        "program",
+        "argv",
+        "exit_code",
+        "pid",
+        "stdout",
+        "stderr",
+        "relay_fallbacks",
+    ]
+    sentinel = c.RelayFallback(
+        stream=c.EchoStream.STDOUT,
+        error_category=c.EchoErrorCategory.UNICODE_ENCODE,
+    )
+    result = sh.CapturedResult(c.ECHO, (), 0, 1, "out", "err", (sentinel,))
+    assert result.relay_fallbacks == (sentinel,)
+    assert not {"stdout", "stderr"}.intersection(sh.CapturedResult.__slots__)
+    assert not hasattr(result, "__dict__")
+
+
+def test_captured_result_type_hints_resolve() -> None:
+    """The narrowed stream annotations remain visible at runtime."""
+    import typing as typ
+
+    from cuprum import sh
+
+    assert typ.get_type_hints(sh.CapturedResult)["stdout"] is str
+    assert typ.get_type_hints(sh.CapturedResult)["stderr"] is str
+    assert (
+        typ.get_type_hints(sh.CommandResult.require_captured)["return"]
+        is sh.CapturedResult
+    )
 
 
 @pytest.mark.parametrize(

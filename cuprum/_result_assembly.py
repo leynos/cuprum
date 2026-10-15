@@ -177,8 +177,18 @@ def _require_text(payload: _StreamPayload | None, stream: str) -> str | None:
     return _require_mode_payload(payload, stream, str, CaptureMode.TEXT)
 
 
+def _require_captured_text(payload: _StreamPayload | None, stream: str) -> str:
+    """Require a decoded stream when a single-command run captured output."""
+    text = _require_text(payload, stream)
+    if text is None:
+        msg = f"text capture was enabled but {stream} was not captured"
+        raise _ExecutionInvariantError(msg)
+    return text
+
+
 __all__ = [
     "_RunMeasurements",
     "_require_bytes",
+    "_require_captured_text",
     "_require_text",
 ]

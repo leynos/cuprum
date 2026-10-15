@@ -91,6 +91,9 @@ def test_captures_output_and_exit_code(
 
     assert result.exit_code == 0
     assert result.ok is True
+    assert isinstance(result, sh.CapturedResult), (
+        "default capture must return the narrowed result type"
+    )
     assert result.stdout == "hello"
     assert result.stderr is not None, (
         f"a captured run must report stderr as text, got {result.stderr!r}"
@@ -102,6 +105,18 @@ def test_captures_output_and_exit_code(
         assert result.max_rss_bytes is None, "Windows must not report child RSS"
         assert result.user_cpu_seconds is None, "Windows must not report child CPU"
         assert result.system_cpu_seconds is None, "Windows must not report child CPU"
+
+
+def test_empty_captured_streams_are_empty_strings(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Captured streams with no child output are empty text values."""
+    _, execute = execution_strategy
+    result = execute(python_builder("-c", "pass"), {})
+
+    assert isinstance(result, sh.CapturedResult)
+    assert (result.stdout, result.stderr) == ("", "")
 
 
 @_wait4_only
@@ -324,6 +339,9 @@ def test_captures_nonzero_exit_code_and_ok_flag(
 
     result = execute(command, {})
 
+    assert isinstance(result, sh.CapturedResult), (
+        "a captured nonzero exit must retain the captured result type"
+    )
     assert result.exit_code == 3
     assert result.ok is False
 
