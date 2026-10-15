@@ -60,13 +60,11 @@ WORKSPACE_MANIFEST: typ.Final[Path] = Path("rust") / "Cargo.toml"
 #: The allowance that override must grant, in seconds.
 #:
 #: Pinned by value rather than only asserted to exceed the profile,
-#: because exceeding the profile is not the requirement -- exceeding a
-#: cold build is. An override set to the profile's 300 s plus one second
-#: satisfies every relation this module checks while still terminating a
-#: healthy compile: the largest figure measured for these tests is
-#: 277.049 s, which a 301 s tier does not clear with the margin the gate
-#: runs actually need. The tier is ten 60 s periods.
-EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
+#: because exceeding the profile is not the requirement -- surviving a
+#: healthy cold build under shared queueing is. The 2026-10-15 full gate
+#: timed out at 600 s after the trybuild scratch build completed in 9m35s.
+#: The 900 s tier gives the remaining UI checks a finite five-minute margin.
+EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 15 * 60
 
 COMPILE_TEST_SOURCES: typ.Final[tuple[str, ...]] = (
     "rust/cuprum-rust/tests/compile_tests.rs",
@@ -195,8 +193,11 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     this repository has already seen kill one of them while it was still
     compiling a dependency and was therefore healthy: the gate run of
     2026-09-19 terminated `compile_time_ui` at 300 s, against 277 s
-    measured for the same test on an unloaded machine. A tier a healthy
-    test reaches is not a bound, so the override is asserted to exist, to
+    measured for the same test on an unloaded machine. On 2026-10-15, a
+    shared-queue run then exceeded the 600 s override after nested Cargo
+    waited on package-cache locks and its trybuild build finished in 9m35s.
+    The 900 s tier adds five minutes for the remaining UI checks while
+    keeping the allowance finite. The override is asserted to exist, to
     carry the expected filter, and to exceed the profile's allowance.
 
     Proved by mutation: removing the override, reducing its multiplier to
@@ -226,14 +227,16 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
         f"s, no more than the profile's {base} s, so it does not widen the tier "
         f"the `trybuild` tests need widened: the gate run of 2026-09-19 "
         f"terminated `compile_time_ui` at 300 s against 277 s measured for the "
-        f"same test on an unloaded machine, so a healthy test reaches it"
+        f"same test on an unloaded machine; a later shared-queue run also "
+        f"exceeded the 600 s compile-test tier after its build completed in "
+        f"9m35s"
     )
     assert widest == EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS, (
         f"the override carrying filter {COMPILE_TEST_FILTER!r} grants {widest} "
         f"s, not the {EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS} s sized for it. "
-        f"Exceeding the profile is not the requirement; exceeding the cold "
-        f"build is. The largest figure measured for these tests is 277.049 s, "
-        f"and an override set just above the profile's 300 s would still leave "
-        f"a healthy compile terminating"
+        f"Exceeding the profile is not the requirement; covering a healthy "
+        f"shared-queue build is. The 2026-10-15 gate timed out at 600 s after "
+        f"the trybuild build completed in 9m35s, so the reviewed tier is "
+        f"900 s"
     )
     _assert_filter_selects_the_pinned_sources()
