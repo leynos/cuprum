@@ -1426,7 +1426,7 @@ jobs:
         id: gate-log-upload
         if: ${{ !cancelled() && env.ACT != 'true' && steps.gate-log.outputs.written == 'true' }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: benchmark-gate-decision-${{ github.run_attempt }}
           path: ${{ runner.temp }}/benchmark-gate/decisions.jsonl
@@ -1978,7 +1978,7 @@ jobs:
 
       - name: Upload benchmark ratchet artefacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: benchmark-ratchet
           retention-days: 90
@@ -2063,7 +2063,7 @@ jobs:
           ${{ !cancelled() && github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
           steps.candidate-artefacts.outputs.available == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: benchmark-ratchet-main-baseline
           if-no-files-found: error
