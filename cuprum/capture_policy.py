@@ -330,32 +330,27 @@ def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-@typ.overload
-def policy_kind(policy: CapturePolicy) -> CapturePolicyKind:  # ruff: ignore[overload-with-docstring] - the `interrogate --fail-under 100` gate counts every function, so an undocumented overload stub fails it.
-    """Report the kind a resolved policy carries."""
-
-
-@typ.overload
-def policy_kind(policy: None) -> None:  # ruff: ignore[overload-with-docstring] - same conflict as the overload above; the interrogate gate admits no undocumented function.
-    """Report ``None`` for an uncaptured stream, so the record carries no kind."""
-
-
-def policy_kind(policy: CapturePolicy | None) -> CapturePolicyKind | None:
+def policy_kind(policy: CapturePolicy) -> CapturePolicyKind:
     """Classify a resolved policy for the metadata a run reports.
 
     The one place a policy object becomes the kind a
     :class:`CapturedStream` carries, so the mapping cannot drift between the
     sites that build metadata for a command and for a pipeline stage.
 
+    An uncaptured stream never reaches here: a record exists only where a
+    policy did, so ``None`` is the absence of a call rather than a value this
+    function classifies. Keeping the parameter concrete is what lets
+    :attr:`CapturedStream.policy` be a non-optional kind.
+
     Parameters
     ----------
-    policy : CapturePolicy | None
-        A resolved policy, or ``None`` for a stream that is not captured.
+    policy : CapturePolicy
+        A resolved policy for one stream.
 
     Returns
     -------
-    CapturePolicyKind | None
-        The policy's kind, or ``None`` alongside a ``None`` policy.
+    CapturePolicyKind
+        The policy's kind.
 
     Raises
     ------
@@ -368,12 +363,8 @@ def policy_kind(policy: CapturePolicy | None) -> CapturePolicyKind | None:
     --------
     >>> policy_kind(BoundedCapture(max_bytes=8))
     <CapturePolicyKind.BOUNDED: 'bounded'>
-    >>> policy_kind(None) is None
-    True
     """
     match policy:
-        case None:
-            return None
         case FullCapture():
             return CapturePolicyKind.FULL
         case BoundedCapture():

@@ -120,6 +120,7 @@ _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
 })
 _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters._tracing_line_stream._line_stream_attributes",
+    "cuprum.capture_policy._is_positive_int",
     "cuprum.control_observation._discard_hook_result",
     "cuprum.control_observation._emit_control_event",
     "cuprum.stream_observation._discard_hook_result",
