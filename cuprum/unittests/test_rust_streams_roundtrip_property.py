@@ -11,7 +11,7 @@ the Rust entry point against an independently computed expectation:
   sink match Python's own results, so "the default applies" cannot be satisfied
   by two identically wrong answers.
 
-Each property here runs the entry point over a real POSIX pipe. Windows raw
+Each property here runs the entry point over a real Unix pipe. Windows raw
 handles do not establish the synchronous-I/O capability and are rejected by
 the native boundary; the Windows rejection contract is covered separately by
 ``test_rust_errno_windows.py``.
@@ -45,7 +45,8 @@ _SUPPRESS_FIXTURE = settings(
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
     reason=(
-        "POSIX pipe descriptors cannot establish the Windows synchronous-I/O capability"
+        "Windows CRT pipe descriptors do not establish the "
+        "synchronous native-I/O capability"
     ),
 )
 
