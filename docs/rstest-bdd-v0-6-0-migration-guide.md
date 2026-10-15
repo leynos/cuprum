@@ -610,20 +610,20 @@ regression-suite snippets.
 For a worked-out example, see the regression suite at
 `crates/rstest-bdd-harness-gpui/tests/stateful_window.rs` and the
 [stateful playbook][users-guide-playbook] subsection. The pattern's rationale
-lives in §§2.7.6.1–2.7.6.2 of the [rstest-bdd design](rstest-bdd-design.md).
+lives in §§2.7.6.1–2.7.6.2 of the
+[rstest-bdd design](https://github.com/leynos/rstest-bdd/blob/main/docs/rstest-bdd-design.md).
 
-[adr-007]: adr-007-harness-context-injection.md
+[adr-007]: https://github.com/leynos/rstest-bdd/blob/main/docs/adr-007-harness-context-injection.md
 
-[adr-012]: adr-012-guard-based-stepcontext-borrowing.md
+[adr-012]: https://github.com/leynos/rstest-bdd/blob/main/docs/adr-012-guard-based-stepcontext-borrowing.md
 
-[design-beta2-quick-wins]: rstest-bdd-design.md#2763-v060-beta2-quick-wins
+[design-beta2-quick-wins]: https://github.com/leynos/rstest-bdd/blob/main/docs/rstest-bdd-design.md#2763-v060-beta2-quick-wins
 
-[design-borrow-constraint]:
-rstest-bdd-design.md#2761-borrow-constraint-exposed-by-gpui-adoption
+[design-borrow-constraint]: https://github.com/leynos/rstest-bdd/blob/main/docs/rstest-bdd-design.md#2761-borrow-constraint-exposed-by-gpui-adoption
 
-[design-interim-gpui]: rstest-bdd-design.md#2762-interim-gpui-state-pattern
+[design-interim-gpui]: https://github.com/leynos/rstest-bdd/blob/main/docs/rstest-bdd-design.md#2762-interim-gpui-state-pattern
 
-[design-redesign]: rstest-bdd-design.md#2765-v070-pre-100-redesign
+[design-redesign]: https://github.com/leynos/rstest-bdd/blob/main/docs/rstest-bdd-design.md#2765-v070-pre-100-redesign
 
 [rustc-e0499]: https://doc.rust-lang.org/error_codes/E0499.html
 
@@ -632,11 +632,9 @@ rstest-bdd-design.md#2761-borrow-constraint-exposed-by-gpui-adoption
 [rustonomicon-splitting]:
 https://doc.rust-lang.org/nomicon/borrow-splitting.html
 
-[users-guide-playbook]:
-users-guide.md#stateful-gpui-scenarios-with-durable-handles
+[users-guide-playbook]: https://github.com/leynos/rstest-bdd/blob/main/docs/users-guide.md#stateful-gpui-scenarios-with-durable-handles
 
-[published-variants]:
-users-guide.md#published-gpui-022-stateful-step-variants
+[published-variants]: https://github.com/leynos/rstest-bdd/blob/main/docs/users-guide.md#published-gpui-022-stateful-step-variants
 
 ### Adopt guard-based `StepContext` borrowing (v0.7.0)
 
@@ -991,7 +989,7 @@ the playbook redirect instead.
 
 ## Further reading
 
-- [Developer's guide](developers-guide.md)
-- [ADR 006 – Fallible scenario functions](adr-006-fallible-scenario-functions.md)
-- [ADR 007 – Harness context injection](adr-007-harness-context-injection.md)
-- [ADR 009 – Consistent implicit fixture-name normalization](adr-009-consistent-implicit-fixture-name-normalization.md)
+- [Developer's guide](https://github.com/leynos/rstest-bdd/blob/main/docs/developers-guide.md)
+- [ADR 006 – Fallible scenario functions](https://github.com/leynos/rstest-bdd/blob/main/docs/adr-006-fallible-scenario-functions.md)
+- [ADR 007 – Harness context injection](https://github.com/leynos/rstest-bdd/blob/main/docs/adr-007-harness-context-injection.md)
+- [ADR 009 – Consistent implicit fixture-name normalization](https://github.com/leynos/rstest-bdd/blob/main/docs/adr-009-consistent-implicit-fixture-name-normalization.md)

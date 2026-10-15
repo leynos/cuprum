@@ -204,6 +204,6 @@ end-user wrapper code.
   - **Fix:** Update imports to `rstest_bdd::async_step::sync_to_async`.
 
 For migration issues not covered here, see
-[ADR-006](adr-006-fallible-scenario-functions.md).[^adr]
+[ADR-006](https://github.com/leynos/rstest-bdd/blob/main/docs/adr-006-fallible-scenario-functions.md).[^adr]
 
-[^adr]: docs/adr-006-fallible-scenario-functions.md
+[^adr]: <https://github.com/leynos/rstest-bdd/blob/main/docs/adr-006-fallible-scenario-functions.md>
