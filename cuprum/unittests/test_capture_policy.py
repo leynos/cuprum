@@ -48,6 +48,22 @@ _POLICIES = st.one_of(
 )
 
 
+def _kind(policy: CapturePolicy | None) -> CapturePolicyKind | None:
+    """Name the kind a resolved policy reports, or ``None`` if uncaptured.
+
+    :func:`policy_kind` classifies a policy that exists, so an uncaptured
+    stream is represented here as the absence of a call rather than as an
+    argument: that is exactly how the drain treats it, and the distinction is
+    the assertion these cases make.
+
+    Returns
+    -------
+    CapturePolicyKind | None
+        The policy's kind, or ``None`` where no policy was resolved.
+    """
+    return None if policy is None else policy_kind(policy)
+
+
 @settings(max_examples=200)
 @given(capture=st.booleans(), stdout=_POLICIES, stderr=_POLICIES)
 def test_each_stream_resolves_from_its_own_field(
@@ -78,10 +94,10 @@ def test_each_stream_resolves_from_its_own_field(
             return policy_kind(FullCapture()) if declared else None
         return policy_kind(declared)
 
-    assert policy_kind(resolved_stdout) == expected(stdout), (
+    assert _kind(resolved_stdout) == expected(stdout), (
         f"stdout resolved to {resolved_stdout!r} for declared {stdout!r}"
     )
-    assert policy_kind(resolved_stderr) == expected(stderr), (
+    assert _kind(resolved_stderr) == expected(stderr), (
         f"stderr resolved to {resolved_stderr!r} for declared {stderr!r}"
     )
     # A stream left as ``None`` inherits the shorthand, so the two fields
@@ -125,7 +141,7 @@ def test_capture_resolution_matrix(
     else:
         policy = declared
     options = RunOutputOptions(capture=capture, capture_stdout=policy)
-    assert policy_kind(options.resolved_capture[0]) == expected, (
+    assert _kind(options.resolved_capture[0]) == expected, (
         f"capture={capture} declared={declared!r} resolved to "
         f"{options.resolved_capture[0]!r}"
     )
