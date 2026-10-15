@@ -29,6 +29,7 @@ from scripts.tests.boundary_harness_support import (
 )
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
+CARGO_METADATA_CALLS_PER_SYMLINK_TEST = 2
 SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS = 3900
 
 
@@ -179,13 +180,13 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
 
 # This is the only test in this file that reaches the real `_compile`. It
 # patches `contract._compile` to a recording seam during `main()`, then invokes
-# the saved helper once for exactly one real `cargo check`. The two Cargo
-# metadata calls each have a 120 s bound for a package-cache lock wait, and
-# `_compile` bounds the check at 3600 s. Their combined 3840 s budget leaves
-# 60 s for test setup and assertions inside this marker. Cargo parallelism
-# belongs to the caller: the cold `CARGO_BUILD_JOBS=1` build measured 181 s, and
-# these fixed subprocess budgets do not depend on the caller's `-j` value. The
-# global `timeout = 30` remains unchanged for every other test.
+# the saved helper once for exactly one real `cargo check`. It calls Cargo
+# metadata twice; each call has a 120 s bound that allows for a package-cache
+# lock wait, and `_compile` bounds the check at 3600 s. Their combined 3840 s
+# budget leaves 60 s for test setup and assertions inside this marker. Cargo
+# parallelism belongs to the caller. The cold `CARGO_BUILD_JOBS=1` build
+# measured 181 s, and the fixed subprocess budgets do not depend on the caller's
+# `-j` value. The global `timeout = 30` remains unchanged for every other test.
 @pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -272,9 +273,12 @@ def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
     assert timeout_markers[0].args == (SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS,), (
         "the real compile test marker must use its named timeout tier"
     )
-    assert SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS > (
-        COMPILE_TIMEOUT_SECONDS + CARGO_METADATA_TIMEOUT_SECONDS
-    ), "the outer marker must contain metadata and compile budgets"
+    subprocess_budget = COMPILE_TIMEOUT_SECONDS + (
+        CARGO_METADATA_CALLS_PER_SYMLINK_TEST * CARGO_METADATA_TIMEOUT_SECONDS
+    )
+    assert subprocess_budget < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
+        "the outer marker must contain both metadata calls and the compile budget"
+    )
 
     pyproject = tomllib.loads(
         (contract.ROOT / "pyproject.toml").read_text(encoding="utf-8")

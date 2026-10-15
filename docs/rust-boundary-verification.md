@@ -82,8 +82,8 @@ for blocking `ReadFile`/`WriteFile` semantics, not merely a live
 `BorrowedHandle`. `synchronous_pipe` establishes that property for `CreatePipe`
 endpoints at `rust/cuprum-native-io/src/windows.rs:91-105`. Foreign
 integrations can use the unsafe constructors at
-`rust/cuprum-native-io/src/lib.rs:76-129` or establish the capability at an
-audited hand-off with `SynchronousBorrowedStream::new_unchecked` at
+`rust/cuprum-native-io/src/lib.rs:76-80,96-112` or establish the capability at
+an audited hand-off with `SynchronousBorrowedStream::new_unchecked` at
 `rust/cuprum-native-io/src/windows.rs:28-36`. A bare Win32 handle has no
 documented runtime mode query, so the property is established at creation,
 duplication, or the audited hand-off rather than inferred from liveness.
