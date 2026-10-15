@@ -50,7 +50,7 @@ NEXTEST_CONFIG: typ.Final[Path] = CARGO_WORKSPACE_DIR / ".config" / "nextest.tom
 #:
 #: 300 s is five 60 s periods, sized for the tests bounded by their own work.
 #: The ``compile_tests`` binaries are bounded by a cold build instead and
-#: carry a separate 600 s override, so the slowest measurements recorded for
+#: carry a separate 900 s override, so the slowest measurements recorded for
 #: this suite describe that tier rather than this one. This value bounds the
 #: profile's own occupants; it is not a measurement of any of them.
 EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
@@ -61,7 +61,7 @@ EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 #: correctly, so ``global-timeout = "2s"`` would pass it while bounding the
 #: run below a single test's allowance.
 #:
-#: 1200 s is twenty minutes, and sits above the compile-test tier's 600 s so
+#: 1200 s is twenty minutes, and sits above the compile-test tier's 900 s so
 #: a single slow ``trybuild`` binary cannot exhaust the whole suite.
 EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
 
