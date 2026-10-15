@@ -6,14 +6,14 @@ import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this test executes a fixed pinned Cargo command.
 import sys
-import typing as typ
+from pathlib import Path
 
 import pytest
 
-if typ.TYPE_CHECKING:
-    from pathlib import Path
-
 DEV_FAST_TOOLCHAIN = os.environ.get("DEV_FAST_TOOLCHAIN", "nightly-2026-08-23")
+DOCTEST_TARGET_DIR = (
+    Path(__file__).resolve().parents[2] / "rust/target/doctest-warning-contract"
+)
 DOCTEST_RUSTDOC_FLAGS = (
     "--cfg docsrs -D warnings -Zunstable-options --display-doctest-warnings "
     "--doctest-build-arg=-D --doctest-build-arg=warnings"
@@ -35,7 +35,7 @@ def _run_doctests(
     """Run the pinned nightly with the standard backend and stated Rustdoc flags."""
     environment: dict[str, str] = dict(os.environ)
     environment.update({
-        "CARGO_TARGET_DIR": str(crate / "target"),
+        "CARGO_TARGET_DIR": str(DOCTEST_TARGET_DIR),
         "RUSTFLAGS": "-D warnings",
         "RUSTUP_TOOLCHAIN": DEV_FAST_TOOLCHAIN,
     })
@@ -66,10 +66,12 @@ def _diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stdout + completed.stderr
 
 
+# Both Cargo routes wait for shared compiler admission as well as compiling.
+# Keep a finite budget without treating a normal queue as a hung unit test.
+@pytest.mark.timeout(600)
 @pytest.mark.skipif(
     sys.platform != "linux", reason="the production doctest warning route is Linux-only"
 )
-@pytest.mark.timeout(10 * 60)
 def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
     """Only the corrected nightly Rustdoc route rejects a doctest warning.
 

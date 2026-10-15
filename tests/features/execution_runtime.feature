@@ -54,3 +54,10 @@ Feature: Execution runtime
     Given a safe command that reads stdin
     When I run the command with direct stdin text
     Then the command result contains the stdin text
+
+  Scenario: Timeout cleanup does not depend on a child PID file
+    Given a safe worker that never publishes its PID
+    When I run the command with a timeout
+    Then a timeout error is raised
+    And the subprocess stops cleanly
+    And the worker PID file is absent

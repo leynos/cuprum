@@ -11,12 +11,12 @@ from pytest_bdd import given, scenario, then, when
 
 from cuprum import ECHO, TimeoutExpired, sh
 from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
+from tests.behaviour import _execution_timeout_steps as _timeout_steps
 from tests.behaviour._execution_runtime_support import (
     WorkerCommand,
     _cancel_command_with_grace,
     _CancellationOptions,
     _create_worker_command,
-    _wait_for_pid,
 )
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
@@ -31,6 +31,10 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, SafeCmd
+
+given(
+    "a safe worker that never publishes its PID", target_fixture="long_running_command"
+)(_timeout_steps.given_unpublished_pid_worker)
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
@@ -244,17 +248,24 @@ def when_run_command_with_timeout(
     pid_file = long_running_command["pid_file"]
     timeout = 0.5
 
+    events: list[ExecEvent] = []
     ctx = ExecutionContext(env={"CUPRUM_PID_FILE": str(pid_file)})
-    with pytest.raises(TimeoutExpired, match=r"timed out") as exc_info:
+    with (
+        sh.observe(events.append),
+        pytest.raises(TimeoutExpired, match=r"timed out") as exc_info,
+    ):
         command.run_sync(
             output=RunOutputOptions(capture=False),
             timeout=timeout,
             context=ctx,
         )
 
+    # A short deadline can expire before the child writes its PID file.
+    pids = started_pids(events)
+    assert pids, "cuprum must emit a start event carrying the spawned PID"
     behaviour_state["timeout_error"] = exc_info.value
     behaviour_state["timeout_value"] = timeout
-    behaviour_state["pid"] = asyncio.run(_wait_for_pid(pid_file))
+    behaviour_state["pid"] = pids[0]
     behaviour_state["cleanup_context"] = "timeout"
 
 
@@ -363,4 +374,20 @@ def then_subprocess_killed_after_escalation(
         pid,
         seconds=5.0,
         context="escalation after SIGTERM ignored",
+    )
+
+
+@scenario(
+    "../features/execution_runtime.feature",
+    "Timeout cleanup does not depend on a child PID file",
+)
+def test_timeout_without_a_child_pid_file() -> None:
+    """A timeout still proves child cleanup when no PID file can arrive."""
+
+
+@then("the worker PID file is absent")
+def then_worker_pid_file_absent(long_running_command: WorkerCommand) -> None:
+    """Prove cleanup did not rely on a child-written readiness marker."""
+    assert not long_running_command["pid_file"].exists(), (
+        "the regression worker must never publish a PID file"
     )

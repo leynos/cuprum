@@ -5313,6 +5313,14 @@ Clippy, and doctests use the separately pinned dev-fast configuration, while
 MSRV, coverage, release, verification, and Whitaker retain their prescribed
 routes.
 
+The Python doctest-warning contract invokes Cargo twice to prove that the
+former route accepts a warning and the corrected route rejects it. Its
+600-second test budget includes waiting for shared compiler admission; the
+suite's default 30-second unit-test budget is too short for that workload.
+Build artefacts stay in `rust/target/doctest-warning-contract`, outside the
+temporary fixture source directory, and Cargo serializes concurrent access.
+Both warning assertions remain mandatory.
+
 ### Rustfmt fixture compatibility
 
 The formatter maintenance pin is `nightly-2026-05-28`; Continuous Integration
