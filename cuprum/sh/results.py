@@ -147,30 +147,29 @@ class CommandResult:
         >>> result.require_captured().stdout
         'output'
         """
-        if isinstance(self, CapturedResult):
-            return self
-
         stdout = self.stdout
         stderr = self.stderr
-        if isinstance(stdout, str) and isinstance(stderr, str):
-            result_fields = {
-                field.name: getattr(self, field.name)
-                for field in dc.fields(CommandResult)
-            }
-            return CapturedResult(**result_fields)
-
         missing = [
             name
             for name, value in (("stdout", stdout), ("stderr", stderr))
             if not isinstance(value, str)
         ]
-        streams = " and ".join(missing)
-        was_were = "was" if len(missing) == 1 else "were"
-        msg = (
-            f"{streams} {was_were} not captured; use "
-            "RunOutputOptions(capture=True) to request captured output"
-        )
-        raise ValueError(msg)
+        if missing:
+            streams = " and ".join(missing)
+            was_were = "was" if len(missing) == 1 else "were"
+            msg = (
+                f"{streams} {was_were} not captured as text; use "
+                "RunOutputOptions(capture=True) to request captured output"
+            )
+            raise ValueError(msg)
+
+        if isinstance(self, CapturedResult):
+            return self
+
+        result_fields = {
+            field.name: getattr(self, field.name) for field in dc.fields(CommandResult)
+        }
+        return CapturedResult(**result_fields)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -203,11 +202,11 @@ class CapturedResult(CommandResult):
         if base_post_init is not None:
             base_post_init(self)
 
-        if self.stdout is None or self.stderr is None:
+        if not isinstance(self.stdout, str) or not isinstance(self.stderr, str):
             missing = [
                 name
                 for name, value in (("stdout", self.stdout), ("stderr", self.stderr))
-                if value is None
+                if not isinstance(value, str)
             ]
             streams = " and ".join(missing)
             msg = f"CapturedResult requires captured {streams} text"

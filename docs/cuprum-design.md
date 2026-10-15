@@ -454,10 +454,46 @@ class SafeCmd:
     def before(self, hook: BeforeHook) -> "SafeCmd": ...
     def after(self, hook: AfterHook) -> "SafeCmd": ...
 
+    @overload
+    async def run(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CapturedResult: ...
+    @overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CommandResult: ...
     async def run(
         self,
         *,
         output: RunOutputOptions | None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CommandResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CapturedResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -473,6 +509,18 @@ class SafeCmd:
 
     def __or__(self, other: "SafeCmd") -> "Pipeline": ...
 ```
+
+These overloads describe the public call surface; both implementations remain
+annotated as returning `CommandResult`. With default text capture, a direct
+command constructs `CapturedResult`, whose streams are `str` and use `""` for
+empty output. An explicit `RunOutputOptions` call remains typed as
+`CommandResult` because that options value can disable capture. Call
+`CommandResult.require_captured()` to check and narrow it: an already narrowed
+result is returned unchanged, two present text streams produce a captured copy,
+and an unavailable stream raises `ValueError`. This also prevents an uncaptured
+diagnostic from being silently replaced with `""`. The decision and its
+compatibility limits are recorded in
+[ADR-023](adr-023-captured-command-output-types.md).
 
 #### 6.1.3 `DynamicCmd[Out]`
 
@@ -538,12 +586,20 @@ class PipelineResult:
 Contract notes:
 
 - When output capture is enabled (`RunOutputOptions(capture=True)`, the
-  default), `PipelineResult.stdout` contains the final stage stdout.
+  default), the final stage stdout and every stage's stderr are strings;
+  `PipelineResult.stdout` contains the final stage stdout.
+- Interior stage stdout is still `None` because it is sent directly to the next
+  process. `require_captured()` succeeds on the final stage and raises
+  `ValueError` for an interior stage.
 - When capture is disabled (`RunOutputOptions(capture=False)`),
   `PipelineResult.stdout` is `None`.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
+
+`TimeoutExpired.output` and `stderr` remain `str | bytes | None` and may
+contain partial output. A timeout can stop a child before its streams have been
+fully drained, so timeout exceptions do not use `CapturedResult`.
 
 #### 6.1.6 Byte-exact results
 

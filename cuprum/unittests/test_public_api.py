@@ -470,13 +470,24 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
     assert hints["stdout"] == str | None
 
 
-@pytest.mark.parametrize("stream", ["stdout", "stderr"])
-def test_captured_result_rejects_missing_streams(stream: str) -> None:
-    """A captured result cannot represent a stream that was not captured."""
+@pytest.mark.parametrize(
+    ("stream", "invalid_value"),
+    [
+        ("stdout", None),
+        ("stderr", None),
+        ("stdout", b"out"),
+        ("stderr", b"err"),
+    ],
+)
+def test_captured_result_rejects_invalid_streams(
+    stream: str,
+    invalid_value: object,
+) -> None:
+    """A captured result requires decoded text for both streams."""
     from cuprum import sh
 
-    invalid_stdout = None if stream == "stdout" else "out"
-    invalid_stderr = None if stream == "stderr" else "err"
+    invalid_stdout = invalid_value if stream == "stdout" else "out"
+    invalid_stderr = invalid_value if stream == "stderr" else "err"
     constructor = typ.cast("cabc.Callable[..., sh.CapturedResult]", sh.CapturedResult)
     with pytest.raises(TypeError, match=stream):
         constructor(
@@ -491,7 +502,7 @@ def test_captured_result_rejects_missing_streams(stream: str) -> None:
     result = sh.CapturedResult(c.ECHO, (), 0, 1, "out", "err")
 
     with pytest.raises(TypeError, match=stream):
-        dc.replace(result, **{stream: None})
+        dc.replace(result, **{stream: invalid_value})
 
 
 def test_command_result_require_captured_copies_every_public_field() -> None:
@@ -550,6 +561,23 @@ def test_command_result_require_captured_reports_missing_streams(
         result.require_captured()
 
     assert "RunOutputOptions(capture=True)" in str(exc_info.value)
+
+
+def test_command_result_require_captured_rejects_non_text_streams() -> None:
+    """Narrowing rejects runtime values that are not decoded text."""
+    result = c.CommandResult(
+        c.ECHO,
+        (),
+        0,
+        1,
+        typ.cast("str | None", b"out"),
+        "err",
+    )
+
+    with pytest.raises(ValueError, match="stdout") as exc_info:
+        result.require_captured()
+
+    assert "not captured as text" in str(exc_info.value)
 
 
 def test_captured_result_preserves_the_command_result_layout() -> None:

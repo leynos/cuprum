@@ -133,6 +133,25 @@ _Applications upgrading from 0.1 should follow the
   original text before the opaque mask is inserted. Redaction failures raise
   `RedactionError` without falling back to raw text. Metrics remain unchanged
   with bounded labels ([#442](https://github.com/leynos/cuprum/issues/442)).
+- **Typed captured text results:** A default single-command text run returns
+  `CapturedResult`, whose streams are strings and use `""` when empty. Calls
+  with explicit `RunOutputOptions` remain typed as `CommandResult` because those
+  options may disable capture. Replace the permissive fallback with checked
+  narrowing:
+
+  ```python
+  captured = result.require_captured()
+  outcome = CommandOutcome(
+      exit_code=result.exit_code,
+      stdout=captured.stdout,
+      stderr=captured.stderr,
+  )
+  ```
+
+  This replaces `stdout=result.stdout or ""` and
+  `stderr=result.stderr or ""`; if capture was omitted,
+  `require_captured()` raises `ValueError` and names the missing streams
+  ([#515](https://github.com/leynos/cuprum/issues/515)).
 - **Scoped executable bindings:**
   `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
   catalogued program to the executable it should run inside the enclosing
