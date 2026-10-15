@@ -854,8 +854,8 @@ members = [
 ]
 reason = "Three modules that each repeat one two-line early return twice within themselves (`if not self.hooks.observe_hooks: return`, `if os.name != 'nt': return fd`/`writer_fd`, `if config is None: return parent`). Each pair is a same-file guard whose two instances read different fields; the detector groups the pairs, not one repeated implementation."
 
-# The next entry groups two matches in one method, so its key is a `unit`;
-# later two-finding entries use `members` keys.
+# The three families below each group two findings that share one key, so the
+# entry is a `unit` even though the family has two members.
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_pipeline_native_pump_types.py::__init__", "cuprum/_subprocess_stdin_stream.py::__init__"]
 reason = "Two exception constructors in one module and a third in `_subprocess_stdin_stream.py` that store the original error and pass its text to `super()`. Each is the initializer of a distinct exception type with a distinct docstring naming a distinct failure (descriptor duplication against blocking-mode refusal, and a stdin-stream configuration refusal); a shared base class would make unrelated errors related to save one line. Widened from a unit entry to all three locations so the family this branch surfaced is covered by the entry that already adjudicated the idiom."
