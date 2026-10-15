@@ -242,6 +242,17 @@ Thresholds that trigger escalation when breached.
   run on this branch in which `ambrleaks` and `skylos` executed at all.
   Evidence: `/tmp/python-lint-cuprum-issue-443-...out` records HEAD `0bc470fb6`
   and `MAKE_EXIT=0`.
+- [x] (2026-10-15) Clear the two guard-test failures the first full `make test`
+  reached — the first run on this branch in which those two modules executed
+  against the new code. `test_no_duplicate_module_definitions.py` was right
+  about the `@typ.overload` stubs of `policy_kind`, which were deleted rather
+  than exempted; `test_skylos_lint_contract.py` required the `_is_positive_int`
+  entry point to be ratified in its typed register, which `a65330883` had
+  missed. Landed as `1e8c687ed` with `make check-fmt`, `make python-lint` (all
+  six leaves), and the four affected test modules green. Evidence:
+  `/tmp/check-fmt-cuprum-issue-443-...out` and
+  `/tmp/python-lint-cuprum-issue-443-...out` each record `MAKE_EXIT=0`;
+  `/tmp/focused-capturefix-cuprum-issue-443-...out` records `46 passed`.
 - [ ] Run the full commit-gate set through `scrutineer`, then push and open
   the draft pull request.
 
@@ -501,6 +512,33 @@ Thresholds that trigger escalation when breached.
   entry-point rule cannot describe. Date/Author: 2026-10-15, implementation
   agent.
 
+- Observation (M4, gate): two repo-owned guard tests failed the first full
+  `make test` on this branch, and both were correct about defects the whole
+  `lint` chain had passed. `test_no_duplicate_module_definitions.py` reported
+  three sibling `def policy_kind` sites, and `test_skylos_lint_contract.py`
+  reported that the `pyproject.toml` entry point added for `_is_positive_int`
+  was absent from the typed register the test compares it against. Neither test
+  file is touched by this branch, so both are pre-existing contracts the new
+  code violated rather than tests that drifted. The register is a paired
+  contract: `8c78a5b77` (#438) changed `pyproject.toml` and this test file in
+  one commit, which is the convention the earlier commit here missed. Date/
+  Author: 2026-10-15, implementation agent.
+
+- Observation (M4, gate): the duplicate-definition guard was right about the
+  `@typ.overload` stubs, and the honest repair was to delete them rather than
+  to teach the guard about overloads. `typing.overload` leaves only the last
+  `def` reachable at runtime, so the two stubs were literally the unreachable
+  siblings the guard describes. No caller passes `None`: `_empty_capture_for`
+  returns before the call when the policy is absent, and
+  `CapturedStream.policy` is a non-optional `CapturePolicyKind`. The parameter
+  was therefore widened for no caller, and the two
+  `ruff: ignore[overload-with-docstring]` suppressions existed only to resolve
+  the ruff/interrogate conflict the stubs created — narrowing the parameter
+  removed the suppressions as well, which is the tell that they were
+  speculative generality rather than a real contract. This is the same
+  preference `cuprum/_streams_pump.py` records when it chooses a separate value
+  over overloading a return. Date/Author: 2026-10-15, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -703,6 +741,24 @@ Thresholds that trigger escalation when breached.
   records the call sites, the probe result, and the two covering tests, so a
   later reader can re-derive the ruling. Date/Author: 2026-10-15,
   implementation agent.
+
+- Decision: delete the two `@typ.overload` stubs of `policy_kind` and narrow
+  its parameter to a concrete `CapturePolicy`, and ratify the
+  `_is_positive_int` entry point in `_RUNTIME_FUNCTION_ENTRY_POINTS`.
+  Rationale: the first failure was caught by a guard whose module docstring
+  exists precisely to report unreachable sibling definitions, and
+  `typing.overload` makes the stubs exactly that — only the final `def` is
+  reachable at runtime — so the guard was correct and the code was wrong.
+  Widening a parameter no caller uses is not a contract worth preserving, and
+  the proof is that narrowing it removed both
+  `ruff: ignore[overload-with-docstring]` suppressions along with it; a real
+  contract does not disappear when its only obstacle does. The second failure
+  is a paired contract that `8c78a5b77` (#438) honoured by changing
+  `pyproject.toml` and the register in one commit, and that `a65330883` broke
+  by changing only one side. The test's own nullable call sites now route
+  through a local `_kind` helper, so the test states the distinction the drain
+  implements — an uncaptured stream is the absence of a call, not a policy that
+  classifies to `None`. Date/Author: 2026-10-15, implementation agent.
 
 ## Outcomes & retrospective
 
