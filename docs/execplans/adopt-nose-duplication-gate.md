@@ -409,7 +409,9 @@ the polarity of the remaining condition is part of the extraction.
   workspace with no `.venv`: `ModuleNotFoundError: No module named 'cyclopts'`.
   The working form is the script path plus `PYTHONPATH=.`:
 
-      PYTHONPATH=. NOSE_BIN=<abs> uv run --no-project --python 3.14 scripts/duplication_gate.py
+  ```sh
+  PYTHONPATH=. NOSE_BIN=<abs> uv run --no-project --python 3.14 scripts/duplication_gate.py
+  ```
 
   Verified by probe: the run materializes an ephemeral environment under
   `.uv-cache/environments-v2/`, `cyclopts`/`tomlkit` resolve from *that* env,
@@ -1029,14 +1031,158 @@ for an in-body claim is the PEP 723 paragraph under its addendum, which
 corrects an accepted sentence without rewriting it in place.
 
 **Local gates at `41d43e14e`** are the Markdown/format set, since the delta is
-one Markdown file: `make check-fmt`, `make markdownlint` (with its spelling
-leaf), `make nixie`, and `make duplication` all pass, each log recording the
-head it certified. `make lint`, `make test-rust`, and `make typecheck` were not
-re-run; they were green at `e30aa6ba2` and the delta touches no Python or Rust.
+one Markdown file: `make check-fmt`, `make markdownlint` (which runs the
+spelling leaf from its recipe body — `Makefile:628`, `+$(MAKE) spelling`),
+`make nixie`, and `make duplication` all pass, each log recording the head it
+certified. `make lint`, `make test-rust`, and `make typecheck` were not re-run;
+they were green at `e30aa6ba2` and the delta touches no Python or Rust.
+
+That scope is a property of `41d43e14e` alone and does not carry forward. The
+head this repair produces adds two Python modules, so the full gate set applies
+to it, not the Markdown subset.
 
 **Hosted CI at `41d43e14e`** is terminal: 26 check runs, 22 `success`, 4
 `skipped` (the opt-in `Kody Code Review`, `Sourcery review`, `automerge`, and
 `extended` apps), 0 failures and 0 in progress. All twelve ruleset-required
-contexts are green. `mergeable_state` reads `blocked`, which is the standing
-`CHANGES_REQUESTED` from the superseded review and not a failing check; a
-current-head review has been queued to clear it.
+contexts are green. `mergeable_state` reads `clean`. An earlier entry in this
+log records a `BLOCKED` reading at `af95e2cfe`; that reading was accurate for
+that head, and the standing `CHANGES_REQUESTED` no longer sets the state,
+because ruleset 18427980 (`main-required-checks`) enforces only
+`required_status_checks` and `deletion` and carries no review requirement.
+`reviewDecision` still reads `CHANGES_REQUESTED`, which is a review-dialogue
+state rather than a merge gate.
+
+### Clearing the fourth assessment (2026-10-15)
+
+The third review (`5525618874`, on `41d43e14e`) carried six rows in its
+walkthrough table: three errors and three warnings. Three are repaired, one is
+repaired in part, and two are disputed with evidence. One of the repairs — the
+developer-documentation contradiction — forced a look at the other gate claims
+recorded in this log, and two of those turned out to be wrong — along with a
+third that was "corrected" and then reverted, since the original was right.
+
+**Repaired.** The identity half of `_without_identity` was untested, and so was
+the `ci.yml` step that installs the detector. Two test modules were added:
+`cuprum/unittests/test_identity_registration_stateful.py` and
+`cuprum/unittests/test_nose_ci_installer.py`. See "The identity discipline was
+tested by a blind model" below for what that exercise uncovered.
+
+**Repaired in part.** The "Testing (Unit And Behavioural)" row asked for the
+installer step to be *executed* end to end under stubs for `curl`, the
+checksum, the archive, the installer and the detector. The new module asserts
+the step's structure and pins its security properties, but does not execute it.
+The boundary drawn is the one the pre-existing
+`test_mdtablefix_ci_installer.py` draws for the formatter installer. If that
+precedent is itself wrong, it is a repository-wide question about how workflow
+steps are tested and belongs in a separate change, not in this PR.
+
+**Disputed.** One row was already withdrawn by the reviewer in comment
+`6176800540`; the walkthrough recomputes its table by check and does not
+reflect a withdrawal recorded only in prose. The other applies `AGENTS.md`'s
+Rust "Observability" rule to a Python console tool, and would require adding
+`tracing` spans that nothing consumes; `tracing` is not a dependency
+(`pyproject.toml:11` is `dependencies = []`) and no `scripts/` module imports
+it.
+
+**Two stale gate claims.** Both had been inherited across commits rather than
+re-read at the head they describe:
+
+- `mergeable_state` was recorded as reading `blocked` at `41d43e14e`. Read live,
+  both the REST field and graphql `mergeStateStatus` read `clean`; the earlier
+  `BLOCKED` reading at `af95e2cfe` is already recorded correctly in the entry
+  above. The `blocked` sentence contradicted that entry in the same file.
+- The local-gate scope for `41d43e14e` was recorded as "one Markdown file, so
+  the Markdown/format set is the applicable set". That is true of `41d43e14e`
+  but stops being true at the head this repair produces, which adds two Python
+  modules and therefore requires the full gate set rather than the Markdown
+  subset.
+
+**A third claim that was wrongly "corrected".** Two entries were briefly edited
+to say `make markdownlint` does not run the spelling leaf, on the reasoning that
+`markdownlint` (`Makefile:626`) depends only on `$(MDLINT)` while `spelling`
+is a prerequisite of `rust-lint` (`Makefile:530`). That reasoning read only the
+*prerequisite* line and not the *recipe body*, where line 628 carries
+`+$(MAKE) spelling`. The original text was right. The claim was reverted in
+both places, and the gate's own log settles it: the markdownlint run for this
+head contains `make spelling` and its `typos-config-builder gate` output.
+
+The lesson is narrow and worth keeping: a target's dependencies are not its
+whole contract. A recipe that recursively invokes another target is invisible
+to a search for prerequisites, and `rg '^markdownlint:'` cannot see it. The
+correction was caught only because the gate log was read afterwards — which is
+the argument for reading the log rather than the Makefile alone.
+
+### The identity discipline was tested by a blind model (2026-10-15)
+
+The first draft of the new stateful test asserted that the context-local tuple
+matched the model tuple with `==`. `_RecordingHook` compares on `tag` alone, so
+that assertion could not tell a surviving hook from an equal-but-distinct one —
+it was blind to exactly the property the module was written to pin. The first
+match-versus-identity mutation run did not expose this, because the machine's
+own model was comparing the same way.
+
+Two corrections followed, and both were verified by mutation rather than argued:
+
+- The comparison is now element-wise by identity (`live is want`). Switching
+  the helper from `remaining[index] is target` to `== target` now fails the
+  machine; before the correction it passed.
+- The scan direction was claimed to be unobservable through the public tuple.
+  That claim was wrong. With two entries for the same object the directions are
+  indistinguishable, but inserting a *distinct* hook between them makes the
+  result `(own, interleaved)` under an end-first scan and `(interleaved, own)`
+  under a first-match scan.
+  `test_end_first_scan_drops_the_newest_of_two_equal_entries` pins that; a
+  first-match mutation now fails it, where it previously survived.
+
+The lesson recorded here is about method, not about this helper: a mutation
+surviving is evidence about the *test*, not proof that the behaviour is
+unobservable. The first mutation run was read as the latter.
+
+### The pre-extraction family, measured rather than recalled (2026-10-15)
+
+The disposition reply to the third review asserts that applying the withdrawn
+"Unit Architecture" row would re-create the duplication this PR removed, and
+cites a family on the pre-extraction base by line number and
+`extraction_shape`. Both were carried in working notes rather than re-derived,
+so both were re-measured before the reply was posted.
+
+The measurement, taken on `git archive d5ee4b308` — the parent of `c02d1ba8c`,
+the extraction commit — using the gate's own argument vector read out of
+`scripts/nose_detector.py::build_command`:
+
+```sh
+nose query --root cuprum all top=0 --mode syntax,semantic,near \
+  --min-size 24 --exclude 'unittests/**' --format json
+```
+
+Result: 66 families, of which exactly one spans the two process modules.
+
+```text
+id a688db95986d31a7   extraction_shape: extract-method-from-block
+  cuprum/_process_lifecycle.py  start=201 end=204  shared_subdag=[201,204]
+  cuprum/_process_signal.py     start=233 end=236  shared_subdag=[233,236]
+  metrics: dup_lines=4 shared_lines=3 mean_sem=51.0 value=3.8272
+  scope=prod  surface=hidden   (the `all` term unhides it)
+```
+
+The cited line numbers and shape are therefore confirmed by the detector's own
+output. Two things about the method are worth recording, because the first
+attempt at this measurement was worthless:
+
+- A first pass ran the detector over a two-file scratch tree holding only the
+  two modules. It reported two families whose locations were each file paired
+  with *itself* (`_process_signal.py` and `cuprum/_process_signal.py`), because
+  both files had been copied to two paths. A "family" spanning a file and its
+  own copy is an artefact of the harness, and reading
+  `extract-method-from-block` out of that output would have been reading noise.
+  The clean rerun of the same scratch tree found **0** families, which is what
+  exposed it.
+- The exclude glob only takes effect against the gate's real invocation. Runs
+  without the bare `all` term and `top=0` also omit hidden-surface families —
+  the family in question is `surface: hidden` — so a run missing those terms
+  reports a smaller, differently-shaped surface and can miss the very family
+  being asked about.
+
+The general lesson repeats one already recorded above, in a new guise: an
+absence in tool output is only evidence if the invocation could have produced a
+presence. Both failures here were queries that looked conclusive and were not.

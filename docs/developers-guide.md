@@ -1683,8 +1683,7 @@ reporting is what keeps the query free of side effects: a query that logs
 cannot be asserted on independently of a log capture, and it makes an
 environmental permission failure look like an answer about the group. The
 command boundary calls the two in sequence — query, report, then act on the
-answer — in `_terminate_process_with_wait`, `_escalate_after_grace`, and
-`_settle_after_escalation`.
+answer — in `_members_remain_to_signal`, described below.
 
 `_members_remain_to_signal` is that sequence as one helper, beside the probe
 and reporter it uses. Its two callers — `_terminate_process_with_wait` in the
@@ -1697,6 +1696,14 @@ had already settled, or holds members this process may not signal and can never
 settle by waiting. The second case has a report attached, while the first has
 nothing to report: a target that is simply gone is the ordinary case rather
 than a failure of the run.
+
+`_settlement` and `_settle_after_escalation` reach `_report_teardown` too, but
+they are a different shape and are not callers of the helper. Both probe by
+awaiting the group rather than by asking `_settlement_of`, and neither acts on
+the probe's answer: `_settlement` reports which way its wait ended, and
+`_settle_after_escalation` distinguishes a timeout from a refused signal after
+the escalation has already been delivered. Their probe is not a veto, so there
+is no query-then-act pair for the helper to own.
 
 `_await_group_exit` polls because a process group has no completion event to
 await; the interval backs off from `_PROBE_INTERVAL` to `_MAX_PROBE_INTERVAL`
@@ -2650,7 +2657,15 @@ it deliberately carries no token of its own.
 discipline with a Hypothesis `RuleBasedStateMachine` driving randomized
 register/detach sequences across all token-backed handle types (nesting,
 context-manager exit, LIFO detach, double-detach), plus an example test pinning
-the documented non-LIFO hazard.
+the documented non-LIFO hazard. The identity half has its own stateful
+companion, `cuprum/unittests/test_identity_registration_stateful.py`, whose
+fixture hooks are deliberately equal-but-distinct. That is what makes the
+discipline observable: a test registering distinct bound methods cannot tell an
+identity match from an equality match, because both agree on its outcome. Its
+generated sequences are compared element-wise by identity, and one example test
+pins the other half — that the end-first scan drops the *newest* of two equal
+entries, a direction that becomes observable only when a distinct hook sits
+between them.
 
 ## Canonical stage-observation inputs
 
