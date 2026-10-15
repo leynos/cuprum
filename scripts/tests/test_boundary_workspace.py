@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import dataclasses
 import stat
+import tomllib
 import typing as typ
 
 import pytest
 
 from scripts import check_boundary_contract as contract
-from scripts.boundary_compile import CompileTargets, compile_arguments
+from scripts.boundary_compile import (
+    COMPILE_TIMEOUT_SECONDS,
+    CompileTargets,
+    compile_arguments,
+)
 from scripts.boundary_workspace import copy_workspace
 from scripts.check_boundary_contract import safe_target_roots
 
@@ -18,11 +23,14 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 from scripts.tests.boundary_harness_support import (
+    CARGO_METADATA_TIMEOUT_SECONDS,
     cargo_target_roots,
     copy_boundary_repository,
 )
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
+CARGO_METADATA_CALLS_PER_SYMLINK_TEST = 2
+SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS = 900
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -170,16 +178,16 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
     manifest.write_text(before + "[lints]\n" + after, encoding="utf-8")
 
 
-# The real isolated Cargo check can wait for the shared package-cache lock.
-# This is the only test in the file that reaches the real `_compile`: `main()`
-# and `_check_target` both resolve through the monkeypatched seam, so exactly
-# one `cargo check` runs here. Even narrowed to the two materialized test
-# targets, it measured 181s cold and 98s warm on this host once the Makefile
-# forced serial cargo builds (`CARGO_BUILD_JOBS=1`). That is well above the
-# suite-wide `timeout = 30` in pyproject.toml, so the bound is raised here
-# rather than left to the default. `check_boundary_contract._compile` owns the
-# real budget at 600s; this sits above it and only catches a wedged process.
-@pytest.mark.timeout(900)
+# This is the only test in this file that reaches the real `_compile`. It
+# patches `contract._compile` to a recording seam during `main()`, then invokes
+# the saved helper once for exactly one real `cargo check`. It calls Cargo
+# metadata twice; each call has a 120 s bound that allows for a package-cache
+# lock wait, and `_compile` bounds the check at 600 s. Their combined budget is
+# 840 s. Cargo parallelism belongs to the caller. The cold
+# `CARGO_BUILD_JOBS=1` build measured 181 s, so this outer marker covers it
+# independently of the caller's `-j` value and catches a wedged process. Every
+# other test retains the global `timeout = 30`.
+@pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -244,6 +252,41 @@ def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
     ), "the scoped check must compile both materialized test targets"
     assert "--all-targets" not in arguments, (
         "the scoped check must not rebuild unrelated package targets"
+    )
+
+
+def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
+    """Keep the isolated compile and metadata budgets inside the test tier."""
+    timeout_markers = [
+        marker
+        for marker in typ.cast(
+            "list[pytest.Mark]",
+            getattr(
+                test_main_materializes_external_source_file_symlinks, "pytestmark", ()
+            ),
+        )
+        if marker.name == "timeout"
+    ]
+    assert len(timeout_markers) == 1, (
+        "the real compile test must have exactly one explicit timeout marker"
+    )
+    assert timeout_markers[0].args == (SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS,), (
+        "the real compile test marker must use its named timeout tier"
+    )
+    subprocess_budget = COMPILE_TIMEOUT_SECONDS + (
+        CARGO_METADATA_CALLS_PER_SYMLINK_TEST * CARGO_METADATA_TIMEOUT_SECONDS
+    )
+    assert subprocess_budget < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
+        "the outer marker must contain both metadata calls and the compile budget"
+    )
+
+    pyproject = tomllib.loads(
+        (contract.ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    global_timeout = pyproject["tool"]["pytest"]["ini_options"]["timeout"]
+    assert isinstance(global_timeout, int), "the global pytest timeout must be seconds"
+    assert global_timeout < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
+        "the real compile test must outlast the tight global timeout"
     )
 
 

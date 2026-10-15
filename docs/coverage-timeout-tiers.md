@@ -130,3 +130,20 @@ the ceiling being raised to fit it.
 The coverage action uses `language: mixed`, so nextest does not bound the
 Python half of the suite. `pytest-timeout` sets that per-test budget separately
 through `timeout = 30` in `pyproject.toml`.
+
+## Boundary harness compile tier
+
+The external-source symlink test in `scripts/tests/test_boundary_workspace.py`
+reaches one real Cargo check after the boundary verifier's other compile calls
+use a recording seam. The check is bounded by `COMPILE_TIMEOUT_SECONDS` (600
+s), and its two Cargo metadata calls are each bounded by
+`CARGO_METADATA_TIMEOUT_SECONDS` (120 s). Their combined subprocess budget is
+840 s, below the test's 900 s marker: `COMPILE_TIMEOUT_SECONDS` <
+`SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS`.
+
+The marker covers the cold `CARGO_BUILD_JOBS=1` build measured at 181 s. The
+test does not set Cargo's job count; parallelism belongs to its caller, so the
+allowance does not depend on the caller's `-j` value. The global pytest timeout
+remains 30 s, and only this test raises its own bound. The fast contract test
+`test_real_compile_test_timeout_exceeds_compile_budget` pins the marker and
+both timeout relationships.
