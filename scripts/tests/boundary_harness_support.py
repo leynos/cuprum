@@ -16,6 +16,9 @@ from pathlib import Path
 from scripts import check_boundary_contract
 from scripts.boundary_workspace import copy_source_tree
 
+# Cargo metadata may wait for the shared package-cache lock.
+CARGO_METADATA_TIMEOUT_SECONDS = 120
+
 
 def copy_boundary_repository(tmp_path: Path) -> Path:
     """Copy the Rust workspace and the tool pins into a temporary root.
@@ -42,6 +45,7 @@ def cargo_target_roots(crate: Path) -> tuple[Path, ...]:
         check=False,
         cwd=crate,
         text=True,
+        timeout=CARGO_METADATA_TIMEOUT_SECONDS,
     )
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr)
