@@ -2522,15 +2522,16 @@ lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
-single `match`, and each phase falls into exactly four categories: span
+single `match`, and each phase falls into exactly five categories: span
 lifecycle (`start` opens a span, `exit` records child details, and `settled`
 closes the span), span event (`stdout`, `stderr`, `stdin_error`, `stdio_error`,
-`timeout`, `teardown_error`, and `capture_eof_grace_expired`, and
-`pipeline_fail_fast` record a `cuprum.<phase>` event on the already-open span),
-deliberately ignored (`plan` and `stdin` carry no tracing semantics), or
-unhandled (the `case _` logs via `_log_unhandled_phase` instead of failing
-silently or raising). A new phase should be slotted into this policy rather
-than given an ad-hoc side path.
+`timeout`, `teardown_error`, and `capture_eof_grace_expired` record a
+`cuprum.<phase>` event on the already-open span), fail-fast
+(`pipeline_fail_fast` is routed to `_record_fail_fast`, which attributes the
+decision to the failing stage's span), deliberately ignored (`plan` and `stdin`
+carry no tracing semantics), or unhandled (the `case _` logs via
+`_log_unhandled_phase` instead of failing silently or raising). A new phase
+should be slotted into this policy rather than given an ad-hoc side path.
 
 **State model.** `TracingHook` keeps `_active_spans`, a dictionary keyed by
 `ExecEvent.exec_id` (the per-execution correlation token), guarded by an

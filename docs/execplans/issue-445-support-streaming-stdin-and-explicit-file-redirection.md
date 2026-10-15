@@ -5,24 +5,23 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: AWAITING OWNER DISPOSITION (the implementation is delivered and
-verified; one recorded deviation is unresolved). The scope tolerance in
+Status: COMPLETE (the implementation is delivered and verified; the one
+recorded deviation has been accepted by the plan owner). The scope tolerance in
 `Tolerances` was breached: the work was continued past the trigger and the
-breach recorded after the fact, rather than escalated at the time. The plan
-therefore cannot honestly be marked `COMPLETE` until the owner accepts that
-deviation or directs rework — that disposition is **pending** and requires a
-human decision, not something this document can supply. Everything else is
-done: the branch is implemented, gated, and pushed. See the paired entries in
-`Decision log` and `Outcomes & retrospective`.)
+breach recorded after the fact, rather than escalated at the time. On
+2026-10-11 the plan owner reviewed that recorded deviation and approved the
+scope tolerance expansion, so the deviation is **accepted** rather than
+unresolved and the qualification it placed on this plan's completion is
+discharged. Everything else is done: the branch is implemented, gated, and
+pushed. See the paired entries in `Decision log` and
+`Outcomes & retrospective`.)
 
 Status of the candidate at the round-6 rebase: base `e4e4c4ad`. The PR had
 returned to `CONFLICTING` after `main` advanced one commit to `e4e4c4ad` (#502,
 which relocated `SafeCmdBuilder` into `cuprum/sh/builder.py`); that collision,
 not any defect in this branch, was again the sole reason no hosted check could
 run. The series was replayed onto the new base, and one rebase-introduced
-formatting defect found by `make lint` was then corrected. This status note
-records the candidate, not a disposition change: the deviation above is still
-open and still the owner's to accept.
+formatting defect found by `make lint` was then corrected.
 
 ## Purpose / big picture
 
@@ -229,8 +228,9 @@ likelihood, and mitigation.
   and the changed file's blob id (`0026f5334c`) is identical at each gate's
   start and end, so no in-place edit occurred inside either window — the guard
   added after the mid-round contamination incident, now used by the scrutineer
-  rather than only by me. The earlier certification is retained as history for
-  its own scope; it is not transferred to `89f12f8e` for the Markdown gates.
+  rather than only by the implementation agent. The earlier certification is
+  retained as history for its own scope; it is not transferred to `89f12f8e`
+  for the Markdown gates.
 - [x] (2026-10-11) The two probe sets the previous round left unmeasured are
   measured, at `8547b209`, after the certifying run — probes belong *after* the
   gate they could invalidate, because restoring a file is not the same as never
@@ -351,9 +351,10 @@ likelihood, and mitigation.
   findings on the branch cleared. The finding had been marked repaired in the
   ledger against a code symbol, but it asked for rejection tests and none
   existed; they are now in
-  `cuprum/unittests/test_stdio_descriptor_sentinels.py` (13 tests, both guards,
-  each paired with a genuine-descriptor control) and both guards were proved
-  non-vacuous by mutation. Separately, two `R0917` findings in
+  `cuprum/unittests/test_stdio_descriptor_sentinels.py` (13 tests at the time,
+  since grown to 17 when the acceptance near-miss was parametrized; both
+  guards, each paired with a genuine-descriptor control) and both guards were
+  proved non-vacuous by mutation. Separately, two `R0917` findings in
   `test_safe_cmd_redirect.py` are fixed with keyword-only parameters, verified
   against a `--collect-only` baseline captured before the edit so the six
   affected node IDs are byte-identical. Both were also reported by the hosted
@@ -2051,6 +2052,28 @@ likelihood, and mitigation.
     route-free cell across three modules, so a one-parameter fixture change
     would become a three-file edit — the coupling the guard exists to avoid.
 
+- [x] 2026-10-11: the queued CodeRabbit review of `e2ad1b76` returned
+      `CHANGES_REQUESTED` with four inline findings, all verified against
+      current source before any edit and all found still valid, so all four
+      were fixed rather than dismissed. (1) The acceptance near-miss in
+      `test_stdio_descriptor_sentinels.py` looped over five descriptors, so a
+      failure stopped the remaining cases and named no descriptor; it is now
+      parametrized, and the module collects 17 tests rather than 13. (2) The
+      developers' guide's phase-dispatch description credited
+      `pipeline_fail_fast` to `_record_span_event` and duplicated an "and";
+      `tracing_adapter.py` routes it to `_record_fail_fast`, and separating it
+      makes the categories **five**, not four, so the count was corrected
+      rather than only the duplicated word removed. (3) Two first-person
+      phrases in this plan were rewritten to the document's own third-person
+      register ("the implementation agent"); a file-wide sweep re-confirmed no
+      other authorial pronoun remains. (4) The migration guide documented the
+      stdin cleanup in the reverse order; the pipe is released *first* and the
+      producer's `aclose()` runs second, matching `StdinStream`'s docstring,
+      the `_subprocess_stdin_reclaim` comment, and
+      `test_the_pipe_is_released_before_the_producer_is_finalized`. That
+      paragraph is the one that would have given a reader the wrong ownership
+      model.
+
 - [x] 2026-10-11: resolved a deletion question raised against this branch by
       its own audit. A two-dot diff against main's *tip* reported 15 paths as
       "deleted in branch"; scoped to the merge base `e4e4c4ad` the branch
@@ -2071,15 +2094,16 @@ likelihood, and mitigation.
   but only because the run happened to end after the last edit; a run whose
   edits began and were reverted wholly within its window would have closed
   clean and been indistinguishable from an untouched one. Evidence: the invalid
-  run's window is 14:33:22 to its close, my edits fall at 14:34:28-14:35:17,
-  and the re-run was started at 14:38:27 with the same head and the same clean
-  tree. The fix that made the second run trustworthy was pinning the *content*
-  rather than the commit — `SUPPORT_BLOB_AT_START` and `SUPPORT_BLOB_AT_END`
-  both `d2fe3969`, the blob id of the committed file — because a hash of the
-  watched file is evidence a commit id is not. The wider lesson is about
-  ordering, not tooling: probe mutations belong *after* the gate run that
-  certifies the tree, never interleaved with it, even when each probe is
-  individually restored. Restoring is not the same as never having changed it.
+  run's window is 14:33:22 to its close, the implementation agent's edits fall
+  at 14:34:28-14:35:17, and the re-run was started at 14:38:27 with the same
+  head and the same clean tree. The fix that made the second run trustworthy
+  was pinning the *content* rather than the commit — `SUPPORT_BLOB_AT_START` and
+  `SUPPORT_BLOB_AT_END` both `d2fe3969`, the blob id of the committed file —
+  because a hash of the watched file is evidence a commit id is not. The wider
+  lesson is about ordering, not tooling: probe mutations belong *after* the
+  gate run that certifies the tree, never interleaved with it, even when each
+  probe is individually restored. Restoring is not the same as never having
+  changed it.
 
 - Observation: **a guard is subject to the same failure it was written to
   catch, one level up.** A test that proves a gate is not lying is itself
@@ -3157,6 +3181,15 @@ likelihood, and mitigation.
   recorded as an accepted deviation, and the plan's completion is qualified
   accordingly in the `Status` line. Date/Author: 2026-09-27, implementation
   agent.
+- Owner disposition on that deviation (added 2026-10-11, superseding the
+  **pending** disposition above without altering it). The plan owner reviewed
+  the recorded deviation and approved the scope tolerance expansion. The
+  deviation is therefore an **accepted** deviation, not an unresolved one, and
+  the qualification it placed on this plan's completion is discharged. The
+  2026-09-27 entry is retained verbatim because it records what was true on
+  that date: no disposition had been sought at the trigger and none existed
+  then. Date/Author: 2026-10-11, implementation agent recording an owner
+  decision.
 - Decision: delete `_pipe_or` rather than keep it in the narrowed form the
   reviewing agent asked for. Rationale: the narrow form is an identity function
   on every input its single call site can produce — proven by enumerating the

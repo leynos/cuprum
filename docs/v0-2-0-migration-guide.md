@@ -961,9 +961,13 @@ who cares about peak memory should yield bounded-size chunks. A `str` chunk is
 encoded with the run's `ExecutionContext.encoding` and `errors`, incrementally,
 so a multi-byte character split across two chunks still encodes correctly; a
 `bytes` chunk is written verbatim. Cuprum owns the producer for the duration of
-the run: on every exit path it closes the iterator when the producer provides an
-`aclose()`, closes the pipe, and awaits `wait_closed()` within a bounded
-grace, so a caller need not finalize their own generator.
+the run: on every exit path it closes the child's pipe first, awaiting
+`wait_closed()` within a bounded grace, and only then calls the iterator's
+`aclose()` when the producer provides one, within the same bound. Both steps
+are bounded. That order is deliberate, because the child's EOF depends on the
+close reaching the pipe: releasing it first means a caller's cleanup, however
+slow, cannot hold the child's input open. A caller need not finalize their own
+generator.
 
 A producer failure raises `StdinSourceError`, which is exported from the
 package root. The original exception is chained as `__cause__`, so

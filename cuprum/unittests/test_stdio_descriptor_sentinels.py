@@ -201,10 +201,12 @@ def test_the_guard_refuses_a_negative_descriptor_and_names_its_source() -> None:
     )
 
 
-def test_the_guard_accepts_every_non_negative_descriptor() -> None:
+@pytest.mark.parametrize("descriptor", [0, 1, 2, 7, 1024])
+def test_the_guard_accepts_every_non_negative_descriptor(descriptor: int) -> None:
     """The direct near-miss: zero and above pass, and the call returns ``None``."""
-    for descriptor in (0, 1, 2, 7, 1024):
-        assert _reject_negative_descriptor("stdout", descriptor, resource="int") is None
+    assert _reject_negative_descriptor("stdout", descriptor, resource="int") is None, (
+        f"a non-negative descriptor {descriptor} must be accepted"
+    )
 
 
 def _target_from(options: RunOutputOptions) -> StdioTarget:
