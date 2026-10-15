@@ -136,9 +136,9 @@ through `timeout = 30` in `pyproject.toml`.
 The external-source symlink test in `scripts/tests/test_boundary_workspace.py`
 reaches one real Cargo check after the boundary verifier's other compile calls
 use a recording seam. The check is bounded by `COMPILE_TIMEOUT_SECONDS` (600
-s), and Cargo metadata calls in the test helper are bounded by
-`CARGO_METADATA_TIMEOUT_SECONDS` (120 s). The test's 900 s marker sits above
-their combined 720 s budget: `COMPILE_TIMEOUT_SECONDS` <
+s), and its two Cargo metadata calls are each bounded by
+`CARGO_METADATA_TIMEOUT_SECONDS` (120 s). Their combined subprocess budget is
+840 s, below the test's 900 s marker: `COMPILE_TIMEOUT_SECONDS` <
 `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS`.
 
 The marker covers the cold `CARGO_BUILD_JOBS=1` build measured at 181 s. The
