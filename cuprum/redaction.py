@@ -195,6 +195,18 @@ class RedactionPolicy:
             redacted = str.replace(redacted, literal, self.mask)
         return _apply_pattern_rules(self.patterns, redacted, self.mask)
 
+    def _redact_mapping_values[NonStringValue](
+        self,
+        values: cabc.Mapping[str, str | NonStringValue],
+    ) -> cabc.Mapping[str, str | NonStringValue]:
+        """Redact string values while preserving non-string markers."""
+        return MappingProxyType(
+            {
+                key: self.apply_text(value) if isinstance(value, str) else value
+                for key, value in values.items()
+            },
+        )
+
     def redact_event(self, event: ExecEvent) -> ExecEvent:
         """Return a sanitized event copy for an opted-in consumer.
 
@@ -220,22 +232,8 @@ class RedactionPolicy:
 
         argv = tuple(self.apply_text(value) for value in event.argv)
         # Non-string overlay values such as UNSET are deletion markers, not text.
-        env = (
-            None
-            if event.env is None
-            else MappingProxyType(
-                {
-                    name: self.apply_text(value) if isinstance(value, str) else value
-                    for name, value in event.env.items()
-                },
-            )
-        )
-        tags = MappingProxyType(
-            {
-                key: self.apply_text(value) if isinstance(value, str) else value
-                for key, value in event.tags.items()
-            },
-        )
+        env = None if event.env is None else self._redact_mapping_values(event.env)
+        tags = self._redact_mapping_values(event.tags)
         line = None if event.line is None else self.apply_text(event.line)
         note = None if event.note is None else self.apply_text(event.note)
         return dc.replace(
