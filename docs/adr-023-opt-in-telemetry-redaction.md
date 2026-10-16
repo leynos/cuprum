@@ -39,7 +39,8 @@ projections, with consistent opt-in behaviour at each supported destination.
 - Redact configured literals and regular-expression matches in selected text.
 - Apply event redaction to argv items, environment values, output lines,
   diagnostic notes, and string-valued tags.
-- Apply title redaction to the argv-derived GitHub Actions group title.
+- Apply title redaction to emitted explicit and argv-derived GitHub Actions
+  titles; retain the trusted fallback annotation label.
 - Let callers wrap other observation consumers before registering them.
 
 ### Technical requirements
@@ -79,20 +80,21 @@ remain private to the policy; adapters and sinks reuse the policy rather than
 duplicating rule handling.
 
 Literal and pattern matches are collected from the original text. Overlapping
-spans are merged before the mask is inserted, so one rule cannot split a match
-from another and inserted mask text is not rescanned. The mask is caller-owned
-replacement text and must not contain secret material.
+or adjacent spans are merged before the mask is inserted, and inserted mask
+text is not rescanned. The mask is caller-owned replacement text and must not
+contain secret material.
 
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
 projection, redacting argv items, environment values, output lines, diagnostic
 notes, and top-level string-valued tag values. Plain-text logging applies the
 policy only to its argv projection. The GitHub Actions sink accepts the same
-keyword and applies the policy only to argv-derived group titles before
-workflow-command escaping; an explicit title, the annotation-label path, and
-mirrored child output remain unchanged. The convenience group and annotation
-flags do not accept a policy, so callers needing title redaction configure the
-sink directly. Passing `None` or an inert policy preserves existing output.
+keyword and applies the policy before workflow-command escaping to explicit
+titles used by enabled group or annotation output and to argv-derived group
+titles. Its trusted fallback annotation label and mirrored child output remain
+unchanged. The convenience group and annotation flags do not accept a policy,
+so callers needing title redaction configure the sink directly. Passing `None`
+or an inert policy preserves existing output.
 
 Across all these integrations, the raw event, executed argv, child environment,
 and captured result remain unchanged.

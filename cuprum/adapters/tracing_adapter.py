@@ -341,7 +341,8 @@ class TracingHook(
             _event_common_fields(event, _prefixed("cuprum."), argv=list),
         )
 
-        project = _project_tag(event)
+        # Prefer the trusted field over a possibly redacted caller tag.
+        project = event.project if event.project is not None else _project_tag(event)
         if project is not None:
             attrs["cuprum.project"] = project
         if "pipeline_stage_index" in event.tags:

@@ -20,6 +20,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
 - [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
 - [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
+- [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -2473,7 +2474,7 @@ and a partial pipeline spawn all leave no task behind. The watchdog is a second
 owner of the run's lifetime, not of the child's: it observes silence and never
 terminates a process or extends a timeout.
 
-### Canonical adapter event projection and locked-store base
+### Canonical adapter projection, redaction, and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from repeating
 the same event projection and in-memory collector locking. It owns the
@@ -2494,6 +2495,38 @@ derive from `_LockedStore` and implement `_clear()` while its lock is held.
 
 `cuprum/unittests/test_adapter_projection.py` pins this contract with
 Hypothesis properties and redacted per-phase syrupy snapshots.
+
+[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines the scope and trust
+boundary for opt-in redaction. `cuprum/redaction.py` owns `RedactionPolicy`,
+which normalizes caller-supplied literal and compiled pattern rules. It gathers
+matches from the original text, merges overlapping or adjacent spans, and
+inserts the configured mask without rescanning it. The inert default adds no
+rules and changes no output; it does not infer secrets.
+
+The policy returns an immutable `ExecEvent` copy with selected text fields
+redacted. It does not change the raw event, executed argv, child environment,
+captured results, or values delivered to other observers. Event adapters apply
+the policy immediately before projection: structured logging before message and
+record construction, and tracing before attribute and span-event construction.
+`logging_hook()` applies it to the argv-derived start message.
+`GitHubActionsSink` applies it to emitted explicit titles and argv-derived
+group titles; the trusted fallback annotation label and mirrored child output
+are outside that projection. Disabled title outputs do not invoke redaction.
+Custom observation consumers opt in by wrapping the hook with
+`redacting_hook(consumer, policy)` before registering it with `observe()`.
+
+A failure in a configured rule raises `RedactionError`; export code propagates
+it and never retries with raw text. This follows the existing observer error
+path, so the failure can affect the command call. Metrics adapters do not use
+the policy: their labels remain bounded to trusted program/project values and
+closed categories.
+
+`cuprum/adapters/_logging_formatter.py` owns JSON serialization of structured
+log records, including the `cuprum_*` fields already projected by the logging
+adapter. Keep policy application in the adapter projection path; the formatter
+renders records and does not establish the redaction boundary. The wider
+telemetry architecture and its design rationale are recorded in the
+[observability design](cuprum-design.md#7-observability-and-logging).
 
 ### Build and test worker controls
 
