@@ -9,9 +9,7 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
-
-UV_PACKAGING_TIMEOUT_SECONDS = 3 * 60
-MATURIN_PACKAGING_TIMEOUT_SECONDS = 60 * 60
+from tests.helpers.packaging import PACKAGING_BACKENDS
 
 
 def _build_source_archive(
@@ -57,18 +55,7 @@ def _build_source_archive(
 
 @pytest.mark.parametrize(
     ("backend", "timeout_seconds"),
-    [
-        pytest.param(
-            "uv",
-            UV_PACKAGING_TIMEOUT_SECONDS,
-            marks=pytest.mark.timeout(UV_PACKAGING_TIMEOUT_SECONDS + 60),
-        ),
-        pytest.param(
-            "maturin",
-            MATURIN_PACKAGING_TIMEOUT_SECONDS,
-            marks=pytest.mark.timeout(MATURIN_PACKAGING_TIMEOUT_SECONDS + 60),
-        ),
-    ],
+    PACKAGING_BACKENDS,
 )
 def test_source_distribution_retains_native_workspace(
     backend: str,

@@ -29,6 +29,7 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
+from tests.helpers.packaging import PACKAGING_BACKENDS
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult
@@ -39,21 +40,6 @@ MARKER_PATH = "cuprum/py.typed"
 #: declares partial typing; anything else, including an empty file, declares
 #: the package fully typed.
 PARTIAL_MARKER_CONTENT = "partial"
-# The maturin backend invokes Cargo and can wait for another build's cache lock.
-UV_PACKAGING_TIMEOUT_SECONDS = 3 * 60
-MATURIN_PACKAGING_TIMEOUT_SECONDS = 60 * 60
-PACKAGING_BACKENDS = (
-    pytest.param(
-        "uv",
-        UV_PACKAGING_TIMEOUT_SECONDS,
-        marks=pytest.mark.timeout(UV_PACKAGING_TIMEOUT_SECONDS + 60),
-    ),
-    pytest.param(
-        "maturin",
-        MATURIN_PACKAGING_TIMEOUT_SECONDS,
-        marks=pytest.mark.timeout(MATURIN_PACKAGING_TIMEOUT_SECONDS + 60),
-    ),
-)
 #: Maturin spells the wheel build ``build``; ``uv`` spells it ``--wheel``.
 _MATURIN_SUBCOMMANDS = {"wheel": "build", "sdist": "sdist"}
 _ARCHIVE_SUFFIXES = {"wheel": "*.whl", "sdist": "*.tar.gz"}

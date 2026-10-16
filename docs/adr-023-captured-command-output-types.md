@@ -17,7 +17,7 @@ though that also hides a missing capture request. An upload failure can then
 lose the diagnostic that would explain the failure.
 
 The distinction matters at runtime as well as to static checkers. `None` means
-capture was disabled; `""` means capture ran and the child wrote no text. The
+capture was disabled; `""` means capture ran, and the child wrote no text. The
 result type should preserve that distinction. Runtime captured results now
 express the guarantee; planned overloads will let static checkers expose it to
 callers of default single-command runs without an assertion.
