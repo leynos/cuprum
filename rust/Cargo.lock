@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "cuprum-rust"
-version = "0.2.0-beta1"
+version = "0.2.0-beta2"
 dependencies = [
  "cuprum-native-io",
  "cuprum-streams",
