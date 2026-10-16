@@ -69,13 +69,13 @@ def _config(profile: str, override: str = "") -> str:
     lines = [
         "[profile.default]",
         f'slow-timeout = {{ period = "60s", terminate-after = 5{profile} }}',
-        'global-timeout = "20m"',
+        'global-timeout = "30m"',
     ]
     if override:
         lines += [
             "[[profile.default.overrides]]",
             "filter = 'binary(compile_tests)'",
-            f'slow-timeout = {{ period = "60s", terminate-after = 15{override} }}',
+            f'slow-timeout = {{ period = "60s", terminate-after = 20{override} }}',
         ]
     return "\n".join(lines) + "\n"
 

@@ -68,7 +68,7 @@ def _diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
 
 # Both Cargo routes wait for shared compiler admission as well as compiling.
 # Keep a finite budget without treating a normal queue as a hung unit test.
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.skipif(
     sys.platform != "linux", reason="the production doctest warning route is Linux-only"
 )

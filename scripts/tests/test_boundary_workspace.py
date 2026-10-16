@@ -178,8 +178,8 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
 # forced serial cargo builds (`CARGO_BUILD_JOBS=1`). That is well above the
 # suite-wide `timeout = 30` in pyproject.toml, so the bound is raised here
 # rather than left to the default. `check_boundary_contract._compile` owns the
-# real budget at 600s; this sits above it and only catches a wedged process.
-@pytest.mark.timeout(900)
+# real budget at 3600s; this sits above it and only catches a wedged process.
+@pytest.mark.timeout(3720)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

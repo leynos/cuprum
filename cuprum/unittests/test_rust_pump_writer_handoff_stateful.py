@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import typing as typ
 
-from hypothesis import settings
+from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
@@ -327,4 +327,6 @@ TestRustPumpWriterHandoffLifecycle.settings = settings(
     max_examples=60,
     stateful_step_count=16,
     deadline=None,
+    # Stage preconditions intentionally filter unavailable lifecycle transitions.
+    suppress_health_check=(HealthCheck.filter_too_much,),
 )

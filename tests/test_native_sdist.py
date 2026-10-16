@@ -40,7 +40,9 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
     )
     with scoped(ScopeConfig(allowlist=frozenset({program}))):
         result = command(*arguments).run_sync(
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=180)
+            # Maturin inspects the Rust workspace while sharing Cargo's cache
+            # and compiler admission queues with other repository work.
+            context=sh.ExecutionContext(cwd=repo_root(), timeout=3600)
         )
     assert result.exit_code == 0, f"source build failed: {result.stderr}"
     archives = list(destination.glob("*.tar.gz"))
@@ -48,7 +50,7 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
     return archives[0]
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(3720)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_retains_native_workspace(
     backend: str,

@@ -45,7 +45,7 @@ _ARCHIVE_SUFFIXES = {"wheel": "*.whl", "sdist": "*.tar.gz"}
 
 
 def _run_packaging_frontend(
-    arguments: tuple[str, ...],
+    arguments: tuple[str, ...], *, timeout: int
 ) -> CommandResult:
     """Run one packaging command through Cuprum's own safe-command layer."""
     program = Program("uv")
@@ -57,7 +57,7 @@ def _run_packaging_frontend(
     command = sh.make(program, catalogue=catalogue)
     with scoped(ScopeConfig(allowlist=frozenset({program}))):
         return command(*arguments).run_sync(
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=180)
+            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout)
         )
 
 
@@ -97,7 +97,9 @@ def _build_distribution(backend: str, kind: str, destination: Path) -> Path:
     """
     suffix = _ARCHIVE_SUFFIXES[kind]
     result = _run_packaging_frontend(
-        _distribution_arguments(backend, kind, destination)
+        _distribution_arguments(backend, kind, destination),
+        # Maturin inspects the Rust workspace and queues on shared Cargo locks.
+        timeout=3600 if backend == "maturin" else 180,
     )
     assert result.exit_code == 0, (
         f"{backend} {kind} build failed with {result.exit_code}: {result.stderr}"
@@ -127,7 +129,8 @@ def _wheel_marker(wheel_path: Path) -> str | None:
         return archive.read(MARKER_PATH).decode("utf-8")
 
 
-@pytest.mark.timeout(240)
+# The outer budget must outlast the Maturin command's shared-Cargo allowance.
+@pytest.mark.timeout(3720)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     """Every wheel carries an empty, complete ``py.typed`` marker.
@@ -152,7 +155,8 @@ def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.timeout(240)
+# The outer budget must outlast the Maturin command's shared-Cargo allowance.
+@pytest.mark.timeout(3720)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
     backend: str,
