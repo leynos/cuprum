@@ -216,6 +216,6 @@ def _build_unstarted_run(
         process=process,
         tasks=_build_run_task_ownership(process, execution, spawn),
         queue=queue,
-        started_at=execution.started_at,
+        execution=execution,
         telemetry=telemetry,
     )

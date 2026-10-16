@@ -24,7 +24,7 @@ from cuprum._line_stream.coordinator import (
     _run_to_command_result,
     _wait_for_line_stream_exit,
 )
-from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._line_stream.drain import _collect_line_stream_after_exit
 from cuprum._line_stream.line_queue import (
     _LINE_QUEUE_CAPACITY,
     _line_event_queue,
@@ -53,9 +53,9 @@ __all__ = [
     "_abandon_unstarted_run",
     "_build_unstarted_run",
     "_cleanup_failed_line_stream_run",
+    "_collect_line_stream_after_exit",
     "_coordinate_line_stream",
     "_discard_drain",
-    "_drain_after_exit",
     "_line_event_queue",
     "_observed_line_hook",
     "_queue_line_sink",
