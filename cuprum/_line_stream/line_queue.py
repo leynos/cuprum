@@ -17,6 +17,7 @@ from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.telemetry import _LineStreamTelemetry
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.line_stream_events import LineStreamSink
     from cuprum.lines import LineEvent, _LineHookFn
@@ -56,15 +57,21 @@ class _LineStreamRun:
     queue:
         The queue every ``LineEvent`` is posted to; the sentinel ends
         iteration.
-    started_at:
-        Monotonic reference the per-line ``at`` stamps are measured from.
+    execution:
+        The bundle stamped with the run's monotonic start reference and wired
+        with the queue sink. It travels with the run rather than being handed
+        alongside it because the two are only meaningful together: the
+        post-exit deadline is a remainder from this bundle's ``started_at``,
+        so a coordinator holding the process without the stamping would
+        measure the child against whatever ``0.0`` default the caller's bundle
+        was built with.
 
     """
 
     process: asyncio.subprocess.Process
     tasks: _RunTaskOwnership
     queue: asyncio.Queue[_LineQueueItem]
-    started_at: float
+    execution: _SubprocessExecution
     telemetry: _LineStreamTelemetry
 
 

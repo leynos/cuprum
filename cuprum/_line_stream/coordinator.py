@@ -27,8 +27,7 @@ from cuprum._capture_cleanup import (
     _finalize_capture_handles,
 )
 from cuprum._delivery_lifecycle import _close_delivery_worker
-from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._line_stream.drain import _collect_line_stream_after_exit
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _recorded_captures, _require_text
@@ -126,11 +125,12 @@ async def _wait_for_line_stream_exit(
             preserve=False,
         )
         raise
-    # The child has exited, so silence no longer means anything: stop before
-    # waiting on stream EOF, which a grandchild's inherited pipe can hold open
-    # long after its parent is gone.
-    await _stop_idle_monitor(execution.idle)
-    stdout_drain, stderr_drain = await _drain_after_exit(
+    # The child has exited, so silence no longer means anything; the heartbeat
+    # stops inside the bounded collection below, along with the writer wait and
+    # the consumers, because a grandchild's inherited pipe can hold that read
+    # open long after its parent is gone and every one of the three would then
+    # wait for ever on a deadline the exit wait has already spent.
+    stdout_drain, stderr_drain = await _collect_line_stream_after_exit(
         run,
         run.process.pid,
         execution,
@@ -315,7 +315,10 @@ async def _run_to_command_result(
     CommandResult
         The completed run's exit code, captured text, and relay diagnostics.
     """
-    started_at = run.started_at
+    # Read from the run's own bundle, not a caller-supplied one: this is the
+    # instant the duration and the exit event are measured from, and it only
+    # ever exists on the execution the spawn helper stamped.
+    started_at = run.execution.started_at
     stdout_text: _StreamPayload | None = None
     stderr_text: _StreamPayload | None = None
     captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
