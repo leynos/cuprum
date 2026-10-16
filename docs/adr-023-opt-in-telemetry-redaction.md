@@ -96,6 +96,12 @@ unchanged. The convenience group and annotation flags do not accept a policy,
 so callers needing title redaction configure the sink directly. Passing `None`
 or an inert policy preserves existing output.
 
+Tracing keeps its historical tag-derived project label unless the configured
+policy changes the `project` tag. When that tag is redacted and the event has a
+trusted `project` field, tracing uses the trusted field so the tag's raw value
+does not survive the projection. An absent, inert, or non-matching policy does
+not change project-label precedence.
+
 Across all these integrations, the raw event, executed argv, child environment,
 and captured result remain unchanged.
 

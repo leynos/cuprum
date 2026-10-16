@@ -114,6 +114,30 @@ def test_tracing_keeps_trusted_project_when_project_tag_is_redacted() -> None:
     assert event.tags["project"] == tag_project, "raw observations must stay unchanged"
 
 
+@pytest.mark.parametrize(
+    "redaction",
+    [None, RedactionPolicy(), RedactionPolicy(literals=("unrelated",))],
+)
+def test_tracing_preserves_tag_project_when_redaction_leaves_it_unchanged(
+    redaction: RedactionPolicy | None,
+) -> None:
+    """Absent, inert, or non-matching rules preserve legacy tag precedence."""
+    event = _make_exec_event(
+        phase="start",
+        overrides={
+            "project": "trusted-project-442",
+            "tags": {"project": "legacy-tag-project"},
+        },
+    )
+    tracer = InMemoryTracer()
+
+    TracingHook(tracer, redaction=redaction)(event)
+
+    assert tracer.spans[0].attributes["cuprum.project"] == "legacy-tag-project", (
+        "unchanged project tags must retain the pre-redaction projection"
+    )
+
+
 @pytest.mark.parametrize("redaction", [None, RedactionPolicy()])
 def test_adapters_preserve_explicit_unredacted_defaults(
     redaction: RedactionPolicy | None,
