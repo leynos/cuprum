@@ -108,6 +108,7 @@
       'cuprum/_streams_rs.py',
       'cuprum/_subprocess_context.py',
       'cuprum/_subprocess_deadline.py',
+      'cuprum/_subprocess_direct_run.py',
       'cuprum/_subprocess_execution.py',
       'cuprum/_subprocess_rendezvous.py',
       'cuprum/_subprocess_spawn.py',

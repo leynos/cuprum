@@ -34,6 +34,7 @@ import typing as typ
 
 from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._stream_drain import (
     _CAPTURE_EOF_GRACE_S,
     _await_eof_grace,
@@ -48,8 +49,11 @@ from cuprum._subprocess_deadline import (
 from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
 from cuprum._subprocess_stdin_reclaim import _cancel_stdin_writer
 from cuprum._subprocess_wait_types import _ConsumerPair, _DrainContext
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import (
         _DrainPair,
@@ -127,6 +131,45 @@ def _drain_context(
     )
 
 
+async def _settle_owned_group_before_draining(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate the run's owned group so the drain that follows can reach EOF.
+
+    Once the direct child has exited, the run still has a post-exit phase to
+    finish. For an owning run that exit is not settlement: a descendant the
+    child left behind is still in the group, still holds the write end of the
+    run's pipes, and no signal aimed at the leader can reach it. A drain begun
+    first would spend the bounded capture grace on readers that cannot reach EOF
+    and then discard output the descendant was still producing, and a writer
+    parked on the child's stdin would never be released at all.
+
+    So the group is settled *before* whatever the caller does next, on every
+    route that has something left to drain rather than only on the failure
+    routes. Both run shapes need it — the streamed run before its gather, the
+    direct run before its writer is reclaimed — which is why it lives here
+    rather than beside either of them.
+
+    The teardown is shielded like every other one on a failure path, so a
+    cancellation arriving during its grace period cannot skip the escalation.
+
+    A run that does not own its group has nothing to do here — its only
+    teardown target is the direct child, which has already exited on every path
+    reaching this helper — so the call is skipped rather than made a no-op.
+    """
+    if not execution.owns_process_group:
+        return
+    await _terminate_all_shielded(
+        (process,),
+        _TeardownPolicy(
+            execution.ctx.cancel_grace,
+            owns_group=True,
+        ),
+        observations=(execution.observation,),
+    )
+
+
 async def _reconcile_run_tasks(
     tasks: _RunTaskOwnership,
     context: _DrainContext,
@@ -194,6 +237,7 @@ __all__ = [
     "_drain_context",
     "_drain_stream_consumers",
     "_reconcile_run_tasks",
+    "_settle_owned_group_before_draining",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]

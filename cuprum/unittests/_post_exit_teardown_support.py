@@ -30,6 +30,7 @@ import pytest
 
 from cuprum import (
     ScopeConfig,
+    _subprocess_direct_run,
     _subprocess_stream_run,
     _subprocess_streams,
     _subprocess_wait,
@@ -228,21 +229,24 @@ class SpawnedWriter:
     :attr:`task` for the precondition that the writer was live, and pin
     settlement where nothing else can stand in for it.
 
-    The spawn is rebound on *two* modules, because the run has two paths and
-    each resolves the name in its own globals: ``_subprocess_stream_run``
-    spawns it for the direct run, and ``_subprocess_streams`` spawns it for the
-    streamed run after the shared spawn construction moved there. Rebinding
-    only the stream-run module would watch a name the streamed path never
-    reads, and the test would report a run that spawned no writer rather than
-    the missed seam it is.
+    The spawn is rebound on *every* module where a run resolves the name, one
+    per path: ``_subprocess_direct_run`` for the direct run, and
+    ``_subprocess_streams`` for the streamed run after the shared spawn
+    construction moved there. Rebinding only one of them would watch a name the
+    other path never reads, and the test would report a run that spawned no
+    writer rather than the missed seam it is.
+
+    A path that moved between modules needs no change here: the list names the
+    modules each path *reads*, not the module the code once lived in, so the
+    helper follows the code rather than a stale address.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rebind the spawn wherever a run resolves it, retaining the task."""
         self.task: asyncio.Task[None] | None = None
-        self._spawn = _subprocess_stream_run._spawn_stdin_writer
+        self._spawn = _subprocess_direct_run._spawn_stdin_writer
         monkeypatch.setattr(
-            _subprocess_stream_run,
+            _subprocess_direct_run,
             "_spawn_stdin_writer",
             self._watching_spawn,
         )
@@ -281,6 +285,73 @@ class SpawnedWriter:
             "expiry's cleanup stopped waiting on the writer without ever "
             "settling it"
         )
+
+
+class DirectCleanupWatch:
+    """Hold the direct run's post-exit cleanup open so arrivals are aimed.
+
+    The direct path's cleanup has two halves — reclaim the stdin writer, then
+    settle the group that writer was writing into — and the property under test
+    is that a cancellation arriving during the first does not cost the run the
+    second. Two gates make both arrivals deterministic: one holds the post-exit
+    writer wait so the first cancellation is delivered there, and one holds the
+    writer's reclamation so the second lands on that half rather than on
+    whatever the scheduler happened to be doing.
+
+    Settlement records arrival on *entry* and then runs the production one,
+    because the two are separate facts and both are needed. An event set on
+    entry says the second half was reached; the descendant being gone says it
+    ran to completion. A run that entered the settlement and was abandoned
+    part-way satisfies the first and not the second, which is exactly what a
+    shield over one half rather than the pair produces.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Capture the originals and rebind the module attributes to watch."""
+        self.writer_gate = Gate()
+        self.cleanup_gate = Gate()
+        self.settled = asyncio.Event()
+        self._await_writer = _subprocess_direct_run._await_writer_within_deadline
+        self._cancel_writer = _subprocess_direct_run._cancel_stdin_writer
+        self._settle_group = _subprocess_direct_run._settle_owned_group_before_draining
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_await_writer_within_deadline",
+            self._held_writer_wait,
+        )
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_cancel_stdin_writer",
+            self._held_cancel,
+        )
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_settle_owned_group_before_draining",
+            self._recording_settle,
+        )
+
+    async def _held_writer_wait(
+        self,
+        execution: _SubprocessExecution,
+        stdin_task: asyncio.Task[None],
+    ) -> None:
+        """Hold the post-exit writer wait so a cancellation lands on it."""
+        await self.writer_gate.hold()
+        await self._await_writer(execution, stdin_task)
+
+    async def _held_cancel(self, stdin_task: asyncio.Task[None] | None) -> None:
+        """Hold the writer's reclamation so a second cancellation lands there."""
+        await self.cleanup_gate.hold()
+        await self._cancel_writer(stdin_task)
+
+    async def _recording_settle(
+        self,
+        process: asyncio.subprocess.Process,
+        execution: _SubprocessExecution,
+    ) -> None:
+        """Record that the settlement was reached, then run the real one."""
+        self.settled.set()
+        await self._settle_group(process, execution)
 
 
 def recorded_descendant(pid_file: Path) -> int | None:
@@ -384,12 +455,27 @@ def start_owned_run(
     pid_file: Path,
     *,
     stdin: StdinInput | None = None,
+    capture: bool = True,
 ) -> asyncio.Task[object]:
-    """Start an owned run of a child that exits leaving a descendant behind."""
+    """Start an owned run of a child that exits leaving a descendant behind.
+
+    *capture* selects which of the run's two shapes is exercised, and the two
+    are genuinely different code: a capturing run takes the streamed boundary
+    with its consumer gather, and a non-capturing one takes the direct path
+    where the only task left after the child exits is the stdin writer. They
+    are named here rather than left to each caller because a test that reached
+    the wrong one would still spawn the same process tree and still look like
+    it was testing the scenario it describes.
+
+    Returns
+    -------
+    asyncio.Task[object]
+        The running task, so the caller can cancel it and await its end.
+    """
     command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
     return asyncio.ensure_future(
         command.run(
-            output=RunOutputOptions(capture=True, echo=False),
+            output=RunOutputOptions(capture=capture, echo=False),
             stdin=stdin,
             context=ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP),
         ),
