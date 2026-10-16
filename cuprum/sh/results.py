@@ -282,9 +282,10 @@ class PipelineResult:
 class BytesCommandResult:
     """Byte-exact result returned by the binary-output command entry points.
 
-    All other fields, defaults, and helper semantics mirror
-    :class:`CommandResult`. Captured bytes remain untouched, so every byte value
-    survives the round trip without decoding or surrogate escapes.
+    Fields and defaults mirror :class:`CommandResult`, but
+    ``require_captured()`` is available only on text result types. Captured
+    bytes remain untouched, so every byte value survives the round trip without
+    decoding or surrogate escapes.
 
     Attributes
     ----------
