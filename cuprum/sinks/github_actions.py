@@ -51,14 +51,15 @@ import secrets
 import sys
 import typing as typ
 
+from cuprum.sinks._github_actions_options import (
+    _GitHubActionsSinkOptionsKwargs,
+    _normalize_github_actions_sink_options,
+)
 from cuprum.sinks.base import (
     SessionOutcome,
     SessionStart,
     TerminalOutcome,
 )
-
-if typ.TYPE_CHECKING:
-    from cuprum.redaction import RedactionPolicy
 
 __all__ = ["GitHubActionsSession", "GitHubActionsSink"]
 
@@ -131,13 +132,6 @@ class _Annotation:
 def _stderr() -> typ.IO[str]:
     """Return the parent's stderr as the default workflow-command stream."""
     return sys.stderr
-
-
-def _reject_non_bool(name: str, value: object) -> None:
-    """Reject a value that is not the documented ``bool`` for a toggle."""
-    if not isinstance(value, bool):
-        msg = f"{name} must be a bool, got {value!r}"
-        raise TypeError(msg)
 
 
 class GitHubActionsSession:
@@ -311,8 +305,10 @@ class GitHubActionsSink:
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
     redaction:
-        Optional policy for argv-derived group titles, applied before escaping.
-        Defaults to ``None``. Explicit titles and echoed output are unchanged.
+        Optional policy for caller-supplied and argv-derived titles, applied
+        before escaping when the corresponding group or annotation is emitted.
+        Defaults to ``None``. The trusted fallback label and echoed output are
+        unchanged.
 
     Raises
     ------
@@ -322,27 +318,19 @@ class GitHubActionsSink:
         strength of something the caller never documented as a flag.
     """
 
-    # Preserve the explicit keyword-only options of this public constructor.
-    # pylint: disable-next=too-many-arguments
-    def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
+    def __init__(
         self,
         destination: typ.IO[str] | None = None,
-        *,
-        title: str | None = None,
-        force: bool = False,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
-        redaction: RedactionPolicy | None = None,
+        **options: typ.Unpack[_GitHubActionsSinkOptionsKwargs],
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
-        _reject_non_bool("emit_group", emit_group)
-        _reject_non_bool("emit_annotation", emit_annotation)
+        settings = _normalize_github_actions_sink_options(options)
         self.destination = destination
-        self.title = title
-        self.force = force
-        self.emit_group = emit_group
-        self.emit_annotation = emit_annotation
-        self.redaction = redaction
+        self.title = settings.title
+        self.force = settings.force
+        self.emit_group = settings.emit_group
+        self.emit_annotation = settings.emit_annotation
+        self.redaction = settings.redaction
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
@@ -366,14 +354,27 @@ class GitHubActionsSink:
         """
         if not self._is_active():
             return None
+        has_argv_title = False
         if self.title is not None:
             label = self.title
+            annotation_label = self.title
         elif start.argv:
             label = " ".join(start.argv)
-            if self.redaction is not None:
-                label = self.redaction.apply_text(label)
+            annotation_label = start.label
+            has_argv_title = True
         else:
             label = start.label
+            annotation_label = start.label
+        has_user_supplied_title = self.title is not None
+        has_configured_group_title = has_user_supplied_title or has_argv_title
+        should_redact_group_title = self.emit_group and has_configured_group_title
+        should_redact_annotation_title = (
+            self.emit_annotation and has_user_supplied_title
+        )
+        if self.redaction is not None and should_redact_group_title:
+            label = self.redaction.apply_text(label)
+        if self.redaction is not None and should_redact_annotation_title:
+            annotation_label = self.redaction.apply_text(annotation_label)
         # The annotation keeps the bounded label even when the group is titled
         # with argv: an annotation is a workflow command property, so publishing
         # arguments there would leak them into the run summary.
@@ -382,7 +383,7 @@ class GitHubActionsSink:
             log,
             label,
             annotation_label=_Annotation(
-                label=self.title or start.label,
+                label=annotation_label,
                 emit_group=self.emit_group,
                 emit_annotation=self.emit_annotation,
             ),

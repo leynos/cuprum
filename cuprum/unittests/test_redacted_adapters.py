@@ -94,6 +94,26 @@ def test_tracing_redacts_attributes_and_diagnostic_events(use_factory: bool) -> 
     assert event.tags["pipeline_stages"] == _SENTINEL, "raw tags must stay unchanged"
 
 
+def test_tracing_keeps_trusted_project_when_project_tag_is_redacted() -> None:
+    """A caller-controlled project tag cannot replace the trusted field."""
+    project = "trusted-project-442"
+    tag_project = _SENTINEL
+    event = _make_exec_event(
+        phase="start",
+        overrides={"project": project, "tags": {"project": tag_project}},
+    )
+    tracer = InMemoryTracer()
+
+    TracingHook(tracer, redaction=RedactionPolicy(literals=(tag_project,)))(event)
+
+    attributes = tracer.spans[0].attributes
+    assert attributes["cuprum.project"] == project, (
+        "the explicit trusted project field must remain the metric-like label"
+    )
+    assert tag_project not in repr(attributes), "caller tags must be redacted first"
+    assert event.tags["project"] == tag_project, "raw observations must stay unchanged"
+
+
 @pytest.mark.parametrize("redaction", [None, RedactionPolicy()])
 def test_adapters_preserve_explicit_unredacted_defaults(
     redaction: RedactionPolicy | None,

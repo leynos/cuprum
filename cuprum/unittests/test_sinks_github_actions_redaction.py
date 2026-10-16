@@ -90,21 +90,54 @@ def test_failed_title_redaction_writes_nothing() -> None:
     assert _SENTINEL not in str(raised.value), "failure metadata must exclude argv"
 
 
-@pytest.mark.parametrize("title", [None, "trusted-caption"])
-def test_trusted_labels_and_explicit_titles_stay_unchanged(title: str | None) -> None:
-    """Only argv-derived titles are within the sink's redaction scope."""
+@pytest.mark.parametrize(
+    ("title", "expected_title"),
+    [(None, "trusted-label"), (_SENTINEL, "[REDACTED]")],
+)
+def test_trusted_fallback_and_explicit_titles_use_their_projection_policy(
+    title: str | None,
+    expected_title: str,
+) -> None:
+    """Trusted fallback labels persist while explicit titles are sanitized."""
     buffer = io.StringIO()
-    policy = RedactionPolicy(literals=("trusted-label", "trusted-caption"))
+    policy = RedactionPolicy(literals=(_SENTINEL, "trusted-label"))
     sink = GitHubActionsSink(buffer, force=True, title=title, redaction=policy)
     session = sink.open_session(SessionStart(label="trusted-label", argv=()))
     assert session is not None, "a forced sink must activate"
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
 
-    label = title or "trusted-label"
     rendered = buffer.getvalue()
-    assert rendered.startswith(f"::group::{label}\n"), (
-        "trusted labels and explicit titles must remain caller-controlled"
+    assert rendered.startswith(f"::group::{expected_title}\n"), (
+        "emitted titles must use their configured projection policy"
     )
-    assert f"::error title={label}::" in rendered, (
-        "annotation labels must remain independent of argv redaction"
+    assert f"::error title={expected_title}::" in rendered, (
+        "explicit annotation titles must be sanitized while fallback labels stay "
+        "bounded"
     )
+    if title is not None:
+        assert _SENTINEL not in rendered, "explicit titles must not export the sentinel"
+
+
+@pytest.mark.usefixtures("failing_redaction_substitution")
+def test_annotation_only_does_not_redact_an_unused_argv_title() -> None:
+    """An unused group title cannot make an annotation-only run fail."""
+    buffer = io.StringIO()
+    sink = GitHubActionsSink(
+        buffer,
+        force=True,
+        emit_group=False,
+        redaction=RedactionPolicy(patterns=(re.compile(r"."),)),
+    )
+
+    session = sink.open_session(
+        SessionStart(label="project: cat", argv=("cat", _SENTINEL))
+    )
+    assert session is not None, "a forced annotation-only sink must activate"
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
+
+    rendered = buffer.getvalue()
+    assert "::group::" not in rendered, "annotation-only output must not open a group"
+    assert "::error title=project%3A cat::exit_nonzero" in rendered, (
+        "the bounded annotation label must remain available without group projection"
+    )
+    assert _SENTINEL not in rendered, "the bounded annotation cannot contain argv"

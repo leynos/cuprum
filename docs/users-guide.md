@@ -1376,11 +1376,11 @@ configured text from these exports when required. Rules are opt-in and
 destination-specific; `redaction=None` and `RedactionPolicy()` leave existing
 output unchanged. The policy uses caller-supplied literal strings and compiled
 regular expressions. It finds every match in the original text, merges
-overlapping match spans, then inserts the mask once; inserted mask text is not
-scanned again. Literal rules are normalized longest first, and pattern rules
-retain their configured order for error reporting. Choose a mask that does not
-contain secret material. The policy does not detect secrets that the caller has
-not configured.
+overlapping or adjacent match spans, then inserts the mask once; inserted mask
+text is not scanned again. Literal rules are normalized longest first, and
+pattern rules retain their configured order for error reporting. Choose a mask
+that does not contain secret material. The policy does not detect secrets that
+the caller has not configured.
 
 For example, one policy can be applied independently to structured logging and
 tracing, and wrapped around another observation consumer before registration:
@@ -1422,9 +1422,11 @@ assert "session-314" not in repr(exports) + repr(tracer.spans)
 ```
 
 Pass the same `redaction=policy` keyword to `logging_hook()` for its plain-text
-start record, or to `GitHubActionsSink` for its group title. The opt-in policy
-uses the same rules at each destination; it is never applied globally. Both
-`TracingHook` and the `tracing_hook()` factory accept the policy.
+start record, or to `GitHubActionsSink` for an emitted explicit title or
+argv-derived group title. An explicit annotation title uses the policy too; its
+bounded fallback label remains unchanged. The opt-in policy uses the same rules
+at each destination; it is never applied globally. Both `TracingHook` and the
+`tracing_hook()` factory accept the policy.
 
 The event projection redacts each `argv` item, environment value, output line,
 diagnostic note, and top-level string-valued tag. It leaves the program and
@@ -1600,12 +1602,12 @@ commands.
 Use `GitHubActionsSink` from `cuprum.sinks` for anything the flags do not
 cover: a custom `title`, another `destination`, `force=True` to reproduce the
 framing locally, `emit_group=False` / `emit_annotation=False` to switch off
-either half of the frame, or `redaction=policy` to redact the argv-derived
-group title. The convenience flags do not accept a redaction policy. Redaction
-runs before workflow-command escaping and applies only to the argv-derived
-title. An explicit title and echoed child output remain unchanged. The
-annotation continues to use the explicit title, when supplied, or the bounded
-start label; it never uses argv.
+either half of the frame, or `redaction=policy` to redact explicit titles and
+argv-derived group titles. The convenience flags do not accept a redaction
+policy. Redaction runs before workflow-command escaping and only when the
+corresponding group or explicit-title annotation is emitted. The trusted
+fallback annotation label and echoed child output remain unchanged. An
+annotation never uses argv.
 
 <!-- tested-example: github-actions-sink -->
 

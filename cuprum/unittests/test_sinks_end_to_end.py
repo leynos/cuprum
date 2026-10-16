@@ -18,6 +18,7 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
+from cuprum.redaction import RedactionPolicy
 from cuprum.sh import RunOutputOptions
 from cuprum.sinks import GitHubActionsSink
 from cuprum.sinks.github_actions import _escape_property
@@ -26,10 +27,14 @@ from tests.helpers.catalogue import python_catalogue
 _LEASE_PREFIX = "::stop-commands::"
 
 
-def _forced_sink() -> tuple[GitHubActionsSink, io.StringIO]:
+def _forced_sink(
+    *, redaction: RedactionPolicy | None = None
+) -> tuple[GitHubActionsSink, io.StringIO]:
     """Build a GitHub Actions sink over a buffer, activated regardless of CI."""
     buffer = io.StringIO()
-    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer), force=True)
+    sink = GitHubActionsSink(
+        typ.cast("typ.IO[str]", buffer), force=True, redaction=redaction
+    )
     return sink, buffer
 
 
@@ -83,6 +88,29 @@ def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
     assert result.ok is True, f"the framed run must still succeed; got {result!r}"
     assert result.stdout == "inside the group\n", "capture must be unchanged"
     _assert_framed(buffer.getvalue(), command)
+
+
+def test_forced_sink_redacts_argv_title_without_changing_run() -> None:
+    """The presentation title is sanitized while command execution stays raw."""
+    sentinel = "gha-e2e-secret-442"
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    command = python("-c", "print('inside the group')", sentinel)
+    sink, buffer = _forced_sink(redaction=RedactionPolicy(literals=(sentinel,)))
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
+
+    rendered = buffer.getvalue()
+    assert result.stdout == "inside the group\n", (
+        "captured output must remain unchanged"
+    )
+    assert command.argv[-1] == sentinel, "execution arguments must remain unchanged"
+    expected_title = " ".join(command.argv_with_program).replace(sentinel, "[REDACTED]")
+    assert rendered.startswith(f"::group::{expected_title}\n"), (
+        "the emitted group title must redact its configured sentinel"
+    )
+    assert sentinel not in rendered, "the presentation must exclude configured secrets"
 
 
 def test_child_workflow_commands_stay_inside_the_lease() -> None:

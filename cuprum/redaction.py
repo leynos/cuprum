@@ -93,10 +93,10 @@ def _collect_rule_spans[Rule](
 def _merge_nonzero_spans(
     spans: tuple[tuple[int, int], ...],
 ) -> tuple[tuple[int, int], ...]:
-    """Merge overlapping non-empty source matches."""
+    """Merge overlapping or adjacent non-empty source matches."""
     merged: list[tuple[int, int]] = []
     for start, end in spans:
-        if merged and start < merged[-1][1]:
+        if merged and start <= merged[-1][1]:
             previous_start, previous_end = merged[-1]
             merged[-1] = (previous_start, max(previous_end, end))
         else:
@@ -241,8 +241,9 @@ class RedactionPolicy:
         Regular-expression substitution failures propagate as
         :class:`RedactionError`. The error identifies the rule without
         retaining or formatting the source text. Literal and pattern matches
-        are collected against the original value; overlapping spans are
-        replaced together, and inserted mask text is never rescanned.
+        are collected against the original value; overlapping or adjacent
+        spans are replaced together, and inserted mask text is never
+        rescanned.
         """
         if not isinstance(value, str):
             msg = "value must be a string"
