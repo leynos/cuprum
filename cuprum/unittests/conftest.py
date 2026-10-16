@@ -225,8 +225,10 @@ def pytest_configure(config: pytest.Config) -> None:
 def failing_redaction_substitution(monkeypatch: pytest.MonkeyPatch) -> None:
     """Install a rule failure that embeds its input in the original exception."""
 
-    def fail_substitution(_pattern: re.Pattern[str], value: str, _mask: str) -> str:
+    def fail_match(
+        _pattern: re.Pattern[str], value: str
+    ) -> tuple[tuple[int, int], ...]:
         """Model a rule whose exception embeds its input."""
         raise ValueError(value)
 
-    monkeypatch.setattr("cuprum.redaction._substitute_pattern", fail_substitution)
+    monkeypatch.setattr("cuprum.redaction._pattern_match_spans", fail_match)

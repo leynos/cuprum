@@ -88,6 +88,41 @@ def test_apply_text_masks_literals_and_pattern_matches() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("literal", "pattern"),
+    [
+        pytest.param("abc", r"abc-[0-9]+", id="pattern-contains-literal"),
+        pytest.param("abc", r"bc-[0-9]+", id="literal-contains-pattern"),
+    ],
+)
+def test_overlapping_literal_and_pattern_matches_are_redacted_together(
+    literal: str,
+    pattern: str,
+) -> None:
+    """Every configured rule sees original text before overlap is merged."""
+    policy = RedactionPolicy(
+        literals=(literal,),
+        patterns=(re.compile(pattern),),
+    )
+
+    assert policy.apply_text("abc-123") == "[REDACTED]", (
+        "overlapping literal and pattern matches must redact their full union"
+    )
+
+
+def test_inserted_mask_is_not_rescanned_by_configured_rules() -> None:
+    """A replacement remains opaque even when it matches another rule."""
+    policy = RedactionPolicy(
+        literals=("secret", "TOKEN"),
+        patterns=(re.compile(r"\[REDACTED\]"),),
+        mask="[REDACTED TOKEN]",
+    )
+
+    assert policy.apply_text("secret") == "[REDACTED TOKEN]", (
+        "matches inside replacement text must not be applied recursively"
+    )
+
+
 @pytest.mark.usefixtures("failing_redaction_substitution")
 def test_failed_pattern_raises_without_echoing_source_text() -> None:
     """A failed rule stops projection and exposes only safe failure metadata."""

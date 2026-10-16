@@ -78,6 +78,11 @@ copies before registration with `observe()`. Rule normalization and application
 remain private to the policy; adapters and sinks reuse the policy rather than
 duplicating rule handling.
 
+Literal and pattern matches are collected from the original text. Overlapping
+spans are merged before the mask is inserted, so one rule cannot split a match
+from another and inserted mask text is not rescanned. The mask is caller-owned
+replacement text and must not contain secret material.
+
 Structured logging, tracing, and plain-text logging accept the policy directly
 through a `redaction` keyword argument. Event adapters sanitize a copy before
 projection, redacting argv items, environment values, output lines, diagnostic
