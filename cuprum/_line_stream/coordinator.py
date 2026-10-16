@@ -1,26 +1,18 @@
 """Pull-style line iteration over one subprocess.
 
-Owns the coordination behind ``SafeCmd.lines()``. The subprocess, its stream
-consumers, its deadline, and the teardown rules are the same primitives
-``SafeCmd.run()`` uses, reached through the same builders; the addition is a
-finite :class:`asyncio.Queue` fed by a per-line callback chained ahead of the
-caller's own ``on_line``, so a caller iterating lines is decoupled from the
-drain without forking the run semantics.
+``SafeCmd.lines()`` uses the same subprocess, deadline, and teardown
+primitives as ``SafeCmd.run()``. Its finite queue is fed by a per-line hook
+ahead of the caller's ``on_line`` callback, keeping iteration decoupled without
+changing run semantics.
 
-That queue is what bounds retention. The sink awaits ``queue.put``, and the
-drain loop awaits the sink, so a caller that iterates slowly pauses the read
-rather than letting a chatty child accumulate events in memory.
+The sink awaits ``queue.put`` and the drain awaits that sink. A slow iterator
+therefore pauses reads instead of retaining unbounded output. Consumer tasks
+belong to ``_RunTaskOwnership.consumers`` and are reconciled once on completion,
+timeout, caller ``break``, generator close, and external cancellation.
 
-The consumer tasks are registered in ``_RunTaskOwnership.consumers``, so the
-shared reconciliation cancels and drains them exactly once on every exit
-path: completion, timeout, caller ``break``, generator close, and external
-cancellation alike.
-
-This module holds the run, teardown, and coordination steps. The queue
-plumbing, telemetry types, pre-return spawn machinery, and post-exit drain live
-in sibling modules of the ``cuprum._line_stream`` package, which re-exports all
-of them. Tests that replace a collaborator of these steps patch this module,
-because each function resolves those names through this module's globals.
+Queue plumbing, telemetry, spawn setup, and post-exit draining live in sibling
+modules and are re-exported by the package. Tests patch this module because its
+coordination functions resolve collaborators through this module's globals.
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ import codecs
 import logging
 import typing as typ
 
-from cuprum._bounded_delivery import _DeliveryPayload
+from cuprum._bounded_delivery import _DeliveryPayload, _DeliveryWorker
 from cuprum._echo_truncation import _split_echo_segments
 from cuprum.echo_events import (
     BrokenPipePolicy,
@@ -73,12 +73,7 @@ def _write_chunk(
     buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
         if delivery is not None:
-            return delivery.enqueue(
-                config.stream,
-                _DeliveryPayload(value=chunk, source_bytes=accounted_bytes),
-                flush=True,
-                diagnostics=state.relay_diagnostics,
-            )
+            return _enqueue_delivery(delivery, state, chunk, accounted_bytes)
         buffer.write(chunk)
         buffer.flush()
         return 0
@@ -88,16 +83,26 @@ def _write_chunk(
         else state.echo_decoder.decode(chunk, final=final)
     )
     if delivery is not None:
-        return delivery.enqueue(
-            config.stream,
-            _DeliveryPayload(value=text, source_bytes=accounted_bytes),
-            flush=True,
-            diagnostics=state.relay_diagnostics,
-        )
+        return _enqueue_delivery(delivery, state, text, accounted_bytes)
     if text:
         config.sink.write(text)
     config.sink.flush()
     return 0
+
+
+def _enqueue_delivery(
+    delivery: _DeliveryWorker,
+    state: _DrainState,
+    value: str | bytes,
+    source_bytes: int,
+) -> int:
+    """Queue a prepared echo payload while preserving source-byte accounting."""
+    return delivery.enqueue(
+        state.config.stream,
+        _DeliveryPayload(value=value, source_bytes=source_bytes),
+        flush=True,
+        diagnostics=state.relay_diagnostics,
+    )
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:

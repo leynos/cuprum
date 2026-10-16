@@ -53,46 +53,59 @@ def _build_subprocess_execution(
             max_queued_bytes=delivery.max_queued_bytes,
         )
     )
-    relay_diagnostics = (
-        None if delivery_worker is None else (_RelayDiagnostics(), _RelayDiagnostics())
-    )
-    idle_delivery = (
-        None
-        if delivery_worker is None or relay_diagnostics is None
-        else functools.partial(
-            _queue_idle_diagnostic,
-            delivery_worker,
-            relay_diagnostics[1],
+    try:
+        relay_diagnostics = (
+            None
+            if delivery_worker is None
+            else (_RelayDiagnostics(), _RelayDiagnostics())
         )
-    )
-    return _SubprocessExecution(
-        cmd=cmd,
-        ctx=state.context,
-        capture=state.output.capture,
-        echo_stdout=state.output.resolved_echo[0],
-        echo_stderr=state.output.resolved_echo[1],
-        max_echo_line_bytes=state.output.max_echo_line_bytes,
-        broken_pipe_policy=state.output.resolved_broken_pipe_policy,
-        sink_session=sink_bracket.session,
-        timeout=state.timeout,
-        observation=observation,
-        stdin_data=state.stdin_data,
-        on_line=state.output.on_line,
-        capture_bytes=state.capture_bytes,
-        process_group=state.context.resolved_process_group,
-        idle=_build_idle_monitor(
-            state.output.idle_after,
-            state.output.on_idle,
-            _idle_subject(str(cmd.program)),
-            _IdleSinkConfig(
-                sink=stderr_destination,
-                delivery=idle_delivery,
+        idle_delivery = (
+            None
+            if delivery_worker is None or relay_diagnostics is None
+            else functools.partial(
+                _queue_idle_diagnostic,
+                delivery_worker,
+                relay_diagnostics[1],
+            )
+        )
+        return _SubprocessExecution(
+            cmd=cmd,
+            ctx=state.context,
+            capture=state.output.capture,
+            echo_stdout=state.output.resolved_echo[0],
+            echo_stderr=state.output.resolved_echo[1],
+            max_echo_line_bytes=state.output.max_echo_line_bytes,
+            broken_pipe_policy=state.output.resolved_broken_pipe_policy,
+            sink_session=sink_bracket.session,
+            timeout=state.timeout,
+            observation=observation,
+            stdin_data=state.stdin_data,
+            on_line=state.output.on_line,
+            capture_bytes=state.capture_bytes,
+            process_group=state.context.resolved_process_group,
+            idle=_build_idle_monitor(
+                state.output.idle_after,
+                state.output.on_idle,
+                _idle_subject(str(cmd.program)),
+                _IdleSinkConfig(
+                    sink=stderr_destination,
+                    delivery=idle_delivery,
+                ),
             ),
-        ),
-        delivery_worker=delivery_worker,
-        delivery_grace_s=None if delivery is None else delivery.drain_grace_s,
-        relay_diagnostics=relay_diagnostics,
-    )
+            delivery_worker=delivery_worker,
+            delivery_grace_s=None if delivery is None else delivery.drain_grace_s,
+            relay_diagnostics=relay_diagnostics,
+        )
+    except BaseException as run_error:
+        if delivery_worker is not None:
+            try:
+                delivery_worker.close()
+            except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
+                run_error.add_note(
+                    "Output delivery worker cleanup also failed "
+                    f"({type(close_error).__name__})."
+                )
+        raise
 
 
 __all__ = ["_build_subprocess_execution"]

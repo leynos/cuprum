@@ -109,9 +109,9 @@ from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BoundedDelivery",
     "BytesCommandResult",
     "BytesPipelineResult",
-    "BoundedDelivery",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",

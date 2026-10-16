@@ -177,4 +177,19 @@
       'cuprum/stream_observation.py',
       'cuprum/tracing_protocols.py',
     ]),
+    'generator': '<maturin-version>',
+    'metadata': dict({
+      'classifiers': list([
+      ]),
+      'name': 'cuprum',
+      'requires_dist': list([
+      ]),
+      'requires_python': '>=3.12',
+      'version': '<project-version>',
+    }),
+    'wheel': dict({
+      'root_is_purelib': 'false',
+      'tag': '<platform-tag>',
+    }),
   })
+# ---

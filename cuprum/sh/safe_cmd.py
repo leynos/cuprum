@@ -26,7 +26,6 @@ handle path resolves its own run inputs, so it lives with the handle package.
 import asyncio
 import dataclasses as dc
 import functools
-import typing as typ
 
 from cuprum._bytes_run import (
     _bytes_output,

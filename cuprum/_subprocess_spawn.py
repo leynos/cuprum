@@ -39,8 +39,8 @@ if typ.TYPE_CHECKING:
     from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
-    from cuprum.lines import _LineHookFn
     from cuprum._streams import _RelayDiagnostics
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
 

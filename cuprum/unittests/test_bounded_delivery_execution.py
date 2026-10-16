@@ -11,8 +11,9 @@ import typing as typ
 
 import pytest
 
+import cuprum._command_execution_config as command_execution_config
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
-from cuprum.echo_events import EchoErrorCategory
+from cuprum.echo_events import EchoErrorCategory, EchoStream
 from cuprum.echo_observation import observe_echo
 from cuprum.events import TerminalOutcome
 from cuprum.sh import (
@@ -23,6 +24,9 @@ from cuprum.sh import (
 from cuprum.unittests._sink_test_support import BlockedSink
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import started_pids, wait_for_process_death
+
+if typ.TYPE_CHECKING:
+    from cuprum._bounded_delivery import _DeliveryWorker
 
 if typ.TYPE_CHECKING:
     from cuprum.echo_events import EchoEvent
@@ -175,6 +179,58 @@ def test_blocked_delivery_does_not_delay_timeout_or_cancellation(
     if scenario.timeout_error is not None:
         assert isinstance(scenario.timeout_error.stdout, str)
         assert _BLOCKED_OUTPUT in scenario.timeout_error.stdout
+
+
+def test_failed_execution_bundle_build_closes_delivery_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A preparation failure cannot strand the newly started daemon worker."""
+    scenario = _build_subject("command")
+    created_workers: list[_DeliveryWorker] = []
+    original_worker = command_execution_config._DeliveryWorker
+    run_error = RuntimeError("idle monitor setup failed")
+
+    def record_worker_creation(
+        destinations: dict[EchoStream, typ.IO[str] | typ.BinaryIO],
+        max_queued_bytes: int,
+    ) -> _DeliveryWorker:
+        """Record worker ownership while preserving its real thread lifecycle."""
+        worker = original_worker(destinations, max_queued_bytes)
+        created_workers.append(worker)
+        return worker
+
+    def fail_idle_monitor(*_args: object, **_kwargs: object) -> None:
+        """Fail after the delivery worker starts but before execution returns."""
+        raise run_error
+
+    monkeypatch.setattr(
+        command_execution_config,
+        "_DeliveryWorker",
+        record_worker_creation,
+    )
+    monkeypatch.setattr(
+        command_execution_config,
+        "_build_idle_monitor",
+        fail_idle_monitor,
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([scenario.program]))),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        asyncio.run(
+            _run_subject(
+                scenario.subject,
+                deadline_s=None,
+                sink=scenario.sink,
+            ),
+        )
+
+    assert exc_info.value is run_error
+    assert len(created_workers) == 1
+    assert created_workers[0]._closing
+    assert not created_workers[0]._thread.is_alive()
+    assert not scenario.sink.started.is_set()
 
 
 def test_blocked_delivery_worker_does_not_join_at_interpreter_exit() -> None:
