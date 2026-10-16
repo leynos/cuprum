@@ -152,7 +152,7 @@ async def _run_spawned_pipeline(
         )
         relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)
         idle_diagnostics = config.idle_delivery_diagnostics
-        if idle_diagnostics is not None and relay_fallbacks_by_stage:
+        if idle_diagnostics is not None:
             idle_diagnostics.settle()
             relay_fallbacks_by_stage = (
                 *relay_fallbacks_by_stage[:-1],

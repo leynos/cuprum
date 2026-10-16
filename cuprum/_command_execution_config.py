@@ -103,7 +103,7 @@ def _build_subprocess_execution(
     except BaseException as run_error:
         if delivery_worker is not None:
             try:
-                delivery_worker.close()
+                delivery_worker.close(grace=0.0)
             except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
                 run_error.add_note(
                     "Output delivery worker cleanup also failed "

@@ -12,6 +12,7 @@ import typing as typ
 import pytest
 
 import cuprum._command_execution_config as command_execution_config
+import cuprum._pipeline_config as pipeline_config
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.echo_events import EchoErrorCategory, EchoStream
 from cuprum.echo_observation import observe_echo
@@ -21,14 +22,12 @@ from cuprum.sh import (
     ExecutionContext,
     RunOutputOptions,
 )
-from cuprum.unittests._sink_test_support import BlockedSink
+from cuprum.unittests._sink_test_support import BlockedSink, RecordingSink
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import started_pids, wait_for_process_death
 
 if typ.TYPE_CHECKING:
     from cuprum._bounded_delivery import _DeliveryWorker
-
-if typ.TYPE_CHECKING:
     from cuprum.echo_events import EchoEvent
     from cuprum.events import ExecEvent
     from cuprum.program import Program
@@ -229,8 +228,53 @@ def test_failed_execution_bundle_build_closes_delivery_worker(
     assert exc_info.value is run_error
     assert len(created_workers) == 1
     assert created_workers[0]._closing
+    created_workers[0]._thread.join(timeout=1.0)
     assert not created_workers[0]._thread.is_alive()
     assert not scenario.sink.started.is_set()
+
+
+def test_failed_pipeline_config_build_closes_delivery_worker_and_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pipeline preparation failure releases its worker and sink session."""
+    sink = RecordingSink()
+    created_workers: list[_DeliveryWorker] = []
+    original_worker = pipeline_config._DeliveryWorker
+    run_error = RuntimeError("idle monitor setup failed")
+
+    def record_worker_creation(
+        destinations: dict[EchoStream, typ.IO[str] | typ.BinaryIO],
+        max_queued_bytes: int,
+    ) -> _DeliveryWorker:
+        """Record the pipeline worker while retaining its real lifecycle."""
+        worker = original_worker(destinations, max_queued_bytes)
+        created_workers.append(worker)
+        return worker
+
+    def fail_idle_monitor(*_args: object, **_kwargs: object) -> None:
+        """Fail after the sink and delivery worker have been acquired."""
+        raise run_error
+
+    monkeypatch.setattr(pipeline_config, "_DeliveryWorker", record_worker_creation)
+    monkeypatch.setattr(pipeline_config, "_build_idle_monitor", fail_idle_monitor)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        pipeline_config._prepare_pipeline_config(
+            output=RunOutputOptions(
+                sink=sink,
+                delivery=BoundedDelivery(max_queued_bytes=128),
+            ),
+            timeout=None,
+            context=None,
+        )
+
+    assert exc_info.value is run_error
+    assert len(created_workers) == 1
+    assert created_workers[0]._closing
+    created_workers[0]._thread.join(timeout=1.0)
+    assert not created_workers[0]._thread.is_alive()
+    assert sink.last_session.closed == 1
+    assert sink.recorded_outcome.outcome is TerminalOutcome.ERROR
 
 
 def test_blocked_delivery_worker_does_not_join_at_interpreter_exit() -> None:
