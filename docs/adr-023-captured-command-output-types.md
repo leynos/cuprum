@@ -40,7 +40,8 @@ callers of default single-command runs without an assertion.
    implemented. The overloads are planned: default `SafeCmd.run` and `run_sync`
    calls will be typed as returning `CapturedResult`; calls with an explicit
    `RunOutputOptions` will remain typed as `CommandResult` because those
-   options may disable capture.
+   options may disable capture. A `RunOutputOptions | None` variable will also
+   return `CommandResult`, since its options value may disable capture.
 2. **Make every result stream `str` and add a captured flag.** Rejected. This
    changes `CommandResult`'s public field contract and still requires every
    consumer to branch on a second field. `None` already communicates the
@@ -63,7 +64,8 @@ disabled still constructs `CommandResult` with `None` streams. Currently,
 `SafeCmd.run` and `run_sync` expose only the implementation annotation
 `CommandResult`. The planned overloads will return `CapturedResult` when
 `output` is omitted or `None`, and `CommandResult` when `output` is an explicit
-`RunOutputOptions`; the implementation annotations will remain `CommandResult`.
+`RunOutputOptions` or a `RunOutputOptions | None` variable is passed; the
+implementation annotations will remain `CommandResult`.
 
 `CommandResult.require_captured()` returns an existing `CapturedResult`
 unchanged. If both streams are strings on an ordinary `CommandResult`, it

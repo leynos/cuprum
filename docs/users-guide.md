@@ -331,6 +331,8 @@ A captured single-command text run returns `CapturedResult`, whose `stdout` and
 explicit `RunOutputOptions` is typed as returning `CommandResult`, because those
 options may disable capture, even when a particular instance sets
 `capture=True`. That captured call still returns `CapturedResult` at runtime.
+A variable typed `RunOutputOptions | None` also has a `CommandResult` return
+type for the same reason.
 Use `result.require_captured()` to narrow an explicit-options result. It returns
 the same object if already narrowed, copies a result whose two streams are
 strings, or raises `ValueError` with the missing stream names when capture was

@@ -475,6 +475,15 @@ class SafeCmd:
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult: ...
+    @overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions | None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CommandResult: ...
     async def run(
         self,
         *,
@@ -497,6 +506,15 @@ class SafeCmd:
         self,
         *,
         output: RunOutputOptions,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> CommandResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions | None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
@@ -526,6 +544,10 @@ and an unavailable stream raises `ValueError`. This also prevents an uncaptured
 diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
 [ADR-023](adr-023-captured-command-output-types.md).
+
+The planned `RunOutputOptions | None` overload accepts variables that may hold
+either explicit options or `None` and returns `CommandResult`. Its broader
+return type reflects that capture may be disabled by the options value.
 
 #### 6.1.3 `DynamicCmd[Out]`
 
