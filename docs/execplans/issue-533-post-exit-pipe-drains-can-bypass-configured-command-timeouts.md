@@ -335,7 +335,25 @@ the issue was filed:
   its `[tool.duplication_gate]` section). Disposition: re-run with the full
   suite once admission holds, and record the outcome; no code change is
   warranted by evidence that points at the environment.
-- [ ] EP-M2 — `SafeCmd.lines()`'s post-exit drain.
+- [x] EP-M2 — `SafeCmd.lines()`'s post-exit drain. Core bound written in
+  `cuprum/_line_stream/drain.py` (`_collect_line_stream_after_exit` plus
+  `_await_writer_within_scope`, `_await_consumers`, `_raise_reader_failure`,
+  `_settle_and_reconcile`), coordinator rewired, and an unstamped-`started_at`
+  defect found and fixed in the same path — see `Surprises & discoveries`. New
+  module `cuprum/unittests/test_safe_cmd_lines_post_exit_deadline.py` collects
+  6 cases (three tests × two group policies) and passes. Red state measured
+  independently rather than asserted: with `_deadline_for_collection` neutered
+  to `return None` in the drain module's namespace, the same 6 cases failed as
+  `TimeoutError` raised from `asyncio/timeouts.py:115` after 123.00 s — the
+  test harness's own 20 s bound spent six times over — and the source file was
+  byte-identical afterwards (`diff` clean). Green after the bound:
+  `6 passed in 8.43s`. Neighbouring modules green in the same tree:
+  `test_safe_cmd_lines.py` (20), `test_line_stream_exit.py` (7),
+  `test_line_stream_terminal_outcome.py` (1), `test_line_stream_ownership.py`
+  (3), `test_line_stream_coordinator_stateful.py` (1),
+  `test_subprocess_timeout.py` (4) — 36 collected, 36 passed, 2.32 s. Together
+  with EP-M1's module the pair is 17 passed in 27.86 s. Milestone gate and
+  CodeRabbit review still outstanding.
 - [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
   route.
 - [ ] EP-M4 — documentation and full validation.
@@ -451,7 +469,91 @@ the issue was filed:
   rule is: **creating a module is a packaging change, and the wheel snapshot is
   the gate that will tell you.**
 
+- **The `lines()` path never stamped `started_at` onto the bundle its caller
+  keeps, and the deadline is what made that matter.** `_start_line_stream_run`
+  rebuilds the execution with `dc.replace(execution, started_at=...)` and hands
+  the rebuild to the consumers, but `_drive_line_stream` went on passing its
+  own *unstamped* bundle to `_coordinate_line_stream`. Both bundles are
+  `_SubprocessExecution`, both carry the same `observation`, and only the two
+  differ in `started_at` — so the defect was invisible until EP-M2 introduced
+  the first read of `execution.started_at` on this path. The direct path had
+  already solved the same problem by returning
+  `_StartedRun(process, execution)` and rebinding at the call site; the
+  line-stream analogue kept only a bare float in `_LineStreamRun.started_at`,
+  which the consumers read but the coordinator's `execution` parameter did not
+  carry.
+
+  How it surfaced, and why the first diagnosis was wrong: with `timeout=2.0`,
+  `_deadline_for_collection` computed `2.0 - (perf_counter() - 0.0)` ≈
+  `-692339`, i.e. two seconds minus the machine's ~8-day monotonic uptime. The
+  traceback printed the value (`remaining = -692019.82`) beside
+  `started_at=0.0`, and the two readings agreed to within the elapsed test time
+  — which is the evidence that pinned it, not the stack alone.
+  `test_lines_empty_output_completes_and_publishes_result` (`python -c pass`,
+  no output, 2 s budget) failed with a `TimeoutExpired` raised instantly, which
+  reads like "the new bound misfired" and is really "the reference it subtracts
+  from was never set".
+
+  The interim guard I had added to `_await_consumers`
+  (`if remaining is not None and remaining <= 0: raise TimeoutError`) was both
+  out of plan and wrong in its own right, and was removed: `asyncio.wait`
+  returns immediately for a non-positive timeout with every unfinished reader
+  left in `pending` (verified: `done 0, pending 1` for `timeout=-100.0`), so a
+  reader that already finished is reported as finished and a spent budget is
+  still reported as expiry by the existing `if pending` arm. A separate guard
+  could only *add* a way to fail a run whose readers had all completed.
+
+  Fix and its shape: `_LineStreamRun` now carries the stamped `execution`
+  instead of a bare `started_at`, mirroring `_StartedRun`, and both the
+  coordinator's exit-event/`duration_s` reading and `_run_to_command_result`'s
+  `started_at` read come from it. There is now one bundle, so the two cannot
+  drift again.
+
+- **The same doctest test has a third failure mode, and it must not be
+  mistaken for the two already recorded.** `Progress` records two independent
+  runs that failed inside the test's *own* assertion, with
+  `build-limits: the supervisor refused: unhealthy` in the reported body; that
+  reading is the better-evidenced one and stands. A background scrutineer run
+  failed differently: `Failed: Timeout (>600.0s) from pytest-timeout`, raised
+  inside `selectors.poll`, with zero `build-limits` matches in the log at all.
+  Saturation evidence around that run: pre-run `build-limits-status` showed
+  `capacity 4, held 4, healthy` with ~170 waiting, and post-run all five
+  queries returned `[Errno 11] Resource temporarily unavailable` while 340
+  wrappers were live.
+
+  The three runs share one cause — compile admission under load — but they are
+  not interchangeable as evidence, and the third is the weakest of the three.
+  Its limitation is structural: `_run_doctests` uses `capture_output=True`, so
+  the child's diagnostics are invisible to the test that times out. **Absence of
+  `build-limits` text is therefore not evidence that admission was not the
+  blocker**, which is the opposite of what it looks like. Treat a
+  `pytest-timeout` failure inside `selectors.poll` on this machine as
+  undiagnosed until admission health is read from *outside* the failing process.
+
 ## Decision log
+
+- Decision (EP-M2, 2026-10-16): fix the unstamped-`started_at` defect found
+  while implementing EP-M2 as part of EP-M2, rather than filing it separately
+  or working around it. Rationale: EP-M1 made `execution.started_at`
+  load-bearing on this path, so the defect and its symptom are the same
+  change's responsibility — leaving it would ship a `lines()` post-exit
+  deadline that fires against a `0.0` reference, which is worse than the
+  unbounded wait it replaces. The fix is also confined to the routes this plan
+  already owns. Alternative considered: keep the `remaining <= 0` guard as a
+  stopgap and file the stamping bug separately (rejected: the guard would
+  convert every `lines()` run into an instant `TimeoutExpired`, i.e. trade a
+  hang for a systematic false failure).
+
+- Decision (EP-M2, 2026-10-16): carry the stamped bundle on `_LineStreamRun`
+  rather than passing it beside the run, and read `started_at` from it in both
+  places the coordinator needs it. Rationale: the defect existed precisely
+  because two bundles with the same type travelled together and only one was
+  stamped; removing the duplicate makes the class of bug unrepresentable rather
+  than merely fixed. This mirrors the direct path's `_StartedRun`, which had
+  already solved the same problem the same way. Alternative considered: keep
+  the bare `started_at` field and pass the stamped `execution` as an extra
+  argument to `_coordinate_line_stream` (rejected: two sources for one value is
+  the original defect, restated).
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
@@ -705,6 +807,33 @@ Acceptance evidence: the module hangs before the change on both `OWN_GROUP`
 capturing and non-capturing modes and passes after it; the partial-output arm
 asserts a line the child emitted before the deadline is present in the raised
 exception.
+
+Measured, with one deliberate departure from the wording above. The Red state
+was taken by neutering the bound rather than by reverting the hunk: a
+subprocess-based probe patched `_deadline_for_collection` in the drain module's
+namespace to `return None`, ran the module, and restored the file, with `diff`
+confirming byte-identical restoration. All 6 cases then failed with
+`TimeoutError` from `asyncio/timeouts.py:115` in 123.00 s, which is the 20 s
+harness bound spent once per case. Reverting instead would have removed the
+`lines()` bound while leaving the *other* change in the same path — the
+unstamped-`started_at` fix — in place, so the two could not be told apart; the
+probe isolates exactly the bound. Both group policies are covered, and the
+partial-output assertion is `_MARKER in drained.joined`, which reads the lines
+a reader task had already received when the expiry ended it. Green:
+`6 passed in 8.43s`.
+
+Two acceptance points are worth stating precisely, because the obvious reading
+of each is wrong. First, the partial-output arm does **not** read the raised
+model's `.output`: with `capture=True` the reconciliation payload does reach
+`TimeoutExpired`, but asserting it there would conflate what the caller already
+received on the iterator with what the exception carries, and only the former
+is the "already-delivered lines" claim. Second, "hangs before the change" is
+strictly true but the mechanism is subtler than a bare hang: the drain awaited
+three things unbounded, so the run did not merely outlive its deadline, it
+never returned at all, and the reconciliation that reclaims the descendant was
+what the hang prevented. An arm that only bounded the wait without settling
+would still have stranded the descendant, which is why the second test asserts
+reclamation rather than merely completion.
 
 ### EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout route
 
