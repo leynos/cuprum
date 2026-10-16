@@ -154,7 +154,7 @@ def _compile(
     context = sh.ExecutionContext(
         cwd=workspace,
         env={"CARGO_TARGET_DIR": str(target_directory)},
-        timeout=600,
+        timeout=3600,
     )
     with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
         result = cargo(*compile_arguments(targets)).run_sync(context=context)
