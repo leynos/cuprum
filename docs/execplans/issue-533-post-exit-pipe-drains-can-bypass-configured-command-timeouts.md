@@ -5,8 +5,13 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: DRAFT — reconnaissance and defect localisation complete; no production
-code has been changed yet.
+Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await) is
+implemented, tested Red-then-Green, its non-vacuity established by mutation,
+and its commit gates are being run. `check-fmt` passes; the compile-admission
+supervisor went down mid-session (blocking `lint`'s clippy leaf and `test`'s
+Rust arm) and has since recovered on its own, so those two gates are being
+re-run. EP-M2 to EP-M4 remain. The direct run has been split into
+`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
 
 ## Purpose / big picture
 
@@ -26,15 +31,15 @@ neither does the group teardown.
 
 After this change a caller of `SafeCmd.run()`, `SafeCmd.lines()`, or
 `Pipeline.run()` gets a run that ends. Either it completes, or it raises
-`cuprum.sh.TimeoutExpired` at the configured deadline, having preserved whatever
-output the run had already read. The overshoot past the deadline is bounded by
-the existing cleanup allowances and nothing else: the teardown grace
-(`cancel_grace`), the capture end-of-file grace (`_CAPTURE_EOF_GRACE_S`, 0.25 s)
-and the stdin close grace (`_CLOSE_GRACE_S`, 0.5 s).
+`cuprum.sh.TimeoutExpired` at the configured deadline, having preserved
+whatever output the run had already read. The overshoot past the deadline is
+bounded by the existing cleanup allowances and nothing else: the teardown grace
+(`cancel_grace`), the capture end-of-file grace (`_CAPTURE_EOF_GRACE_S`, 0.25
+s) and the stdin close grace (`_CLOSE_GRACE_S`, 0.5 s).
 
-This plan fixes all three public routes. It is written so that someone with only
-this file, the working tree, and no memory of the investigation can finish the
-job.
+This plan fixes all three public routes. It is written so that someone with
+only this file, the working tree, and no memory of the investigation can finish
+the job.
 
 ## Conformance basis
 
@@ -69,9 +74,12 @@ the issue was filed:
   `ebd6a41e4435`, is now `_wait_for_exit_code_within_timeout` plus the
   `_deadline_for_collection` helper at `cuprum/_subprocess_wait.py:209-243`.
 - The issue's sink, `cuprum/_subprocess_stream_run.py:187` at `ebd6a41e4435`,
-  is now `_run_subprocess_without_streams` at
-  `cuprum/_subprocess_stream_run.py:161-194`, whose bare `await stdin_task` is
-  the unbounded await in question.
+  is now `_run_subprocess_without_streams`, whose bare `await stdin_task` is
+  the unbounded await in question. The function has since moved to
+  `cuprum/_subprocess_direct_run.py` as part of EP-M1, and the bare await is now
+  `_await_writer_within_deadline`. A follow-up reader tracing the issue text
+  should follow the *behaviour* — "the direct run awaits its writer with no
+  bound" — rather than the path, which this plan's own work has relocated.
 
 ## Constraints
 
@@ -140,11 +148,11 @@ the issue was filed:
 - Risk: bounding a consumer gather by cancelling it *discards* the partial
   output the deadline exists to preserve, turning a hang into silent data loss.
   Severity: high. Likelihood: medium. Mitigation: every expiry path reconciles
-  through the existing `_drain_stream_consumers` with
-  `discard_on_cancel` *unset*, which is the mode that returns the partial
-  buffer; discard mode is used only on routes that are re-raising some other
-  error. Milestone EP-M1's second test asserts the payload directly, and EP-M2
-  and EP-M3 repeat the assertion on their routes.
+  through the existing `_drain_stream_consumers` with `discard_on_cancel`
+  *unset*, which is the mode that returns the partial buffer; discard mode is
+  used only on routes that are re-raising some other error. Milestone EP-M1's
+  second test asserts the payload directly, and EP-M2 and EP-M3 repeat the
+  assertion on their routes.
 
 - Risk: the new tests pass vacuously. A `TimeoutExpired`-shaped test can be
   satisfied by a run that expired during the *exit wait* rather than during the
@@ -167,17 +175,16 @@ the issue was filed:
   saying why.
 
 - Risk: a `lines()` case deadlocks on **caller** backpressure rather than on the
-  bug, because the line buffer fills while nobody is consuming from `LineStream`
-  and the run's own cleanup then blocks writing a terminal event. Severity:
-  medium. Likelihood: medium. Mitigation: EP-M2's tests drain the stream in a
-  dedicated reader task, and the plan records the requirement in the users'
-  guide: `lines()` backpressure counts towards the deadline.
+  bug, because the line buffer fills while nobody is consuming from
+  `LineStream` and the run's own cleanup then blocks writing a terminal event.
+  Severity: medium. Likelihood: medium. Mitigation: EP-M2's tests drain the
+  stream in a dedicated reader task, and the plan records the requirement in
+  the users' guide: `lines()` backpressure counts towards the deadline.
 
 - Risk: the new tests leak grandchildren, leaving SIGTERM-immune processes on a
   shared machine where other agents are working. Severity: medium. Likelihood:
-  medium. Mitigation: every test reaps in `finally` through
-  `reap_descendant`, which escalates to `SIGKILL` — the only signal the
-  descendant honours.
+  medium. Mitigation: every test reaps in `finally` through `reap_descendant`,
+  which escalates to `SIGKILL` — the only signal the descendant honours.
 
 - Risk: bounding the pipeline's final gather makes an unrelated failure
   *reported* as a timeout, because `TimeoutError` is also what a bounded wait
@@ -192,8 +199,8 @@ the issue was filed:
   `cuprum/_line_stream/` are long and precise, and an edit that keeps the code
   correct can still leave the prose describing the old behaviour. Severity:
   low. Likelihood: high. Mitigation: each milestone's Definition of Done
-  includes reading the module docstring against the new code, and EP-M4
-  reviews them again as part of the design-document pass.
+  includes reading the module docstring against the new code, and EP-M4 reviews
+  them again as part of the design-document pass.
 
 ## Progress
 
@@ -203,10 +210,138 @@ the issue was filed:
 - [x] (2026-10-16 14:05Z) Confirmed `ebd6a41e4435` (the issue's revision) is an
   ancestor of `HEAD`; `_deadline_for_collection` arrived later, in `8c78a5b77`.
 - [x] (2026-10-16 14:40Z) Built a scratch probe harness under `/tmp/probe533/`
-  and ran twelve routes against `HEAD`. Result table in `Surprises &
-  Discoveries`. Probes are scratch only and are never committed.
+  and ran twelve routes against `HEAD`. Result table in
+  `Surprises & Discoveries`. Probes are scratch only and are never committed.
 - [x] (2026-10-16 15:23Z) Wrote this plan.
-- [ ] (2026-10-16 15:23Z) Submit this plan for approval before implementation.
+- [x] (2026-10-16 16:05Z) EP-M1 Red: `test_run_no_stream_post_exit_deadline.py`
+  added and run against the unmodified tree — 4 failed in 82.81 s, every
+  failure an `asyncio.wait_for` `TimeoutError` at the harness bound of 20 s.
+  The direct route hangs, confirmed for both group policies.
+- [x] (2026-10-16 16:50Z) EP-M1 Green: `_await_writer_within_deadline` and
+  `_cleanup_direct_run` added — 4 passed in 7.20 s.
+- [x] (2026-10-16 17:20Z) EP-M1 refactor: the fix pushed
+  `_subprocess_stream_run.py` to 476 lines, over the 400-line module cap, so
+  the direct run moved to `cuprum/_subprocess_direct_run.py` and
+  `_settle_owned_group_before_draining` moved to `cuprum/_subprocess_wait.py`
+  (both run shapes need it; neither should import the other). 10 passed in
+  18.03 s.
+- [x] (2026-10-16 17:45Z) EP-M1 non-vacuity: two mutations run against
+  `_subprocess_direct_run.py`. Removing the group settle fails exactly the four
+  `own-group` arms and passes the four `inherit` arms; removing the writer
+  cancel fails exactly the two async `inherit` arms. Both mutations reverted.
+  See `Verification plan`.
+- [x] (2026-10-16 18:05Z) EP-M1 `check-fmt` failed on `mdtablefix`: two files
+  would be reformatted. `make fmt` applied; the gate then reported 93 files
+  left unchanged. Lesson recorded under `Surprises & Discoveries`.
+- [x] (2026-10-16 19:20Z) EP-M1 first `lint` attempt hit the runner's own
+  4500 s bound during an uncached Rust stage (rustdoc "Finished `dev` profile
+  in 23m 35s"; the managed sccache server was unreachable). Re-run with a
+  longer runner timeout. Not a code failure.
+- [x] (2026-10-16 19:30Z) EP-M1 `lint` attempt 2: every Python leaf passed,
+  including the `interrogate` closure-docstring defect found and fixed at
+  17:57Z. The clippy leaf then failed with
+  `build-limits: the supervisor refused: unhealthy` — an admission outage, not
+  a code defect. Independent confirmation: `build-limits-status` reports
+  connection refused on `/run/user/1000/buildlimits/supervisor.sock`.
+- [x] (2026-10-16 19:35Z) Removed an orphaned duplication allow entry my own
+  module split created
+  (`cuprum/_subprocess_stream_run.py ~ cuprum/_process_handle/coordinator.py`).
+  Verified against source, not merely by absence of a match; see `Decision log`.
+- [x] (2026-10-16 19:55Z) EP-M1 self-review caught a real defect in my own fix:
+  `_cleanup_direct_run` promised one shield over its two halves while the body
+  made two sequential shielded calls, the second unshielded entirely. Composed
+  into a single coroutine under one `_shielded_cleanup`. The property was
+  unpinned by any direct-path test, so
+  `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group` was
+  added with a new `DirectCleanupWatch`; mutation back to the two-shields shape
+  fails it on the settlement assertion. 11 passed in 20.62 s.
+- [x] (2026-10-16 20:00Z) Compile admission recovered on its own
+  (`build-limits-status`: "capacity 4, held 2, healthy"). No workaround was
+  applied at any point; `RUSTC_WRAPPER`/`RUSTDOC` were left untouched.
+- [x] (2026-10-16 20:35Z) The first `test-python` run of the EP-M1 gate
+  completed and reported the wheel snapshot as stale: creating
+  `cuprum/_subprocess_direct_run.py` changed the release wheel's member list and
+  `test_maturin_wheel_build_snapshot` failed on it. Fixed with a one-line
+  sorted insert into `cuprum/unittests/__snapshots__/test_maturin_build.ambr`;
+  the module sorts between `cuprum/_subprocess_context.py` and
+  `cuprum/_subprocess_execution.py`. Verified the fix restores agreement in
+  both directions rather than only silencing one entry: comparing every shipped
+  `cuprum/**/*.py` on disk against the snapshot's `entries` now reports nothing
+  missing and nothing stale, and the 165-name list is still in sorted order. See
+  `Surprises & discoveries` for why no other gate could have caught this.
+- [x] (2026-10-16 20:40Z) `make duplication` passed independently of the full
+  gate, so the new module's `if typ.TYPE_CHECKING:` block did not surface as a
+  new family: "duplication gate passed; 60 allowed by reasoned exceptions". The
+  28-module entry in `[tool.duplication_gate.allow]` therefore needs no change
+  — the block's three-line body is below the detector's floor, which is why the
+  module is absent from it by design rather than by oversight.
+- [x] (2026-10-16 20:50Z) The completed `test-python` run gave the real
+  failure set, which is smaller and different in kind from what was assumed
+  while it ran. Full result:
+  `3 failed, 3284 passed, 93 skipped in 2657.74s (0:44:17)`, log
+  `/tmp/test-python-cuprum-issue-533-frozen10-pre-snapshotfix.out`, dirty count
+  10 at start and 10 at end. The three failures:
+
+  | Test                                                                                          | Cause                    | Disposition                        |
+  | --------------------------------------------------------------------------------------------- | ------------------------ | ---------------------------------- |
+  | `test_maturin_build.py::test_maturin_wheel_build_snapshot`                                    | the stale wheel snapshot | **real defect, fixed** (20:35Z)    |
+  | `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`               | admission outage         | retried, **still outage** (21:35Z) |
+  | `test_rust_pump_debug_abort.py::test_debug_rust_pump_does_not_abort_on_early_exit_or_timeout` | admission outage         | retried, **green** (21:35Z)        |
+
+  Both non-defect failures carry
+  `build-limits: the supervisor refused: unhealthy` (or the
+  `[Errno 111] Connection refused` variant after the wrapper's 270 s wait) in
+  their bodies, and both are Rust-touching tests therefore routed through
+  compile admission. Their cause is the supervisor outage that was live for
+  part of the run's 44 minutes, not the diff.
+
+  **A diagnosis carried into this milestone was wrong and is retracted.** The
+  doctest failure was expected to be the known 30 s load flake, on the reading
+  that it ran under `pyproject.toml`'s suite-wide `timeout = 30`. It does not:
+  `cuprum/unittests/test_doctest_warning_contract.py:71` carries
+  `@pytest.mark.timeout(600)`, raised deliberately because the test compiles a
+  scratch crate twice through shared admission. The failure body is an
+  `AssertionError` from the test's own `former_route.returncode == 0`
+  assertion, reporting `assert 101 == 0` with the supervisor refusal inside —
+  an environment failure, not a timeout and not a code defect. Recording the
+  actual mechanism matters more than the disposition, because "it's just the
+  flake" would have left a supervisor outage unexplained and could have
+  mislabelled a genuine regression later.
+- [x] (2026-10-16 20:52Z) Admission recovered again and is stably healthy
+  across three samples
+  (`capacity 4, held 2/3/2, healthy, sccache unreachable, compiling directly`).
+  The `sccache unreachable` note means builds run uncached; that is not a
+  failure. The supervisor is flapping rather than down, which is why the same
+  suite both passed and failed Rust leaves within one run.
+- [x] (2026-10-16 21:35Z) Focused retry of the three failures, on the
+  snapshot-fixed tree: `1 failed, 2 passed in 1772.54s (0:29:32)`, log
+  `/tmp/focused-epm1-snapshotfix-cuprum-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts.out`.
+  **The snapshot fix is verified** — `test_maturin_wheel_build_snapshot`
+  passed ("1 snapshot passed"), and `test_rust_pump_debug_abort.py` passed, so
+  the first `test-python` run's two `retry` rows resolve as: one real defect
+  fixed, one outage artifact now green. That leaves one failure, and the
+  retraction above is confirmed on a second independent run: the doctest test
+  failed again with admission in its body, now at an even earlier point — the
+  `cargo`→`rustc` **version probe** was refused, so the scratch crate was never
+  compiled at all. The body reads `error: process didn't exit successfully:`
+  naming `build-limits-rustc` invoking `rustc -vV` and exiting 1, with
+  `[build-limits] rustc: waiting for a compile slot (123 ahead, 45s)` and
+  `build-limits: the supervisor refused: unhealthy`. Given a queue of 123
+  crates ahead of it, this run had essentially no chance of reaching admission,
+  which is consistent with an outage rather than with the test. The test cannot
+  be reached by this diff on its own terms either: it writes its scratch crate
+  into `tmp_path` and reads only `cargo`, `RUSTFLAGS` and `RUSTDOCFLAGS`, so it
+  never consults the one file the diff touches (`pyproject.toml`, and only at
+  its `[tool.duplication_gate]` section). Disposition: re-run with the full
+  suite once admission holds, and record the outcome; no code change is
+  warranted by evidence that points at the environment.
+- [ ] EP-M2 — `SafeCmd.lines()`'s post-exit drain.
+- [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
+  route.
+- [ ] EP-M4 — documentation and full validation.
+- [ ] Gate each commit through `scrutineer`; request `coderabbit review --agent`
+  after each milestone.
+- [ ] Push and open the draft PR.
 
 ## Surprises & discoveries
 
@@ -222,20 +357,20 @@ the issue was filed:
   prints a marker, and exits 0; run `timeout` 1.0 s; an outer harness bound of
   12 s, counted as a hang if the run had not ended.
 
-  | # | Route | Configuration | Verdict |
-  | - | ----- | ------------- | ------- |
-  | 1 | `run()` streamed | capture, OWN_GROUP | bounded, expired at 1.54 s |
-  | 2 | `run()` streamed | capture, 2 MiB stdin, OWN_GROUP | bounded, 1.54 s |
-  | 3 | `run()` direct | no capture, 2 MiB stdin, INHERIT | hangs |
-  | 4 | `run()` direct | no capture, 2 MiB stdin, OWN_GROUP | hangs |
-  | 5 | `run()` direct | no capture, no stdin | fine, 0.07 s |
-  | 6 | `lines()` | capture, OWN_GROUP | hangs |
-  | 7 | `lines()` | no capture, OWN_GROUP | hangs |
-  | 8 | `Pipeline.run()` | success, capture, OWN_GROUP | hangs |
-  | 9 | `Pipeline.run()` | success, no capture, OWN_GROUP | fine, 0.07 s |
-  | 10 | `Pipeline.run()` | success, non-final stage leaves descendant | hangs |
-  | 11 | `Pipeline.run()` | wait timeout, OWN_GROUP | bounded, 1.58 s |
-  | 12 | `Pipeline.run()` | wait timeout, INHERIT | hangs |
+  | #   | Route            | Configuration                              | Verdict                    |
+  | --- | ---------------- | ------------------------------------------ | -------------------------- |
+  | 1   | `run()` streamed | capture, OWN_GROUP                         | bounded, expired at 1.54 s |
+  | 2   | `run()` streamed | capture, 2 MiB stdin, OWN_GROUP            | bounded, 1.54 s            |
+  | 3   | `run()` direct   | no capture, 2 MiB stdin, INHERIT           | hangs                      |
+  | 4   | `run()` direct   | no capture, 2 MiB stdin, OWN_GROUP         | hangs                      |
+  | 5   | `run()` direct   | no capture, no stdin                       | fine, 0.07 s               |
+  | 6   | `lines()`        | capture, OWN_GROUP                         | hangs                      |
+  | 7   | `lines()`        | no capture, OWN_GROUP                      | hangs                      |
+  | 8   | `Pipeline.run()` | success, capture, OWN_GROUP                | hangs                      |
+  | 9   | `Pipeline.run()` | success, no capture, OWN_GROUP             | fine, 0.07 s               |
+  | 10  | `Pipeline.run()` | success, non-final stage leaves descendant | hangs                      |
+  | 11  | `Pipeline.run()` | wait timeout, OWN_GROUP                    | bounded, 1.58 s            |
+  | 12  | `Pipeline.run()` | wait timeout, INHERIT                      | hangs                      |
 
   Routes 1–2 are bounded because `_collect_stream_output` already wraps its
   whole post-exit boundary in `asyncio.timeout(_deadline_for_collection(...))`.
@@ -247,29 +382,82 @@ the issue was filed:
 - **Route 4 hangs under `OWN_GROUP` too.** This was counter-intuitive — the
   group teardown exists to reclaim descendants. The reason is ordering: the
   direct path awaits the parked stdin writer *before* any settle happens, and
-  the settle only runs when the writer await fails. There is nothing to fail it.
-  The bound has to come first; the settle follows expiry.
+  the settle only runs when the writer await fails. There is nothing to fail
+  it. The bound has to come first; the settle follows expiry.
 
-- **Route 5 and route 9 are fine for the same reason, and it is not reassuring.**
-  Both have literally nothing to await after exit — no stdin task, and (for a
-  no-capture pipeline) no output tasks. They are bounded by vacuity, not by
-  design, and are listed to show the probe distinguished them rather than to
-  claim they are exercised.
+- **Route 5 and route 9 are fine for the same reason, and it is not
+  reassuring.** Both have literally nothing to await after exit — no stdin
+  task, and (for a no-capture pipeline) no output tasks. They are bounded by
+  vacuity, not by design, and are listed to show the probe distinguished them
+  rather than to claim they are exercised.
 
 - **A timeout route can appear bounded while the descendant survives.** Route 11
   returned in 1.58 s under `OWN_GROUP`, which looks like success until the pid
-  file is read: the descendant is still alive because the group teardown did not
-  reach it either. `Pipeline.run()` has no process-group policy of its own, so
-  this is a structural limitation rather than a regression, but the plan records
-  it so the new pipeline tests do not assert a reclamation that cannot happen.
+  file is read: the descendant is still alive because the group teardown did
+  not reach it either. `Pipeline.run()` has no process-group policy of its own,
+  so this is a structural limitation rather than a regression, but the plan
+  records it so the new pipeline tests do not assert a reclamation that cannot
+  happen.
+
+- **The chained lint log does not name the tool that failed.** `make lint` runs
+  `ruff`, `interrogate`, `pylint`, `skylos`, the duplication gate, and then
+  `rustdoc`/`clippy` in one recipe. A failure prints only the failing command's
+  own output, and that output was 54 KB into the log. The `interrogate` defect
+  found at 17:57Z (two nested closures without docstrings in the new test
+  module, 96.8 % against a 100 % floor) was located only by grepping the
+  `Makefile` for `minimum:`, which surfaced `Makefile:235`. Treat every
+  `make lint` failure as "some tool in the chain", and identify it before
+  reading the message as a code defect.
+
+- **`mdtablefix` is not satisfied by writing documentation "already
+  formatted".** `make check-fmt` failed with `2 files would be reformatted` on
+  `docs/developers-guide.md` and this plan, both written by hand at 80 columns.
+  `make fmt` rewrote the plan (771 → 774 lines). The formatter owns the layout;
+  writing to the column count by hand is not the same as being formatted.
+
+- **A module split can orphan a duplication allow entry, and the gate reports
+  it as a coincidence rather than as growth.** Moving the direct run out of
+  `cuprum/_subprocess_stream_run.py` removed the last `_TeardownPolicy` import
+  from that module, which is the overlap a two-key entry named. The entry then
+  matched no family, and the gate said so — but framed it as "the overlap at <a
+  26-location import family> is a path-glob coincidence", which is a misleading
+  pointer: the real cause was that the entry's *subject* had moved. See
+  `Decision log` for how the removal was confirmed.
+
+- **A new module is also a wheel-layout change, and the only gate that says so
+  is a snapshot reached through a full release build.** Creating
+  `cuprum/_subprocess_direct_run.py` left the `entries` list in
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr` stale, so
+  `test_maturin_wheel_build_snapshot` failed. The failure was expensive to
+  reach and cheap to fix, and both halves are worth recording. It is reached
+  only by building the native wheel through maturin and cargo — the test carries
+  `@pytest.mark.timeout(0)` and took over twenty minutes on this machine, most
+  of it queued behind other agents in compile admission — so it surfaces late
+  in a full `make test` and looks like a stall rather than a defect. The fix is
+  one sorted insert, because the snapshot records the wheel's own member names
+  in sorted order and the new module sorts between
+  `cuprum/_subprocess_context.py` and `cuprum/_subprocess_execution.py`.
+
+  The useful part is why nothing caught it earlier. The wheel's packaging is
+  globbed by directory (`python-source = "."` with
+  `exclude = ["cuprum/unittests/**"]`), so no packaging manifest enumerates
+  modules and no lint notices a new one. The snapshot is a *consequence* check
+  rather than an inventory: it asserts what the build actually emitted, which
+  is why it cannot be replaced by keeping a list up to date by hand. It is also
+  the only gated enumeration of shipped modules — `pyproject.toml`'s
+  duplication allow-list and the module-boundary prose in `docs/` name modules
+  too, but neither is asserted against the tree, and grepping every tracked
+  file for a module list found no other mechanised inventory. So the practical
+  rule is: **creating a module is a packaging change, and the wheel snapshot is
+  the gate that will tell you.**
 
 ## Decision log
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
-  the same deadline already exists and is already honoured by the streamed path;
-  the defect is four sites that never ask for it. Threading a deadline into
-  `_drain_stream_consumers` would give a second mechanism for the same
+  the same deadline already exists and is already honoured by the streamed
+  path; the defect is four sites that never ask for it. Threading a deadline
+  into `_drain_stream_consumers` would give a second mechanism for the same
   invariant. Alternatives considered: a deadline parameter on every await site
   (rejected: duplicates the arithmetic and drifts), and a watchdog task that
   cancels the run (rejected: would change which exception the caller sees).
@@ -280,8 +468,8 @@ the issue was filed:
   run already expires this way, and a caller cannot tell which route expired.
   Alternatives considered: raising a distinct post-exit exception (rejected: a
   new public type for a distinction no caller asked for), and reporting the
-  bounded remainder as the timeout value (rejected: it would make
-  `exc.timeout` mean two different things on two routes). Date: 2026-10-16.
+  bounded remainder as the timeout value (rejected: it would make `exc.timeout`
+  mean two different things on two routes). Date: 2026-10-16.
 
 - Decision: for `lines()`, wait on consumers with a bounded
   `asyncio.wait` and then reconcile, rather than wrapping the consumer gather in
@@ -292,10 +480,10 @@ the issue was filed:
   already knows how to do so without losing a trailing line. Date: 2026-10-16.
 
 - Decision: do not signal an inherited group on a pipeline deadline, and do not
-  attempt to. Rationale: `Pipeline.run()` has no process-group policy; inventing
-  one here would be a design change (see `Tolerances`). The plan records the
-  gap so the pipeline tests assert a bounded *return* rather than a reclaimed
-  descendant. Date: 2026-10-16.
+  attempt to. Rationale: `Pipeline.run()` has no process-group policy;
+  inventing one here would be a design change (see `Tolerances`). The plan
+  records the gap so the pipeline tests assert a bounded *return* rather than a
+  reclaimed descendant. Date: 2026-10-16.
 
 - Decision: one new test module per route —
   `test_run_no_stream_post_exit_deadline.py` for the direct run,
@@ -310,6 +498,123 @@ the issue was filed:
   clock `started_at` was sampled from, and the seam lets a test hold the
   deadline still instead of racing a wall clock. Date: 2026-10-16.
 
+- Decision: read expiry and cancellation apart by catching `TimeoutError` and
+  letting `CancelledError` propagate, rather than by consulting the timeout
+  scope's `expired()` state. **This deviates from the letter of the Coding
+  Plan**, which named `expired()`. Date: 2026-10-16.
+
+  Rationale: `asyncio.timeout.__aexit__` already performs the cancel accounting
+  (`self._task.uncancel() <= self._cancelling`) that decides whether an
+  overlapping expiry-and-cancellation pair was its own timer or the caller's
+  `cancel()`. Re-deriving that from `expired()` would be a second, less careful
+  copy of the same judgement: `expired()` returns true for both the `EXPIRING`
+  and `EXPIRED` states and cannot distinguish its own timer from a caller's
+  `cancel()` arriving after that timer fired, so a caller's cancellation would
+  be reported as a timeout. The scope's own accounting is authoritative; the
+  repository's streamed boundary already relies on it, so the direct path now
+  does too.
+
+  Impact: none on the observable contract — every case still raises the public
+  `TimeoutExpired` carrying the configured timeout, and a caller's cancellation
+  still surfaces as `CancelledError`. The deviation is in the mechanism, not
+  the behaviour. No upstream artefact needs revising.
+
+- Decision: move `_settle_owned_group_before_draining` from
+  `cuprum/_subprocess_stream_run.py` to `cuprum/_subprocess_wait.py`, and split
+  the direct run into `cuprum/_subprocess_direct_run.py`. Rationale: the helper
+  is now needed by both run shapes, and the streamed module importing it back
+  from a direct-run module (or the reverse) would make one shape depend on the
+  other for no reason. `_subprocess_wait` is already where the rules for
+  *ending* a run live — the deadline, the exit wait, the task reconciliation —
+  and the group settlement is exactly that kind of rule. The streamed module
+  re-exports the name so existing imports keep resolving. Alternatives
+  considered: leaving it in the streamed module and having the direct run
+  import it (rejected: an inverted dependency between two sibling shapes), and
+  duplicating it (rejected: two copies of a teardown invariant is how they
+  drift). Date: 2026-10-16.
+
+- Decision: parametrize the direct-run module over all four entrypoints
+  (`run`, `run_bytes`, `run_sync`, `run_bytes_sync`), while stating in the
+  module docstring which arms carry which evidence. Date: 2026-10-16.
+
+  Rationale: the two synchronous entrypoints delegate to `asyncio.run`, whose
+  shutdown cancels whatever is still pending before the case can look.
+  Measured, not assumed: removing the writer cancellation fails the two async
+  `inherit` arms and passes all four sync arms. The sync arms therefore do
+  *not* pin writer cancellation, and the docstring says so rather than letting
+  a reader infer equal weight from equal parametrization. What they do
+  establish — the wrapper reaches the same bounded path, reports the same
+  public exception, and settles the group — is still worth the parametrization.
+
+  Impact: the module's claims are narrower and true; no production change.
+
+- Decision: assert descendant reclamation only on the `OWN_GROUP` arms. Date:
+  2026-10-16. Rationale: `_members_remain_to_signal` vetoes the signal when the
+  group holds no signalable members, and `_settlement_of` probes the child's
+  *group* under `owns_group` rather than the leader's own state — so an exited
+  leader does not suppress the group signal. Verified by reading
+  `cuprum/_process_signal.py:130-212`, and confirmed by mutation: removing the
+  settle leaves all four `own-group` descendants alive past the test's 5 s
+  reclamation window. Under `INHERIT` there is no group to reclaim and nothing
+  to assert, which is why the reclamation assertion is conditional rather than
+  parametrized over both policies.
+
+- Decision: delete the duplication allow entry keyed on
+  `cuprum/_subprocess_stream_run.py ~ cuprum/_process_handle/coordinator.py`,
+  rather than widen it to the module the overlap moved to. Date: 2026-10-16.
+
+  Rationale, and this is the part the plan's `Constraints` require be recorded
+  rather than assumed: AGENTS.md forbids deleting a stale entry merely because
+  no family matched it, so the removal was confirmed against the source first.
+  Three checks, in order. (a) The entry's own reason names its subject — "the
+  same run-machinery surface — `_drain_context`, `_reconcile_run_tasks`,
+  `_wait_for_exit_code_within_timeout` … and `_TeardownPolicy` from its own
+  module". `grep -n '_TeardownPolicy' cuprum/_subprocess_stream_run.py` now
+  returns nothing: the import the entry was about is gone from that module, and
+  it did not move to `cuprum/_subprocess_direct_run.py` either (same grep,
+  empty). So there is no successor module to widen the entry *to*. (b) At
+  pristine `HEAD` the entry matched a real two-location family
+  (`_subprocess_stream_run.py:52-68 ~ coordinator.py:52-62`, value 25.2); with
+  this branch's tree it matches nothing. The change in status is attributable
+  to this branch, which is what makes "stale" a claim about the split rather
+  than about the detector. (c) Dropping the entry and re-running the detector
+  at progressively lower `--min-size` floors (24, 20, 16, 12, 8) shows no
+  family at or above the configured floor 24 containing either key; the
+  residual overlaps only appear at floor 12 and are three- and four-location
+  import families under the *other* prologue entry's keys, not this one's.
+  Widening the entry to those would be exactly the "manufacture a generic
+  utility to satisfy the detector" move AGENTS.md rejects.
+
+  Impact: the gate reports 60 allowed families instead of 61, with no unmatched
+  entry. Nothing else in the allowlist was touched, and no entry was removed on
+  the strength of a report alone.
+
+- Decision: `_cleanup_direct_run` composes its two halves into one coroutine
+  under a single `_shielded_cleanup`, rather than making two sequential
+  shielded calls. Date: 2026-10-16.
+
+  Rationale: this was a defect in the EP-M1 fix as first written, found by
+  re-reading the diff rather than by a failing test — which is the point worth
+  recording. `_shielded_cleanup` finishes the task it was given and *then*
+  re-raises the caller's cancellation, so sequential calls are not one shielded
+  sequence: a cancellation landing in the first exits before the second is
+  awaited. The direct path's first half is the writer reclamation and its
+  second is the group settlement, so the bug left the descendant holding the
+  run's stdin unsignalled — precisely the failure the milestone exists to fix.
+  The streamed path already had this shape right
+  (`_settle_group_and_reconcile_consumers`), and its own second-cancellation
+  test is what made the asymmetry visible.
+
+  Impact: the property was unpinned on the direct path, so a test was added
+  rather than the fix being taken on trust. `DirectCleanupWatch` gates both
+  halves;
+  `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group`
+  asserts the settlement was entered *and* the descendant is gone. Mutating the
+  helper back to the sequential shape fails it on the first assertion, so the
+  test detects the defect it was written for rather than merely passing beside
+  it. `start_owned_run` grew a `capture` parameter to select the direct shape;
+  no production behaviour changed beyond the shield composition.
+
 ## Milestones
 
 Each milestone ends in a state that is coherent on its own: the repository
@@ -318,7 +623,9 @@ builds, the gates are green, and the routes it covers are bounded.
 ### EP-M1 — the direct run's post-exit stdin await
 
 Requirement: `ISS533`. Deliverable, in
-`cuprum/_subprocess_stream_run.py::_run_subprocess_without_streams`:
+`cuprum/_subprocess_stream_run.py::_run_subprocess_without_streams` — which
+EP-M1 relocated to `cuprum/_subprocess_direct_run.py`, see the split decision in
+`Decision log`:
 
 1. Replace the bare `await stdin_task` with a shielded `_await_stdin_writer`
    inside `asyncio.timeout(_deadline_for_collection(execution))`. The shield
@@ -332,10 +639,15 @@ Requirement: `ISS533`. Deliverable, in
    that releases the descendant runs before the exception propagates.
 3. Preserve the existing behaviour on the cancellation and error routes: the
    same cleanup, then re-raise unchanged.
-4. Report expiry by distinguishing the timeout scope's own `expired()` state
-   from a cancellation, not by catching the exception type alone:
-   `cuprum.sh.TimeoutExpired` subclasses the builtin `TimeoutError`, so a
-   `TimeoutError` arm sees cancellations and expiries alike.
+4. Report expiry without mistaking a cancellation for one. The plan named the
+   timeout scope's `expired()` state as the mechanism; **amended at
+   implementation**, because `expired()` is true for both the `EXPIRING` and
+   `EXPIRED` states and cannot tell the scope's own timer from a caller's
+   `cancel()` arriving after that timer fired. The scope's `__aexit__` already
+   performs the authoritative cancel accounting, so the implementation catches
+   `TimeoutError` and lets `CancelledError` propagate, which reads the same
+   distinction correctly and without a second copy of the judgement. See
+   `Decision log`; the amendment is recorded there rather than applied silently.
 5. Route the resulting failure through the existing
    `_handle_stream_timeout()` translation with `None` payloads, so the caller
    receives the same public `TimeoutExpired` the streamed path produces.
@@ -343,16 +655,19 @@ Requirement: `ISS533`. Deliverable, in
 Tests: new module `cuprum/unittests/test_run_no_stream_post_exit_deadline.py`,
 built on `cuprum/unittests/_post_exit_teardown_support.py`, with a 2 MiB stdin
 payload, capture, echo and observers all off, parametrized over
-`INHERIT`/`OWN_GROUP` and over `run`/`run_bytes`/`run_sync`. Extend
-`cuprum/unittests/test_stream_run_owned_group_deadline.py` with the direct-path
-analogue of its stdin case. Assert the run ends, the raised exception is the
-public `TimeoutExpired`, pending tasks are inspected through
-`tests/helpers/timeouts.py::pending_tasks`, and any descendant is reaped in
-`finally`.
+`INHERIT`/`OWN_GROUP` and over all four entrypoints —
+`run`/`run_bytes`/`run_sync`/`run_bytes_sync` rather than the plan's three; the
+byte-exact synchronous wrapper reaches the same path and costs one id. Assert
+the run ends, the raised exception is the public `TimeoutExpired`, pending
+tasks are inspected through `tests/helpers/timeouts.py::pending_tasks`, and any
+descendant is reaped in `finally`.
 
-Acceptance evidence: the new module fails before the change on the `INHERIT`
-arm with a hang past the harness bound (Red), and passes after it (Green); the
-`OWN_GROUP` arm asserts the descendant is gone.
+Acceptance evidence: the new module fails before the change with a hang past
+the harness bound (Red — observed as 4 failed in 82.81 s, all four
+`asyncio.wait_for` `TimeoutError` at the 20 s bound), and passes after it
+(Green — 10 passed in 18.03 s across the four entrypoints and two policies); the
+`OWN_GROUP` arms assert the descendant is gone, and fail when the group
+settlement is removed. Mutation evidence in `Verification plan`.
 
 ### EP-M2 — `SafeCmd.lines()`'s post-exit drain
 
@@ -455,7 +770,8 @@ Requirement: `ISS533`, repository documentation policy. Deliverables:
    that the deadline is what makes the group settlement reachable when a leader
    exits early, or record in the `Decision log` why no amendment is needed.
 4. Full validation: every new module, plus
-   `test_timeout_capture_contract.py`, `test_capture_eof_grace_observability.py`,
+   `test_timeout_capture_contract.py`,
+   `test_capture_eof_grace_observability.py`,
    `test_stream_run_owned_group_deadline.py`,
    `test_stream_run_owned_group_post_exit.py`, `test_pipeline_timeouts.py`,
    `test_safe_cmd_lines.py` and `test_line_stream_terminal_outcome.py`; then
@@ -497,14 +813,24 @@ Lemmas:
   `timeout - (monotonic_clock() - started_at)`, which the caller reads no
   earlier than the scope it bounds.
 - **L2 (for I2):** `_drain_stream_consumers` with `capture=True` returns the
-  partial buffer of a cancelled-but-not-at-end-of-file reader, and falls back
-  to `""` or `b""` according to `capture_bytes`.
+  partial buffer of a cancelled-but-not-at-end-of-file reader, and falls back to
+  `""` or `b""` according to `capture_bytes`.
 - **L3 (for I3):** `_reconcile_run_tasks` leaves no task from
   `_RunTaskOwnership` pending, and `_terminate_all_shielded` completes its
   teardown before the caller's cancellation is re-raised.
-- **L4 (for I4):** the `asyncio.timeout` scope's `expired()` distinguishes its
-  own expiry from an external cancellation, which the exception type alone
-  cannot, since `cuprum.sh.TimeoutExpired` is a `TimeoutError`.
+- **L4 (for I4):** the `asyncio.timeout` scope's own cancel accounting in
+  `__aexit__` (`self._task.uncancel() <= self._cancelling`) distinguishes its
+  own expiry from an external cancellation, and reports the first as
+  `TimeoutError` and the second as `CancelledError`. Catching `TimeoutError`
+  and letting `CancelledError` propagate therefore reads the two apart without
+  a second copy of that accounting. Note the scope's `expired()` state does
+  *not* serve here: it is true for both the `EXPIRING` and `EXPIRED` states and
+  cannot tell its own timer from a caller's `cancel()` arriving after the timer
+  fired, so consulting it would report that caller's cancellation as a timeout.
+  See the corresponding entry in `Decision log`. Because
+  `cuprum.sh.TimeoutExpired` subclasses the builtin `TimeoutError` *and*
+  `_SubprocessTimeoutError` does not, the exception *type* alone still cannot
+  answer I4; the scope's accounting is what makes the type meaningful.
 - **L5 (for I6):** `_teardown_policy` yields `owns_group=False` for every stage
   under `INHERIT`, and the new call sites pass the policy through unchanged.
 
@@ -518,26 +844,42 @@ Axioms (assumptions treated as given, with the evidence that exercises them):
   descendant on this host, and `_terminate_process` escalates to it within
   `cancel_grace`.
 - **A4:** the Windows leg cannot exercise process groups; the POSIX-only marker
-  is the repository's accepted acknowledgement of that gap
-  (`ADR021`, `tests/helpers/timeouts.py`).
+  is the repository's accepted acknowledgement of that gap (`ADR021`,
+  `tests/helpers/timeouts.py`).
 
 Methods, artefacts and discharge conditions:
 
 - **I1, L1:** unit test over `_deadline_for_collection` with a held clock, plus
-  the parametrized route tests' timing assertions. Discharged when an
-  unfixed build exceeds the 10 s per-test tolerance and a fixed build does not.
+  the parametrized route tests' timing assertions. Discharged when an unfixed
+  build exceeds the 10 s per-test tolerance and a fixed build does not.
 - **I2, L2:** direct payload assertions on each route (EP-M1, EP-M2, EP-M3),
   each with a `stdout_marker` the child flushes before it spawns anything, so
   the payload is in the buffer well before the deadline. Discharged when
   replacing the capture-mode reconciliation with discard mode fails the
   assertion.
 - **I3, L3:** `pending_tasks()` after each route returns, plus
-  `assert_reclaimed` on descendants for the `OWN_GROUP` arms. Discharged when
-  a route that stops waiting without reconciling leaves a pending task.
+  `assert_reclaimed` on descendants for the `OWN_GROUP` arms. Discharged when a
+  route that stops waiting without reconciling leaves a pending task.
+
+  EP-M1 status: **discharged for the direct route, with a measured limit.**
+  `pending_tasks()` is asserted on all four entrypoints, but only the two async
+  ones have a live loop at the assertion — `asyncio.run`'s shutdown cancels
+  stranded tasks before the synchronous arms can see them. The
+  `assert_reclaimed` arms are discharged: with
+  `_settle_owned_group_before_draining` removed from `_cleanup_direct_run`, all
+  four `own-group` arms fail with the descendant still alive after the 5 s
+  reclamation window, and the four `inherit` arms pass, which is the
+  discrimination expected since only `OWN_GROUP` has a group to settle.
+  Reclamation is asserted on the `OWN_GROUP` arms alone for that reason.
+
 - **I4, L4:** a case that cancels the run and asserts the caller's
   `CancelledError` (not a timeout), and a case that completes inside the
-  deadline and asserts success. Discharged when the `expired()` check is
-  removed and the cancellation case misreports.
+  deadline and asserts success. Discharged when the expiry/cancellation
+  distinction is removed and the cancellation case misreports. EP-M1 relies on
+  `asyncio.timeout`'s own accounting rather than an `expired()` check; the
+  existing `test_stream_run_owned_group_post_exit.py` covers the cancellation
+  arm for the streamed boundary, and the direct route's cancellation arms are
+  added with EP-M2's shared support if they are not already exercised.
 - **I5:** a case with no `timeout=` that completes normally against a
   descendant that does eventually exit.
 - **I6, L5:** a unit assertion on `_teardown_policy`'s ownership for each
@@ -548,8 +890,27 @@ Methods, artefacts and discharge conditions:
   deadline is present after it.
 - **I8:** a *negative control* per route: the bound is removed (or the
   remainder forced to `None`) on a scratch copy, the discriminating test is run
-  and must hang or fail, and the scratch copy is discarded. The observed
-  result is recorded in `Progress`.
+  and must hang or fail, and the scratch copy is discarded. The observed result
+  is recorded in `Progress`.
+
+  EP-M1 status: **discharged, with two mutations rather than one.** The Red
+  stage is itself the negative control for the bound — the module failed with
+  four `asyncio.wait_for` `TimeoutError` failures at the 20 s harness bound
+  before any production change. Two further mutations isolate the two halves of
+  the cleanup, because a single mutation cannot distinguish them:
+
+  | Mutation                                         | `own-group` arms                     | `inherit` arms                |
+  | ------------------------------------------------ | ------------------------------------ | ----------------------------- |
+  | group settle removed from `_cleanup_direct_run`  | 4 failed (descendant alive past 5 s) | 4 passed                      |
+  | writer cancel removed from `_cleanup_direct_run` | 4 passed                             | 2 async failed; 4 sync passed |
+
+  The second row is the measurement that bounds this module's claims: the group
+  signal alone settles the writer under `OWN_GROUP`, so those arms cannot
+  detect a missing writer cancellation, and `asyncio.run`'s shutdown sweeps it
+  under the synchronous entrypoints. Only the two async `inherit` arms pin
+  writer settlement, and the module docstring now says so instead of implying
+  that all four entrypoints carry equal weight. Both mutations were reverted
+  and the module re-run green (10 passed in 18.03 s).
 
 Non-vacuity: the `INHERIT` arms are what make most of these tests real. Under
 `OWN_GROUP` a group signal can close the pipes, so a run that bounds *only* the
@@ -558,6 +919,13 @@ new bound and the new settlement end the run. Each route therefore carries at
 least one `INHERIT` arm, and the test docstrings say which arm is expected to
 discriminate. Each child announces readiness through a pid file and a flushed
 marker rather than the test sleeping, so no case can pass by racing start-up.
+
+The EP-M1 measurement sharpens this: for the direct route the *split* is the
+other way round from what was expected. `OWN_GROUP` is the arm that
+discriminates the group settlement (four failures without it, none with it
+removed from `INHERIT` runs because there is no group to remove), while
+`INHERIT` is the arm that discriminates writer settlement. Neither policy alone
+is sufficient evidence, which is why both are parametrized on every case.
 
 Residual gaps, recorded rather than hidden:
 
@@ -597,8 +965,8 @@ To be completed as milestones land. At minimum it will record: which routes
 were bounded, the measured overshoot past the deadline on each, whether the
 `INHERIT` arms discriminated as predicted, whether any route needed a design
 change, and what a future contributor should read first — the module docstring
-of `cuprum/_subprocess_stream_run.py`, whose account of the streamed boundary is
-the shape all three routes now follow.
+of `cuprum/_subprocess_stream_run.py`, whose account of the streamed boundary
+is the shape all three routes now follow.
 
 ## Appendix — how to reproduce the hang by hand
 

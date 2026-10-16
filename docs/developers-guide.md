@@ -8162,16 +8162,25 @@ Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
 cleanup paths in `_run_subprocess_with_streams`
 (`cuprum/_subprocess_stream_run.py`) and `_run_subprocess_without_streams`
-(`cuprum/_subprocess_execution.py`); the spawn-failure, timeout, and
-run-failure paths, plus `_finalize_pipeline_execution`, in
-`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in
-`cuprum/_command_internals.py`, which previously used a bare
-`await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
-shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
-the stdin writer, then drains the stream consumers, and
+(`cuprum/_subprocess_direct_run.py`, where the direct run moved once the two
+run shapes were split); the spawn-failure, timeout, and run-failure paths, plus
+`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
+`_execute_with_hooks` in `cuprum/_command_internals.py`, which previously used
+a bare `await asyncio.shield(...)`. Two further helpers keep multi-step cleanup
+as one shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py`
+cancels the stdin writer, then drains the stream consumers, and
 `_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
 the stream tasks, then drains the observe-hook tasks. Shielding the halves
 separately would let a cancellation landing between them abandon the second.
+
+The direct run's cleanup is one such multi-step unit and is composed rather
+than inlined: `_cleanup_direct_run` in `cuprum/_subprocess_direct_run.py`
+cancels the stdin writer and *then* settles the owned process group, under a
+single shield. The group settlement matters because the writer may be parked on
+a pipe that only the descendant holding it can release, and under
+`ProcessGroupPolicy.INHERIT` there is no group to signal and the cancellation
+is all there is. That helper delegates to `_settle_owned_group_before_draining`
+in `cuprum/_subprocess_wait.py`, which both run shapes share.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
@@ -8476,14 +8485,27 @@ executes:
    `_SubprocessTimeoutError`; cancellation passes `preserve=False` and re-raises
    `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
-   `_run_subprocess_without_streams`, which creates the same writer task and
-   awaits the exit through `_await_exit_or_writer_failure`, which settles the
-   exit wait and the writer together rather than awaiting either alone. On
-   `TimeoutError` or `asyncio.CancelledError` from that wait,
-   `_run_subprocess_without_streams` itself cancels and drains the writer task
-   via `_cancel_stdin_writer` before the timeout is translated or the
-   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
-   delay completion.
+   `_run_subprocess_without_streams` in `cuprum/_subprocess_direct_run.py`,
+   which creates the same writer task and awaits the exit through
+   `_await_exit_or_writer_failure`, racing the exit wait against the writer so a
+   producer that fails at once ends the run with its own error rather than being
+   reported later as a slow child. The exit wait it wraps,
+   `_wait_for_exit_code_within_timeout`, carries the run's whole configured
+   deadline; the *writer* await that follows is a separate await with its own
+   bound, and it has to be, because the writer can park on a pipe no reader will
+   ever drain — a descendant that inherited the run's stdin and does not read it
+   — so an unbounded await there hangs the run past a deadline it had already
+   reached. `_await_writer_within_deadline` therefore takes
+   `_deadline_for_collection(execution)` and awaits the writer under it,
+   shielded so the bound is reached before the writer's own 0.5 s close grace
+   rather than after it. On expiry, and equally on `asyncio.CancelledError` or
+   an unexpected failure from either wait, `_cleanup_direct_run` cancels and
+   drains the writer task via `_cancel_stdin_writer` and then settles the run's
+   owned group, both under one shield, so a stdin drain blocked on an unread
+   pipe can neither delay the timeout's translation nor outlive the run. The
+   resulting failure is translated through `_handle_stream_timeout` with `None`
+   payloads, so a caller receives the same public `TimeoutExpired` whichever
+   route expired.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload size

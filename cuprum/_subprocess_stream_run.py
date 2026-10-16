@@ -1,12 +1,12 @@
-"""The two single-command run loops.
+"""The streamed run: a child whose output the parent captures or relays.
 
 Split from ``cuprum._subprocess_execution`` so the orchestration module stays
-about spawning and result assembly. A run takes one of two shapes — the
-*streamed* run with stdout/stderr consumers attached, and the *direct* run
-without — and both live here because they owe the same debts: waiting for exit
-through the deadline path, and reconciling the tasks the run owns exactly once
-on every exit route. The direct run is a path of its own rather than a
-degenerate case of the other for the reason its docstring below records.
+about spawning and result assembly, and split *from* the direct run at
+``cuprum._subprocess_direct_run`` because the two owe different debts. This
+module's post-exit phase is a boundary: one deadline over three awaits that all
+share an aftermath. The direct run has no such boundary — one await, then a
+cleanup — and the shape of the code is what tells a reader which of the two they
+are looking at.
 
 The streamed run's post-exit phase has a shape that is not obvious from the
 code, and it is load-bearing:
@@ -49,12 +49,6 @@ from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _decode_consumer_drains
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_reclaim import (
-    _cancel_stdin_writer,
-    _settle_stdin_writer,
-)
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
@@ -63,25 +57,12 @@ from cuprum._subprocess_stream_exit import (
     # second binding here would be one no call path resolves.
     _wait_for_streamed_process_exit as _wait_for_streamed_process_exit,
 )
-from cuprum._subprocess_stream_post_exit import (
-    # Re-imported, not moved outright: ``_await_stdin_writer`` and
-    # ``_settle_owned_group_before_draining`` are still called from this
-    # module's own helpers below, and those calls resolve the names from *this*
-    # module's globals. Keeping them bound here is what lets the teardown
-    # tests go on patching them where the production call path reads them.
-    _await_stdin_writer as _await_stdin_writer,
-)
-from cuprum._subprocess_stream_post_exit import (
-    _settle_owned_group_before_draining as _settle_owned_group_before_draining,
-)
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
-    _await_exit_or_writer_failure,
     _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
     _reconcile_run_tasks,
-    _wait_for_exit_code_within_timeout,
 )
 
 if typ.TYPE_CHECKING:
@@ -93,55 +74,6 @@ if typ.TYPE_CHECKING:
         _DrainPair,
         _RunTaskOwnership,
     )
-
-
-async def _run_subprocess_without_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> tuple[int, float]:
-    """Run a subprocess directly, without stdout/stderr capture or echo.
-
-    The direct path spawns no stream consumers, so the only task to reconcile is
-    the stdin writer. Whatever escapes the wait — a timeout, a cancellation, or
-    an unexpected failure — it is cancelled and drained through
-    :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
-    drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation. That cleanup is shielded, so a cancellation arriving while it
-    runs cannot abandon it. An unexpected stdin-writer failure after the process
-    exits normally propagates unchanged.
-
-    The wait is raced against that same writer — see
-    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure` — so a
-    producer that dies at once ends the run with its own failure rather than
-    being reported later as a slow child.
-
-    Returns
-    -------
-    tuple[int, float]
-        The process exit code and the observation's monotonic exit timestamp.
-    """
-    stdin_task = _spawn_stdin_writer(
-        process,
-        execution.stdio.stdin,
-        _stdin_codec(execution.ctx),
-        execution.observation,
-    )
-    try:
-        exit_code, exited_at = await _await_exit_or_writer_failure(
-            _wait_for_exit_code_within_timeout(process, execution),
-            stdin_task,
-        )
-    except BaseException:
-        await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
-        raise
-    # Settled rather than awaited: this path has no shared post-exit deadline
-    # scope over it (that scope belongs to the streamed path), so a producer
-    # parked in ``anext`` would make a bare await outlast the run's own
-    # deadline — the terminator would fire, the child would be killed, and the
-    # caller would go on waiting for the producer. See
-    # :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`.
-    await _settle_stdin_writer(stdin_task)
-    return exit_code, exited_at
 
 
 async def _settle_group_and_reconcile_consumers(
@@ -343,7 +275,6 @@ async def _run_subprocess_with_streams(
 __all__ = [
     "_collect_stream_output",
     "_run_subprocess_with_streams",
-    "_run_subprocess_without_streams",
     "_settle_owned_group_before_draining",
     "_wait_for_streamed_process_exit",
 ]

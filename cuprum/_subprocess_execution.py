@@ -31,11 +31,13 @@ from cuprum._result_assembly import (
     _RunMeasurements,
 )
 from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_direct_run import (
+    # Imported, not merely re-exported: the direct run path below is the caller.
+    _run_subprocess_without_streams,
+)
 from cuprum._subprocess_spawn import _start_owned_process, _SubprocessExecution
 from cuprum._subprocess_stream_run import (
-    # Imported, not merely re-exported: the direct run path below is the caller.
     _run_subprocess_with_streams,
-    _run_subprocess_without_streams,
 )
 from cuprum._subprocess_streams import (
     _build_stream_config as _build_stream_config,
