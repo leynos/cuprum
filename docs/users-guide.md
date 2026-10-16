@@ -1457,8 +1457,12 @@ output lines, diagnostic notes, and tag values. Use `RedactionPolicy` to remove
 configured text from these exports when required. Rules are opt-in and
 destination-specific; `redaction=None` and `RedactionPolicy()` leave existing
 output unchanged. The policy uses caller-supplied literal strings and compiled
-regular expressions, with literals applied longest first and patterns in
-configured order. It does not detect secrets that the caller has not configured.
+regular expressions. It finds every match in the original text, merges
+overlapping match spans, then inserts the mask once; inserted mask text is not
+scanned again. Literal rules are normalized longest first, and pattern rules
+retain their configured order for error reporting. Choose a mask that does not
+contain secret material. The policy does not detect secrets that the caller has
+not configured.
 
 For example, one policy can be applied independently to structured logging and
 tracing, and wrapped around another observation consumer before registration:

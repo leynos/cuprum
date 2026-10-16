@@ -46,9 +46,69 @@ def _normalize_patterns(
     return values
 
 
-def _substitute_pattern(pattern: re.Pattern[str], value: str, mask: str) -> str:
-    """Substitute matches with *mask* as literal text."""
-    return pattern.sub(lambda _match: mask, value)
+def _literal_match_spans(literal: str, value: str) -> tuple[tuple[int, int], ...]:
+    """Find literal occurrences, including occurrences that overlap."""
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    while search_from <= len(value) - len(literal):
+        start = str.find(value, literal, search_from)
+        if start < 0:
+            break
+        spans.append((start, start + len(literal)))
+        search_from = start + 1
+    return tuple(spans)
+
+
+def _pattern_match_spans(
+    pattern: re.Pattern[str], value: str
+) -> tuple[tuple[int, int], ...]:
+    """Find regular-expression matches against the original value."""
+    return tuple(match.span() for match in pattern.finditer(value))
+
+
+def _collect_rule_spans[Rule](
+    rules: tuple[Rule, ...],
+    value: str,
+    matcher: cabc.Callable[[Rule, str], tuple[tuple[int, int], ...]],
+    rule_kind: typ.Literal["literal", "pattern"],
+) -> tuple[tuple[int, int], ...]:
+    """Collect configured matches without retaining source text in failures."""
+    spans: list[tuple[int, int]] = []
+    for index, rule in enumerate(rules):
+        error_type: str | None = None
+        try:
+            spans.extend(matcher(rule, value))
+        except Exception as error:  # ruff: ignore[blind-except] - fail closed
+            # The exception text can include the value being redacted.
+            error_type = type(error).__name__
+        if error_type is not None:
+            raise RedactionError(
+                rule_kind=rule_kind,
+                rule_index=index,
+                error_type=error_type,
+            ) from None
+    return tuple(spans)
+
+
+def _merge_overlapping_spans(
+    spans: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Merge overlapping source matches and retain standalone zero-width ones."""
+    merged: list[tuple[int, int]] = []
+    zero_width_positions: set[int] = set()
+    for start, end in sorted(spans):
+        if start == end:
+            zero_width_positions.add(start)
+        elif merged and start < merged[-1][1]:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+
+    for position in zero_width_positions:
+        if not any(start <= position <= end for start, end in merged):
+            merged.append((position, position))
+    return tuple(sorted(merged))
 
 
 class RedactionError(Exception):
@@ -81,28 +141,6 @@ class RedactionError(Exception):
         )
 
 
-def _apply_pattern_rules(
-    patterns: tuple[re.Pattern[str], ...], value: str, mask: str
-) -> str:
-    """Apply ordered pattern rules, raising only safe failure metadata."""
-    redacted = value
-    for index, pattern in enumerate(patterns):
-        error_type: str | None = None
-        try:
-            redacted = _substitute_pattern(pattern, redacted, mask)
-        except Exception as error:  # ruff: ignore[blind-except] - any rule failure must stop export
-            # Keep only safe type metadata; the exception text can include
-            # the value being redacted.
-            error_type = type(error).__name__
-        if error_type is not None:
-            raise RedactionError(
-                rule_kind="pattern",
-                rule_index=index,
-                error_type=error_type,
-            ) from None
-    return redacted
-
-
 @dc.dataclass(frozen=True, slots=True, init=False)
 class RedactionPolicy:
     """Apply configured literal and regular-expression masks to exports.
@@ -114,15 +152,14 @@ class RedactionPolicy:
     ----------
     literals:
         Literal strings to replace. A single string or any iterable of strings
-        is coerced to an immutable tuple, ordered longest first to avoid
-        partially masking a longer literal through its shorter prefix. Empty
-        strings are rejected because replacing them would insert a mask
-        between every character.
+        is coerced to an immutable tuple, ordered longest first. Empty strings
+        are rejected because they would match every position in the input.
     patterns:
         Compiled text regular expressions to replace. A single pattern or any
         iterable of patterns is coerced to an immutable tuple.
     mask:
-        Text substituted for each match. Defaults to ``"[REDACTED]"``.
+        Opaque text substituted for each merged match. Defaults to
+        ``"[REDACTED]"``.
 
     Examples
     --------
@@ -182,7 +219,9 @@ class RedactionPolicy:
         -----
         Regular-expression substitution failures propagate as
         :class:`RedactionError`. The error identifies the rule without
-        retaining or formatting the source text.
+        retaining or formatting the source text. Literal and pattern matches
+        are collected against the original value; overlapping spans are
+        replaced together, and inserted mask text is never rescanned.
         """
         if not isinstance(value, str):
             msg = "value must be a string"
@@ -190,10 +229,28 @@ class RedactionPolicy:
         if not self.literals and not self.patterns:
             return value
 
-        redacted = value
-        for literal in self.literals:
-            redacted = str.replace(redacted, literal, self.mask)
-        return _apply_pattern_rules(self.patterns, redacted, self.mask)
+        spans = _collect_rule_spans(
+            self.literals,
+            value,
+            _literal_match_spans,
+            "literal",
+        ) + _collect_rule_spans(
+            self.patterns,
+            value,
+            _pattern_match_spans,
+            "pattern",
+        )
+        merged_spans = _merge_overlapping_spans(spans)
+        if not merged_spans:
+            return value
+
+        pieces: list[str] = []
+        cursor = 0
+        for start, end in merged_spans:
+            pieces.extend((value[cursor:start], self.mask))
+            cursor = end
+        pieces.append(value[cursor:])
+        return "".join(pieces)
 
     def _redact_mapping_values[NonStringValue](
         self,
