@@ -104,6 +104,7 @@
       'cuprum/_wait4_process_errors.py',
       'cuprum/_wait4_spawn.py',
       'cuprum/adapters/__init__.py',
+      'cuprum/adapters/_logging_formatter.py',
       'cuprum/adapters/_metrics_operations.py',
       'cuprum/adapters/_support.py',
       'cuprum/adapters/_tracing_control_join.py',
