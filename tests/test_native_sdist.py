@@ -10,8 +10,15 @@ import pytest
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
 
+UV_PACKAGING_TIMEOUT_SECONDS = 3 * 60
+MATURIN_PACKAGING_TIMEOUT_SECONDS = 60 * 60
 
-def _build_source_archive(backend: str, destination: Path) -> Path:
+
+def _build_source_archive(
+    backend: str,
+    destination: Path,
+    timeout_seconds: int,
+) -> Path:
     """Build one real source archive using the repository's packaging frontend."""
     program = Program("uv")
     catalogue = ProgramCatalogue(
@@ -40,9 +47,7 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
     )
     with scoped(ScopeConfig(allowlist=frozenset({program}))):
         result = command(*arguments).run_sync(
-            # Maturin inspects the Rust workspace while sharing Cargo's cache
-            # and compiler admission queues with other repository work.
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=3600)
+            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout_seconds)
         )
     assert result.exit_code == 0, f"source build failed: {result.stderr}"
     archives = list(destination.glob("*.tar.gz"))
@@ -50,14 +55,35 @@ def _build_source_archive(backend: str, destination: Path) -> Path:
     return archives[0]
 
 
-@pytest.mark.timeout(3720)
-@pytest.mark.parametrize("backend", ["uv", "maturin"])
+@pytest.mark.parametrize(
+    ("backend", "timeout_seconds"),
+    [
+        pytest.param(
+            "uv",
+            UV_PACKAGING_TIMEOUT_SECONDS,
+            marks=pytest.mark.timeout(UV_PACKAGING_TIMEOUT_SECONDS + 60),
+        ),
+        pytest.param(
+            "maturin",
+            MATURIN_PACKAGING_TIMEOUT_SECONDS,
+            marks=pytest.mark.timeout(MATURIN_PACKAGING_TIMEOUT_SECONDS + 60),
+        ),
+    ],
+)
 def test_source_distribution_retains_native_workspace(
     backend: str,
+    timeout_seconds: int,
     tmp_path: Path,
 ) -> None:
-    """Every crate source and lockfile survives packaging without build output."""
-    with tarfile.open(_build_source_archive(backend, tmp_path)) as archive:
+    """Every crate source and lockfile survives packaging without build output.
+
+    The maturin route invokes Cargo across shared worktrees, so its command and
+    test timeouts allow for compiler admission and package-cache lock waits.
+    The local ``uv build`` route retains a shorter timeout.
+    """
+    with tarfile.open(
+        _build_source_archive(backend, tmp_path, timeout_seconds)
+    ) as archive:
         members = {Path(name).parts[1:] for name in archive.getnames()}
     workspace = repo_root() / "rust"
     expected: set[tuple[str, ...]] = {

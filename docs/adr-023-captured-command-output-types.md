@@ -18,13 +18,14 @@ lose the diagnostic that would explain the failure.
 
 The distinction matters at runtime as well as to static checkers. `None` means
 capture was disabled; `""` means capture ran and the child wrote no text. The
-result type should preserve that distinction while letting callers of default
-single-command runs use captured text without an assertion.
+result type should preserve that distinction. Runtime captured results now
+express the guarantee; planned overloads will let static checkers expose it to
+callers of default single-command runs without an assertion.
 
 ## Decision drivers
 
-- Make the completed single-command capture guarantee visible to static
-  checkers and at runtime.
+- Make the completed single-command capture guarantee visible at runtime and,
+  through planned overloads, to static checkers.
 - Preserve `CommandResult` and its optional-stream contract for uncaptured runs
   and existing consumers.
 - Make explicit-options callers check capture before consuming text, so an
@@ -35,9 +36,11 @@ single-command runs use captured text without an assertion.
 ## Options considered
 
 1. **Add `CapturedResult`, capture-sensitive `SafeCmd` overloads, and checked
-   narrowing.** Chosen. Default `SafeCmd.run` and `run_sync` calls are typed as
-   returning `CapturedResult`; calls with an explicit `RunOutputOptions` remain
-   typed as `CommandResult` because those options may disable capture.
+   narrowing.** Chosen. The runtime result and checked narrowing are
+   implemented. The overloads are planned: default `SafeCmd.run` and `run_sync`
+   calls will be typed as returning `CapturedResult`; calls with an explicit
+   `RunOutputOptions` will remain typed as `CommandResult` because those
+   options may disable capture.
 2. **Make every result stream `str` and add a captured flag.** Rejected. This
    changes `CommandResult`'s public field contract and still requires every
    consumer to branch on a second field. `None` already communicates the
@@ -56,10 +59,11 @@ non-string stream. It keeps the six existing positional fields, the seventh
 
 Every single-command text run that captures output constructs `CapturedResult`,
 including an explicit `RunOutputOptions(capture=True)` call. A run with capture
-disabled still constructs `CommandResult` with `None` streams. The overloads for
-`SafeCmd.run` and `run_sync` return `CapturedResult` when `output` is omitted
-or `None`, and `CommandResult` when `output` is an explicit `RunOutputOptions`.
-Their implementation annotations remain `CommandResult`.
+disabled still constructs `CommandResult` with `None` streams. Currently,
+`SafeCmd.run` and `run_sync` expose only the implementation annotation
+`CommandResult`. The planned overloads will return `CapturedResult` when
+`output` is omitted or `None`, and `CommandResult` when `output` is an explicit
+`RunOutputOptions`; the implementation annotations will remain `CommandResult`.
 
 `CommandResult.require_captured()` returns an existing `CapturedResult`
 unchanged. If both streams are strings on an ordinary `CommandResult`, it
@@ -76,14 +80,15 @@ partial because termination can precede stream completion.
 
 ## Consequences
 
-- Default single-command callers can use `stdout` and `stderr` as strings
-  without `or ""`.
+- At runtime, default single-command callers receive strings for `stdout` and
+  `stderr` without `or ""`; the planned overloads will make that guarantee
+  visible to static checkers.
 - Explicit-options callers use `require_captured()` to prove both streams are
   present. This preserves the useful failure when capture was forgotten.
 - Existing `CommandResult` consumers, pipeline construction, timeout
   exceptions, and measurement-field compatibility remain unchanged.
 - Runtime tests cover construction and `dataclasses.replace`; `ty` fixtures
-  cover the overloads and the optional fields on explicit-options results.
+  will cover the overloads and optional fields on explicit-options results.
 
 ## Assumptions
 

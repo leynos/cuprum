@@ -198,10 +198,6 @@ class CapturedResult(CommandResult):
 
     def __post_init__(self) -> None:
         """Enforce the captured-stream invariant at every construction path."""
-        base_post_init = getattr(CommandResult, "__post_init__", None)
-        if base_post_init is not None:
-            base_post_init(self)
-
         if not isinstance(self.stdout, str) or not isinstance(self.stderr, str):
             missing = [
                 name

@@ -446,6 +446,9 @@ Represents a prepared command instance that, when run, yields a value (e.g.
 
 Example (type sketch, not final signature):
 
+The capture-sensitive overloads in this sketch are proposed and are not yet
+implemented.
+
 ```python
 class SafeCmd:
     program: Program
@@ -510,11 +513,13 @@ class SafeCmd:
     def __or__(self, other: "SafeCmd") -> "Pipeline": ...
 ```
 
-These overloads describe the public call surface; both implementations remain
-annotated as returning `CommandResult`. With default text capture, a direct
-command constructs `CapturedResult`, whose streams are `str` and use `""` for
-empty output. An explicit `RunOutputOptions` call remains typed as
-`CommandResult` because that options value can disable capture. Call
+The overloads above are the planned public typing surface; `SafeCmd.run` and
+`run_sync` currently expose only their implementation annotation,
+`CommandResult`. At runtime, a direct single-command run with default text
+capture constructs `CapturedResult`, whose streams are `str` and use `""` for
+empty output. An explicit `RunOutputOptions` call also constructs
+`CapturedResult` when that instance enables capture, but its current static
+type remains `CommandResult` because the options type can disable capture. Call
 `CommandResult.require_captured()` to check and narrow it: an already narrowed
 result is returned unchanged, two present text streams produce a captured copy,
 and an unavailable stream raises `ValueError`. This also prevents an uncaptured
