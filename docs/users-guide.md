@@ -2178,7 +2178,8 @@ The hook creates spans with these attributes:
 - `cuprum.exit_code`: Actual child exit code, when an `exit` event occurred
 - `cuprum.duration_s`: Duration in seconds, when an `exit` event occurred
 - `cuprum.terminal_outcome`: Bounded terminal category set on `settled`
-- `cuprum.project`: Project name from tags
+- `cuprum.project`: Project name from tags; when a configured rule redacts the
+  `project` tag, tracing uses the trusted event project when available
 - `cuprum.resolved_path`: The bound executable that ran, when an
   [executable binding](#bind-a-catalogued-program-to-a-specific-executable)
   applied

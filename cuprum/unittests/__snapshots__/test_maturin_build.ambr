@@ -107,6 +107,7 @@
       'cuprum/adapters/_logging_formatter.py',
       'cuprum/adapters/_metrics_operations.py',
       'cuprum/adapters/_support.py',
+      'cuprum/adapters/_tracing_attributes.py',
       'cuprum/adapters/_tracing_control_join.py',
       'cuprum/adapters/_tracing_fields.py',
       'cuprum/adapters/_tracing_line_stream.py',
