@@ -14,6 +14,11 @@ The event carries only bounded values. The stream name is one of ``stdout`` or
 ``stderr`` and the error category is one closed value; a sink's type, its
 encoding, any exception text, and the subprocess payload never reach it.
 
+Opt-in bounded delivery also reports saturated queue writes, failed worker
+writes or flushes, and output abandoned after the shutdown drain grace. Those
+events use the same categorical channel and do not change capture or process
+outcomes.
+
 The two recoverable failures are not equally welcome. An unencodable payload is
 inherent to the sink's configuration and is always handled. A broken pipe may
 instead mean the caller's destination went away, so recovering from it is
@@ -60,12 +65,18 @@ class EchoErrorCategory(enum.StrEnum):
 
         assert EchoErrorCategory.UNICODE_ENCODE == "unicode_encode"
         assert EchoErrorCategory.BROKEN_PIPE == "broken_pipe"
+        assert EchoErrorCategory.DROPPED == "dropped"
+        assert EchoErrorCategory.UNDELIVERED == "undelivered"
+        assert EchoErrorCategory.DELIVERY_ERROR == "delivery_error"
 
     """
 
     UNICODE_ENCODE = "unicode_encode"
     BROKEN_PIPE = "broken_pipe"
     TRUNCATED = "truncated"
+    DROPPED = "dropped"
+    UNDELIVERED = "undelivered"
+    DELIVERY_ERROR = "delivery_error"
 
 
 class BrokenPipePolicy(enum.StrEnum):
@@ -144,7 +155,8 @@ class EchoEvent:
         The closed-set category naming why the event occurred.
     dropped_bytes:
         Child-output bytes omitted from a successfully truncated echo line,
-        otherwise ``None``.
+        otherwise ``None``. Bounded delivery also uses this field for bytes
+        dropped on queue saturation or left undelivered at shutdown.
 
     Examples
     --------
@@ -165,24 +177,24 @@ class EchoEvent:
 
 @dc.dataclass(frozen=True, slots=True)
 class RelayFallback:
-    """One handled echo-disablement recorded on a command's result.
+    """One categorical echo failure or delivery-loss record for a stream.
 
-    A text-only echo sink rejected the subprocess output, or reported a broken
-    pipe the caller asked to tolerate, so the echo for that stream's drain was
-    disabled while the stream itself kept being consumed and, when enabled,
-    captured. One record describes one handled disablement for one stream:
-    later chunks and the final decoder flush never re-enter the failed write,
-    so a drain contributes at most one record.
+    Some records describe a handled failure that disables echo for the stream,
+    such as an unencodable payload or a tolerated broken pipe. Bounded delivery
+    also records one ``DROPPED`` event per rejected chunk, groups
+    ``UNDELIVERED`` bytes by stream when the worker closes, and reports a
+    ``DELIVERY_ERROR`` if a worker write or flush fails. These delivery records
+    do not claim that synchronous echo was disabled.
 
     Attributes
     ----------
     stream:
-        Which output stream the handled echo disablement belonged to. The
-        value is the closed-set :class:`EchoStream`, not free text.
+        Which output stream the failure or lost output belonged to. The value
+        is the closed-set :class:`EchoStream`, not free text.
     error_category:
-        The closed-set :class:`EchoErrorCategory` naming why the echo write
-        failed. It is categorical only: the sink's type, its encoding, any
-        exception text, and the subprocess payload never reach the record.
+        The closed-set :class:`EchoErrorCategory` naming the failure or loss.
+        It is categorical only: the sink's type, its encoding, exception text,
+        and subprocess payload never reach the record.
 
     Examples
     --------

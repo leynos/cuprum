@@ -25,6 +25,7 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # references to ``SafeCmd`` and ``Pipeline`` inside the class bodies are quoted.
 import asyncio
 import dataclasses as dc
+import functools
 
 from cuprum._bytes_run import (
     _bytes_output,
@@ -333,16 +334,14 @@ class SafeCmd(_OwnedStart):
         )
         observation = _prepare_execution_observation(self, state, tracking)
 
-        return LineStream(
-            _iter_line_events(
-                _build_subprocess_execution(
-                    self,
-                    state,
-                    observation=observation,
-                ),
-                tracking,
-            ),
+        execution_factory = functools.partial(
+            _build_subprocess_execution,
+            self,
+            state,
+            observation=observation,
+            sink_bracket=tracking.sink_bracket,
         )
+        return LineStream(_iter_line_events(execution_factory, tracking))
 
     def run_sync(
         self,

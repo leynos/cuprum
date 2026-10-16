@@ -12,7 +12,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import asyncio
 
-    from cuprum._pipeline_internals import _ExecutionHooks
+    from cuprum._pipeline_types import _ExecutionHooks
     from cuprum._sink_lifecycle import _SinkBracket
 
 

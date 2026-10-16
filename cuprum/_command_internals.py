@@ -14,13 +14,12 @@ repeated caller cancellation.
 from __future__ import annotations
 
 import dataclasses as dc
-import sys
 import time
 import typing as typ
 
+from cuprum._command_execution_config import _build_subprocess_execution
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._execution_tracking import _ExecutionTracking
-from cuprum._idle_diagnostic import _idle_subject
-from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -44,7 +43,6 @@ from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
 )
-from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum._timeout_reporting import _safe_emit_terminal
 from cuprum.context import EnvMode
 from cuprum.events import CaptureMode, TerminalOutcome
@@ -52,7 +50,6 @@ from cuprum.events import CaptureMode, TerminalOutcome
 if typ.TYPE_CHECKING:
     from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmd
-    from cuprum.sinks import base as sinks
 
 __all__ = [
     "_ExecutionState",
@@ -134,74 +131,6 @@ def _prepare_execution_observation(
     )
 
 
-def _build_subprocess_execution(
-    cmd: SafeCmd,
-    state: _ExecutionState,
-    *,
-    observation: _StageObservation,
-    sink_session: sinks.OutputSession | None = None,
-) -> _SubprocessExecution:
-    """Bundle everything one command's execution needs, before it spawns.
-
-    The run's already-resolved inputs arrive together as *state*, so this
-    helper stays a pure translation from what the run decided to what the
-    subprocess layer consumes; *observation* and *sink_session* stay separate
-    because they are the two products of the run's own preparation rather
-    than inputs it was handed.
-
-    The idle monitor is part of the bundle rather than an execution-time
-    argument because its presence is what decides whether the child's stdout
-    and stderr are piped for activity observation. Deferring it would leave
-    the spawn unable to make that choice. The sink session travels with it
-    for the same reason: stream wiring routes mirrored output through the
-    session's log, so it has to be part of the bundle before the consumers
-    are built. The process-group policy is read from the context into the
-    bundle for the complementary reason: the spawn and the teardown must
-    agree about whether the child's group belongs to this run, and a single
-    bundle field is what makes that agreement structural.
-
-    Returns
-    -------
-    _SubprocessExecution
-        The resolved execution bundle, ready for ``_execute_with_hooks``.
-    """
-    return _SubprocessExecution(
-        cmd=cmd,
-        ctx=state.context,
-        capture=state.output.capture,
-        echo_stdout=state.output.resolved_echo[0],
-        echo_stderr=state.output.resolved_echo[1],
-        max_echo_line_bytes=state.output.max_echo_line_bytes,
-        broken_pipe_policy=state.output.resolved_broken_pipe_policy,
-        sink_session=sink_session,
-        timeout=state.timeout,
-        observation=observation,
-        stdin_data=state.stdin_data,
-        on_line=state.output.on_line,
-        capture_bytes=state.capture_bytes,
-        # Built here, during the parent's own preparation, but armed by the run
-        # itself, once the child is actually running: everything preceding the
-        # spawn is the parent's work, and must not read as the child's silence.
-        idle=_build_idle_monitor(
-            state.output.idle_after,
-            state.output.on_idle,
-            _idle_subject(str(cmd.program)),
-            # Resolved the way the stderr drain resolves its own sink — the
-            # same session, sink, and last resort — because the keepalive
-            # shares that stream's incomplete-line state, so writing it
-            # elsewhere would land outside the group an active session claims.
-            _resolve_stream_sink(
-                sink_session,
-                state.context.stderr_sink,
-                sys.stderr,
-            ),
-        ),
-        # Read from the context here so the bundle's spawn and teardown stages
-        # share one decision instead of each consulting the context separately.
-        process_group=state.context.resolved_process_group,
-    )
-
-
 async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
@@ -220,6 +149,22 @@ async def _execute_with_hooks(
     result: _AnyCommandResult | None = None
     try:
         result = await _execute_subprocess(execution)
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                execution.delivery_worker,
+                drain_grace_s=execution.delivery_grace_s,
+            ),
+        )
+        if execution.relay_diagnostics is not None:
+            stdout_diagnostics, stderr_diagnostics = execution.relay_diagnostics
+            # _execute_subprocess snapshots before delivery closes; rebuild to
+            # include failures and undelivered bytes appended during close.
+            result = dc.replace(
+                result,
+                relay_fallbacks=(
+                    stdout_diagnostics.snapshot() + stderr_diagnostics.snapshot()
+                ),
+            )
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
@@ -244,6 +189,12 @@ async def _finalize_command_run_failure(
     """Settle and drain an observed command after execution or hook failure."""
     # Close before the drain: its failure is grouped with the primary error.
     outcome = _outcome_for_error(run_error)
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
     tracking.sink_bracket.close(outcome=outcome)
     _safe_emit_terminal(
         execution.observation,
@@ -286,6 +237,12 @@ async def _finalize_command_run_success(
 ) -> None:
     """Settle a completed command, then drain every observe-hook task."""
     outcome = _outcome_for_result(result)
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
     tracking.sink_bracket.close(outcome=outcome)
     try:
         execution.observation.emit_terminal(

@@ -475,6 +475,11 @@ full_name = [
 reason = "Called structurally through _PipelineWaitReporter by _StageObservation.report_pipeline_wait."
 
 [[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = ["cuprum._bounded_delivery._DeliveryWorker.close"]
+reason = "Passed to asyncio.to_thread by _close_delivery_worker for bounded off-loop shutdown."
+
+[[tool.skylos.dead_code.entrypoints]]
 type = "function"
 full_name = [
     "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
@@ -656,6 +661,7 @@ members = [
     "cuprum/_process_handle/state.py",
     "cuprum/_subprocess_context.py",
     "cuprum/_subprocess_stream_run.py",
+    "cuprum/_command_execution_config.py",
     "cuprum/_line_stream/telemetry.py",
     "cuprum/_result_types.py",
     "cuprum/_subprocess_streams.py",
@@ -674,7 +680,7 @@ members = [
     "cuprum/context/_scope.py",
     "cuprum/events.py",
 ]
-reason = "Twenty-eight modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match *every* key of an entry to be silenced. Widened again — from twenty-four to twenty-eight, a separate two-module entry having been folded in and `main`'s `_pipeline_records`, `_pipeline_results`, `_pipeline_types` and `_subprocess_stream_run` blocks surfacing as locations of the same family — so this entry alone now covers both the twenty-six-location family the detector reports and the `_pipeline_collect ~ _pipeline_spawn` pair that shares the idiom at two locations."
+reason = "Twenty-nine modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match *every* key of an entry to be silenced. Widened again — from twenty-four to twenty-eight, a separate two-module entry having been folded in and `main`'s `_pipeline_records`, `_pipeline_results`, `_pipeline_types` and `_subprocess_stream_run` blocks surfacing as locations of the same family — so this entry alone now covers both the twenty-six-location family the detector reports and the `_pipeline_collect ~ _pipeline_spawn` pair that shares the idiom at two locations. The `main`-added `_command_execution_config` type-only imports are part of that same module-local convention."
 
 
 
@@ -809,6 +815,7 @@ reason = "Five one-line fd closers. Each names one descriptor's ownership bounda
 
 [[tool.duplication_gate.allow]]
 members = [
+    "cuprum/_bounded_delivery.py",
     "cuprum/_idle_heartbeat.py",
     "cuprum/_pipeline_stream_fds.py",
     "cuprum/_sink_lifecycle.py",
@@ -817,7 +824,7 @@ members = [
     "cuprum/context/env_overlay.py",
     "cuprum/context/executable_overlay.py",
 ]
-reason = "`if <field> is None: return None` over seven different fields in seven modules: an interval, a stream, a sink, a subprocess executable, a timeout, an environment overlay, an executable overlay. The guard is the None-tolerance idiom this codebase uses at every optional-parameter boundary, not one shared operation. Widened from five after `main` added the subprocess and executable-overlay sites."
+reason = "`if <field> is None: return None` over nine different optional values: an interval, a stream, a sink, a subprocess executable, a timeout, an environment overlay, an executable overlay, bounded-delivery options, and a drain-grace override. The two bounded-delivery validators then enforce different contracts, so a shared guard helper would obscure independent normalization. This is the None-tolerance idiom used at optional-parameter boundaries, not one shared operation. Widened from seven to nine for bounded delivery."
 
 [[tool.duplication_gate.allow]]
 members = [

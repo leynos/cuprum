@@ -104,6 +104,7 @@ from cuprum.pump_span_observation import PumpHopSpanRegistration, observe_pump_s
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
     ArgValue,
+    BoundedDelivery,
     BytesCommandResult,
     BytesPipelineResult,
     CommandResult,
@@ -141,6 +142,7 @@ __all__ = [
     "AllowRegistration",
     "ArgValue",
     "BeforeHook",
+    "BoundedDelivery",
     "BrokenPipePolicy",
     "BytesCommandResult",
     "BytesPipelineResult",
