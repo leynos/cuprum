@@ -1469,7 +1469,7 @@ worker with a byte-bounded queue shared by stdout and stderr. Saturated chunks
 are dropped from presentation and reported; capture remains complete. The
 worker has a bounded shutdown drain and reports output left queued or in flight
 as undelivered if it must be abandoned. See
-[ADR-021](adr-021-bounded-output-delivery.md) for the delivery, ownership, and
+[ADR-023](adr-023-bounded-output-delivery.md) for the delivery, ownership, and
 failure contract.
 
 Users should be able to choose:

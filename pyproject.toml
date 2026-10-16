@@ -689,6 +689,7 @@ members = [
     "cuprum/_stream_drain.py",
     "cuprum/_stream_line_consumer.py",
     "cuprum/_subprocess_spawn.py",
+    "cuprum/_command_execution_config.py",
     "cuprum/_command_prepare.py",
     "cuprum/_line_stream/spawn.py",
     "cuprum/_pipeline_config.py",
@@ -697,7 +698,7 @@ members = [
     "cuprum/context/_scope.py",
     "cuprum/events.py",
 ]
-reason = "Thirty modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match every key of an entry to be silenced. Widened from twenty-eight to thirty as this branch's module splits added `_subprocess_stream_exit.py` and `_stdio_ownership.py` to the family `main` already reported."
+reason = "Thirty-one modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match every key of an entry to be silenced. Widened from twenty-eight to thirty as this branch's module splits added `_subprocess_stream_exit.py` and `_stdio_ownership.py` to the family `main` already reported. Bounded delivery adds `_command_execution_config.py` to the same module-local convention."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -823,6 +824,7 @@ reason = "Five one-line fd closers. Each names one descriptor's ownership bounda
 
 [[tool.duplication_gate.allow]]
 members = [
+    "cuprum/_bounded_delivery.py",
     "cuprum/_idle_heartbeat.py",
     "cuprum/_pipeline_stream_fds.py",
     "cuprum/_sink_lifecycle.py",
@@ -833,7 +835,7 @@ members = [
     "cuprum/context/executable_overlay.py",
     "cuprum/sh/execution.py",
 ]
-reason = "`if <field> is None: return None` over different fields in nine modules: an interval, a stream, a sink, a subprocess executable, a writer task, a timeout, an environment overlay, an executable overlay, and a stdin payload. The guard is the None-tolerance idiom this codebase uses at every optional-parameter boundary, not one shared operation. Widened from seven to nine after this branch added the rendezvous writer-outcome and stdin-encoding sites, and from five to seven when `main` added the subprocess and executable-overlay sites."
+reason = "`if <field> is None: return None` occurs at eleven optional-value boundaries across ten modules: an interval, stream, sink, subprocess executable, writer task, timeout, environment overlay, executable overlay, stdin payload, bounded-delivery options, and drain-grace override. These guards share a None-tolerance idiom, but the two delivery validators enforce different contracts and should remain independently understandable. The entries preserve the current main-side sites and add the bounded-delivery sites."
 
 [[tool.duplication_gate.allow]]
 members = [
