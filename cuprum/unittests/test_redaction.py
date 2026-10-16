@@ -123,6 +123,22 @@ def test_inserted_mask_is_not_rescanned_by_configured_rules() -> None:
     )
 
 
+def test_zero_width_matches_are_preserved_or_coalesced() -> None:
+    """Keep standalone zero-width matches but fold boundary matches together."""
+    standalone = RedactionPolicy(patterns=(re.compile(r"(?=x)"),))
+    overlapping = RedactionPolicy(
+        literals=("x",),
+        patterns=(re.compile(r"(?=x)"),),
+    )
+
+    assert standalone.apply_text("x") == "[REDACTED]x", (
+        "a standalone zero-width match must remain visible"
+    )
+    assert overlapping.apply_text("x") == "[REDACTED]", (
+        "a zero-width match on a literal boundary must not add a second mask"
+    )
+
+
 @pytest.mark.usefixtures("failing_redaction_substitution")
 def test_failed_pattern_raises_without_echoing_source_text() -> None:
     """A failed rule stops projection and exposes only safe failure metadata."""

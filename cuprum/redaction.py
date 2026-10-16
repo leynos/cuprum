@@ -90,25 +90,46 @@ def _collect_rule_spans[Rule](
     return tuple(spans)
 
 
-def _merge_overlapping_spans(
+def _merge_nonzero_spans(
     spans: tuple[tuple[int, int], ...],
 ) -> tuple[tuple[int, int], ...]:
-    """Merge overlapping source matches and retain standalone zero-width ones."""
+    """Merge overlapping non-empty source matches."""
     merged: list[tuple[int, int]] = []
-    zero_width_positions: set[int] = set()
-    for start, end in sorted(spans):
-        if start == end:
-            zero_width_positions.add(start)
-        elif merged and start < merged[-1][1]:
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
             previous_start, previous_end = merged[-1]
             merged[-1] = (previous_start, max(previous_end, end))
         else:
             merged.append((start, end))
+    return tuple(merged)
 
-    for position in zero_width_positions:
-        if not any(start <= position <= end for start, end in merged):
-            merged.append((position, position))
-    return tuple(sorted(merged))
+
+def _standalone_zero_width_spans(
+    positions: set[int],
+    nonzero_spans: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Retain zero-width matches outside non-empty match boundaries."""
+    return tuple(
+        (position, position)
+        for position in positions
+        if not any(start <= position <= end for start, end in nonzero_spans)
+    )
+
+
+def _merge_overlapping_spans(
+    spans: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Merge overlapping source matches and retain standalone zero-width ones."""
+    ordered_spans = tuple(sorted(spans))
+    nonzero_spans = _merge_nonzero_spans(
+        tuple((start, end) for start, end in ordered_spans if start != end)
+    )
+    zero_width_positions = {start for start, end in ordered_spans if start == end}
+    standalone_zero_width_spans = _standalone_zero_width_spans(
+        zero_width_positions,
+        nonzero_spans,
+    )
+    return tuple(sorted((*nonzero_spans, *standalone_zero_width_spans)))
 
 
 class RedactionError(Exception):
