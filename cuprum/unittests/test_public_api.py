@@ -507,6 +507,10 @@ def test_captured_result_rejects_invalid_streams(
 
 def test_command_result_require_captured_copies_every_public_field() -> None:
     """Narrowing a base result preserves execution and measurement fields."""
+    fallback = c.RelayFallback(
+        stream=c.EchoStream.STDOUT,
+        error_category=c.EchoErrorCategory.UNICODE_ENCODE,
+    )
     result = c.CommandResult(
         c.ECHO,
         ("argument",),
@@ -520,25 +524,42 @@ def test_command_result_require_captured_copies_every_public_field() -> None:
         user_cpu_seconds=0.25,
         system_cpu_seconds=0.125,
         resolved_path="/bin/echo",
+        relay_fallbacks=(fallback,),
     )
 
     captured = result.require_captured()
 
-    assert type(captured) is c.CapturedResult
-    assert captured.program is result.program
-    assert captured.argv == result.argv
-    assert captured.exit_code == result.exit_code
-    assert captured.pid == result.pid
-    assert captured.stdout == result.stdout
-    assert captured.stderr == result.stderr
-    assert captured.started_at == result.started_at
-    assert captured.duration == result.duration
-    assert captured.max_rss_bytes == result.max_rss_bytes
-    assert captured.user_cpu_seconds == result.user_cpu_seconds
-    assert captured.system_cpu_seconds == result.system_cpu_seconds
-    assert captured.resolved_path == result.resolved_path
-    assert captured.relay_fallbacks == result.relay_fallbacks
-    assert captured.require_captured() is captured
+    assert type(captured) is c.CapturedResult, (
+        f"narrowing must return CapturedResult, got {type(captured).__name__}"
+    )
+    assert captured.program is result.program, "narrowing must preserve the program"
+    assert captured.argv == result.argv, "narrowing must preserve command arguments"
+    assert captured.exit_code == result.exit_code, "narrowing must preserve exit status"
+    assert captured.pid == result.pid, "narrowing must preserve the child PID"
+    assert captured.stdout == result.stdout, "narrowing must preserve captured stdout"
+    assert captured.stderr == result.stderr, "narrowing must preserve captured stderr"
+    assert captured.started_at == result.started_at, (
+        "narrowing must preserve start time"
+    )
+    assert captured.duration == result.duration, "narrowing must preserve duration"
+    assert captured.max_rss_bytes == result.max_rss_bytes, (
+        "narrowing must preserve peak memory measurement"
+    )
+    assert captured.user_cpu_seconds == result.user_cpu_seconds, (
+        "narrowing must preserve user CPU measurement"
+    )
+    assert captured.system_cpu_seconds == result.system_cpu_seconds, (
+        "narrowing must preserve system CPU measurement"
+    )
+    assert captured.resolved_path == result.resolved_path, (
+        "narrowing must preserve the resolved executable path"
+    )
+    assert captured.relay_fallbacks == (fallback,), (
+        "narrowing must preserve relay fallback diagnostics"
+    )
+    assert captured.require_captured() is captured, (
+        "narrowing an already captured result must preserve its identity"
+    )
 
 
 @pytest.mark.parametrize(

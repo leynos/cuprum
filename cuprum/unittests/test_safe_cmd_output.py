@@ -140,8 +140,13 @@ def test_explicit_capture_returns_captured_result(
 
     result = execute(command, {"output": RunOutputOptions(capture=True)})
 
-    assert isinstance(result, sh.CapturedResult)
-    assert (result.stdout, result.stderr) == ("", "")
+    assert isinstance(result, sh.CapturedResult), (
+        f"explicit capture must return CapturedResult, got {type(result).__name__}"
+    )
+    assert (result.stdout, result.stderr) == ("", ""), (
+        "captured empty stdout and stderr must be empty strings, got "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
 
 
 def test_bounded_stderr_echo_keeps_complete_capture(
@@ -321,7 +326,9 @@ def test_allows_disabling_capture(
 
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
-    assert type(result) is CommandResult
+    assert type(result) is CommandResult, (
+        f"disabled capture must return CommandResult, got {type(result).__name__}"
+    )
     assert_capture_disabled(result)
 
 

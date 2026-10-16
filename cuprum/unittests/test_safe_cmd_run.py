@@ -115,8 +115,13 @@ def test_empty_captured_streams_are_empty_strings(
     _, execute = execution_strategy
     result = execute(python_builder("-c", "pass"), {})
 
-    assert isinstance(result, sh.CapturedResult)
-    assert (result.stdout, result.stderr) == ("", "")
+    assert isinstance(result, sh.CapturedResult), (
+        f"default capture must return CapturedResult, got {type(result).__name__}"
+    )
+    assert (result.stdout, result.stderr) == ("", ""), (
+        "captured empty stdout and stderr must be empty strings, got "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
 
 
 @_wait4_only
