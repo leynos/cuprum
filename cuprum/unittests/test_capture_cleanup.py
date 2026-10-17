@@ -195,7 +195,7 @@ def test_cleanup_keeps_the_file_the_caller_asked_to_keep(
     """``keep_file`` outranks the sink path exactly as it does the other one."""
     accumulator = _spilled_accumulator(tmp_path, keep_file=True)
     path = accumulator.finalize().capture.path
-    assert path is not None
+    assert path is not None, "the spill must have produced a file to keep"
 
     asyncio.run(_cleanup_capture_sinks((accumulator,)))
 
@@ -217,7 +217,7 @@ def test_finalize_closes_the_result_handles_before_touching_the_sinks(
     accumulator = _spilled_accumulator(tmp_path)
     final = accumulator.finalize()
     path = final.capture.path
-    assert path is not None
+    assert path is not None, "the spill must have produced a file to order against"
     observed: list[bool] = []
 
     class _WatchingSink(_StubSink):
@@ -234,7 +234,7 @@ def test_finalize_closes_the_result_handles_before_touching_the_sinks(
         "the drain result's handle must be closed before the sinks are "
         f"cleaned; the sink saw exists()={observed}"
     )
-    assert not path.exists()
+    assert not path.exists(), f"the result step must remove the file; {path} survived"
 
 
 def test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle(
@@ -250,7 +250,7 @@ def test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle(
     """
     accumulator = _spilled_accumulator(tmp_path)
     path = accumulator.finalize().capture.path
-    assert path is not None
+    assert path is not None, "the spill must have produced a file to remove"
 
     # The empty drain tuple is the whole point: nothing settled, so nothing
     # reported a handle, and the ordinary removal path cannot run.

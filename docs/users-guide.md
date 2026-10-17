@@ -1100,8 +1100,9 @@ question. Choose by the question:
   [Other observation channels](#other-observation-channels). A Rust pump
   decline means Cuprum used another stream path, not that the child failed.
 - **What did a capture policy do to the output?** `observe_capture` reports a
-  `CaptureEvent` when a bound discards bytes or a spill file is moved, written,
-  or fails; see [Other observation channels](#other-observation-channels).
+  `CaptureEvent` when a bound discards bytes, a stream spills to a file, or a
+  spill-file create, write, flush, or read-back fails; see
+  [Other observation channels](#other-observation-channels).
 
 Keep callbacks bounded, and avoid recording payloads or arguments as metric
 labels.
@@ -1798,7 +1799,8 @@ Registrations are context-local, like the policy registrations in
 _Table 5: Observation channels and their metrics adapters._
 
 The `observe_*` functions are importable from `cuprum`, except
-`observe_stream_operation`, which lives in `cuprum.stream_observation`. For
+`observe_capture` and `observe_stream_operation`. They live in
+`cuprum.capture_observation` and `cuprum.stream_observation`, respectively. For
 example, a supervisor can record how each stop request went:
 
 <!-- tested-example: control-observation -->

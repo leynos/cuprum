@@ -272,6 +272,76 @@ def test_bounded_capture_drops_from_the_front_not_the_back(
     assert final.capture.dropped_bytes == 1
 
 
+@pytest.mark.parametrize("max_bytes", [1, 2, 3])
+def test_a_repeated_finalize_reports_the_same_drop_count(max_bytes: int) -> None:
+    """Reading the capture twice may not count the trim twice.
+
+    A bound that lands inside a multibyte code point makes ``finalize`` drop
+    the torn leading bytes, and a caller that reads the payload and the record
+    from two calls would see the second call report a larger ``dropped_bytes``
+    than the first — breaking ``dropped + retained == total`` for the record it
+    actually holds. The payload is entirely four-byte code points, so every
+    bound here forces the trim.
+    """
+    sink = _sink(BoundedCapture(max_bytes=max_bytes))
+
+    _absorb(sink, ["\U0001f600\U0001f601".encode()])
+    first = sink.finalize()
+    second = sink.finalize()
+
+    assert second.capture.dropped_bytes == first.capture.dropped_bytes, (
+        "a repeated read must not accumulate the trim cost; "
+        f"first reported {first.capture.dropped_bytes}, second "
+        f"{second.capture.dropped_bytes}"
+    )
+    for final in (first, second):
+        assert isinstance(final.payload, str), "text mode must decode to text"
+        retained = len(final.payload.encode())
+        assert final.capture.dropped_bytes + retained == final.capture.total_bytes, (
+            "dropped + retained must equal the recorded total on every read; "
+            f"got {final.capture.dropped_bytes} + {retained} != "
+            f"{final.capture.total_bytes}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("encoding", "max_bytes"),
+    [
+        # The mark is 2 bytes for UTF-16 and 3 for UTF-8-SIG, so these bounds
+        # leave the tail wholly mark-less. UTF-32's mark is 4 bytes, and a
+        # 4-byte bound would retain it whole; 6 keeps a complete code unit
+        # while still cutting the mark away.
+        pytest.param("utf-16", 2, id="utf-16"),
+        pytest.param("utf-32", 6, id="utf-32"),
+        pytest.param("utf-8-sig", 2, id="utf-8-sig"),
+    ],
+)
+def test_a_bound_that_discards_the_mark_still_decodes(
+    encoding: str,
+    max_bytes: int,
+) -> None:
+    """A byte-order mark the bound dropped is resolved from the stream's head.
+
+    ``utf-16``, ``utf-32``, and ``utf-8-sig`` select their real codec from a
+    leading mark, and a decoder handed a mark-less tail raises rather than
+    guessing an order. The stream is encoded *with* the family name, so the
+    mark is really there, and the bound is set so the retained tail cannot
+    contain it.
+    """
+    settings = _DecodeSettings(encoding, "strict", capture_bytes=False)
+    sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
+    text = "ab中"
+
+    sink.absorb(text.encode(encoding))
+    final = sink.finalize()
+
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert text.endswith(final.payload), (
+        f"a mark-less tail must still decode as the stream's own {encoding}; "
+        f"got {final.payload!r} from {text!r}"
+    )
+
+
 def test_build_accumulator_returns_nothing_for_an_uncaptured_stream() -> None:
     """No policy means no accumulator, which is how a discarded stream is said."""
     assert build_accumulator(None, stream="stdout", settings=_TEXT) is None

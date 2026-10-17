@@ -1168,9 +1168,10 @@ file is left in place for the caller to read. A failure to remove the file at
 the end of the run is absorbed silently, so that cleanup cannot replace the
 caller's own timeout or cancellation.
 
-`BoundedCapture` and `FileBackedCapture` are exported from
-`cuprum.capture_policy`. The full field list of a capture record is in
-[Control output](users-guide.md#control-output).
+`BoundedCapture`, `FileBackedCapture`, `FullCapture`, `CapturedStream`, and
+`CapturePolicyKind` are exported from the package root and from `cuprum.sh`, as
+well as from `cuprum.capture_policy`. The full field list of a capture record
+is in [Control output](users-guide.md#control-output).
 
 ## For contributors: benchmark and profiling changes
 

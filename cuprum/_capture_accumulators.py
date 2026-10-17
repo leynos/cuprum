@@ -14,7 +14,13 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum._capture_decode import _DecodeSettings, _render, _trim_to_code_point
+from cuprum._capture_decode import (
+    _BOM_MAX_BYTES,
+    _bounded_settings,
+    _DecodeSettings,
+    _render,
+    _trim_to_code_point,
+)
 from cuprum._capture_file import _FileAccumulator
 from cuprum._capture_types import CaptureFinal, CaptureSink
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
@@ -163,9 +169,20 @@ class _BoundedAccumulator:
     # only be realigned against the whole stream, so discarding the oldest bytes
     # must move this in step with them.
     _offset: int = dc.field(init=False, default=0)
+    # The first bytes of the stream, kept so finalize can resolve a codec whose
+    # byte order the retained tail no longer carries. A bound can discard the
+    # BOM that selects UTF-16's or UTF-32's endianness, and a decoder handed
+    # the BOM-less tail raises rather than guessing.
+    _prefix: bytes = dc.field(init=False, default=b"")
+    # Whether the truncation event has already been published. ``finalize`` is
+    # a query called again by some callers, and the event describes the run
+    # once rather than once per read.
+    _truncation_emitted: bool = dc.field(init=False, default=False)
 
     def absorb(self, chunk: bytes) -> None:
         """Append one raw chunk and discard whatever no longer fits."""
+        if len(self._prefix) < _BOM_MAX_BYTES:
+            self._prefix += chunk[: _BOM_MAX_BYTES - len(self._prefix)]
         self._buffer.extend(chunk)
         self._total += len(chunk)
         overflow = len(self._buffer) - self.max_bytes
@@ -175,35 +192,49 @@ class _BoundedAccumulator:
             self._dropped = self._total - len(self._buffer)
 
     def finalize(self) -> CaptureFinal:
-        """Render the retained tail and report the bytes it dropped."""
+        """Render the retained tail and report the bytes it dropped.
+
+        The reported count is computed, not stored: two calls over the same
+        retained buffer must agree even when the second one trims a cut tail
+        again. Only the truncation event is remembered, so a repeated read
+        does not publish the same outcome twice.
+
+        Returns
+        -------
+        CaptureFinal
+            The rendered tail together with the record of how much of the
+            stream reached the accumulator and how much of that was discarded.
+        """
         raw = bytes(self._buffer)
         # Only a text run decodes its capture, and only a cut can land inside a
         # code point. A byte-exact tail is the child's own bytes and an uncut
         # stream has no damaged edge, so both are handed back untouched: a
         # binary tail ending in a continuation-shaped byte is not a broken
         # character, and trimming it would lose data the caller asked for.
+        settings = _bounded_settings(self.settings, self._prefix)
         retained = (
             raw
-            if self.settings.capture_bytes or not self._dropped
-            else _trim_to_code_point(raw, self.settings, stream_offset=self._offset)
+            if settings.capture_bytes or not self._dropped
+            else _trim_to_code_point(raw, settings, stream_offset=self._offset)
         )
-        self._dropped += len(self._buffer) - len(retained)
-        if self._dropped:
+        dropped = self._dropped + len(raw) - len(retained)
+        if dropped and not self._truncation_emitted:
+            self._truncation_emitted = True
             _emit_capture_event(
                 CaptureEvent(
                     stream=self.stream,
                     category=CaptureEventCategory.TRUNCATED,
                     total_bytes=self._total,
-                    dropped_bytes=self._dropped,
+                    dropped_bytes=dropped,
                 )
             )
         return CaptureFinal(
-            payload=_render(retained, self.settings),
+            payload=_render(retained, settings),
             capture=CapturedStream(
                 stream=self.stream,
                 policy=policy_kind(BoundedCapture(max_bytes=self.max_bytes)),
                 total_bytes=self._total,
-                dropped_bytes=self._dropped,
+                dropped_bytes=dropped,
             ),
         )
 

@@ -311,6 +311,10 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
             tasks=types.SimpleNamespace(
                 consumers=consumers,
                 discard_on_cancel=asyncio.Event(),
+                # The discard drain now releases the accumulators the
+                # consumers were reading into, so this case has to supply the
+                # (empty) pair a run with no capture policies holds.
+                captures=(None, None),
             ),
             telemetry=types.SimpleNamespace(emit=double.emit),
         ),
@@ -354,6 +358,67 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
         "drain",
         LineStreamPhase.TEARDOWN_COMPLETED,
     ], f"the discard drain must bracket the drain in teardown, got {double.order!r}"
+
+
+class _ReleasedSink:
+    """A capture sink that records its release."""
+
+    def __init__(self) -> None:
+        """Start unreleased."""
+        self.released = False
+
+    def absorb(self, chunk: bytes) -> None:
+        """Accept output, which this case never sends."""
+
+    def finalize(self) -> typ.NoReturn:
+        """Refuse to finalize; the discard path builds no result."""
+        raise NotImplementedError
+
+    async def cleanup(self) -> None:
+        """Record the release."""
+        self.released = True
+
+
+def test_discard_drain_releases_the_capture_sinks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The discard path owns the sink release, since it bypasses reconciliation.
+
+    ``_reconcile_run_tasks`` is where a normal teardown closes the
+    accumulators, and the drain context here asks for no capture at all, so a
+    consumer cancelled mid-read never finalizes and nothing else would close a
+    spill file. This case fails without the ``finally`` in ``_discard_drain``.
+    """
+    double = _FailedExitTestDouble(error=ValueError("unused"))
+    sink = _ReleasedSink()
+    run = typ.cast(
+        "_LineStreamRun",
+        types.SimpleNamespace(
+            tasks=types.SimpleNamespace(
+                consumers=object(),
+                discard_on_cancel=asyncio.Event(),
+                captures=(sink, None),
+            ),
+            telemetry=types.SimpleNamespace(emit=double.emit),
+        ),
+    )
+    execution = typ.cast(
+        "_SubprocessExecution",
+        types.SimpleNamespace(
+            capture_stdout=_STDOUT_POLICY,
+            capture_stderr=_STDERR_POLICY,
+            capture_bytes=False,
+            observation=object(),
+        ),
+    )
+    double.install(monkeypatch)
+
+    asyncio.run(coordinator._discard_drain(run, 456, execution))
+
+    assert sink.released, (
+        "the discard path drains no settled result, so it must release the "
+        "accumulator itself or the spill file survives the run"
+    )
 
 
 def _teardown_run(order: list[object]) -> _LineStreamRun:

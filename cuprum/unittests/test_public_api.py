@@ -329,6 +329,9 @@ def test_capture_policy_types_are_public_surface(name: str) -> None:
     assert name in c.sh.__all__, f"cuprum.sh.__all__ must export {name}"
     assert hasattr(c, name), f"cuprum must expose {name}"
     assert hasattr(c.sh, name), f"cuprum.sh must expose {name}"
+    assert getattr(c, name) is getattr(c.sh, name), (
+        f"both packages must expose the same {name}, not two copies"
+    )
 
 
 def test_a_default_run_still_returns_complete_text_under_full_capture() -> None:
@@ -418,25 +421,6 @@ def _run_echoing_child(options: c.RunOutputOptions) -> c.CommandResult:
     env = build_python_catalogue_env()
     with scoped(ScopeConfig(allowlist=frozenset({env.program}))):
         return env.builder("-c", _ECHO_BOTH_SOURCE).run_sync(output=options)
-
-
-def test_capture_policy_kind_is_public_surface() -> None:
-    """``CapturePolicyKind`` is exported because it types a public field.
-
-    ``CapturedStream.policy`` is annotated with the kind, so a caller matching
-    on the reported vocabulary — or writing that annotation down in their own
-    code — needs the name reachable from both packages rather than only from
-    the module that defines it.
-    """
-    assert "CapturePolicyKind" in c.__all__, (
-        "the vocabulary typing CapturedStream.policy must be exported"
-    )
-    assert "CapturePolicyKind" in c.sh.__all__, (
-        "the vocabulary typing CapturedStream.policy must be exported"
-    )
-    assert c.CapturePolicyKind is c.sh.CapturePolicyKind, (
-        "both packages must expose the same enum, not two copies"
-    )
 
 
 def test_broken_pipe_policy_does_not_take_a_positional_slot() -> None:

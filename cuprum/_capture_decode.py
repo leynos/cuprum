@@ -27,10 +27,39 @@ if typ.TYPE_CHECKING:
     from cuprum._streams import _StreamConfig
 
 __all__ = [
+    "_BOM_MAX_BYTES",
     "_DecodeSettings",
+    "_bounded_settings",
     "_render",
     "_trim_to_code_point",
 ]
+
+# The longest byte-order mark among the codecs that carry one, so an
+# accumulator knows how much of the stream's head it must remember to resolve
+# the codec after a bound has discarded that head.
+_BOM_MAX_BYTES = len(codecs.BOM_UTF32_LE)
+
+# Family name to ``(little-endian codec, big-endian codec)`` for the codecs
+# whose byte order is selected by a mark rather than by the caller's spelling.
+# ``utf-8-sig`` names the same codec twice: its mark carries no order, it only
+# announces the encoding. Only these need the mark; every other encoding's
+# name already fixes its order.
+_BOM_SELECTED_CODECS: dict[str, tuple[str, str]] = {
+    "utf-16": ("utf-16-le", "utf-16-be"),
+    "utf-32": ("utf-32-le", "utf-32-be"),
+    "utf-8-sig": ("utf-8", "utf-8"),
+}
+
+# Each family's little- then big-endian mark, with UTF-32 before UTF-16: the
+# UTF-32 little-endian mark begins with the UTF-16 one, so testing the narrower
+# mark first would read a UTF-32 stream as UTF-16 with trailing NUL bytes. This
+# is the order marks must be tried in, not the order the families are listed
+# above.
+_BOM_MARKS: tuple[tuple[str, bytes, bytes], ...] = (
+    ("utf-32", codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE),
+    ("utf-16", codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE),
+    ("utf-8-sig", codecs.BOM_UTF8, codecs.BOM_UTF8),
+)
 
 # Widest code point, in bytes, for each encoding the codec registry names.
 # Only the width is needed: it bounds how far a mid-stream cut can land inside
@@ -101,6 +130,55 @@ class _DecodeSettings:
             errors=config.errors,
             capture_bytes=config.capture_bytes,
         )
+
+
+def _mark_selected_codec(family: str, prefix: bytes) -> str | None:
+    """Return the concrete codec *prefix* selects for *family*, if any."""
+    for marked_family, little_mark, big_mark in _BOM_MARKS:
+        if marked_family != family:
+            continue
+        little, big = _BOM_SELECTED_CODECS[family]
+        if prefix.startswith(little_mark):
+            return little
+        if prefix.startswith(big_mark):
+            return big
+        return None
+    return None
+
+
+def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettings:
+    """Resolve the codec a truncated tail can still be read with.
+
+    A byte bound drops the oldest bytes, which for ``utf-16``, ``utf-32``, and
+    ``utf-8-sig`` can be the byte-order mark that selects the codec. Handing
+    those decoders a tail without their mark raises, and returning early would
+    leave that error to the caller, so the mark captured from the head
+    resolves the family to the concrete endianness the stream actually used.
+    The mark stays part of the retained bytes when it survived, because
+    stripping it is the removal the decoder itself performs for those names.
+
+    Parameters
+    ----------
+    settings : _DecodeSettings
+        The run's decoding, whose encoding may need resolving.
+    prefix : bytes
+        The stream's first bytes, as captured before any bound discarded them.
+
+    Returns
+    -------
+    _DecodeSettings
+        *settings* when its encoding is not mark-selected, otherwise the same
+        decoding spelled as the concrete codec the mark names. An absent or
+        unrecognized mark leaves *settings* unchanged: the stream was going to
+        fail that decode anyway, and inventing an order would misread it.
+    """
+    family = _canonical_encoding(settings.encoding)
+    if family not in _BOM_SELECTED_CODECS:
+        return settings
+    codec = _mark_selected_codec(family, prefix)
+    if codec is None:
+        return settings
+    return dc.replace(settings, encoding=codec)
 
 
 def _render(retained: bytes, settings: _DecodeSettings) -> str | bytes:

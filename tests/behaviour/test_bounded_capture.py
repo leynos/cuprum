@@ -248,6 +248,10 @@ def then_stderr_is_complete(result: PipelineResult) -> None:
         "stderr was declared complete, so the run must report 'full'; "
         f"got {record.policy!r}"
     )
+    assert result.final.stderr == _ANNOUNCEMENT, (
+        f"the relay must announce the whole payload length {_ANNOUNCEMENT!r}; "
+        f"got {result.final.stderr!r}"
+    )
     assert record.dropped_bytes == 0, (
         f"a complete stderr capture drops nothing; got {record.dropped_bytes}"
     )

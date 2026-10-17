@@ -316,7 +316,9 @@ def test_a_stream_under_its_threshold_is_not_a_witnessed_spill(
     )
     record = _only_spill(result.captures)
     assert record.storage == "memory", "no spill means the capture stayed on the heap"
-    assert record.total_bytes == len("tiny")
+    assert record.total_bytes == len("tiny"), (
+        "the captured byte count must match the child output"
+    )
     _directory_is_clean(tmp_path, outcome="a run under its spill threshold")
 
 
@@ -395,9 +397,9 @@ def test_two_runs_into_one_directory_leave_nothing_behind(
         )
     first_path = _reported_path(_only_spill(first_result.captures))
 
-    # Between the runs exactly one file exists: the second run's spill has not
-    # happened yet, so this is also the assertion that the first run removed
-    # its own file rather than the second run removing both.
+    # Between the runs no file exists: the second run's spill has not happened
+    # yet, so this assertion confirms the first run removed its own file rather
+    # than the second run removing both.
     assert not list(tmp_path.iterdir()), (
         f"the first run must remove its file before the second starts; {first_path}"
     )
@@ -410,5 +412,7 @@ def test_two_runs_into_one_directory_leave_nothing_behind(
     second_path = _reported_path(_only_spill(second_result.captures))
 
     assert second_path != first_path, "two spills must not share a file"
-    assert second_path.name in second.awaited()
+    assert second_path.name in second.awaited(), (
+        f"the witness must have seen the second run's file {second_path.name}"
+    )
     _directory_is_clean(tmp_path, outcome="two runs sharing a spill directory")

@@ -29,7 +29,10 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._capture_cleanup import _finalize_capture_handles
+from cuprum._capture_cleanup import (
+    _cleanup_capture_sinks,
+    _finalize_capture_handles,
+)
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.drain import _drain_after_exit
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
@@ -217,20 +220,39 @@ async def _discard_drain(
     pid: int | None,
     execution: _SubprocessExecution,
 ) -> _DrainPair:
-    """Discard and reconcile the line stream's consumers after a failure."""
-    return await _run_line_stream_teardown(
-        run,
-        _drain_stream_consumers(
-            run.tasks.consumers,
-            _DrainContext(
-                captures=(None, None),
-                capture_bytes=execution.capture_bytes,
-                pid=pid,
-                observation=execution.observation,
-                discard_on_cancel=run.tasks.discard_on_cancel,
-            ),
-        ),
-    )
+    """Discard and reconcile the line stream's consumers after a failure.
+
+    Unlike :func:`_cleanup_failed_line_stream_run`, this path drains the
+    consumers directly rather than through ``_reconcile_run_tasks``, so it
+    owes the accumulator release itself. The context captures neither stream,
+    so a cancelled consumer re-raises from ``_finish_drain`` without
+    finalizing: its spill handle reaches no result, and the sink is the only
+    remaining reference to the file. Releasing them in ``finally`` keeps that
+    true even when the drain itself raises.
+
+    Returns
+    -------
+    _DrainPair
+        The stdout and stderr drain results, in that order.
+    """
+
+    async def drain_then_release() -> _DrainPair:
+        """Drain the consumers, then release the sinks they were reading into."""
+        try:
+            return await _drain_stream_consumers(
+                run.tasks.consumers,
+                _DrainContext(
+                    captures=(None, None),
+                    capture_bytes=execution.capture_bytes,
+                    pid=pid,
+                    observation=execution.observation,
+                    discard_on_cancel=run.tasks.discard_on_cancel,
+                ),
+            )
+        finally:
+            await _cleanup_capture_sinks(run.tasks.captures)
+
+    return await _run_line_stream_teardown(run, drain_then_release())
 
 
 async def _coordinate_line_stream(
