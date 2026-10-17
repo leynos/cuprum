@@ -25,7 +25,7 @@ from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
-from cuprum.capture_policy import captures_any_stream as _captures_any_stream
+from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
