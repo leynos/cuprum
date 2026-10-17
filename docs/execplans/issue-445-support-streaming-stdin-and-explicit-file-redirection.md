@@ -4121,20 +4121,48 @@ and why a passing result cannot be vacuous.
   the owned assertions and fails these; POSIX-only descriptor checks are
   skipped on Windows with an explicit marker rather than silently omitted.
 
-- Obligation: `INV-6 — piped-only consumers and writers`. A stream bound to a
-  file, inherited, or `/dev/null` has no parent-side `StreamReader` and no
-  stdin writer; a stream left as a pipe still has both. Method: parameterized
-  unit tests over the four `StdioTarget` variants times the three streams,
-  asserting on the values cuprum passes to the spawn layer and on which
-  consumer tasks exist. Rationale: this is the invariant whose violation
-  produces hangs rather than failures, so it needs a direct structural
-  assertion, not an end-to-end one. Domain: each stream independently
-  redirected while the others are captured; all three redirected at once.
-  Artefact: `cuprum/unittests/test_safe_cmd_redirect.py`. Evidence:
-  `make test`; skipping the `connect_pipes()` gate causes a hang that the
-  test's own timeout converts into a failure. Non-vacuity: the "other two
-  streams still captured" half of each case proves the assertion can
-  distinguish a fully-pinned run from a partially-pinned one.
+- Obligation: `INV-6 — piped-only consumers and writers`. A stream left as a
+  pipe has a parent-side `StreamReader` and, for stdin, a writer; a stream
+  bound to a file, a borrowed descriptor, or the parent's own stream has
+  neither, and a pipe nobody consumes is spawned as `DEVNULL` rather than as a
+  pipe the parent never reads. Method: end-to-end runs asserting that each
+  redirected stream yields no captured text while each still-piped stream
+  yields its bytes, paired with construction-time tests for the stdin domain.
+  Rationale: the invariant's observable is the result of a live run — a
+  redirected stream reports `stdout is None`, a piped one reports its bytes —
+  so these runs pin the contract while the private bookkeeping that implements
+  it (`_StdioBinding.is_pipe`, `_ResolvedStdio.pipes`) is left unasserted; a
+  test of that bookkeeping would restate the implementation rather than the
+  contract. Domain: `stdin` admits only `pipe` and `inherit`, because
+  `_reject_redirected_stdin` refuses `path` and `fd`: the input arrives through
+  `stdin=StdinInput(...)` or `stdin=StdinStream(...)`, and a second spelling
+  would leave one of the two silently ignored. `stdout` and `stderr` admit all
+  four variants; `stdout` is exercised live through every one of them, `stderr`
+  through `path`, `pipe`, and a borrowed file object on the `lines()` path, with
+  `inherit` covered where `SafeCmd.start()` refuses it. Both streams are also
+  redirected at once. Artefact: `cuprum/unittests/test_safe_cmd_redirect.py`
+  (`test_redirected_stream_is_not_captured`,
+  `test_inherit_target_leaves_the_parent_stream_alone`,
+  `test_both_streams_can_be_redirected_at_once`, and the near-miss
+  `test_pipe_target_still_captures`);
+  `cuprum/unittests/test_safe_cmd_stdio_rules.py`
+  (`test_stdin_rejects_a_destination_rather_than_an_input`,
+  `test_stdin_accepts_both_stream_describing_variants`);
+  `cuprum/unittests/test_wait4_process_delivery_fallback.py`
+  (`test_unread_pipe_stays_devnull_on_the_fallback_backend`, which fails if a
+  pipe nobody reads is promoted to `PIPE` and strands the child in `write`); and
+  `cuprum/unittests/test_safe_cmd_streams.py` for a piped run's consumer
+  reconciliation on cancellation and stdin-writer failure. Evidence:
+  `make test`. Non-vacuity: the accepted near-misses are the controls — the
+  same options with `StdioTarget.pipe()` capture as usual, and a `path` target
+  refused for stdin is accepted for stdout — so a rule that refused every
+  target would fail them. The `connect_pipes()` membership test is
+  defence-in-depth rather than load-bearing: `Popen` hands back a stream object
+  only for `PIPE`, so `DEVNULL` and a borrowed descriptor already leave the
+  child-side stream `None`, and `is_pipe` short-circuits the check. Removing it
+  would not cause a hang; it would attach a reader to a descriptor cuprum does
+  not own. The `connect_pipes` tests in `test_wait4_process_reaping.py` inject
+  a failure to check cleanup, not pipe-ness.
 
 - Obligation: `INV-7 — existing behaviour unchanged`. With no new arguments,
   every existing test in the suite passes unmodified. Method: the existing
@@ -4247,9 +4275,10 @@ Validation: `make test` focused on the new public-API tests; `make typecheck`.
 ### EP-M2 — resolved planning and spawn-time binding
 
 Red: add tests that redirect the child's stdout to a temporary path and assert
-the file's contents and that its descriptor is closed after the run; add the
-structural INV-6 assertions. Expect failure or a hang that the test's own
-timeout converts into a failure.
+the file's contents and that its descriptor is closed after the run, and tests
+showing that a redirected stream yields no captured text while a piped one
+still does (INV-6). Expect the contents, descriptor, and capture assertions to
+fail.
 
 Green:
 
@@ -4464,12 +4493,17 @@ Acceptance as behaviour:
   timeout, and spawn failure.
 - A borrowed descriptor and a borrowed file object are usable by the caller
   afterwards.
-- Capture, echo, idle observation, and `on_line` continue to work on the
-  streams that stay piped, and a run that asks for one of them *and* redirects
-  that same stream is rejected at construction, with a message naming the
-  fields. Redirection removes the parent-side pipe those features read, so the
-  pair is unsupported rather than merely untested — the rejection is what makes
-  `lines()` refuse a redirected stdout instead of silently observing nothing.
+- Capture and echo continue to work on the streams that stay piped, and a run
+  that asks for either *and* redirects that same stream is rejected at
+  construction, with a message naming the field. Redirection removes the
+  parent-side pipe those two features read, so the pair is unsupported rather
+  than merely untested. Idle observation and `on_line` are a different case:
+  they are *not* rejected beside a redirect, because they observe a pipe the
+  run may still own rather than requiring one. A redirected stream simply has
+  no parent-side data to report, so an accepted `on_line` or idle observation
+  receives nothing — the behaviour `_SubprocessExecution.consumes_stdout`
+  documents. `lines()` is rejected on a redirected stdout at call time, when
+  the requirement is known, rather than when the options are constructed.
 
 Quality criteria: `make test` passes; `make typecheck` passes; `make check-fmt`,
 `make lint`, `make markdownlint`, `make spelling`, and `make nixie` pass; no
