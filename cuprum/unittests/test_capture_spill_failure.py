@@ -343,6 +343,7 @@ def test_a_failed_append_keeps_the_prefix_that_reached_the_file(
     assert final.capture.total_bytes == len(_FULL), (
         "the record must still count what the child wrote, not what was kept"
     )
+    _cleanup(accumulator)
 
 
 def test_a_failed_append_stops_writing_rather_than_retrying_per_chunk(
@@ -372,6 +373,7 @@ def test_a_failed_append_stops_writing_rather_than_retrying_per_chunk(
         CaptureEventCategory.SPILLED_TO_FILE,
         CaptureEventCategory.STORAGE_WRITE_FAILED,
     ], f"the refusal must be reported once, after the spill; got {recorder!r}"
+    _cleanup(accumulator)
 
 
 def test_a_failed_append_flush_is_reported_as_a_flush_failure(
@@ -414,6 +416,7 @@ def test_a_failed_append_flush_is_reported_as_a_flush_failure(
     assert final.capture.path.read_bytes() == _PREFIX, (
         "a refused flush must leave the file holding the prefix that arrived"
     )
+    _cleanup(accumulator)
 
 
 def test_a_failed_flush_during_the_spill_abandons_the_file(

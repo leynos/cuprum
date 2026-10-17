@@ -210,7 +210,7 @@ def test_file_backed_capture_defaults_to_the_package_constant() -> None:
         == DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES
     ), "the default must track the constant rather than duplicating its value"
     assert DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES == 1024 * 1024, (
-        "the constant itself must stay a size in KiB form"
+        "the constant itself must stay one MiB (1024 * 1024 bytes)"
     )
     assert FileBackedCapture(spill_threshold_bytes=None).spill_threshold_bytes is None
 
@@ -223,6 +223,45 @@ def test_file_backed_capture_normalizes_a_string_directory() -> None:
         "the directory must be normalized so the spill code never sees a str"
     )
     assert FileBackedCapture().directory is None
+
+
+@pytest.mark.parametrize(
+    ("declared", "replacement", "expected"),
+    [
+        pytest.param(
+            None,
+            False,
+            (None, None),
+            id="no-per-stream-field-takes-the-new-shorthand",
+        ),
+        pytest.param(
+            FullCapture(),
+            False,
+            (FullCapture(), None),
+            id="an-explicit-policy-outlives-the-new-shorthand",
+        ),
+    ],
+)
+def test_replacing_the_shorthand_reresolves_the_streams_it_still_governs(
+    declared: CapturePolicy | None,
+    replacement: bool,
+    expected: tuple[CapturePolicy | None, CapturePolicy | None],
+) -> None:
+    """``dataclasses.replace`` re-resolves, rather than inheriting a resolution.
+
+    The resolution has to live outside the init fields for this to hold. Stored
+    back into ``capture_stdout``/``capture_stderr``, it would be copied into the
+    replacement as an explicit per-stream declaration and outrank the new
+    shorthand, so ``replace(options, capture=False)`` would keep capturing both
+    streams — a silent behaviour change for every caller adapting shared
+    options. A stream the caller named keeps its own policy either way.
+    """
+    options = RunOutputOptions(capture_stdout=declared)
+
+    assert dc.replace(options, capture=replacement).resolved_capture == expected, (
+        "a replacement must resolve from the fields as the caller wrote them, "
+        f"not reuse the {options.resolved_capture!r} resolution"
+    )
 
 
 def test_policies_are_frozen_and_hashable() -> None:

@@ -363,7 +363,8 @@ Thresholds that trigger escalation when breached.
   (`cuprum/unittests/__snapshots__/test_maturin_build.ambr`) enumerates every
   shipped module, so a new module under `cuprum/` fails that test until the
   snapshot is updated. Impact: each new module this plan adds
-  (`capture_policy.py`, `_capture_sink.py`, `capture_events.py`,
+  (`capture_policy.py`, `_capture_accumulators.py`, `_capture_decode.py`,
+  `_capture_file.py`, `_capture_types.py`, `capture_events.py`,
   `capture_observation.py`) costs one `--snapshot-update` run on
   `test_maturin_build.py`. Adding the module and updating the snapshot belong
   in the same commit or the suite is red in between.
@@ -1287,7 +1288,7 @@ Conformance check:
     relay path is untouched.
 - Upstream assumptions valid: `_encode_prefix` is reusable as hoped (or the
     deviation is recorded).
-- No unapproved public interface change: `_capture_sink` and the event
+- No unapproved public interface change: the accumulator modules and the event
     module are public-by-export only; the drain internals stay private.
 - No trust-boundary or persisted-format change: spill files are new but are
     temporary by contract and removed deterministically.
@@ -1452,11 +1453,12 @@ in, and the failing spill-cleanup assertion under cancellation before
 No new third-party dependency. Standard library only: `dataclasses`, `enum`,
 `contextvars`, `pathlib`, `tempfile`, `os`, `typing`.
 
-In `cuprum/capture_policy.py`, define:
+In `cuprum/capture_policy.py` — the vocabulary the caller names:
 
 ```python
 type CapturePolicy = FullCapture | BoundedCapture | FileBackedCapture
 type CaptureStreamName = typ.Literal["stdout", "stderr"]
+type CaptureStorage = typ.Literal["memory", "file"]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -1471,7 +1473,9 @@ class BoundedCapture:
 @dc.dataclass(frozen=True, slots=True)
 class FileBackedCapture:
     spill_threshold_bytes: int | None = DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES
-    directory: pathlib.Path | None = None
+    # Normalized to ``Path`` in ``__post_init__``, but annotated wide so a
+    # caller may spell the directory as either.
+    directory: pathlib.Path | str | None = None
     keep_file: bool = False
 
 
@@ -1480,17 +1484,40 @@ class CapturedStream:
     stream: CaptureStreamName
     policy: CapturePolicyKind
     total_bytes: int
-    dropped_bytes: int
-    storage: typ.Literal["memory", "file"]
-    path: pathlib.Path | None
-    owned: bool
+    dropped_bytes: int = 0
+    storage: CaptureStorage = "memory"
+    path: pathlib.Path | None = None
+    owned: bool = False
+    storage_failed: bool = False
+
+    @property
+    def truncated(self) -> bool: ...
 
     def read_text(self, *, encoding: str = "utf-8", errors: str = "replace") -> str: ...
 ```
 
+The implementation is split across four modules rather than the one
+`_capture_sink.py` this plan first sketched:
+
+- `cuprum/_capture_types.py` — the `CaptureSink` protocol (`absorb`,
+  `finalize`, `async cleanup`), `CaptureSinkRegistry`, `CaptureFinal`, and the
+  idempotent `SpillHandle`.
+- `cuprum/_capture_accumulators.py` — the in-memory `_FullAccumulator` and
+  `_BoundedAccumulator`, plus `build_accumulator(policy, *, stream, settings)`
+  returning `None` when the stream is not captured.
+- `cuprum/_capture_file.py` — `_FileAccumulator`, the only accumulator that
+  owns a file and so the only one with a storage obligation. It carries its own
+  module because absorbing a create, write, flush, or read failure is most of
+  what it does.
+- `cuprum/_capture_cleanup.py` — `_cleanup_capture_sinks` and
+  `_finalize_capture_handles`, the removal paths shared by single-command,
+  pipeline, and `lines()` runs.
+
 In `cuprum/capture_events.py`, define `CaptureStreamName` (re-used),
 `CaptureEventCategory(enum.StrEnum)` with `TRUNCATED`, `SPILLED_TO_FILE`,
-`STORAGE_WRITE_FAILED`, `STORAGE_FLUSH_FAILED`, and:
+`STORAGE_WRITE_FAILED`, `STORAGE_FLUSH_FAILED`, and `STORAGE_READ_FAILED` — the
+last added because byte mode reads a spilled file back during result
+construction, and a failure there is absorbed like any other storage call — and:
 
 ```python
 @dc.dataclass(frozen=True, slots=True)
@@ -1506,9 +1533,3 @@ class CaptureEvent:
 In `cuprum/capture_observation.py`, mirror `cuprum/echo_observation.py`:
 `observe_capture(hook) -> CaptureHookRegistration`, `current_capture_hooks()`
 and a private `_emit_capture_event(event)`.
-
-In `cuprum/_capture_sink.py`, define an accumulator protocol with
-`absorb(chunk: bytes) -> None`, `finalize(stream, config) -> _CaptureFinal`, and
-`async cleanup() -> None`, plus three implementations and a
-`build_accumulator(policy, *, stream, encoding, errors) -> _Accumulator | None`
-factory returning `None` when capture is disabled.

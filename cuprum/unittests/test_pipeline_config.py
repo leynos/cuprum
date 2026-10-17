@@ -70,7 +70,7 @@ def test_stream_config_uses_requested_stream_settings(
         f"{stream} must retain its configured output sink"
     )
     assert stream_config.capture == FullCapture(), (
-        "capture must be shared by both streams"
+        f"{stream} must keep its own capture policy, not the other stream's"
     )
     assert stream_config.echo_max_line_bytes == 123, (
         "the echo line bound must be shared by both streams"
