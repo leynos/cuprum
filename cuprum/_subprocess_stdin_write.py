@@ -99,6 +99,17 @@ class _StreamSink:
         return self._encoder
 
     @property
+    def has_encoder(self) -> bool:
+        """Whether text processing has already built this run's encoder.
+
+        The distinction the final flush turns on, and the reason it cannot be
+        recovered from the encoder itself: building one to find out is the very
+        act that emits a byte-order mark. A byte-only producer never asks for an
+        encoder, so this stays ``False`` for its whole run.
+        """
+        return self._encoder is not None
+
+    @property
     def chunk_error(self) -> _ChunkBoundary | None:
         """Where this run's own encoding or chunk handling failed, if it did."""
         return self._chunk_error
@@ -232,11 +243,29 @@ async def _write_chunk(
 
 
 async def _flush_encoder(sink: _StreamSink) -> None:
-    """Write whatever the incremental encoder is still holding.
+    r"""Write whatever the incremental encoder is still holding.
 
     A trailing partial sequence only becomes visible to the child here, so this
-    runs after the producer is exhausted and before the pipe is closed.
+    runs after the producer is exhausted and before the pipe is closed. A
+    stream that never produced text has nothing held and nothing to flush, so
+    its encoder is never built; constructing one to discover that is not a
+    harmless query. Several codecs emit their byte-order mark from a whole
+    encoder's bytes, and they emit it on that encoder's *first* ``encode`` call
+    — including ``encode("", final=True)``. Flushing a byte-only stream
+    therefore appends a BOM to bytes the caller supplied verbatim: ``utf-8-sig``
+    turns ``b"raw"`` into ``b"raw\xef\xbb\xbf"``, and a producer that yields
+    nothing sends three bytes instead of end-of-file. An encoding name this
+    build does not know fails the run for the same reason, from a codec the
+    caller's bytes never needed.
+
+    Only an encoder that already exists is flushed, which is exactly the set of
+    runs whose text might still be inside one. The stateful codecs that need a
+    final escape sequence on the wire are in that set by construction: the
+    escape is owed because a ``str`` chunk was encoded, and encoding one is what
+    built the encoder.
     """
+    if not sink.has_encoder:
+        return
     tail = sink.encode("", final=True)
     if not tail:
         return
