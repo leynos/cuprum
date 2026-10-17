@@ -151,6 +151,7 @@
       'cuprum/capture_events.py',
       'cuprum/capture_observation.py',
       'cuprum/capture_policy.py',
+      'cuprum/capture_presence.py',
       'cuprum/catalogue.py',
       'cuprum/concurrent.py',
       'cuprum/context/__init__.py',
