@@ -130,6 +130,10 @@ def test_zero_width_matches_are_preserved_or_coalesced() -> None:
         literals=("x",),
         patterns=(re.compile(r"(?=x)"),),
     )
+    disjoint = RedactionPolicy(
+        literals=("X",),
+        patterns=(re.compile(r"(?=.)|(?=$)"),),
+    )
 
     assert standalone.apply_text("x") == "[REDACTED]x", (
         "a standalone zero-width match must remain visible"
@@ -137,6 +141,9 @@ def test_zero_width_matches_are_preserved_or_coalesced() -> None:
     assert overlapping.apply_text("x") == "[REDACTED]", (
         "a zero-width match on a literal boundary must not add a second mask"
     )
+    assert disjoint.apply_text("aXbXc") == (
+        "[REDACTED]a[REDACTED]b[REDACTED]c[REDACTED]"
+    ), "inclusive boundaries must coalesce across multiple non-empty spans"
 
 
 @pytest.mark.usefixtures("failing_redaction_substitution")

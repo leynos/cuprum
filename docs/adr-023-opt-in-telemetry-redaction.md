@@ -39,8 +39,8 @@ projections, with consistent opt-in behaviour at each supported destination.
 - Redact configured literals and regular-expression matches in selected text.
 - Apply event redaction to argv items, environment values, output lines,
   diagnostic notes, and string-valued tags.
-- Apply title redaction to emitted explicit and argv-derived GitHub Actions
-  titles; retain the trusted fallback annotation label.
+- Apply title redaction to every emitted GitHub Actions group and annotation
+  title, including explicit, argv-derived, and bounded fallback labels.
 - Let callers wrap other observation consumers before registering them.
 
 ### Technical requirements
@@ -89,12 +89,12 @@ through a `redaction` keyword argument. Event adapters sanitize a copy before
 projection, redacting argv items, environment values, output lines, diagnostic
 notes, and top-level string-valued tag values. Plain-text logging applies the
 policy only to its argv projection. The GitHub Actions sink accepts the same
-keyword and applies the policy before workflow-command escaping to explicit
-titles used by enabled group or annotation output and to argv-derived group
-titles. Its trusted fallback annotation label and mirrored child output remain
-unchanged. The convenience group and annotation flags do not accept a policy,
-so callers needing title redaction configure the sink directly. Passing `None`
-or an inert policy preserves existing output.
+keyword and applies the policy before workflow-command escaping to every
+emitted group and annotation title, including explicit titles, argv-derived
+group titles, and the bounded fallback annotation label. Mirrored child output
+remains unchanged. The convenience group and annotation flags do not accept a
+policy, so callers needing title redaction configure the sink directly. Passing
+`None` or an inert policy preserves existing output.
 
 Tracing keeps its historical tag-derived project label unless the configured
 policy changes the `project` tag. When that tag is redacted and the event has a
