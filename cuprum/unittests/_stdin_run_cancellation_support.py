@@ -205,17 +205,20 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
     opens the same window, and is still the thing a cancellation interrupts;
     only the writer's head start is arranged.
 
-    Both modules that can settle a writer are patched. A run reaches exactly
-    one of them — the direct path settles from the orchestration module, the
-    streamed path from the run loop — and patching both leaves the signal
-    independent of which path the configured run took.
+    The settle is patched where the name is *resolved*, not where it is
+    defined: ``_subprocess_stream_run`` imports it, so that module's global is
+    what both of its run loops call. Both paths are covered by the one patch —
+    the direct path settles from ``_run_subprocess_without_streams`` and the
+    streamed path from ``_settle_group_and_reconcile_consumers``, and the two
+    live in the same module. ``_line_stream.drain`` resolves the name too, but
+    only for ``lines()``, which no caller here uses; patching it would add a
+    binding no exercised call path reads.
 
     Returns
     -------
     _CancellationProbe
         The events, records, and handles the patched seams fill in.
     """
-    import cuprum._subprocess_execution as execution_module
     import cuprum._subprocess_stdin_stream as stream_module
     import cuprum._subprocess_stream_run as stream_run_module
     from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
@@ -244,7 +247,6 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
         probe.settling.set()
         await _settle_stdin_writer(stdin_task)
 
-    monkeypatch.setattr(execution_module, "_settle_stdin_writer", tracked_settle)
     monkeypatch.setattr(stream_run_module, "_settle_stdin_writer", tracked_settle)
     return probe
 
