@@ -25,10 +25,11 @@ from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._process_handle import RunningCommand
 from cuprum._process_handle.tasks import _HandleRun
 from cuprum._sink_lifecycle import _SinkBracket
+from cuprum._stdio_plan import _resolve_stdio
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_spawn import _SubprocessExecution
 from cuprum._subprocess_wait_types import _RunTaskOwnership
-from cuprum.sh import ExecutionContext
+from cuprum.sh import ExecutionContext, RunOutputOptions
 from cuprum.unittests._signal_statuses import _KILLED, _TERMINATED
 from tests.helpers.catalogue import python_builder
 
@@ -324,7 +325,7 @@ def _handle(
         sink_session=None,
         timeout=None,
         observation=observation,
-        stdin_data=None,
+        stdio=_resolve_stdio(None, RunOutputOptions()),
     )
     ownership = _RunTaskOwnership(
         stdin_task=None,

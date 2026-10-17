@@ -270,38 +270,31 @@ def _record_fallback_stdio(monkeypatch: pytest.MonkeyPatch) -> dict[str, int | N
     observed: dict[str, int | None] = {}
     real_spawn = _wait4_spawn.asyncio.create_subprocess_exec
 
-    async def _record(
-        *argv: str,
-        stdin: int | None = None,
-        stdout: int | None = None,
-        stderr: int | None = None,
-        env: cabc.Mapping[str, str] | None = None,
-        cwd: str | None = None,
-        start_new_session: bool = False,
-    ) -> asyncio.subprocess.Process:
+    async def _record(*argv: object, **kwargs: object) -> object:
         """Record the stdio the fallback was handed, then spawn for real.
 
-        The keywords are spelled out rather than taken as ``**kwargs``: a
-        ``**kwargs`` annotation has to describe every parameter the real
-        ``create_subprocess_exec`` accepts, so a narrower one is rejected at the
-        splat and a wider one would have to be ``Any``. Naming the ones the
-        fallback actually sends keeps the recording and the call in agreement.
+        Both the call and its forwarding are casts. Mirroring the transport's
+        own parameters costs one per keyword it accepts — ``stdin``,
+        ``stdout``, ``stderr``, ``env``, ``cwd``, ``start_new_session`` — which
+        is six against a project ceiling of five, so an exact mirror cannot be
+        written at all. This is the same trade as
+        ``_stdio_redirect_support._recording_transport``: the cast is confined
+        to the forwarding call, so every argument still meets the real
+        signature there, and a wrapper that drifted from it would raise rather
+        than record the wrong thing.
 
         Returns
         -------
         asyncio.subprocess.Process
             The process the real spawn produced, so the test can await it.
         """
-        observed.update({"stdin": stdin, "stdout": stdout, "stderr": stderr})
-        return await real_spawn(
-            *argv,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            env=env,
-            cwd=cwd,
-            start_new_session=start_new_session,
-        )
+        observed.update({
+            "stdin": typ.cast("int | None", kwargs.get("stdin")),
+            "stdout": typ.cast("int | None", kwargs.get("stdout")),
+            "stderr": typ.cast("int | None", kwargs.get("stderr")),
+        })
+        spawn = typ.cast("cabc.Callable[..., cabc.Awaitable[object]]", real_spawn)
+        return await spawn(*argv, **kwargs)
 
     monkeypatch.setattr(_wait4_spawn.asyncio, "create_subprocess_exec", _record)
     return observed

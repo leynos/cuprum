@@ -504,7 +504,12 @@ observation when it should be inspected in the parent; the two are alternatives.
 argument, which is where the encoding is applied and a producer is pulled.
 `SafeCmd.lines()` requires stdout to be a pipe for the same reason — there is
 no parent-side stream to iterate when stdout goes to a file — and rejects a
-redirected stdout; use `SafeCmd.run` for that case.
+redirected stdout; use `SafeCmd.run` for that case. `SafeCmd.start()` forces
+capture on, because a handle exists so its caller can inspect the child after
+the fact, and a stream bound to a file or the parent has no parent-side pipe to
+read. It therefore rejects a redirected stdout or stderr as well; use `run()` or
+`run_sync()` when the child's output should land somewhere other than the
+parent.
 
 <!-- tested-example: redirect-stdout-to-a-file -->
 

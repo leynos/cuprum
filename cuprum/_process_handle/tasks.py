@@ -266,7 +266,9 @@ async def _attach_run_tasks(
         if stdin_task is not None:
             started.append(stdin_task)
         consumers = _spawn_stream_consumers(process, execution, spawn.spawn_context)
-        started.extend(consumers)
+        # A redirected stream gets no consumer and holds ``None`` in its slot,
+        # so only the tasks actually started are handed to the reclaim path.
+        started.extend(consumer for consumer in consumers if consumer is not None)
     except BaseException:
         await _detach_run_tasks(started)
         raise

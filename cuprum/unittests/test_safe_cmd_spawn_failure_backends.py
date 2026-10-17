@@ -31,7 +31,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum.sh import SafeCmd, StdioTarget
 from cuprum.unittests._stdio_redirect_support import (
     _WRITE_STDOUT,
@@ -146,10 +146,10 @@ def refusing_backend_spawn(
         # Read from the module at call time, so this selects the failure for
         # this case without rebinding the import.
         monkeypatch.setattr(
-            _wait4_process, "_spawn_popen", _refusing_entry(reached, "wait4")
+            _wait4_spawn, "_spawn_popen", _refusing_entry(reached, "wait4")
         )
         monkeypatch.setattr(
-            _wait4_process.asyncio,
+            _wait4_spawn.asyncio,
             "create_subprocess_exec",
             _trapping_entry("asyncio"),
         )
@@ -158,14 +158,14 @@ def refusing_backend_spawn(
         # dispatch itself would replace the branch under test. The trap is what
         # reports if this patch ever stops taking effect.
         monkeypatch.setattr(
-            _wait4_process, "wait4_resource_measurement_available", lambda: False
+            _wait4_spawn, "wait4_resource_measurement_available", lambda: False
         )
         monkeypatch.setattr(
-            _wait4_process.asyncio,
+            _wait4_spawn.asyncio,
             "create_subprocess_exec",
             _refusing_entry(reached, "asyncio"),
         )
-        monkeypatch.setattr(_wait4_process, "_spawn_popen", _trapping_entry("wait4"))
+        monkeypatch.setattr(_wait4_spawn, "_spawn_popen", _trapping_entry("wait4"))
     return _BackendTraversal(request.param, reached)
 
 

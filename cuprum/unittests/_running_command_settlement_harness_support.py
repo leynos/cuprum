@@ -242,7 +242,11 @@ class _SettlementHarness:
             settling = handle._settlement._task
             if settling is not None:
                 tasks.append(settling)
-            tasks.extend(handle._run.ownership.consumers)
+            tasks.extend(
+                consumer
+                for consumer in handle._run.ownership.consumers
+                if consumer is not None
+            )
         for task in tasks:
             task.cancel()
         self._drive(asyncio.gather(*tasks, return_exceptions=True))

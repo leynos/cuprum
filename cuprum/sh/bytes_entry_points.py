@@ -15,12 +15,14 @@ unchanged, and each method still resolves as an ordinary bound method.
 This module deliberately omits ``from __future__ import annotations``, for the
 same reason ``safe_cmd`` does: the methods are public signatures that
 ``cuprum.sh`` introspects with ``typing.get_type_hints``, so they are evaluated
-eagerly. Nothing here names ``SafeCmd`` in an annotation — the methods' own
-types are options, a result, and a context — so the mixin needs no import of
-the class that inherits it, and no cycle exists to break.
+eagerly. No annotation here names ``SafeCmd``; each method reaches the run
+helpers by casting ``self`` to it, mirroring ``_OwnedStart.start``. The type
+checker needs the name, so the import sits under ``TYPE_CHECKING`` and costs
+nothing at run time — which is also what keeps the cycle out.
 """
 
 import asyncio
+import typing as typ
 
 from cuprum._bytes_run import (
     _bytes_output,
@@ -30,9 +32,16 @@ from cuprum._bytes_run import (
 from cuprum._command_internals import _ExecutionState, _run_prepared_command
 from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._subprocess_context import _resolve_timeout
-from cuprum.sh.execution import ExecutionContext, StdinInput
+from cuprum.sh.execution import (
+    ExecutionContext,
+    StdinSource,
+    _resolve_stdin_source,
+)
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import BytesCommandResult
+
+if typ.TYPE_CHECKING:
+    from cuprum.sh import SafeCmd
 
 __all__ = ["_BytesEntryPoints"]
 
@@ -53,7 +62,7 @@ class _BytesEntryPoints:
         output: RunOutputOptions | None = None,
         timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> BytesCommandResult:
         """Execute the command, capturing its output as bytes.
 
@@ -79,8 +88,10 @@ class _BytesEntryPoints:
             timeout in ``context``.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source, as for :meth:`run`: a complete payload, a
+            producer pulled one chunk at a time, or ``None`` to inherit the
+            parent's stdin.
 
         Returns
         -------
@@ -99,17 +110,23 @@ class _BytesEntryPoints:
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
         out = _bytes_output(output)
         _validate_bytes_output(out)
         ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        # ``Self`` narrows to the mixin, not to the ``SafeCmd`` that inherits
+        # it, so the run helpers below are handed the concrete command. This
+        # mirrors ``_OwnedStart.start``, which casts for the same reason.
+        cmd = typ.cast("SafeCmd", self)
+        _enforce_allowlist(cmd)
+        stdin_data = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return _require_bytes_command_result(
             await _run_prepared_command(
-                self,
+                cmd,
                 _ExecutionState(
                     context=ctx,
                     output=out,
@@ -126,7 +143,7 @@ class _BytesEntryPoints:
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> BytesCommandResult:
         """Execute the command synchronously, capturing its output as bytes.
 
@@ -141,8 +158,10 @@ class _BytesEntryPoints:
             Maximum execution time in seconds.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source, as for :meth:`run`: a complete payload, a
+            producer pulled one chunk at a time, or ``None`` to inherit the
+            parent's stdin.
 
         Returns
         -------
@@ -161,6 +180,8 @@ class _BytesEntryPoints:
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
         return asyncio.run(

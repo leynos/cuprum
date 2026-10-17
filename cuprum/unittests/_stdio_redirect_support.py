@@ -22,7 +22,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _wait4_process
+from cuprum import _wait4_spawn
 from cuprum.sh import RunOutputOptions, StdioTarget
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -31,7 +31,7 @@ if typ.TYPE_CHECKING:
     import subprocess
     from pathlib import Path
 
-    from cuprum._wait4_process import DirectProcessConfig
+    from cuprum._wait4_spawn import DirectProcessConfig
     from cuprum.sh import CommandResult, SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
@@ -150,22 +150,22 @@ def spawn_backend(
     """
     reached: list[str] = []
     if request.param == "wait4":
-        if not _wait4_process.wait4_resource_measurement_available():
+        if not _wait4_spawn.wait4_resource_measurement_available():
             pytest.skip("os.wait4 and waitstatus_to_exitcode are unavailable here")
     else:
         # ``spawn_direct_process`` reads this at call time, so patching it
         # selects the fallback for this test alone. Patching the dispatch
         # itself would replace the branch under test.
         monkeypatch.setattr(
-            _wait4_process, "wait4_resource_measurement_available", lambda: False
+            _wait4_spawn, "wait4_resource_measurement_available", lambda: False
         )
     monkeypatch.setattr(
-        _wait4_process,
+        _wait4_spawn,
         "_spawn_popen",
         _recording_entry(reached, "wait4", request.param),
     )
     monkeypatch.setattr(
-        _wait4_process.asyncio,
+        _wait4_spawn.asyncio,
         "create_subprocess_exec",
         _recording_transport(reached, "asyncio", request.param),
     )
@@ -198,7 +198,7 @@ def _recording_entry(
         The entry point, recording on the way through, or refusing when it
         should not have been reached at all.
     """
-    original = _wait4_process._spawn_popen
+    original = _wait4_spawn._spawn_popen
 
     def record(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
         """Note the wait4 route, then spawn or refuse."""
@@ -242,7 +242,7 @@ def _recording_transport(
         The transport, recording on the way through, or refusing when it
         should not have been reached at all.
     """
-    original = _wait4_process.asyncio.create_subprocess_exec
+    original = _wait4_spawn.asyncio.create_subprocess_exec
     # The cast exists only because ``kwargs`` is typed as ``object``. It is
     # applied at the call rather than widening the callee's annotation: the
     # real transport keeps its own signature, and every forwarded value is
@@ -287,7 +287,7 @@ def refusing_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     # ``spawn_direct_process`` is read from the module at call time, so patching
     # the module attribute selects the failure without rebinding the import.
-    monkeypatch.setattr(_wait4_process, "spawn_direct_process", _refuse_to_spawn)
+    monkeypatch.setattr(_wait4_spawn, "spawn_direct_process", _refuse_to_spawn)
 
 
 @pytest.fixture

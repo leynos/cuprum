@@ -14,6 +14,8 @@ pass against a stale copy; ``is`` fails, because a copy is a different object.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 import cuprum._stdio_ownership as stdio_ownership
@@ -25,6 +27,9 @@ import cuprum.sh.safe_cmd as safe_cmd_module
 from cuprum.adapters import _logging_projection as logging_projection
 from cuprum.adapters import logging_adapter
 from cuprum.sh import bytes_entry_points, line_options, pipeline_output
+
+if typ.TYPE_CHECKING:
+    from types import ModuleType
 
 # (old path, new home, name) for every re-exported helper.
 _REEXPORTS = [
@@ -50,8 +55,8 @@ _REEXPORTS = [
     ids=[f"{home.__name__}.{name}" for _, home, name in _REEXPORTS],
 )
 def test_split_reexports_the_moved_object(
-    old_path: object,
-    new_home: object,
+    old_path: ModuleType,
+    new_home: ModuleType,
     name: str,
 ) -> None:
     """The old path binds the same object the new module defines."""

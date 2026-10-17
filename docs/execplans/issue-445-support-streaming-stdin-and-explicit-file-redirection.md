@@ -2181,6 +2181,196 @@ likelihood, and mitigation.
   they arrange. Only `_subprocess_stream_run` imports the name, and both of its
   run loops call that global, so the one patch covers both routes.
 
+- [x] 2026-10-17: the rebase also left nine `ty` diagnostics, and none of them
+  was cosmetic. Three classes, each a merge artefact rather than a defect the
+  branch introduced:
+
+  1. **The redirect suites patched a module that never owned the spawn.**
+     `_stdio_redirect_support.py` and `test_safe_cmd_spawn_failure_backends.py`
+     read and patched `_spawn_popen`, `spawn_direct_process`,
+     `DirectProcessConfig`, and `wait4_resource_measurement_available` on
+     `cuprum._wait4_process`. Main's `8c78a5b77` (PR #583) moved all four into
+     the new `cuprum._wait4_spawn`, and `_wait4_process` re-exports none of
+     them. `cuprum._subprocess_spawn` reaches the spawn as
+     `_wait4_spawn.spawn_direct_process(...)` — a module-attribute read, not a
+     from-import — so the fixtures' patches were *silent no-ops* as well as
+     untyped: the availability patch did not select the asyncio arm, and the
+     `spawn_direct_process` patch did not make the spawn fail. Every seam is
+     now repointed at `_wait4_spawn`, which is where the dispatch reads them.
+
+  2. **A redirected stream leaves a `None` in its consumer slot.** `main`'s
+     `_ConsumerPair` is `tuple[_Consumer, _Consumer]` with
+     `_Consumer = _StreamConsumerTask | None`, so `list[Task].extend(consumers)`
+     does not type-check, and `_detach_run_tasks` calls `.cancel()` on every
+     entry it is handed. Both the production extend and the settlement
+     harness's now filter `None`; the *result* slots keep their positions
+     through `_consumer_awaitable`, which is the part that must not be
+     filtered. The handle path is not reachable with a `None` slot today —
+     `_with_capture` forces capture on for `start()`, so its streams are
+     always pipes, and a redirect beside capture is rejected at construction.
+     The filter is therefore type-correctness plus a total reclaim path: a
+     future change to what a handle may redirect must not turn attaching's
+     cleanup into an `AttributeError`.
+
+  3. **The bytes entry points disagreed with their own documentation about
+     `stdin`.** `docs/users-guide.md` says `run_bytes`/`run_bytes_sync` take
+     "the same `stdin` arguments" as `run`, and `run` is `StdinSource | None`,
+     but both byte entry points still declared `StdinInput | None` and called
+     `stdin.resolve(ctx)` — which a `StdinStream` does not have. They now
+     resolve through the shared `_resolve_stdin_source`, so a streaming
+     producer reaches a bytes run instead of raising `AttributeError`. The
+     widening is additive: `origin/main` and the pre-split branch both declared
+     `StdinInput | None`, and `Pipeline.run_bytes` has no `stdin` at all.
+
+  Two smaller typing repairs came with them: the seam test's `object`-annotated
+  fixture parameters are now `ModuleType` (it reads `.__name__` in its failure
+  message), and `_running_command_support` builds its execution bundle with a
+  resolved `stdio` rather than the `stdin_data` field the rebase removed.
+
+- [x] 2026-10-17: the three verification probes that back this branch's claims
+  were re-run against the rebased tree, and the third found a contract gap that
+  is now documented and pinned. (1) Streaming and payload stdin reach
+  `run_bytes` and `run_bytes_sync` against a real child: a payload run and a
+  `StdinStream` run — sync and async — each produced the exact bytes and exit
+  zero. (2) A producer that raises mid-stream still fails the run with
+  `StdinSourceError` rather than a bare transport error. (3) `SafeCmd.start()`
+  cannot be combined with a redirected stream at all: `_with_capture` forces
+  capture on for every handle, and `RunOutputOptions.__post_init__`
+  re-validates, so a redirect beside capture is refused with "stdout cannot be
+  redirected to 'inherit' while capture or echo is enabled". That refusal is
+  inherited from `main` (`owned_start.py` is byte-identical to it, last changed
+  by PR #437) and is *correct*: a handle exists so its caller can inspect the
+  child's streams, and a redirected stream has no parent-side pipe to inspect.
+  It is now stated in `docs/users-guide.md` beside the `lines()` restriction,
+  and pinned by `test_start_rejects_a_redirected_stream` with one row per
+  stream, so the guide's claim cannot drift from the code. The consumer-slot
+  `None` filter on this path is therefore type-correctness and a total reclaim
+  path, not a live-bug fix; the Progress entry above says so.
+
+- [x] 2026-10-17: the commit gate caught two Pylint `design` findings on test
+  code the rebase's earlier repairs had touched, and both were genuine calls
+  for a signature change rather than something to suppress:
+
+  1. **`test_a_byte_only_stream_is_never_encoded` had five positional
+     parameters** against a ceiling of four. Nothing about the order is
+     meaningful — the four after the builder are all pytest-injected — so every
+     parameter after `python_builder` is now keyword-only. Pytest binds the
+     fixture by name either way, and the signature now says what the call sites
+     already implied.
+
+  2. **`_record_fallback_stdio`'s `_record` replacement mirrored six of the
+     transport's keywords** against a ceiling of five. Mirroring cannot satisfy
+     both limits: the function needs `argv` plus the six keywords, so the
+     honest options are a looser signature or a split that only moves the
+     count. It now takes `*argv: object, **kwargs: object` and casts the
+     forwarding call, which is exactly the trade
+     `_stdio_redirect_support._recording_transport` already makes and explains
+     — the cast is confined to the call, so every argument still meets the
+     real signature there. The three values the test asserts on are read back
+     with narrow casts of their own, so the recorder cannot start recording
+     the wrong shape silently.
+
+  A first attempt at the second held *both* the old tail and the new body, so
+  the call was recorded twice and the dead statements named keywords that no
+  longer existed. Ruff's `F821` set caught it before any test ran; the lesson
+  is that a body replacement has to delete the tail, not just stop before it.
+
+- [x] 2026-10-17: the eleven `test_executable_binding_*` failures were a real
+  regression this branch introduced, not gate noise. `d8c7d9dd0` ("Resolve
+  stdio plans at spawn…") changed the direct spawn's argument vector from
+  `(observation.argv0, *cmd.argv)` to `cmd.argv_with_program`, and justified it
+  in the docstring with a premise that is false: `argv_with_program` returns
+  `(str(self.program), *self.argv)`, and `str(self.program)` is the *catalogued
+  logical name*, not the bound executable. The binding lives only in
+  `observation.resolved_path`, which `argv0` is the one place that turns back
+  into the spawn vector. So the rewrite discarded the binding at exactly the
+  point it had to be applied — bare names then raised `FileNotFoundError`, and
+  catalogued programs that did exist ran the impostor.
+
+  The pipeline spawn site (`cuprum/_pipeline_spawn.py`) still used
+  `observation.argv0` throughout, which is why only the direct-command binding
+  tests failed and the pipeline ones did not: one spawn site had been rewritten
+  and the other had not, so the divergence was between two copies of the same
+  rule rather than between a rule and its tests.
+
+  Fixed by restoring `(observation.argv0, *cmd.argv)` and rewriting the
+  docstring to state what the two accessors actually differ on. That is the
+  same vector `main` used; no test was changed. Recorded here because the
+  general form is worth keeping: a refactor that replaces an expression with a
+  property *named for a similar concept* needs the property's own definition
+  read first, and the docstring's rationale re-checked against it — the false
+  premise was written into the comment, so review of the code alone would not
+  have shown it.
+
+- [x] 2026-10-17: `make lint` aborted in `python-lint`'s duplication gate at
+  `5280d6fb7` — 13 unsuppressed families plus 6 stale allow entries — after the
+  rebase onto `main` and the five module splits the 400-line ceiling forced.
+  Before adjudicating, the gate's own baseline was established rather than
+  assumed: `git archive origin/main` extracted to `/tmp/cuprum-main-baseline`
+  and its gate exits 0 with "61 allowed by reasoned exceptions". This branch
+  reports the same 61 families with different *membership*, so the failure is
+  branch-caused, not a noisy `main` baseline. (This mattered: the earlier
+  ratchet lesson — a noisy `main` run is the bar — would have been the wrong
+  reading of a scan that simply found what `main` also finds.)
+
+  The partition was then reproduced offline from the raw `nose query` JSON
+  (`/tmp/nose-branch-full.json`, `/tmp/dup_partition.py`, run under
+  `uv run --no-project --python 3.14` because `PurePosixPath.full_match` needs
+  3.13+), so each family and stale entry could be adjudicated by reading source
+  instead of re-running the gate. The gate's `allow` command can only *append*,
+  so widening, re-keying and removal are direct edits to `pyproject.toml`; a
+  tomlkit parse/`dumps` round trip was rejected because it reflows the whole
+  list (blank line inserted before every table), so the edits are text-level
+  splices on the `[[tool.duplication_gate.allow]]` blocks.
+
+  Dispositions, each source-confirmed:
+
+  1. **Widened** the seven-module `if <field> is None: return None` idiom to
+     nine, adding `_subprocess_rendezvous.py` (writer-outcome guard) and
+     `sh/execution.py` (stdin-payload guard).
+  2. **Widened** the precedence idiom from two modules to three, adding
+     `_stream_drain.py`'s `if task is not None: return task`.
+  3. **Widened** the 28-module `TYPE_CHECKING` family to thirty with
+     `_subprocess_stream_exit.py` and `_stdio_ownership.py`, both new modules
+     this branch's splits created.
+  4. **Widened** the exception-constructor unit entry to a two-key members
+     entry, adding `_subprocess_stdin_stream.py::__init__` — this is exactly why
+     its unit key had gone stale.
+  5. **Re-keyed** `run_bytes_sync` from `safe_cmd.py` to
+     `bytes_entry_points.py`, where the split moved it; the duplication moved
+     with it, so re-keying, not deletion.
+  6. **Added** eight entries: three import-prologue families
+     (`_command_internals ~ _pipeline_observation`,
+     `_pipeline_finalize ~ _command_finalization`,
+     `_command_internals ~ _subprocess_execution`), the fragment-level
+     `asyncio.run` tail (`bytes_entry_points ~ pipeline ~ safe_cmd`, keyed by
+     whole module because fragments carry no `name`), the two named
+     `sh/stdio.py` pairs (`path_value ~ fd_value`, `pipe ~ inherit`), the
+     `str(...) if ... else None` pair (`_cwd_arg ~ _rendered_value`), and the
+     two-line conjunction guard (`_rusage ~ stdio_rules`).
+  7. **Removed** four stale entries after reading the current source for each:
+     `_support.py::_event_common_fields ~ ::_verbatim_fields` (`main`'s family
+     no longer exists — `_event_common_fields` now delegates to
+     `_optional_common_fields` and the field tuple was rewritten);
+     `_subprocess_stdin.py ~ tracing_adapter.py` (neither module carries the
+     paired guard any more); and
+     `_subprocess_stream_run.py ~ _process_handle/coordinator.py` (both still
+     define `_settle_owned_group_before_draining`, but with different
+     parameters — `execution` vs `run` — and different bodies, so `main`'s
+     25.2 family is gone). None was deleted on the scan's word alone.
+
+  The offline partition then reports
+  `families=61 blocking=0 allowed=61 stale=0`, and `make duplication` confirms
+  it on the real detector: "duplication gate passed; 61 allowed by reasoned
+  exceptions".
+
+  Lesson worth keeping: a 400-line-ceiling split does not only move code, it
+  moves *duplication families* — membership, file keys, and even which entries
+  are stale. A gate whose only maintenance interface is append leaves stale
+  entries and new families to be reconciled by hand, and the reconciliation has
+  to be done by reading the source, because "the scan did not report it" is not
+  evidence that the duplication is gone.
+
 ## Surprises & discoveries
 
 - Observation: **a gate log that records its head at the start is not enough

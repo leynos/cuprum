@@ -49,7 +49,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamConsumerTask
+    from cuprum._subprocess_wait_types import _ConsumerPair, _StreamConsumerTask
     from cuprum.lines import LineStreamName, _LineHookOutcome
     from cuprum.sinks.base import OutputSession
 
@@ -175,7 +175,7 @@ def _spawn_stream_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     spawn_context: _StreamConsumerSpawnContext,
-) -> tuple[_StreamConsumerTask, _StreamConsumerTask]:
+) -> _ConsumerPair:
     """Spawn a consumer for each stream cuprum holds a pipe for.
 
     Each consumer drains into its collector from ``spawn_context``:
@@ -194,8 +194,9 @@ def _spawn_stream_consumers(
 
     Returns
     -------
-    tuple[_StreamConsumerTask, _StreamConsumerTask]
-        The stdout and stderr consumer tasks, in that order.
+    _ConsumerPair
+        The stdout and stderr consumer tasks, in that order. A slot is
+        ``None`` for a stream cuprum does not pipe.
     """
     pid = spawn_context.pid
     stream_config = spawn_context.stream_config

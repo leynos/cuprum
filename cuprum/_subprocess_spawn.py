@@ -239,12 +239,13 @@ async def _spawn_subprocess(
     object, from a borrowed descriptor. Naming the pipes explicitly is what
     makes both backends agree.
 
-    The argument vector is the run's own ``argv_with_program`` rather than a
-    rebuilt ``(argv0, *argv)`` pair, because an executable binding must reach the
-    child as its ``argv[0]`` as well as being what is executed: the binding is
-    resolved onto the command before the run starts, so one source for the vector
-    is what keeps the file that runs and the name it is told it has from
-    disagreeing.
+    The first element is the observation's ``argv0`` rather than the command's
+    catalogue name, so an executable binding reaches the child as its
+    ``argv[0]`` as well as being the file that is executed. ``argv_with_program``
+    cannot serve here: it always starts with ``str(program)``, which is the name
+    the allowlist catalogued, not the path the binding supplied. The remaining
+    arguments still come from the command, so the vector is exactly the one the
+    observation describes.
 
     Returns
     -------
@@ -270,7 +271,7 @@ async def _spawn_subprocess(
         _flush_borrowed_stdio(execution)
         return await _wait4_spawn.spawn_direct_process(
             _wait4_spawn.DirectProcessConfig(
-                argv=execution.cmd.argv_with_program,
+                argv=(execution.observation.argv0, *execution.cmd.argv),
                 stdin=_stdin_stdio(execution.stdio.stdin),
                 stdout=_output_stdio(
                     execution.stdio.stdout,

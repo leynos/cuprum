@@ -129,6 +129,7 @@ _BYTE_ONLY_PRODUCERS = (
 @pytest.mark.parametrize("values", _BYTE_ONLY_PRODUCERS)
 def test_a_byte_only_stream_is_never_encoded(
     python_builder: cabc.Callable[..., SafeCmd],
+    *,
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
     encoding: str,
@@ -209,7 +210,7 @@ def test_a_later_text_chunk_still_flushes_the_encoder(
     be. Text arriving *after* raw bytes still builds one, so it still flushes.
 
     The mark lands where the text starts rather than at the front of the
-    stream, and that is the honest expectation rather than an artifact of this
+    stream, and that is the honest expectation rather than an artefact of this
     change: cuprum writes chunks in order and never rewrites a byte it has
     already sent, so a stream mixing raw bytes ahead of text under a
     byte-order-mark codec puts the mark where the first text is encoded. A
