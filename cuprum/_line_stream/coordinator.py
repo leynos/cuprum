@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.drain import _drain_after_exit
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
@@ -275,6 +276,32 @@ async def _coordinate_line_stream(
     result_future.set_result(result)
 
 
+async def _finalize_line_stream_captures(
+    run: _LineStreamRun,
+    stdout_drain: _CapturedDrain,
+    stderr_drain: _CapturedDrain,
+) -> None:
+    """Close the spill files a completed ``lines()`` run still owns.
+
+    ``run()`` closes its handles right after collecting the streams, and the
+    ``lines()`` success path reaches the same place — every consumer has
+    settled and the drain results are in hand — so it owes the same removal.
+    Without this, a ``FileBackedCapture`` would return a record reporting
+    ``owned=True`` for a file that outlives the run, with nothing left to
+    remove it.
+
+    Shielded because the drains are already settled: a cancellation landing
+    between the collect and the close would leave the file on disk while the
+    caller was still about to be handed the result.
+    """
+    await _shielded_cleanup(
+        _finalize_capture_handles(
+            (stdout_drain, stderr_drain),
+            run.tasks.captures,
+        )
+    )
+
+
 async def _run_to_command_result(
     run: _LineStreamRun,
     execution: _SubprocessExecution,
@@ -305,6 +332,7 @@ async def _run_to_command_result(
         stdout_text = stdout_drain.payload
         stderr_text = stderr_drain.payload
         captures = (stdout_drain.capture, stderr_drain.capture)
+        await _finalize_line_stream_captures(run, stdout_drain, stderr_drain)
     except (TimeoutError, _SubprocessTimeoutError) as exc:
         _handle_subprocess_timeout(
             _SubprocessTimeoutContext(
