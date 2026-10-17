@@ -29,6 +29,7 @@ redirected stdout cannot shift stderr's payload into its position.
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 import contextlib
 import logging
 import typing as typ
@@ -238,6 +239,31 @@ def _decode_consumer_result(
     )
 
 
+def _decode_consumer_drains(
+    results: cabc.Sequence[_CapturedDrain | BaseException | None],
+    *,
+    context: _DrainContext,
+) -> _DrainPair:
+    """Decode both settled streams of a completed gather, in stream order.
+
+    A stream cuprum holds no pipe for is still one of two positions: its slot
+    settles to ``None`` and must report *that stream's* empty capture, or a
+    redirected stdout would hand stderr's result to stdout's caller. The two
+    reads are one function so no call site can decode one slot and forget the
+    other, and so the stream indexes stay beside the names they select.
+
+    Returns
+    -------
+    _DrainPair
+        The stdout and stderr results, each the reader's own capture or the
+        empty capture its configured policy owed when no reader ran.
+    """
+    return (
+        _decode_consumer_result(results[0], stream=0, context=context),
+        _decode_consumer_result(results[1], stream=1, context=context),
+    )
+
+
 async def _settle_consumers(
     consumers: tuple[_Consumer, ...],
     *,
@@ -286,6 +312,7 @@ __all__ = [
     "_await_eof_grace",
     "_cancel_pending_consumers",
     "_consumer_awaitable",
+    "_decode_consumer_drains",
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_report_drain_failures",

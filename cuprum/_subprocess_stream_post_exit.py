@@ -7,17 +7,20 @@ from reading a run loop top to bottom.
 
 Every await in this phase can be cancelled and each needs the same aftermath,
 so each one is written to hand its failure to a coordinator rather than to
-repair it locally. Three of them are here:
+repair it locally. Two of them are here:
 
 - :func:`_settle_owned_group_before_draining` terminates a group the run owns,
   because the direct child exiting is not settlement while a descendant still
   holds the write end of the run's pipes.
-- :func:`_wait_for_streamed_process_exit` waits through the deadline path and
-  reconciles every task the run owns when that wait fails.
 - :func:`_await_stdin_writer` waits for the writer that closes the child's
   stdin, which must finish before the consumers are gathered.
 
-``cuprum._subprocess_stream_run`` re-imports all three, and that re-import is
+The third, the exit wait itself, is ``main``'s: it moved to
+``cuprum._subprocess_stream_exit`` while this branch was in flight, and this
+module does not restate it. A second copy here would be a binding no call path
+resolves, and the run module imports the one from the exit module.
+
+``cuprum._subprocess_stream_run`` re-imports both helpers, and that re-import is
 load-bearing rather than cosmetic: the callers of ``_await_stdin_writer`` and
 ``_settle_owned_group_before_draining`` remained behind in the run module, so
 it is *its* globals those callers read. Re-importing keeps the names bound
@@ -33,41 +36,13 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._subprocess_timeout import _handle_stream_timeout
-from cuprum._subprocess_wait import (
-    _drain_context,
-    _reconcile_run_tasks,
-    _wait_for_exit_code_within_timeout,
-)
+from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _DrainPair, _RunTaskOwnership
-
-
-async def _reconcile_shielded(
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-    *,
-    preserve: bool,
-) -> _DrainPair:
-    """Reconcile every task the run owns under one shield."""
-    # The shield is what makes the reconciliation a guarantee: a caller
-    # cancelling now would otherwise abandon the consumers mid-drain and leak
-    # them. *preserve* is the caller's, because the routes disagree about what
-    # the drained output is for — a preserving route hands it to the caller's
-    # ``TimeoutExpired``, and a route re-raising some other error settles
-    # promptly rather than spending the capture grace on output nobody will
-    # read.
-    return await _shielded_cleanup(
-        _reconcile_run_tasks(
-            tasks,
-            _drain_context(execution, tasks, pid, preserve=preserve),
-        )
-    )
+    from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 
 async def _settle_owned_group_before_draining(
@@ -101,43 +76,6 @@ async def _settle_owned_group_before_draining(
     )
 
 
-async def _wait_for_streamed_process_exit(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
-    try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
-        )
-    except TimeoutError as exc:
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_drain, stderr_drain = await _reconcile_shielded(
-            execution,
-            tasks,
-            pid,
-            preserve=True,
-        )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_drain.payload,
-            stderr_text=stderr_drain.payload,
-            timeout=execution.timeout,
-        )
-    except BaseException:
-        # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation. Do not capture
-        # stream text while another error propagates, but settle every task
-        # before re-raising the original failure unchanged.
-        await _reconcile_shielded(execution, tasks, pid, preserve=False)
-        raise
-
-
 async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     """Await the stdin writer, letting a failure reach the run's cleanup.
 
@@ -153,15 +91,23 @@ async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     boundary is woken only after the writer has finished dying, including the
     close grace it bounds. The shield returns the cancellation at once instead.
     It is a latency improvement and *not* what makes the run terminate: the
-    writer's bounded close does that (ADR 021 records the measurements).
+    writer's own bounded settle does that (ADR 021 records the measurements).
+
+    The shielded await is a *settle* rather than a bare await of the task, and
+    that is what supplies the bound the shield only protects. The writer's
+    ``_close_stdin`` grace bounds a write already in flight, but it is reached
+    only once the producer has finished producing; a producer parked in
+    ``anext`` never gets there, so a bare await would sit on this line with the
+    child already reaped and outlast the run's own deadline. The settle window
+    plus the cancel it falls back to is what makes the wait terminate in that
+    case, and it reclaims the task rather than leaving it parked.
     """
     if tasks.stdin_task is None:
         return
-    await asyncio.shield(tasks.stdin_task)
+    await asyncio.shield(_settle_stdin_writer(tasks.stdin_task))
 
 
 __all__ = [
     "_await_stdin_writer",
     "_settle_owned_group_before_draining",
-    "_wait_for_streamed_process_exit",
 ]

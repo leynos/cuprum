@@ -18,8 +18,10 @@ import typing as typ
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
+from cuprum.capture_policy import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
+from cuprum.sh._capture_options import _resolved_capture as _resolved_capture
 from cuprum.sh._convenience_sink import (
     _validate_convenience_flags,
     synthesize_sink,
@@ -350,13 +352,9 @@ class RunOutputOptions:
         >>> RunOutputOptions(capture=False, capture_stderr=True).resolved_capture
         (None, FullCapture())
         """
-        # The declared field types stay ``CapturePolicy | bool | None`` because
-        # the caller may spell a stream as the shorthand bool; only the
-        # constructor's resolution narrows them, which the declared types
-        # cannot express to a type checker.
-        return (  # ty: ignore[invalid-return-type]
-            self.capture_stdout,
-            self.capture_stderr,
+        return _resolved_capture(
+            capture_stdout=self.capture_stdout,
+            capture_stderr=self.capture_stderr,
         )
 
     @property
@@ -383,7 +381,7 @@ class RunOutputOptions:
         >>> RunOutputOptions(capture=False, capture_stderr=True).captures_any_stream
         True
         """
-        return self.capture_stdout is not None or self.capture_stderr is not None
+        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:

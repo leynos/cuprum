@@ -1259,6 +1259,7 @@ The split changed no public surface. `_subprocess_stdin_stream.py` imports
 `__all__`, so no importer outside the module ever saw them. The maturin wheel
 snapshot gained exactly one line for the new module, which is the same
 one-line-per-module shape every other split here records.
+
 ## Addendum (2026-10-14): the deprecated output spellings leave `cuprum/sh/output.py`
 
 `cuprum/sh/output.py` reached 379 lines of the 400-line ceiling the 2026-09-25
@@ -1289,9 +1290,9 @@ No public API changes: `cuprum/sh/__init__.py` re-exports every moved name with
 the same object identity, so `cuprum.sh.IOOptions` and
 `cuprum.sh._resolve_pipeline_output` resolve as before and `cuprum/__init__.py`
 is untouched. `cuprum/sh/pipeline.py` imports the flags from
-`cuprum.sh.pipeline_output` and `IOOptions` comes from
-`cuprum.sh._deprecated`, which are the only in-package callers. No module in
-this tree needs a module-size suppression.
+`cuprum.sh.pipeline_output` and `IOOptions` comes from `cuprum.sh._deprecated`,
+which are the only in-package callers. No module in this tree needs a
+module-size suppression.
 
 ## Addendum (2026-10-14): the convenience-sink machinery leaves `cuprum/sh/output.py`
 

@@ -668,38 +668,51 @@ exclude = ["unittests/**"]
 
 [[tool.duplication_gate.allow]]
 members = [
+    "cuprum/_pipeline_types.py",
     "cuprum/_pipeline_finalize.py",
+    "cuprum/_pipeline_results.py",
+    "cuprum/_subprocess_spawn.py",
+    "cuprum/_command_internals.py",
+    "cuprum/_pipeline_collect.py",
+    "cuprum/_pipeline_records.py",
+    "cuprum/_subprocess_execution.py",
+    "cuprum/_line_stream/coordinator.py",
+    "cuprum/_subprocess_stream_run.py",
     "cuprum/_line_callbacks.py",
     "cuprum/_line_iteration.py",
-    "cuprum/_pipeline_collect.py",
     "cuprum/_pipeline_native_pump_types.py",
-    "cuprum/_pipeline_records.py",
-    "cuprum/_pipeline_results.py",
-    "cuprum/_pipeline_types.py",
     "cuprum/_process_handle/state.py",
+    "cuprum/_stream_drain.py",
     "cuprum/_subprocess_context.py",
-    "cuprum/_subprocess_stream_run.py",
+    "cuprum/_subprocess_streams.py",
+    "cuprum/_subprocess_wait_types.py",
     "cuprum/_line_stream/telemetry.py",
     "cuprum/_result_types.py",
-    "cuprum/_subprocess_streams.py",
-    "cuprum/_subprocess_stream_exit.py",
-    "cuprum/_subprocess_wait.py",
+    "cuprum/_stream_config.py",
     "cuprum/context/registration.py",
     "cuprum/_line_stream/line_queue.py",
     "cuprum/_observability.py",
-    "cuprum/_stdio_ownership.py",
-    "cuprum/_stream_drain.py",
-    "cuprum/_stream_line_consumer.py",
-    "cuprum/_subprocess_spawn.py",
-    "cuprum/_command_prepare.py",
-    "cuprum/_line_stream/spawn.py",
     "cuprum/_pipeline_config.py",
-    "cuprum/_pipeline_spawn.py",
+    "cuprum/_stdio_ownership.py",
+    "cuprum/_command_prepare.py",
+    "cuprum/_pipeline_stage_streams.py",
+    "cuprum/_process_handle/coordinator.py",
+    "cuprum/_result_assembly.py",
+    "cuprum/_stream_drain_finish.py",
+    "cuprum/_stream_line_consumer.py",
     "cuprum/adapters/pump_metrics.py",
     "cuprum/context/_scope.py",
     "cuprum/events.py",
 ]
-reason = "Thirty modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match every key of an entry to be silenced. Widened from twenty-eight to thirty as this branch's module splits added `_subprocess_stream_exit.py` and `_stdio_ownership.py` to the family `main` already reported."
+
+reason = "Thirty-five modules whose `if typ.TYPE_CHECKING:` block repeats. The membership is the rebased tree's, not either parent's: `main` had widened it to thirty while this branch was in flight, the branch's own splits added eight modules, and two modules `main` had carried stopped matching the span once the rebased imports changed their shape. The entry names what the detector reports here rather than what either history said. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_subprocess_stream_run.py",
+    "cuprum/_subprocess_stream_exit.py",
+]
+reason = "Two halves of one split: the run module owns the two run loops and the post-exit collection, the exit module owns the exit wait they drive. Both therefore import the same run-machinery prologue — `_handle_stream_timeout` and the `_subprocess_wait` names — because the split partitioned one module's body, not one module's dependencies. Every name in the run module's block is still called there, so neither copy is dead; collapsing them would mean one module importing the other for a re-import it already binds locally, which is what `main`'s split deliberately avoided. The import declarations are that module's declared dependency surface, for the reason the import-family entries above record."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -724,10 +737,23 @@ reason = "The package's public surface and an adapter's import of the same four 
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_line_stream/__init__.py",
-    "cuprum/_line_stream/coordinator.py",
+    "cuprum/_capture_accumulators.py",
+    "cuprum/_capture_file.py",
+    "cuprum/capture_observation.py",
+    "cuprum/echo_observation.py",
 ]
-reason = "A package re-export and its own coordinator importing the same submodule names. The `__init__` exists to re-export them; a coordinator that took them from the package would import itself."
+reason = "One per-channel reporter body, over each channel's own event type. The overlap is the hook-invocation and hook-result-report shape: `_invoke_capture_hook ~ _invoke_echo_hook`, one `__all__` tail, and one string `ContextVar` declaration whose channel name differs only in the word. Each channel's log action, `extra` keys, and event fields are its own and separately observable API, so a shared emitter would need a mode flag over which vocabulary to read and which log record to write. The `ContextVar` name is a diagnostic identity: two channels sharing one variable would silently merge their hooks. The registration handles are already shared — both subclass `_TokenTupleRegistration` — so only the emission text remains here."
+
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_pipeline_results.py", "cuprum/_subprocess_execution.py"]
+reason = "Two modules importing the same four result-helper names. Import declarations cannot be factored into a shared helper, for the reason the import-family entries above record: each module binds the names it uses into its own namespace, and the overlap is the prologue, not an operation. `_subprocess_execution` assembles a single command's result, `_pipeline_results` a stage's; their bodies diverge immediately below the import."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/sh/output.py::captures_any_stream",
+    "cuprum/_pipeline_config.py::captures_any_stream",
+]
+reason = "Two properties that now delegate to the same predicate and so read almost identically. Both bodies call `cuprum.capture_policy.captures_any_stream`, which is where the reading lives; what the detector still matches is the two-line docstring lead-in plus that one call, and the two docstrings deliberately differ because one documents a public options property and the other a private pipeline configuration. Deleting either property to leave one would put a `sh` type on an internal pipeline class or the reverse, so the delegation is the smallest shared form."
 
 # --- Parallel structures -------------------------------------------------
 #
@@ -779,11 +805,12 @@ reason = "Two tar builders that share a docstring skeleton and a boolean-flag no
 
 [[tool.duplication_gate.allow]]
 members = [
+    "cuprum/capture_observation.py::_discard_capture_hook_result",
     "cuprum/echo_observation.py::_discard_echo_hook_result",
     "cuprum/control_observation.py::_discard_hook_result",
     "cuprum/stream_observation.py::_discard_hook_result",
 ]
-reason = "Three hook-result reporters, one per observation channel. Each logs the channel's own event fields (`event.stream` against `event.operation`) under its own log action, and the family value has already fallen from the shared shape alone. Merging them would couple three channels whose log records are separately observable API. Widened after `main` added the control channel to the family."
+reason = "Four hook-result reporters, one per observation channel. Each logs the channel's own event fields (`event.stream` against `event.operation`) under its own log action, and the family value has already fallen from the shared shape alone. Merging them would couple four channels whose log records are separately observable API. Widened on this branch for the new capture channel, and earlier for the control channel `main` added."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -1042,14 +1069,6 @@ reason = "`if <field> is None: return` over an observation (three times, in thre
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_command_internals.py", "cuprum/_pipeline_observation.py"]
 reason = "Two modules whose import prologue repeats: the same five-name `from cuprum._observability import (...)` re-import, followed by the same `_pipeline_types` and `_subprocess_context` imports. Import declarations cannot be factored into a shared helper — re-importing from a common module would not remove the per-module binding, and a wildcard re-export would trade a reviewable list for an invisible one — for the reason the import-family entries above record. Each block is that module's declared dependency surface; the observation code below them diverges."
-
-[[tool.duplication_gate.allow]]
-members = ["cuprum/_pipeline_finalize.py", "cuprum/_command_finalization.py"]
-reason = "The same prologue in the pipeline and command finalization modules: an `_observability` import of the two shutdown helpers (`_drain_tasks_during_cleanup`, `_wait_for_exec_hook_tasks`) that every finalizer needs to stop hook tasks, before each declares its `TYPE_CHECKING` block. Two modules, two different result families, one dependency surface; import declarations cannot be shared, for the reason the import-family entries above record. The finalization ordering below the imports is where the two deliberately part company."
-
-[[tool.duplication_gate.allow]]
-members = ["cuprum/_command_internals.py", "cuprum/_subprocess_execution.py"]
-reason = "Two `if typ.TYPE_CHECKING:` prologues that open with the same `import asyncio` line and then import `_StageObservation` and `_AnyCommandResult` in the same order, before each continues with its own type-only collaborators. The matched text is the guard plus the first imports a run-machinery module needs; import declarations cannot be factored into a shared helper, for the reason the import-family entries above record. The pair surfaced with this branch's module splits; the idiom is the one already recorded for the wider TYPE_CHECKING family."
 
 [[tool.duplication_gate.allow]]
 members = ["cuprum/sh/bytes_entry_points.py", "cuprum/sh/pipeline.py", "cuprum/sh/safe_cmd.py"]

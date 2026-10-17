@@ -48,6 +48,7 @@ import typing as typ
 from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._stream_drain import _decode_consumer_drains
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
     _cancel_stdin_writer,
@@ -230,9 +231,15 @@ async def _collect_stream_output(
             await _await_stdin_writer(tasks)
             # The awaitables, not the tasks: a stream cuprum holds no pipe for
             # has ``None`` in its slot, and gathering that would raise instead
-            # of settling the slot to nothing.
-            stdout_drain, stderr_drain = await asyncio.gather(
-                *(_consumer_awaitable(task) for task in tasks.consumers)
+            # of settling the slot to nothing. A settled ``None`` then decodes
+            # to that stream's own empty capture rather than standing as an
+            # absent result in a pair every caller reads the payload and record
+            # off — a redirected stdout must report in stdout's position.
+            stdout_drain, stderr_drain = _decode_consumer_drains(
+                await asyncio.gather(
+                    *(_consumer_awaitable(task) for task in tasks.consumers)
+                ),
+                context=_drain_context(execution, tasks, pid, preserve=True),
             )
     except TimeoutError as exc:
         # Capture-aware, matching the exit-wait route: a capturing run's text

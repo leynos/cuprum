@@ -1009,6 +1009,61 @@ exported from the package root. Exhaustive observe hooks also see the new
 `stdio_error` phase; see
 [Observe hooks see new event phases](#observe-hooks-see-new-event-phases).
 
+`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget`, which names
+where one of the child's standard streams is bound. Its four variants differ in
+_ownership_, which is the contract:
+
+- `StdioTarget.pipe()` — a library-owned pipe cuprum creates, consumes or
+  writes, and closes.
+- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
+- `StdioTarget.path(path)` — a file **cuprum owns**. Cuprum opens it
+  immediately before the spawn and closes its copy in a `finally` immediately
+  after, so the descriptor never outlives the run. The caller names a path and
+  never manages a descriptor.
+- `StdioTarget.fd(fd)` — a **borrowed** descriptor or open file object the
+  caller owns. Cuprum never closes it, and a borrowed file object is flushed
+  immediately before the spawn so buffered caller-side bytes reach the child.
+
+The lifetime contract follows from that split. Cuprum closes only what it
+opened: a `path` target's file is opened before the spawn and closed right
+after it, while a borrowed descriptor or file object is only flushed by cuprum.
+A caller who reuses one borrowed descriptor across two runs shares a single
+file offset, so the second run writes wherever the first left off.
+
+Contradictory combinations are rejected. `RunOutputOptions` refuses the
+combinations whose contradiction is visible once its three targets are
+assembled; the inherited-stdin rule is checked when the run is prepared,
+because whether a source was also supplied is not known when the options are
+built:
+
+- A stream that capture or echo must read cannot be redirected: there is no
+  parent-side pipe to read.
+- One path cannot be named for both stdout and stderr: each open starts at
+  offset 0, so the two streams would interleave unpredictably.
+- `RunOutputOptions.stdin` accepts only `StdioTarget.pipe()` and
+  `StdioTarget.inherit()`. A `path` or `fd` target is refused, because the
+  input itself arrives on the run call's `stdin=` argument.
+- An inherited stdin alongside a stdin source is refused: both answer where
+  the child's input comes from, and honouring one would silently discard the
+  other. An explicit stdin pipe alongside a source is accepted, because the
+  source is written through the pipe the target names.
+- `Pipeline` rejects explicit standard-stream targets on all three streams;
+  redirect a single `SafeCmd` instead.
+
+Redirection through a `path` or `fd` target needs POSIX descriptor semantics:
+on a platform without them, cuprum refuses the descriptor arms rather than
+opening a stream and failing to hand it over. Inheriting a stream and a
+library-owned pipe are not platform-limited, so a supported combination keeps
+working there.
+
+`StdioTarget`, `StdinStream`, `StdinSource`, and `StdinSourceError` are all
+exported from the package root, so an existing import line only needs the new
+name added to it. For the full contract, see
+[capture and echo](users-guide.md#capture-and-echo) for the target vocabulary
+and the rules policing it, and
+[supply input, environment, and a deadline](users-guide.md#supply-input-environment-and-a-deadline)
+for the streaming source.
+
 ### Per-stream capture policies
 
 Capture was a single joint switch. `capture=True` retained both streams
@@ -1105,7 +1160,7 @@ cancellation. Set `keep_file=True` if the caller wants the file, and read
 
 A failure to create or write the spill file does not fail the run: it is
 reported on the record as `storage_failed=True` and through a `CaptureEvent`,
-because a failure to *retain* output is not a failure of the command that
+because a failure to _retain_ output is not a failure of the command that
 produced it. If the file could not be created the stream stays in memory and is
 still reported complete; if an append failed the record holds what reached the
 file before the failure.

@@ -24,6 +24,7 @@ except through the re-export.
 from __future__ import annotations
 
 import dataclasses as dc
+import sys
 import typing as typ
 
 from cuprum._capture_accumulators import build_accumulator
@@ -38,7 +39,84 @@ if typ.TYPE_CHECKING:
 
     from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_state import _MirrorCursor
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.capture_policy import CapturePolicy
+    from cuprum.sinks.base import OutputSession
+
+
+def _resolve_stream_sink(
+    session: OutputSession | None,
+    configured: typ.IO[str] | None,
+    fallback: typ.IO[str],
+) -> typ.IO[str]:
+    """Return the sink echoed output for one stream is written to.
+
+    A live presentation-sink session normally owns the destination, so
+    mirrored output lands inside the adapter's framing — the GitHub Actions
+    group, say — in the order the adapter received it. A session exposing
+    ``redirects_echo = False`` leaves echo on the caller-configured sink, or
+    the process's own stream when no sink was configured.
+
+    This is the middle rung of one resolution the whole run shares: the
+    sibling :meth:`cuprum._sink_lifecycle._SinkBracket.resolve_destination`
+    answers the session half for destinations that have no caller-configured
+    sink between them, and the pipeline config composes that half with the
+    caller's choice made here.
+
+    It lives beside the config it feeds, since resolving a destination is the
+    first half of deriving a stream's configuration.
+
+    Returns
+    -------
+    typ.IO[str]
+        The destination for this stream's echoed output.
+    """
+    if session is not None and getattr(session, "redirects_echo", True) is not False:
+        return session.log
+    return fallback if configured is None else configured
+
+
+def _resolve_stream_configs(
+    execution: _SubprocessExecution,
+    stdout_config: _StreamConfig,
+) -> tuple[_StreamConfig, _StreamConfig]:
+    """Derive the stderr config, and the stdout config's final cursor.
+
+    Each stream's *own* settings are applied here — its capture policy, its
+    echo gate, and its resolved sink — because those differ per stream. What
+    the two share is derived by replacement: the mode, the encoding, and the
+    broken-pipe policy are properties of the run, so one value governs both.
+
+    The cursor is the one place the two streams interact. It tracks where the
+    keepalive's destination ended up, not which stream wrote there: a caller
+    may point both sinks at one object, and then a newline-less stdout echo
+    strands the diagnostic exactly as a stderr one would. Resolved sinks are
+    compared, because that is where the bytes land.
+
+    It lives beside the config it builds rather than beside the spawn that
+    asks for it, so a change to how a config is derived cannot outgrow the
+    module that defines what a config *is*.
+
+    Returns
+    -------
+    tuple[_StreamConfig, _StreamConfig]
+        The stdout and stderr configurations, in that order, ready to be
+        drained and to have their accumulators cleaned up.
+    """
+    stderr_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
+    )
+    stderr_config = dc.replace(
+        stdout_config,
+        capture=execution.capture_stderr,
+        echo_output=execution.echo_stderr,
+        sink=stderr_sink,
+        stream=EchoStream.STDERR,
+        mirror=execution.idle.mirror if execution.idle is not None else None,
+    )
+    if stdout_config.sink is stderr_config.sink:
+        stdout_config = dc.replace(stdout_config, mirror=stderr_config.mirror)
+    return stdout_config, stderr_config
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -120,4 +198,8 @@ class _StreamConfig:
         return OBSERVER_ERROR_POLICY if self.capture_bytes else self.errors
 
 
-__all__ = ["_StreamConfig"]
+__all__ = [
+    "_resolve_stream_configs",
+    "_resolve_stream_sink",
+    "_StreamConfig",
+]

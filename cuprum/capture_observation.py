@@ -17,9 +17,9 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
-if typ.TYPE_CHECKING:
-    from contextvars import Token
+from cuprum._scope_registration import _TokenTupleRegistration
 
+if typ.TYPE_CHECKING:
     from cuprum.capture_events import CaptureEvent, CaptureHook
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ _capture_hooks: ContextVar[tuple[CaptureHook, ...]] = ContextVar(
 )
 
 
-class CaptureHookRegistration:
+class CaptureHookRegistration(_TokenTupleRegistration["CaptureHook"]):
     """Registration handle for a per-stream capture observation hook.
 
     Supports ``detach()`` and context-manager use. The handle captures a
@@ -46,36 +46,11 @@ class CaptureHookRegistration:
     out of order restores a tuple that discards later registrations.
     """
 
-    __slots__ = ("_detached", "_hook", "_token")
+    __slots__ = ()
 
     def __init__(self, hook: CaptureHook) -> None:
         """Append ``hook`` to the current context's capture hooks."""
-        self._hook = hook
-        self._detached = False
-        self._token: Token[tuple[CaptureHook, ...]] = _capture_hooks.set((
-            *_capture_hooks.get(),
-            hook,
-        ))
-
-    def detach(self) -> None:
-        """Restore the capture hooks that preceded this registration."""
-        if self._detached:
-            return
-        _capture_hooks.reset(self._token)
-        self._detached = True
-
-    def __enter__(self) -> typ.Self:
-        """Enter the context manager; the hook is already registered."""
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Detach the registration on scope exit."""
-        self.detach()
+        super().__init__(_capture_hooks, hook)
 
 
 def observe_capture(hook: CaptureHook) -> CaptureHookRegistration:

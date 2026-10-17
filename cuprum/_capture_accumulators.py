@@ -127,11 +127,13 @@ class _FullAccumulator:
 
     async def cleanup(self) -> None:
         """Release the retained buffer; there is nothing on disk to remove."""
-        # Rebound rather than cleared. The release is the same — the run's
-        # bytes are dropped either way — but a lone ``self._buffer.clear()``
-        # is the one-statement attribute forward the df12 rule reads as a
-        # trivial wrapper, and the plugin's remedy is to change the shape
-        # rather than to suppress the message.
+        # Rebound rather than cleared: the run's bytes are dropped either way,
+        # but a lone ``self._buffer.clear()`` is the one-statement attribute
+        # forward the df12 rule reads as a trivial wrapper. The same body
+        # appears in :class:`_BoundedAccumulator` because the two accumulators
+        # are deliberately unrelated classes; the shared `CaptureSink`
+        # protocol is structural, and a common base would exist only to hold
+        # these two lines.
         self._buffer = bytearray()
 
 
@@ -192,5 +194,4 @@ class _BoundedAccumulator:
 
     async def cleanup(self) -> None:
         """Release the retained tail; there is nothing on disk to remove."""
-        # Rebound, for the same reason as :class:`_FullAccumulator.cleanup`.
         self._buffer = bytearray()

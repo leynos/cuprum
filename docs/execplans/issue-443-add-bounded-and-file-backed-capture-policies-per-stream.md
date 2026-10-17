@@ -568,6 +568,59 @@ Thresholds that trigger escalation when breached.
   module instead, leaving no re-export for the run module to shadow.
   Date/Author: 2026-10-17, implementation agent.
 
+- Observation (rebase, 2026-10-18): the replay onto `d93df9563` is a
+  *semantic* rebase, not a textual one, and the failures it produced are not
+  the ones a conflict list predicts. Four are worth recording because each was
+  green in its own parent and only failed once the two histories were combined.
+
+  First, `main`'s PR #445 widened `_RunTaskOwnership.consumers` to
+  `_ConsumerPair` with `None` slots, and both gather sites on this branch still
+  destructured the result as a `_DrainPair`. The union is not merely a typing
+  puzzle: both callers read `.payload` and `.capture` off each slot and feed
+  the pair to `_finalize_capture_handles`, so a raw `None` would have failed
+  downstream rather than at the type checker. The repair is a single
+  `_decode_consumer_drains` helper in `cuprum/_stream_drain.py` that decodes
+  both slots in stream order against one `_drain_context(..., preserve=True)`,
+  owned by one function so no call site can decode one slot and forget the
+  other.
+
+  Second, `cuprum/sh/output.py` landed at exactly 400 lines after this branch's
+  own split and the replay's extra content pushed it one over the pylint cap.
+  The `resolved_capture` read moved beside `_resolve_capture` in
+  `cuprum/sh/_capture_options.py`, which is where that widening already
+  belonged. `cuprum/_subprocess_streams.py` was over for a different reason:
+  the replay's resolution kept `main`'s wiring shape *and* this branch's
+  `_resolve_stream_configs`, so `_resolve_stream_configs` and
+  `_resolve_stream_sink` moved to `cuprum/_stream_config.py` with re-exports
+  left behind, because `cuprum._command_internals` still reaches the sink
+  resolver by its old path. `cuprum/capture_policy.py` is over the cap too, but
+  it is over by exactly the same amount in the original commit `901ee8bcf` (437
+  lines in both); the author's next commit `86d00d942` trims it to 375, so it
+  is left for the replay to repair rather than repaired twice.
+
+  Third, the replay of this branch's split commit took the *pre*-#445 body of
+  `_await_stdin_writer`, which awaited the writer task directly. `main` had
+  since replaced that with `await asyncio.shield(_settle_stdin_writer(...))`.
+  The bare await let a producer parked in `anext` outlive the run's deadline,
+  and three stdin tests that main had already repaired went red again. The
+  settle call and its two-paragraph rationale were restored; the module
+  docstring's "leaf with respect to the run module" claim still holds, because
+  `_settle_stdin_writer` comes from `_subprocess_stdin_reclaim`, not from the
+  run module.
+
+  Fourth, and only visible after the third repair, `main`'s
+  `_install_post_exit_probe` patches the settle where the name is *resolved*,
+  and its docstring's premise — that both run loops resolve it from
+  `_subprocess_stream_run` — is exactly what this branch's post-exit split
+  invalidates. The direct path still resolves it there; the streamed path now
+  resolves it in `_subprocess_stream_post_exit`. A single patch left the
+  streamed path settling for real, so `probe.settling` never fired and both
+  scenarios failed on their readiness wait. The probe now patches both
+  resolution sites, which keeps it independent of which path a case exercises.
+  The general lesson: a test that patches by resolved name is a contract on
+  where production resolves it, and splitting a module silently moves that
+  contract. Date/Author: 2026-10-18, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.

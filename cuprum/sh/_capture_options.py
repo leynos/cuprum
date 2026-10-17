@@ -66,4 +66,29 @@ def _resolve_capture(
     raise ValueError(msg)
 
 
-__all__ = ["_resolve_capture"]
+def _resolved_capture(
+    *,
+    capture_stdout: CapturePolicy | bool | None,
+    capture_stderr: CapturePolicy | bool | None,
+) -> tuple[CapturePolicy | None, CapturePolicy | None]:
+    """Read a run's resolved per-stream policies as the pair the run uses.
+
+    The declared field types stay ``CapturePolicy | bool | None`` because a
+    caller may spell a stream as the shorthand bool; only the constructor's
+    resolution narrows them, which the declared types cannot express to a type
+    checker. Keeping the read beside the resolution is what makes that
+    widening local rather than something each importer rediscovers.
+
+    Returns
+    -------
+    tuple[CapturePolicy | None, CapturePolicy | None]
+        The stdout and stderr policies, in that order, each either a policy
+        object or ``None`` for a stream that is not captured.
+    """
+    return (  # ty: ignore[invalid-return-type]
+        capture_stdout,
+        capture_stderr,
+    )
+
+
+__all__ = ["_resolve_capture", "_resolved_capture"]
