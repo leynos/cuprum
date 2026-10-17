@@ -1,68 +1,46 @@
 """Captured/echoed output configuration for ``cuprum.sh`` runs.
 
-``RunOutputOptions`` (and its deprecated ``IOOptions`` alias) configure how a
-command or pipeline's stdout and stderr are captured, mirrored, and
-optionally reframed through a presentation sink. This module also hosts the
-deprecated flat ``capture``/``echo`` keyword resolution used by
-``Pipeline.run``/``run_sync``. The ``cuprum.sh`` package re-exports the
-public names.
+``RunOutputOptions`` configures how a command or pipeline's stdout and stderr
+are captured, mirrored, and optionally reframed through a presentation sink.
+The ``cuprum.sh`` package re-exports the public name, and the deprecated
+spellings that still resolve to it live in :mod:`cuprum.sh._deprecated`.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-import warnings
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
+from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
+from cuprum.sh._convenience_sink import (
+    _validate_convenience_flags,
+    synthesize_sink,
+)
 
-# ``GitHubActionsSink`` comes from the same package surface rather than its
-# ``github_actions`` submodule: the package publishes it in ``__all__``, and the
-# convenience flags synthesize it as part of this class's documented contract.
-from cuprum.sinks import GitHubActionsSink
-
-# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
-from cuprum.sinks import base as sinks
+# ``RunOutputOptions.sink`` is public and its annotation names ``sinks``, so
+# ``typing.get_type_hints`` must resolve ``sinks`` from this module's globals —
+# a type-checking block would break that. Ruff reads an annotation-only use as
+# type-only and suggests moving it; the run-time sink construction that used to
+# keep this import visibly run-time now lives in ``cuprum.sh._convenience_sink``.
+from cuprum.sinks import base as sinks  # ruff: ignore[typing-only-first-party-import]
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    # Type-only like ``LineHook`` below: the capture policies appear in field
+    # and property annotations and in docstring examples, never in run-time
+    # expressions — ``__post_init__`` delegates the resolution that used them
+    # to :mod:`cuprum.sh._capture_options`.
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import LineHook
 
 __all__ = [
-    "IOOptions",
     "RunOutputOptions",
 ]
-
-
-def _validate_convenience_flags(options: RunOutputOptions) -> None:
-    """Reject non-``bool`` values for the convenience opt-in flags.
-
-    Both flags gate whether workflow commands are written, so a value that
-    merely coerces to a truthy bool — the integer ``1``, say — would frame a
-    run on the strength of something the caller never documented as a flag.
-    ``max_echo_line_bytes`` draws the same line for the same reason.
-
-    Parameters
-    ----------
-    options : RunOutputOptions
-        The options whose ``group`` and ``annotate_failure`` are checked.
-
-    Raises
-    ------
-    ValueError
-        If either flag is not a ``bool``.
-    """
-    for name, value in (
-        ("group", options.group),
-        ("annotate_failure", options.annotate_failure),
-    ):
-        if not isinstance(value, bool):
-            msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
-            # Issue #375 expressly specifies ValueError for these flags.
-            raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -75,6 +53,20 @@ class RunOutputOptions:
         Store stdout and stderr on the returned result. Capture is independent
         of echoing, so a captured stream can remain silent and an echoed stream
         can be left uncaptured.
+    capture_stdout : CapturePolicy | bool | None, keyword-only, default=None
+        How stdout is captured. ``None`` inherits ``capture``; a policy is
+        used as given; ``True`` and ``False`` are the shorthand's spelling for
+        a complete capture and no capture. A
+        :class:`~cuprum.capture_policy.BoundedCapture` retains the most recent
+        ``max_bytes`` of the stream and reports the exact dropped byte count,
+        and a :class:`~cuprum.capture_policy.FileBackedCapture` spills to a
+        temporary file past a threshold, reporting the path instead of the
+        text. The policy governs the capture tap only: bytes a pipeline stage
+        relays to the next stage are never affected.
+    capture_stderr : CapturePolicy | bool | None, keyword-only, default=None
+        How stderr is captured, resolved exactly as ``capture_stdout`` is and
+        independently of it, so the two streams can be configured differently
+        in one run.
     echo : bool, default=False
         Shorthand for enabling both ``echo_stdout`` and ``echo_stderr`` unless
         either stream has an explicit override.
@@ -192,6 +184,13 @@ class RunOutputOptions:
     """
 
     capture: bool = True
+    # Keyword-only although they read beside ``capture``: ``RunOutputOptions``
+    # is a public, non-``kw_only`` dataclass whose first six fields are
+    # positional, and ``test_public_api`` pins them. Declaring these two
+    # positionally would take the slots of ``max_echo_line_bytes`` and
+    # ``on_line`` and rebind every existing positional caller.
+    capture_stdout: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
+    capture_stderr: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
@@ -219,7 +218,25 @@ class RunOutputOptions:
     )
 
     def __post_init__(self) -> None:
-        """Resolve the echo shorthand and synthesize a sink from the flags."""
+        """Resolve the echo and capture shorthands, then synthesize any sink."""
+        object.__setattr__(
+            self,
+            "capture_stdout",
+            _resolve_capture(
+                shorthand=self.capture,
+                declared=self.capture_stdout,
+                field="capture_stdout",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "capture_stderr",
+            _resolve_capture(
+                shorthand=self.capture,
+                declared=self.capture_stderr,
+                field="capture_stderr",
+            ),
+        )
         object.__setattr__(
             self,
             "echo_stdout",
@@ -246,7 +263,7 @@ class RunOutputOptions:
             _parse_broken_pipe_policy(self.broken_pipe_policy),
         )
         _validate_convenience_flags(self)
-        self._synthesize_sink_from_flags()
+        synthesize_sink(self)
 
         if self.max_echo_line_bytes is None:
             return
@@ -258,39 +275,6 @@ class RunOutputOptions:
                 f"integer or None, got {bound!r}"
             )
             raise ValueError(msg)
-
-    def _synthesize_sink_from_flags(self) -> None:
-        """Materialize the convenience flags as this run's presentation sink.
-
-        Both flags are spelled as a configuration of the existing
-        :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
-        code, which is what keeps workflow-command syntax inside the adapter.
-        The synthesized sink carries no ``force``, so it stays subject to the
-        adapter's own ``GITHUB_ACTIONS`` gate. Private identity metadata tracks
-        the adapter created by this options object so
-        :func:`dataclasses.replace` can resynthesize it when flags change.
-        An adapter supplied to a new options object remains explicit regardless
-        of its concrete type.
-        """
-        is_synthesized_sink = self.sink is self._synthesized_sink
-        if self.sink is not None and not is_synthesized_sink:
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        if not (self.group or self.annotate_failure):
-            if is_synthesized_sink:
-                object.__setattr__(self, "sink", None)
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        synthesized_sink = GitHubActionsSink(
-            emit_group=self.group,
-            emit_annotation=self.annotate_failure,
-        )
-        object.__setattr__(
-            self,
-            "sink",
-            synthesized_sink,
-        )
-        object.__setattr__(self, "_synthesized_sink", synthesized_sink)
 
     @property
     def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
@@ -308,6 +292,66 @@ class RunOutputOptions:
         return _parse_broken_pipe_policy(self.broken_pipe_policy)
 
     @property
+    def resolved_capture(self) -> tuple[CapturePolicy | None, CapturePolicy | None]:
+        """The resolved ``(capture_stdout, capture_stderr)`` policies.
+
+        ``__post_init__`` turns each stream's field into a policy — inheriting
+        ``capture`` where the caller named none, mapping ``True`` to
+        :class:`~cuprum.capture_policy.FullCapture` and ``False`` to ``None``
+        — so the returned pair is always concrete and says exactly what the
+        run will do. ``None`` means that stream is not captured at all.
+
+        Returns
+        -------
+        tuple[CapturePolicy | None, CapturePolicy | None]
+            The stdout and stderr policies, in that order, each either a
+            policy object or ``None`` for a stream that is not captured.
+
+        Examples
+        --------
+        >>> RunOutputOptions().resolved_capture
+        (FullCapture(), FullCapture())
+        >>> RunOutputOptions(capture=False).resolved_capture
+        (None, None)
+        >>> RunOutputOptions(capture=False, capture_stderr=True).resolved_capture
+        (None, FullCapture())
+        """
+        # The declared field types stay ``CapturePolicy | bool | None`` because
+        # the caller may spell a stream as the shorthand bool; only the
+        # constructor's resolution narrows them, which the declared types
+        # cannot express to a type checker.
+        return (  # ty: ignore[invalid-return-type]
+            self.capture_stdout,
+            self.capture_stderr,
+        )
+
+    @property
+    def captures_any_stream(self) -> bool:
+        """Whether either stream is captured under the resolved policies.
+
+        The one-bool reading of ``resolved_capture``: the observation tags
+        report capture as a single flag, and this keeps that flag meaning what
+        it always did now that the policies differ per stream. A run that
+        captures anything at all is a capturing run.
+
+        Returns
+        -------
+        bool
+            ``True`` when either stream has a policy, ``False`` when neither
+            does.
+
+        Examples
+        --------
+        >>> RunOutputOptions().captures_any_stream
+        True
+        >>> RunOutputOptions(capture=False).captures_any_stream
+        False
+        >>> RunOutputOptions(capture=False, capture_stderr=True).captures_any_stream
+        True
+        """
+        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
+
+    @property
     def resolved_echo(self) -> tuple[bool, bool]:
         """The resolved ``(echo_stdout, echo_stderr)`` gates.
 
@@ -320,60 +364,3 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class IOOptions(RunOutputOptions):
-    """Deprecated alias for command output stream options."""
-
-    def __post_init__(self) -> None:
-        """Resolve the inherited options, then warn about the deprecated alias."""
-        # Zero-arg ``super()`` breaks under ``slots=True``: the decorator
-        # rebuilds the class, so the method's ``__class__`` cell refers to the
-        # pre-rebuild class and the instance fails the ``super`` type check.
-        RunOutputOptions.__post_init__(self)
-        warnings.warn(
-            "IOOptions is deprecated; use RunOutputOptions instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-
-class _DeprecatedOutputFlags(typ.TypedDict, total=False):
-    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
-
-    capture: bool
-    echo: bool
-
-
-def _resolve_pipeline_output(
-    output: RunOutputOptions | None,
-    flags: _DeprecatedOutputFlags,
-) -> RunOutputOptions:
-    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
-    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
-    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
-    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
-    # here to preserve the strict keyword surface.
-    unknown = set(flags) - {"capture", "echo"}
-    if unknown:
-        joined = ", ".join(sorted(unknown))
-        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
-        raise TypeError(msg)
-    if not flags:
-        return output or RunOutputOptions()
-    if output is not None:
-        # Reject combining the deprecated flat flags with ``output``: the
-        # caller's intent would otherwise be ambiguous.
-        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
-        raise ValueError(msg)
-    warnings.warn(
-        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
-        "deprecated; pass output=RunOutputOptions(...) instead",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    return RunOutputOptions(
-        capture=flags.get("capture", True),
-        echo=flags.get("echo", False),
-    )

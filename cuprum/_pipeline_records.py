@@ -21,13 +21,20 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+# Run-time, not annotation-only: it is the default factory for a spawn
+# result's capture registry, so the record below builds one when none is
+# supplied. ``cuprum._capture_types`` is a leaf, so nothing is closed by it.
+from cuprum._capture_types import CaptureSinkRegistry
+
 if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._streams import _RelayDiagnostics
-    from cuprum._subprocess_wait_types import _StreamConsumerTask, _StreamPayload
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.echo_events import RelayFallback
 
 
@@ -50,11 +57,16 @@ class _PipelineStageResultInputs:
     order. A stage's tuple lists its stdout diagnostics first (final stage
     only, matching the single-command result order) and then its stderr
     diagnostics, so every stage result owns the records of its own streams.
+
+    The two stream columns carry whole drain results rather than bare payloads:
+    a stage result reports how each of its streams was retained, and the spill
+    handles those records still own have to reach the construction site so the
+    files are removed before the pipeline returns.
     """
 
     wait_result: _PipelineWaitResult
-    stderr_by_stage: tuple[_StreamPayload | None, ...]
-    final_stdout: _StreamPayload | None
+    stderr_by_stage: tuple[_CapturedDrain | None, ...]
+    final_stdout: _CapturedDrain | None
     relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...]
 
 
@@ -102,6 +114,11 @@ class _PipelineSpawnResult:
     empty for the callers that build this result directly: an empty sequence
     leaves every stage on the direct-child route, which is what those callers
     spawned.
+
+    ``captures`` holds every accumulator the stage consumers were given, so a
+    teardown can remove the spill file of a drain that never settled. A result
+    built directly rather than by the spawn carries an empty registry, which is
+    what a run with no consumers has to clean up.
     """
 
     processes: list[asyncio.subprocess.Process]
@@ -114,6 +131,7 @@ class _PipelineSpawnResult:
     stages: _StageWaitContext
     owns_group: tuple[bool, ...] = ()
     idle: _IdleMonitor | None = None
+    captures: CaptureSinkRegistry = dc.field(default_factory=CaptureSinkRegistry)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -123,11 +141,18 @@ class _PipelineOutputs:
     ``relay_fallbacks_by_stage`` mirrors
     :class:`_PipelineStageResultInputs` so the timeout path can raise with
     whatever was already recorded before the wait failed.
+
+    ``capture_stdout`` and ``capture_stderr`` are resolved policies rather than
+    one flag, because the deadline path has to answer two separate questions:
+    whether the final stage's stdout is worth reporting as the expired run's
+    ``output``, and whether the stages' stderr is worth joining for its
+    ``stderr``. A per-stream policy is what makes those answers differ.
     """
 
-    stderr_by_stage: tuple[_StreamPayload | None, ...]
-    final_stdout: _StreamPayload | None
-    capture: bool
+    stderr_by_stage: tuple[_CapturedDrain | None, ...]
+    final_stdout: _CapturedDrain | None
+    capture_stdout: CapturePolicy | None
+    capture_stderr: CapturePolicy | None
     # Whether the captured payloads are bytes rather than decoded text. Read
     # only where the ``TimeoutExpired`` is built, because that is the one
     # payload this path has to *combine* rather than pass through: joining

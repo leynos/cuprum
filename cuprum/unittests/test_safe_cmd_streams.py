@@ -14,6 +14,7 @@ import typing as typ
 import pytest
 
 from cuprum import ScopeConfig, scoped, sh
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum.sh import RunOutputOptions, StdinInput
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -120,9 +121,10 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
         """Return two never-completing consumer tasks and record them."""
         _ = (process, execution, spawn_context)
 
-        async def _block() -> str | None:
+        async def _block() -> _CapturedDrain:
             """Block until cancelled during stdin-failure cleanup."""
             await asyncio.Event().wait()
+            return _CapturedDrain()
 
         tasks = (asyncio.create_task(_block()), asyncio.create_task(_block()))
         recorded.extend(tasks)

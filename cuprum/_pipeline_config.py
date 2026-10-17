@@ -4,8 +4,14 @@
 ``on_line``, alongside context-derived stream settings. Its ``consumes_stdout``
 and ``consumes_stderr`` decisions keep a stream readable when capture, echo,
 line observation, or the idle heartbeat needs it, and the ``stream_config`` and
-``stderr_stream_config`` properties supply the stream-specific capture, echo,
-sink, encoding, and error configuration consumed by pipeline stream tasks.
+``stderr_stream_config`` fields supply the stream-specific capture, echo, sink,
+encoding, and error configuration consumed by pipeline stream tasks.
+
+Both stream configurations are built once, by ``__post_init__``, rather than
+per read. That is not merely an economy: a stream config carries the capture
+accumulator for its own policy, so a run that rebuilt them would hand its
+consumers accumulators no other party could reach, and the spill files those
+accumulators own would outlive the run that created them.
 """
 
 from __future__ import annotations
@@ -19,11 +25,13 @@ from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._streams import _MirrorCursor
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
@@ -36,7 +44,14 @@ class _PipelineRunConfig:
 
     ctx: ExecutionContext
 
-    capture: bool
+    # One resolved policy per stream, so a caller can bound the final stage's
+    # stdout without bounding every stage's stderr, or spill one and not the
+    # other. ``None`` means that stream is not captured at all. The policies
+    # are resolved by ``RunOutputOptions``, so the shorthand ``capture`` bool
+    # the caller may have spelled is already turned into a policy here.
+    capture_stdout: CapturePolicy | None
+
+    capture_stderr: CapturePolicy | None
 
     echo_stdout: bool
 
@@ -67,6 +82,48 @@ class _PipelineRunConfig:
 
     idle: _IdleMonitor | None = None
 
+    # Built once, here, because each one owns the capture accumulator its
+    # policy selected. A run whose consumers built their own would leave the
+    # accumulators holding the spill files unreachable from teardown, so the
+    # files would outlive the run. Both are derived state, so neither takes
+    # part in equality or the representation.
+    stream_config: _StreamConfig = dc.field(init=False, repr=False, compare=False)
+    stderr_stream_config: _StreamConfig = dc.field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        """Build both streams' configurations, and their accumulators, once."""
+        object.__setattr__(
+            self,
+            "stream_config",
+            self._build_stream_config(
+                capture=self.capture_stdout,
+                echo_output=self.echo_stdout,
+                fallback_sink=self.stdout_sink,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "stderr_stream_config",
+            self._build_stream_config(
+                capture=self.capture_stderr,
+                echo_output=self.echo_stderr,
+                fallback_sink=self.stderr_sink,
+            ),
+        )
+
+    @property
+    def captures_any_stream(self) -> bool:
+        """Whether the pipeline captures at least one of the two streams.
+
+        The observation tag reports "capture" as one bool, and this is the
+        reading that keeps its meaning under per-stream policies: a run that
+        captures anything at all is a capturing run, and a run that names no
+        policy for either stream captures nothing.
+        """
+        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
+
     @property
     def consumes_stdout(self) -> bool:
         """Whether the parent must consume the final stage's stdout.
@@ -76,7 +133,7 @@ class _PipelineRunConfig:
         off, and the idle heartbeat needs raw chunks for the same reason.
         """
         return (
-            self.capture
+            self.capture_stdout is not None
             or self.echo_stdout
             or self.idle is not None
             or self.on_line is not None
@@ -90,7 +147,7 @@ class _PipelineRunConfig:
         the same gates that keep stdout readable apply here.
         """
         return (
-            self.capture
+            self.capture_stderr is not None
             or self.echo_stderr
             or self.idle is not None
             or self.on_line is not None
@@ -99,21 +156,25 @@ class _PipelineRunConfig:
     def _build_stream_config(
         self,
         *,
+        capture: CapturePolicy | None,
         echo_output: bool,
         fallback_sink: typ.IO[str],
     ) -> _StreamConfig:
         """Build one parent-consumed pipeline stream configuration.
 
-        Both pipeline streams are wired identically here; only the echo gate
-        and the resolved destination differ. When a presentation-sink session
-        is active, a mirrored stream routes through the session's log
-        destination instead of its fallback, so it lands inside the adapter's
-        framing in the order the adapter received it. That bracketing is
-        required for stdout and stderr alike: every mirrored stream must fall
-        between the session's opening and closing frames.
+        Both pipeline streams are wired identically here; only the capture
+        policy, the echo gate, and the resolved destination differ. When a
+        presentation-sink session is active, a mirrored stream routes through
+        the session's log destination instead of its fallback, so it lands
+        inside the adapter's framing in the order the adapter received it. That
+        bracketing is required for stdout and stderr alike: every mirrored
+        stream must fall between the session's opening and closing frames.
 
         Parameters
         ----------
+        capture : CapturePolicy | None
+            This stream's resolved capture policy, or ``None`` for a stream
+            the run is not capturing.
         echo_output : bool
             Whether this stream's lines are mirrored to the parent.
         fallback_sink : typ.IO[str]
@@ -127,7 +188,7 @@ class _PipelineRunConfig:
         """
         framed = self.sink_bracket.resolve_destination(fallback_sink)
         return _StreamConfig(
-            capture_output=self.capture,
+            capture=capture,
             echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
             broken_pipe_policy=self.broken_pipe_policy,
@@ -138,22 +199,6 @@ class _PipelineRunConfig:
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
             mirror=self._echo_mirror(framed),
-        )
-
-    @property
-    def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
-        return self._build_stream_config(
-            echo_output=self.echo_stdout,
-            fallback_sink=self.stdout_sink,
-        )
-
-    @property
-    def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage."""
-        return self._build_stream_config(
-            echo_output=self.echo_stderr,
-            fallback_sink=self.stderr_sink,
         )
 
     def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
@@ -209,13 +254,15 @@ def _prepare_pipeline_config(
     # separate arguments; the developer guide forbids parallel internal
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
+    capture_stdout, capture_stderr = output.resolved_capture
     sink_bracket = _SinkBracket.open(
         output.sink,
         sinks.SessionStart(label="pipeline", argv=()),
     )
     return _PipelineRunConfig(
         ctx=ctx,
-        capture=output.capture,
+        capture_stdout=capture_stdout,
+        capture_stderr=capture_stderr,
         echo_stdout=echo_stdout,
         echo_stderr=echo_stderr,
         max_echo_line_bytes=output.max_echo_line_bytes,

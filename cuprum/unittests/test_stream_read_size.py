@@ -8,6 +8,7 @@ import typing as typ
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
+from cuprum.capture_policy import FullCapture
 
 if typ.TYPE_CHECKING:
     from cuprum.unittests._stream_drain_support import CapturedPair
@@ -35,14 +36,14 @@ async def _consume_lines(payload: bytes) -> CapturedPair[list[str]]:
     reader.feed_data(payload)
     reader.feed_eof()
     lines: list[str] = []
-    captured = await _consume_stream(reader, _config(), on_line=lines.append)
-    return captured, lines
+    drained = await _consume_stream(reader, _config(), on_line=lines.append)
+    return drained.payload, lines
 
 
 def _config(*, read_size: int = _READ_SIZE) -> _StreamConfig:
     """Return a UTF-8 config that captures output without echoing it."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -67,8 +68,8 @@ def test_consume_stream_forwards_explicit_read_size_to_every_reader_call() -> No
     async def consume() -> CapturedPair[list[int]]:
         """Consume a recording reader with a deliberately non-default size."""
         reader = _RecordingReader(b"firstsecond")
-        captured = await _consume_stream(reader, _config(read_size=17))
-        return captured, reader.read_sizes
+        drained = await _consume_stream(reader, _config(read_size=17))
+        return drained.payload, reader.read_sizes
 
     captured, read_sizes = asyncio.run(consume())
 

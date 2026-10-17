@@ -15,7 +15,7 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
-from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._stream_drain_finish import _CapturedDrain, _empty_capture
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
 if typ.TYPE_CHECKING:
@@ -23,7 +23,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._streams import _LineSink, _RelayDiagnostics, _StreamConfig
-    from cuprum._subprocess_wait_types import _StreamPayload
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -32,7 +31,7 @@ class _LineConsumption:
 
     config: _StreamConfig
     on_line: _LineSink
-    drain: cabc.Callable[..., cabc.Awaitable[_StreamPayload | None]]
+    drain: cabc.Callable[..., cabc.Awaitable[_CapturedDrain]]
     relay_diagnostics: _RelayDiagnostics | None
 
 
@@ -71,21 +70,21 @@ async def _emit_completed_lines(
 async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     consumption: _LineConsumption,
-) -> str | bytes | None:
+) -> _CapturedDrain:
     """Drain a stream while incrementally decoding and emitting complete lines.
 
-    The decoder feeds the line sink only; the capture buffer the drain returns
-    is untouched, so a byte-exact config still yields the child's own bytes
-    here and the widened payload is narrowed by the caller, not by this
+    The decoder feeds the line sink only; the capture accumulator the drain
+    finalizes is untouched, so a byte-exact config still yields the child's own
+    bytes here and the widened payload is narrowed by the caller, not by this
     function. A stream that was never attached reports the empty capture in
     the run's own mode, matching
     :func:`cuprum._streams._consume_stream_without_lines`.
 
     Returns
     -------
-    str | bytes | None
-        The capture, typed by ``config.capture_bytes``; ``None`` when the run
-        captured nothing.
+    _CapturedDrain
+        The capture, typed by ``config.capture_bytes``, with the record
+        describing how it was retained.
     """
     if stream is None:
         return _empty_capture(consumption.config)
@@ -113,16 +112,7 @@ async def _consume_stream_with_lines(
     )
     if pending_text:
         await _emit_line(consumption.on_line, _strip_line_ending(pending_text))
-    if consumption.config.capture_bytes:
-        return _require_bytes(captured, "line-observed stream")
-    return _require_text(captured, "line-observed stream")
-
-
-def _empty_capture(config: _StreamConfig) -> str | bytes | None:
-    """Report an unattached stream in the mode the run asked for."""
-    if not config.capture_output:
-        return None
-    return b"" if config.capture_bytes else ""
+    return captured
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
@@ -145,8 +135,8 @@ def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
     ``SafeCmd.lines()`` under ``errors="strict"`` still raise on undecodable
     input exactly as they did before byte mode existed. The byte-mode capture
     still reports undecodable input where it is read back: a byte-exact run
-    hands back ``bytes`` untouched, and a text run raises when it decodes its
-    buffer in :func:`cuprum._stream_drain_finish._captured_payload`.
+    hands back ``bytes`` untouched, and a text run raises when its accumulator
+    renders the buffer in :func:`cuprum._capture_decode._render`.
 
     See :data:`cuprum._constants.OBSERVER_ERROR_POLICY` and
     :attr:`cuprum._streams._StreamConfig.view_errors` for the shared rationale.

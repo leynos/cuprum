@@ -26,6 +26,7 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_spawn, sh
+from cuprum._pipeline_spawn import _SpawnedPipelineStages
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum._testing import _prepare_pipeline_config
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
@@ -78,9 +79,24 @@ class _RecordingProcess:
         return self.returncode if self.returncode is not None else 0
 
 
-def _as_processes(doubles: list[_RecordingProcess]) -> list[asyncio.subprocess.Process]:
-    """Present the doubles as the process handles teardown expects."""
-    return [typ.cast("asyncio.subprocess.Process", double) for double in doubles]
+def _staged(doubles: list[_RecordingProcess]) -> _SpawnedPipelineStages:
+    """Present the doubles as the partial spawn teardown is handed.
+
+    The teardown reads each stage the spawn actually recorded, so the doubles
+    are cast into the accumulator's own lists rather than into a stand-in
+    shaped like it: a spy would hide what the production accumulator holds.
+
+    Returns
+    -------
+    _SpawnedPipelineStages
+        An accumulator whose ``processes`` list is the cast doubles, with its
+        other members at their dataclass defaults.
+    """
+    staged = _SpawnedPipelineStages()
+    staged.processes = [
+        typ.cast("asyncio.subprocess.Process", double) for double in doubles
+    ]
+    return staged
 
 
 def test_owned_pipeline_stages_are_each_signalled_as_a_group(
@@ -123,10 +139,8 @@ def test_owned_pipeline_stages_are_each_signalled_as_a_group(
     async def run_case() -> None:
         """Tear down a partial spawn whose recorded stages all own groups."""
         await _pipeline_spawn._cleanup_spawned_processes(
-            _as_processes([_RecordingProcess(7001), _RecordingProcess(7002)]),
-            [],
-            None,
             _TeardownPolicy(0.1, owns_group=[True, True]),
+            _staged([_RecordingProcess(7001), _RecordingProcess(7002)]),
         )
 
     asyncio.run(run_case())
@@ -165,10 +179,8 @@ def test_inherited_pipeline_stages_are_signalled_directly(
     async def run_case() -> None:
         """Tear down stages recorded as inheriting the pipeline's group."""
         await _pipeline_spawn._cleanup_spawned_processes(
-            _as_processes(doubles),
-            [],
-            None,
             _TeardownPolicy(0.1, owns_group=[False, False]),
+            _staged(doubles),
         )
 
     asyncio.run(run_case())
@@ -352,10 +364,8 @@ def test_an_exited_owned_stage_still_reaches_its_live_group(
     async def run_case() -> None:
         """Tear down a partial spawn whose one stage has already exited."""
         await _pipeline_spawn._cleanup_spawned_processes(
-            _as_processes(doubles),
-            [],
-            None,
             _TeardownPolicy(0.1, owns_group=[True]),
+            _staged(doubles),
         )
 
     asyncio.run(run_case())

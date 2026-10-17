@@ -20,6 +20,7 @@ import typing as typ
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
 from cuprum._result_assembly import (
+    _recorded_captures,
     _require_bytes,
     _require_text,
     _RunMeasurements,
@@ -41,7 +42,7 @@ if typ.TYPE_CHECKING:
     )
     from cuprum._pipeline_types import _StageObservation
     from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
-    from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum.echo_events import RelayFallback
     from cuprum.sh import CommandResult, SafeCmd
 
@@ -241,8 +242,8 @@ class _StageResultInputs:
 
 def _build_stage_result(
     inputs: _StageResultInputs,
-    stdout: _StreamPayload | None,
-    stderr: _StreamPayload | None,
+    stdout: _CapturedDrain | None,
+    stderr: _CapturedDrain | None,
     *,
     capture_bytes: bool,
 ) -> _AnyCommandResult:
@@ -253,6 +254,19 @@ def _build_stage_result(
     behind one helper for the same reason: a stage result and a direct result
     of the same command should differ only in what could actually be measured.
 
+    The streams arrive as whole drain results rather than payloads, because a
+    stage reports how each of its streams was retained as well as what it
+    retained. Only the text result carries those records:
+    ``BytesCommandResult`` mirrors ``CommandResult``'s captured-output fields
+    but not this one, exactly as on the single-command path.
+
+    A ``None`` slot is a stream the spawn attached no consumer to. In a
+    pipeline that is also a stream no policy was named for — a stage's stderr
+    is consumed exactly when its config captures, echoes, observes lines, or
+    watches for idleness, and an interior stage's stdout is never consumed at
+    all, because it relays into the next stage's stdin instead. So a missing
+    drain means a missing capture, and no record is reported for it.
+
     Returns
     -------
     CommandResult | BytesCommandResult
@@ -260,6 +274,10 @@ def _build_stage_result(
         the ordinary text result.
     """
     sh = _sh_module()
+    stdout_payload = None if stdout is None else stdout.payload
+    stdout_capture = None if stdout is None else stdout.capture
+    stderr_payload = None if stderr is None else stderr.payload
+    stderr_capture = None if stderr is None else stderr.capture
     # A stage is never measured directly, so ``rusage`` is ``None`` and the
     # three resource figures it carries stay ``None``. Building the same typed
     # value the direct path builds keeps the two result constructions
@@ -278,17 +296,18 @@ def _build_stage_result(
             program=inputs.cmd.program,
             argv=inputs.cmd.argv,
             exit_code=inputs.exit_code,
-            stdout=_require_bytes(stdout, "stdout"),
-            stderr=_require_bytes(stderr, "stderr"),
+            stdout=_require_bytes(stdout_payload, "stdout"),
+            stderr=_require_bytes(stderr_payload, "stderr"),
             **measurements.as_kwargs(),
         )
     return sh.CommandResult(
         program=inputs.cmd.program,
         argv=inputs.cmd.argv,
         exit_code=inputs.exit_code,
-        stdout=_require_text(stdout, "stdout"),
-        stderr=_require_text(stderr, "stderr"),
+        stdout=_require_text(stdout_payload, "stdout"),
+        stderr=_require_text(stderr_payload, "stderr"),
         **measurements.as_kwargs(),
+        captures=_recorded_captures((stdout_capture, stderr_capture)),
     )
 
 

@@ -762,3 +762,72 @@ filter on.
 
 No public API changes, and no module in this tree needs a module-size
 suppression.
+
+## Addendum (2026-10-14): the deprecated output spellings leave `cuprum/sh/output.py`
+
+`cuprum/sh/output.py` reached 379 lines of the 400-line ceiling the 2026-09-25
+addendum's split was written to respect, and the per-stream capture policies of
+issue #443 add fields, resolution, and a property to `RunOutputOptions` itself.
+The module could not absorb that growth and could not shed it either: the two
+compatibility surfaces it also held — the deprecated `IOOptions` alias and the
+flat `capture=`/`echo=` keyword shim behind `Pipeline.run` — describe how to
+_reach_ the options vocabulary rather than what the vocabulary means, and both
+are scheduled to disappear.
+
+Those two surfaces now live in `cuprum/sh/_deprecated.py`:
+
+- `IOOptions` — the deprecated alias, which resolves every field exactly as its
+  base does and then warns.
+- `_DeprecatedOutputFlags` and `_resolve_pipeline_output` — the flat
+  `capture=`/`echo=` keyword arguments of `Pipeline.run`/`run_sync`, translated
+  into a `RunOutputOptions`.
+
+`cuprum/sh/output.py` keeps only `RunOutputOptions` and its two private helpers
+— `_validate_convenience_flags` and the sink synthesis it drives — and now
+stands at 318 lines with room for the capture work.
+
+No public API changes: `cuprum/sh/__init__.py` re-exports every moved name from
+its new home with the same object identity, so `cuprum.sh.IOOptions` and
+`cuprum.sh._resolve_pipeline_output` resolve as before and `cuprum/__init__.py`
+is untouched. `cuprum/sh/pipeline.py` imports the flags from
+`cuprum.sh._deprecated` directly, which is the only in-package caller. No
+module in this tree needs a module-size suppression.
+
+## Addendum (2026-10-14): the convenience-sink machinery leaves `cuprum/sh/output.py`
+
+Clearing the deprecated spellings (the addendum above) took
+`cuprum/sh/output.py` to 318 lines, but that was measured before the per-stream
+capture policies of issue #443 were restored to it. The two new fields, their
+resolution, and the `resolved_capture` property take the module to 431 lines —
+past the 400-line ceiling a second time, and by the same mechanism: the ceiling
+applies to production targets, and this is one.
+
+`cuprum/sh/_convenience_sink.py` now owns the machinery behind the `group` and
+`annotate_failure` convenience flags: `_validate_convenience_flags`, which
+rejects a non-`bool` for either, and `synthesize_sink`, which materializes them
+as a `GitHubActionsSink`. The two were formerly a module function and a private
+method of `RunOutputOptions`; the method's body only ever read or replaced its
+own object's fields, so making it a module-level function over an options
+argument is a rename and nothing more. Together they are 58 lines, and moving
+them leaves `cuprum/sh/output.py` at 370 lines.
+
+The cut is a responsibility boundary, not a line count: these two describe what
+the convenience flags _produce_ — a presentation adapter configured for one
+half of the framing — whereas the options module describes what an options
+object _is_. The workflow-command syntax, the stop-commands lease, and the
+`GITHUB_ACTIONS` environment gate all stay inside the adapter and its
+synthesizer, and the options class calls into them from `__post_init__`.
+
+There is no cycle. `cuprum/sh/_convenience_sink.py` imports `GitHubActionsSink`
+at run time and `RunOutputOptions` only under `TYPE_CHECKING`, so the
+annotation on its parameter does not make the options module's import of it
+mutual at run time. The `_synthesized_sink` identity field stays declared on
+`RunOutputOptions`, because it is an init field that `dataclasses.replace`
+forwards and is what distinguishes a sink this run synthesized from one a
+caller supplied.
+
+No public API changes: neither moved name was ever exported — one is private
+and the other was a private method — so `cuprum/sh/__init__.py` and
+`cuprum/__init__.py` are untouched by this addendum. `cuprum/sh/output.py` is
+the only importer, and `make pylint-classic` reports 10.00/10 on both passes
+with no module-size suppression anywhere in the tree.

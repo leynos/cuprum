@@ -45,7 +45,7 @@ import typing as typ
 from cuprum import _wait4_spawn
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
-from cuprum._result_assembly import _require_text
+from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
@@ -58,7 +58,8 @@ from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamPayloadPair
+    from cuprum._subprocess_wait_types import _DrainPair
+    from cuprum.capture_policy import CapturedStream
     from cuprum.sh import CommandResult
 
 __all__ = [
@@ -103,8 +104,8 @@ async def _finalize_settled_run(
     run: _HandleRun,
     execution: _SubprocessExecution,
     *,
-    capture: bool,
-) -> tuple[str | None, str | None]:
+    preserve: bool,
+) -> _DrainPair:
     """Reconcile an ended run's tasks, keeping its output if asked.
 
     An owned group is settled first, because the drain below is what it would
@@ -131,35 +132,35 @@ async def _finalize_settled_run(
     execution : _SubprocessExecution
         The bundle the wait was driven with, which carries the observation the
         drain reports through.
-    capture : bool
+    preserve : bool
         Whether to keep the drained output. False while another error is
         propagating, so a drain failure cannot mask it.
 
     Returns
     -------
-    tuple[str | None, str | None]
-        The decoded stdout and stderr; both ``None`` when *capture* is false.
+    _DrainPair
+        The drained stdout and stderr, each a payload with the record
+        describing how its policy retained it.
     """
 
-    async def settle_then_reconcile() -> _StreamPayloadPair:
+    async def settle_then_reconcile() -> _DrainPair:
         """Settle the owned group, then reconcile the run's tasks, as one unit."""
         await _settle_owned_group_before_draining(run)
         return await _reconcile_run_tasks(
             run.ownership,
             _DrainContext(
-                capture=capture,
+                captures=(
+                    (execution.capture_stdout, execution.capture_stderr)
+                    if preserve
+                    else (None, None)
+                ),
                 pid=run.process.pid,
                 observation=execution.observation,
                 discard_on_cancel=run.ownership.discard_on_cancel,
             ),
         )
 
-    drained = await _shielded_cleanup(settle_then_reconcile())
-    # A handle always runs in text mode: ``start()`` forces capture on and never
-    # offers the byte-exact entry points, so the drain's widened payload is
-    # text here. Narrowing through ``_require_text`` re-establishes that
-    # guarantee and reports a contradiction rather than asserting it away.
-    return _require_text(drained[0], "stdout"), _require_text(drained[1], "stderr")
+    return await _shielded_cleanup(settle_then_reconcile())
 
 
 async def _settle_handle_run(run: _HandleRun) -> CommandResult:
@@ -197,20 +198,25 @@ async def _settle_handle_run(run: _HandleRun) -> CommandResult:
         # Cancellation, and any other failure escaping the wait, still needs
         # the run reconciled before it propagates. No output is kept while
         # another error is on its way out.
-        await _finalize_settled_run(run, execution, capture=False)
+        await _finalize_settled_run(run, execution, preserve=False)
         raise
-    stdout_text, stderr_text = await _finalize_settled_run(
+    drained = await _finalize_settled_run(
         run,
         execution,
-        capture=True,
+        preserve=True,
     )
+    # A handle always runs in text mode: ``start()`` forces capture on and never
+    # offers the byte-exact entry points, so the drain's widened payload is
+    # text here. Narrowing through ``_require_text`` re-establishes that
+    # guarantee and reports a contradiction rather than asserting it away.
     return _build_handle_result(
         run,
         _HandleOutcome(
             exit_code=exit_code,
             exited_at=exited_at,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
+            stdout_text=_require_text(drained[0].payload, "stdout"),
+            stderr_text=_require_text(drained[1].payload, "stderr"),
+            captures=(drained[0].capture, drained[1].capture),
         ),
     )
 
@@ -230,6 +236,11 @@ class _HandleOutcome:
     exited_at: float
     stdout_text: str | None
     stderr_text: str | None
+    # The capture records for the two streams, in the stdout-then-stderr order
+    # every pair in this library uses. Carried here rather than read from the
+    # drain again, because the drain happens exactly once per run and its
+    # records are the only description of how each policy retained its stream.
+    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
 
 
 def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandResult:
@@ -289,4 +300,10 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
         # caller's binding is exactly what chose the file that ran.
         resolved_path=execution.observation.resolved_path,
         relay_fallbacks=_relay_fallbacks_for_result(run.ownership.relay_diagnostics),
+        # Flattened through the same helper every other result-construction
+        # site uses, so a handle that captured one stream reports exactly the
+        # one record a ``run()`` of the same command would: the raw optional
+        # pair would put a ``None`` in a tuple the field declares as holding
+        # only records.
+        captures=_recorded_captures(outcome.captures),
     )

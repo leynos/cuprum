@@ -47,6 +47,7 @@ from cuprum.echo_events import EchoStream
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._capture_types import CaptureSink
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.lines import LineStreamName, _LineHookOutcome
@@ -104,16 +105,34 @@ def _create_stream_callback(
 class _StreamConsumerSpawnContext:
     """Inputs a run hands to its stream-consumer spawn.
 
-    Bundles the stdout stream configuration, the subprocess PID, and the
-    per-stream relay diagnostics collectors so the spawn helper takes one
-    argument instead of three. The context is created before any consumer
-    task exists; ownership of the collectors stays with the run, which
-    continues to retain the same tuple on its ``_RunTaskOwnership``.
+    Bundles the *resolved* per-stream configurations, the subprocess PID, and
+    the per-stream relay diagnostics collectors so the spawn helper takes one
+    argument instead of three. The context is created before any consumer task
+    exists; ownership of the collectors stays with the run, which continues to
+    retain the same tuple on its ``_RunTaskOwnership``.
+
+    The configurations are resolved here rather than inside the spawn so that
+    the run holds the very objects its consumers drain. That is what makes the
+    capture accumulators reachable from teardown: a config carries the
+    accumulator for its own policy, and a run that rebuilt the configs would
+    hold accumulators nobody drained into while the ones holding a spill file
+    went out of reach.
     """
 
-    stream_config: _StreamConfig
+    stdout_config: _StreamConfig
+    stderr_config: _StreamConfig
     pid: int | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+    @property
+    def captures(self) -> tuple[CaptureSink | None, CaptureSink | None]:
+        """Report both streams' accumulators, stdout first.
+
+        The order matches ``relay_diagnostics`` and the consumer pair, so a
+        teardown indexed by stream reaches the right accumulator for whichever
+        stream it is cleaning up.
+        """
+        return (self.stdout_config.capture_sink, self.stderr_config.capture_sink)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -164,7 +183,47 @@ def _build_run_task_ownership(
         discard_on_cancel=spawn.discard_on_cancel,
         relay_diagnostics=spawn.relay_diagnostics,
         idle=execution.idle,
+        captures=spawn.spawn_context.captures,
     )
+
+
+def _resolve_stream_configs(
+    execution: _SubprocessExecution,
+    stdout_config: _StreamConfig,
+) -> tuple[_StreamConfig, _StreamConfig]:
+    """Derive the stderr config, and the stdout config's final cursor.
+
+    Each stream's *own* settings are applied here — its capture policy, its
+    echo gate, and its resolved sink — because those differ per stream. What
+    the two share is derived by replacement: the mode, the encoding, and the
+    broken-pipe policy are properties of the run, so one value governs both.
+
+    The cursor is the one place the two streams interact. It tracks where the
+    keepalive's destination ended up, not which stream wrote there: a caller
+    may point both sinks at one object, and then a newline-less stdout echo
+    strands the diagnostic exactly as a stderr one would. Resolved sinks are
+    compared, because that is where the bytes land.
+
+    Returns
+    -------
+    tuple[_StreamConfig, _StreamConfig]
+        The stdout and stderr configurations, in that order, ready to be
+        drained and to have their accumulators cleaned up.
+    """
+    stderr_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
+    )
+    stderr_config = dc.replace(
+        stdout_config,
+        capture=execution.capture_stderr,
+        echo_output=execution.echo_stderr,
+        sink=stderr_sink,
+        stream=EchoStream.STDERR,
+        mirror=execution.idle.mirror if execution.idle is not None else None,
+    )
+    if stdout_config.sink is stderr_config.sink:
+        stdout_config = dc.replace(stdout_config, mirror=stderr_config.mirror)
+    return stdout_config, stderr_config
 
 
 def _spawn_stream_consumers(
@@ -184,32 +243,14 @@ def _spawn_stream_consumers(
     tuple[_StreamConsumerTask, _StreamConsumerTask]
         The stdout and stderr consumer tasks, in that order.
     """
-    pid = spawn_context.pid
-    stream_config = spawn_context.stream_config
     relay_diagnostics = spawn_context.relay_diagnostics
-    stdout_on_line = _create_stream_callback(execution, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution, "stderr", pid)
-    stderr_sink = _resolve_stream_sink(
-        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
-    )
-    stderr_config = dc.replace(
-        stream_config,
-        echo_output=execution.echo_stderr,
-        sink=stderr_sink,
-        stream=EchoStream.STDERR,
-        mirror=execution.idle.mirror if execution.idle is not None else None,
-    )
-    # The cursor tracks where the keepalive's destination ended up, not which
-    # stream wrote there: a caller may point both sinks at one object, and then
-    # a newline-less stdout echo strands the diagnostic exactly as a stderr one
-    # would. Resolved sinks are compared, because that is where the bytes land.
-    if stream_config.sink is stderr_config.sink:
-        stream_config = dc.replace(stream_config, mirror=stderr_config.mirror)
+    stdout_on_line = _create_stream_callback(execution, "stdout", spawn_context.pid)
+    stderr_on_line = _create_stream_callback(execution, "stderr", spawn_context.pid)
     return (
         asyncio.create_task(
             _consume_stream(
                 process.stdout,
-                stream_config,
+                spawn_context.stdout_config,
                 on_line=stdout_on_line,
                 relay_diagnostics=relay_diagnostics[0],
             ),
@@ -217,7 +258,7 @@ def _spawn_stream_consumers(
         asyncio.create_task(
             _consume_stream(
                 process.stderr,
-                stderr_config,
+                spawn_context.stderr_config,
                 on_line=stderr_on_line,
                 relay_diagnostics=relay_diagnostics[1],
             ),
@@ -240,7 +281,8 @@ def _build_stream_config(
     inherited by the stderr one, which this module derives with
     ``dc.replace``: each is a property of the run rather than of a stream, so
     one value governs both, exactly as the caller specified it on the options
-    object.
+    object. Capture is the exception the derivation overrides: it is configured
+    per stream, so the stderr policy is applied rather than inherited.
 
     Returns
     -------
@@ -251,7 +293,7 @@ def _build_stream_config(
         execution.sink_session, execution.ctx.stdout_sink, sys.stdout
     )
     return _StreamConfig(
-        capture_output=execution.capture,
+        capture=execution.capture_stdout,
         echo_output=execution.echo_stdout,
         echo_max_line_bytes=execution.max_echo_line_bytes,
         capture_bytes=execution.capture_bytes,
@@ -292,11 +334,19 @@ def _prepare_stream_spawn(
     """
     discard_on_cancel = asyncio.Event()
     relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    # Both configs are resolved before the consumers exist and the run keeps
+    # the exact pair they drain, so each stream's capture accumulator stays
+    # reachable from the run's single reconciliation point.
+    stdout_config, stderr_config = _resolve_stream_configs(
+        execution,
+        _build_stream_config(execution, discard_on_cancel),
+    )
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
         spawn_context=_StreamConsumerSpawnContext(
-            stream_config=_build_stream_config(execution, discard_on_cancel),
+            stdout_config=stdout_config,
+            stderr_config=stderr_config,
             pid=pid,
             relay_diagnostics=relay_diagnostics,
         ),
@@ -310,6 +360,7 @@ __all__ = [
     "_build_stream_config",
     "_create_stream_callback",
     "_prepare_stream_spawn",
+    "_resolve_stream_configs",
     "_resolve_stream_sink",
     "_spawn_stream_consumers",
 ]

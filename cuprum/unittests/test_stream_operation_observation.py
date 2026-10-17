@@ -17,6 +17,7 @@ from cuprum.adapters.stream_metrics import (
     STREAM_OPERATION_READ_OPERATIONS_TOTAL,
     stream_operation_metrics_hook,
 )
+from cuprum.capture_policy import FullCapture
 from cuprum.events import new_exec_id
 from cuprum.pump_observation import _correlate_pump_events
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
@@ -118,7 +119,7 @@ class _MetricRecorder:
 def _drain_config(*, errors: str = "replace") -> _StreamConfig:
     """Build a capture-only configuration for direct drain tests."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -136,7 +137,7 @@ def test_drain_emits_exact_aggregate_completion() -> None:
                 typ.cast("asyncio.StreamReader", _Reader((b"abc", b"de"))),
                 _drain_config(),
             )
-        )
+        ).payload
 
     assert captured == "abcde", "drain must preserve captured payload"
     assert len(seen) == 1, "one completed drain must emit exactly one event"
@@ -181,7 +182,7 @@ def test_drain_strict_decode_success_emits_eof_completion() -> None:
                 typ.cast("asyncio.StreamReader", _Reader((b"valid",))),
                 _drain_config(errors="strict"),
             )
-        )
+        ).payload
 
     assert captured == "valid", "strict decoding must preserve valid UTF-8"
     assert len(seen) == 1, "a successful strict drain must emit one completion"
@@ -299,7 +300,7 @@ def test_unobserved_operations_do_not_emit_events_or_metrics(
         _drain(
             typ.cast("asyncio.StreamReader", _Reader((b"payload",))), _drain_config()
         )
-    )
+    ).payload
     writer = _Writer()
     asyncio.run(
         _pump_stream(
@@ -326,7 +327,7 @@ def test_failing_observer_does_not_change_drain_or_pump_success() -> None:
             _drain(
                 typ.cast("asyncio.StreamReader", _Reader((b"drain",))), _drain_config()
             )
-        )
+        ).payload
         writer = _Writer()
         asyncio.run(
             _pump_stream(

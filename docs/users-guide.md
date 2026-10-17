@@ -465,6 +465,151 @@ Keep the callback and sink writes prompt: they run on the command's event loop.
 A heartbeat reports silence, not a deadlock, and does not alter the deadline or
 exit status.
 
+Capture is configured per stream, and a stream's policy decides where its bytes
+are kept. `capture=True` and `capture=False` are the shorthands for the
+whole-run switch, and each stream can name its own policy with `capture_stdout`
+and `capture_stderr`:
+
+| Policy                        | What the run reports                                     |
+| ----------------------------- | -------------------------------------------------------- |
+| `True`                        | Complete text, held in the parent's memory. The default. |
+| `False`                       | Nothing: `None` for that stream, and no record.          |
+| `FullCapture()`               | The same as `True`, stated explicitly.                   |
+| `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
+| `FileBackedCapture(...)`      | A file, named by the record.                             |
+
+A per-stream field left at `None` inherits `capture`, and a per-stream value
+always wins for its own stream: `capture=True, capture_stderr=False` captures
+stdout in full and nothing on stderr. So mixing `capture=` with
+`capture_stdout=` is allowed and well defined, not an error. A value that is
+neither a policy nor a `bool` is refused with `ValueError` before the child is
+spawned.
+
+### Bounded capture
+
+`BoundedCapture` keeps the tail of a stream in memory and reports what it
+dropped. The bound counts **bytes, not characters**, so a multi-byte character
+is never split; the retained tail is always decodable on its own:
+
+<!-- tested-example: users-guide-bounded-capture -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="bounded-capture")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij')"
+)
+options = RunOutputOptions(
+    capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=False
+)
+result = command.run_sync(output=options)
+assert result.stdout == "ghij"
+
+# The record says how much of the stream the result does not show.
+(record,) = result.captures
+assert record.stream == "stdout"
+assert record.policy == "bounded"
+assert record.total_bytes == 10
+assert record.dropped_bytes == 6
+assert record.truncated is True
+```
+
+A bound is a decision about what the _result_ keeps. It never shortens what a
+pipeline stage hands to the stage after it, and it never shortens the mirrored
+copy an echo sink receives; those read the child's own pipe.
+
+### File-backed capture
+
+`FileBackedCapture` keeps the stream on the parent's heap until it passes
+`spill_threshold_bytes`, then moves it to a file and appends there. Past the
+threshold the parent's memory stops tracking the child's output, so a long or
+noisy command no longer costs memory proportional to what it wrote:
+
+<!-- tested-example: users-guide-file-backed-capture -->
+
+```python
+import sys
+import tempfile
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import FileBackedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="file-backed")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('z' * 4096)"
+)
+with tempfile.TemporaryDirectory() as directory:
+    options = RunOutputOptions(
+        capture_stdout=FileBackedCapture(spill_threshold_bytes=64, directory=directory),
+        capture_stderr=False,
+    )
+    result = command.run_sync(output=options)
+    (record,) = result.captures
+    assert record.storage == "file"
+    # Text mode reports the spill as a file rather than reading it back, so
+    # the result carries no text for a stream the parent did not retain.
+    assert result.stdout is None
+    assert record.path is not None
+    # The run removes its own file before returning; the record is a statement
+    # that the spill happened, not a promise the file is still there.
+    assert not record.path.exists()
+```
+
+In byte mode (`run_bytes()`) a spilled capture is read back, because a caller
+who asked for the child's own bytes cannot be handed anything less. That read
+is O(stream size), so byte mode does not carry the bounded-memory guarantee
+that text mode does.
+
+`directory` defaults to the system temporary directory, and the file's name is a
+`NamedTemporaryFile` name. Pass `keep_file=True` to keep it: the file then
+survives the run, `record.owned` is `False`, and removing it is the caller's
+job. Without it, `record.owned` is `True` and the run removes the file before
+returning the result — on the success path, on a non-zero exit, on a timeout,
+and on cancellation alike.
+
+A failure to create or write the spill file is absorbed rather than raised: a
+failure to _retain_ output is not a failure of the command that produced it.
+The run still completes and the caller still receives a result, with
+`storage_failed=True` on the record. Read that flag together with `storage`,
+because the pair distinguishes the two failures:
+
+- The file could not be created. The stream never left memory, so `storage`
+  stays `"memory"`, `path` is `None`, and the capture is _complete_ — the
+  caller has the whole stream and only lost the spill.
+- An append failed after the spill began. `storage` is `"file"` and `path`
+  names the file, but the capture holds only whatever reached it before the
+  failure. That is what tells the difference between a short capture and an
+  incomplete one.
+
+### Reading a stream's capture metadata
+
+Every captured stream contributes one `CapturedStream` to `result.captures`, in
+stdout-then-stderr order, and a stream that was not captured contributes none.
+The record is how a caller learns that a result is a tail rather than the whole
+stream, or that the payload is a file rather than text:
+
+| Field            | Meaning                                       |
+| ---------------- | --------------------------------------------- |
+| `stream`         | `"stdout"` or `"stderr"`.                     |
+| `policy`         | `"full"`, `"bounded"`, or `"file_backed"`.    |
+| `total_bytes`    | What the child wrote, not what was kept.      |
+| `dropped_bytes`  | What the bound discarded. `0` for the others. |
+| `storage`        | `"memory"` or `"file"`.                       |
+| `path`           | The spill file, when the storage is a file.   |
+| `owned`          | Whether this run still must remove that file. |
+| `storage_failed` | Whether the spill failed, as above.           |
+| `truncated`      | Derived: `dropped_bytes > 0`.                 |
+
+`truncated` is derived rather than stored, so it cannot disagree with the count
+beside it. Spill transitions and storage failures are also published as
+`CaptureEvent`s; see [Observe production runs](#observe-production-runs).
+
 ### Binary output
 
 Capture decodes by default, so `stdout` and `stderr` are strings and bytes the

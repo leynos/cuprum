@@ -26,6 +26,7 @@ from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_timeout import _SubprocessInvariantError
+from cuprum.capture_policy import FullCapture
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
@@ -64,7 +65,8 @@ def _timeout_free_config() -> _PipelineRunConfig:
     """Build a run configuration with no timeout configured."""
     return _PipelineRunConfig(
         ctx=ExecutionContext(),
-        capture=True,
+        capture_stdout=FullCapture(),
+        capture_stderr=FullCapture(),
         echo_stdout=False,
         echo_stderr=False,
         max_echo_line_bytes=None,

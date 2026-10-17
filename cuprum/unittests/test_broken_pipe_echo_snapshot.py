@@ -42,6 +42,7 @@ import pytest
 from cuprum import BrokenPipePolicy
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
 from cuprum.adapters.echo_metrics import ECHO_BROKEN_PIPE_TOTAL, EchoMetricsHook
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import observe_echo
 from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions
@@ -124,7 +125,7 @@ def _config(
 ) -> _StreamConfig:
     """Build a UTF-8 config for one stream and broken-pipe policy."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         sink=sink,
         encoding="utf-8",

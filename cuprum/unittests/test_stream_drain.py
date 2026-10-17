@@ -18,6 +18,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
+from cuprum.capture_policy import CapturePolicy, FullCapture
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -59,6 +60,12 @@ class _ChunkedReader:
         return self._chunks.pop(0)
 
 
+# The default policy for these drain tests: one shared, immutable instance,
+# because a call in a default argument is banned and a fresh object per call
+# would allocate for no reason.
+_FULL_CAPTURE = FullCapture()
+
+
 def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
     """Build a stream-reader-shaped stub for the given chunks."""
     return typ.cast("asyncio.StreamReader", _ChunkedReader(chunks))
@@ -67,13 +74,13 @@ def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
 def _config(
     sink: typ.IO[str],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = False,
     errors: str = "replace",
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -181,9 +188,12 @@ def _expected_emitted_lines(payload: bytes) -> list[str]:
 def test_drain_empty_capture_returns_empty_text() -> None:
     """Empty captured streams drain to an empty string."""
     sink = io.StringIO()
-    captured = asyncio.run(_drain(_reader(()), _config(sink)))
+    drained = asyncio.run(_drain(_reader(()), _config(sink)))
 
-    assert not captured, "empty captured streams must decode to empty text"
+    assert not drained.payload, "empty captured streams must decode to empty text"
+    assert drained.capture is not None, (
+        "a captured stream must report a record even when it held nothing"
+    )
     assert not sink.getvalue(), "non-echoing empty streams must not write to sink"
 
 
@@ -191,7 +201,7 @@ def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
     """The drain loop retains the injected benchmark read size."""
     reader = _ChunkedReader((b"first", b"second"))
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -201,7 +211,9 @@ def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
 
     captured = asyncio.run(_drain(typ.cast("asyncio.StreamReader", reader), config))
 
-    assert captured == "firstsecond", f"expected complete capture, got {captured!r}"
+    assert captured.payload == "firstsecond", (
+        f"expected complete capture, got {captured!r}"
+    )
     assert reader.read_sizes == [17, 17, 17], (
         "every drain reader call must retain the explicit read size, got "
         f"{reader.read_sizes}"
@@ -214,7 +226,7 @@ def test_drain_respects_capture_and_echo_flags() -> None:
     sink = io.StringIO()
     captured = asyncio.run(_drain(_reader(chunks), _config(sink, echo=True)))
 
-    assert captured == b"alpha \xe2\x98\x83".decode(), (
+    assert captured.payload == b"alpha \xe2\x98\x83".decode(), (
         f"captured text must decode the complete payload for chunks={chunks!r}"
     )
     assert sink.getvalue() == _decode_chunks(chunks), (
@@ -226,11 +238,14 @@ def test_drain_can_disable_capture_while_echoing() -> None:
     """Echo-only drains write chunks but return no captured text."""
     chunks = (b"only ", b"echo")
     sink = io.StringIO()
-    captured = asyncio.run(
-        _drain(_reader(chunks), _config(sink, capture=False, echo=True)),
+    drained = asyncio.run(
+        _drain(_reader(chunks), _config(sink, capture=None, echo=True)),
     )
 
-    assert captured is None, "capture-disabled drains must return None"
+    assert drained.payload is None, "capture-disabled drains must return None"
+    assert drained.capture is None, (
+        "a drain that captured nothing must report no capture record"
+    )
     assert sink.getvalue() == "only echo", (
         f"echo-only drain must write all decoded chunks for chunks={chunks!r}"
     )
@@ -245,7 +260,7 @@ def test_discarding_a_cancelled_capture_skips_decoding() -> None:
         reader = asyncio.StreamReader()
         reader.feed_data(b"\xff")
         config = _StreamConfig(
-            capture_output=True,
+            capture=FullCapture(),
             echo_output=False,
             sink=io.StringIO(),
             encoding="utf-8",
@@ -273,7 +288,7 @@ def test_cancelled_capture_retains_buffered_text() -> None:
         task = asyncio.create_task(_drain(reader, _config(io.StringIO())))
         await asyncio.sleep(0)
         task.cancel()
-        return await task
+        return (await task).payload
 
     assert asyncio.run(run_case()) == "partial output"
 
@@ -289,7 +304,7 @@ def test_cancelled_capture_flushes_replacement_echo() -> None:
         task = asyncio.create_task(_drain(reader, _config(sink, echo=True)))
         await asyncio.sleep(0)
         task.cancel()
-        return await task, sink.getvalue()
+        return (await task).payload, sink.getvalue()
 
     assert asyncio.run(run_case()) == (
         "\N{REPLACEMENT CHARACTER}",
@@ -322,7 +337,7 @@ def test_drain_echoes_split_multibyte_text_sink() -> None:
 
     captured = asyncio.run(_drain(_reader(chunks), _config(sink, echo=True)))
 
-    assert captured == expected, (
+    assert captured.payload == expected, (
         f"capture must decode the whole payload for chunks={chunks!r}"
     )
     assert sink.getvalue() == expected, (
@@ -336,7 +351,7 @@ def test_drain_strictly_echoes_split_multibyte_text_sink() -> None:
     chunks = (b"before \xe2", b"\x98", b"\x83 after")
     sink = io.StringIO()
     config = _StreamConfig(
-        capture_output=False,
+        capture=None,
         echo_output=True,
         sink=sink,
         encoding="utf-8",
@@ -345,7 +360,9 @@ def test_drain_strictly_echoes_split_multibyte_text_sink() -> None:
 
     captured = asyncio.run(_drain(_reader(chunks), config))
 
-    assert captured is None, f"echo-only drains must return None for chunks={chunks!r}"
+    assert captured.payload is None, (
+        f"echo-only drains must return None for chunks={chunks!r}"
+    )
     assert sink.getvalue() == "before \u2603 after", (
         "strict text-sink echo must reconstruct split multibyte characters for "
         f"chunks={chunks!r}, received={sink.getvalue()!r}"
@@ -359,10 +376,10 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
     sink = io.TextIOWrapper(raw_sink, encoding="utf-8")
 
     captured = asyncio.run(
-        _drain(_reader(chunks), _config(sink, capture=False, echo=True)),
+        _drain(_reader(chunks), _config(sink, capture=None, echo=True)),
     )
 
-    assert captured is None, (
+    assert captured.payload is None, (
         f"buffered echo-only drains must return None for chunks={chunks!r}"
     )
     assert raw_sink.getvalue() == b"".join(chunks), (
@@ -399,7 +416,7 @@ def test_final_flush_after_disabled_echo_writes_nothing() -> None:
     )
     attempts = sink.attempts
 
-    assert captured == "ś\N{REPLACEMENT CHARACTER}", (
+    assert captured.payload == "ś\N{REPLACEMENT CHARACTER}", (
         "capture must keep the rejected character and flush the decoder tail "
         f"after echo is disabled for captured={captured!r}"
     )
@@ -433,7 +450,9 @@ def test_consume_stream_variants_capture_identically(
         ),
     )
 
-    assert plain == with_lines == payload.decode("utf-8", errors="replace"), (
+    assert (
+        plain.payload == with_lines.payload == payload.decode("utf-8", errors="replace")
+    ), (
         "plain and line-emitting variants must match whole-payload decode for "
         f"payload={payload!r}, chunks={chunks!r}"
     )
@@ -516,13 +535,13 @@ def test_line_emission_matches_splitlines_for_every_supported_boundary(
 def _byte_config(
     sink: typ.IO[str],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = False,
     errors: str = "replace",
 ) -> _StreamConfig:
     """Build a byte-exact UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -550,7 +569,9 @@ def test_byte_exact_echo_survives_a_strict_capture_policy() -> None:
         )
     )
 
-    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
+    assert captured.payload == payload, (
+        f"the capture must stay byte-exact, got {captured!r}"
+    )
     assert sink.getvalue() == "first\nsecond�\nthird", (
         "the mirror must render the replacement view rather than raise, got "
         f"{sink.getvalue()!r}"
@@ -604,7 +625,9 @@ def test_byte_exact_capture_still_observes_decoded_lines() -> None:
         )
     )
 
-    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
+    assert captured.payload == payload, (
+        f"the capture must stay byte-exact, got {captured!r}"
+    )
     assert lines == ["first", "second�", "third"], (
         f"the observer must receive the decoded lines, got {lines!r}"
     )
@@ -627,7 +650,7 @@ def test_byte_exact_capture_observes_lines_across_chunk_boundaries() -> None:
         )
     )
 
-    assert captured == b"a\xc3\xa9b\n", (
+    assert captured.payload == b"a\xc3\xa9b\n", (
         f"the split sequence must survive intact, got {captured!r}"
     )
     assert lines == ["aéb"], f"the joined sequence must decode once, got {lines!r}"
@@ -646,5 +669,5 @@ def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:
         _consume_stream(None, _byte_config(io.StringIO()), on_line=lines.append)
     )
 
-    assert captured == b"", f"an empty byte capture is b'', got {captured!r}"
+    assert captured.payload == b"", f"an empty byte capture is b'', got {captured!r}"
     assert not lines, "an unattached stream publishes no lines"

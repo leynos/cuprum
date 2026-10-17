@@ -37,6 +37,7 @@ from cuprum._pipeline_types import (
     _ExecutionHooks,
     _StageObservation,
 )
+from cuprum.unittests._stream_drain_support import captured
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -111,7 +112,18 @@ def _inputs(
     exit_codes: tuple[int, ...],
     ended_at: tuple[float | None, ...],
 ) -> _PipelineStageResultInputs:
-    """Build the wait outcome the assembler consumes for a synthetic pipeline."""
+    """Build the wait outcome the assembler consumes for a synthetic pipeline.
+
+    Each captured stream is handed over as a settled drain result rather than a
+    bare payload, because that is what the assembler reads a stage's payload and
+    capture record off. Each stage's stderr text names its own index, so a
+    result built from the wrong stage's stream cannot pass by coincidence.
+
+    Returns
+    -------
+    _PipelineStageResultInputs
+        The inputs, one stderr drain per stage plus the final stdout drain.
+    """
     return _PipelineStageResultInputs(
         wait_result=_PipelineWaitResult(
             exit_codes=exit_codes,
@@ -120,8 +132,10 @@ def _inputs(
             ended_at=ended_at,
             wall_clock_started_at=_WALL_CLOCK,
         ),
-        stderr_by_stage=tuple(f"stderr-{idx}" for idx in range(len(exit_codes))),
-        final_stdout="captured",
+        stderr_by_stage=tuple(
+            captured(f"stderr-{idx}") for idx in range(len(exit_codes))
+        ),
+        final_stdout=captured("captured"),
         # This seam builds stage results from injected wait outcomes, so no
         # echo-disablement records exist to carry into them.
         relay_fallbacks_by_stage=tuple(() for _ in exit_codes),

@@ -24,6 +24,7 @@ from cuprum import _subprocess_spawn
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._subprocess_spawn import _SubprocessExecution
+from cuprum.capture_policy import FullCapture
 from cuprum.sh import ExecutionContext, RunOutputOptions, TimeoutExpired
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.idle import keepalives, pending_tasks
@@ -33,6 +34,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.sh import SafeCmd
 
 _MAX_LINE_BYTES = 512
@@ -64,6 +66,11 @@ class _UnwritableSink:
         """Model the flush call on a text stream."""
 
 
+def _capture_for(enabled: bool) -> CapturePolicy | None:
+    """Resolve one stream's capture policy for a run with *enabled* set."""
+    return FullCapture() if enabled else None
+
+
 def _execution(
     command: SafeCmd,
     *,
@@ -75,7 +82,8 @@ def _execution(
     return _SubprocessExecution(
         cmd=command,
         ctx=ExecutionContext(),
-        capture=capture,
+        capture_stdout=_capture_for(capture),
+        capture_stderr=_capture_for(capture),
         echo_stdout=echo,
         echo_stderr=echo,
         max_echo_line_bytes=None,
