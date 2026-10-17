@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import codecs
 import dataclasses as dc
+import sys
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -149,15 +150,13 @@ def _mark_selected_codec(family: str, prefix: bytes) -> str | None:
 def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettings:
     """Resolve the codec a truncated tail can still be read with.
 
-    A byte bound drops the oldest bytes, which for ``utf-16``, ``utf-32``, and
-    ``utf-8-sig`` can be the byte-order mark that selects the codec. Handing
-    those decoders a tail without their mark raises, and returning early would
-    leave that error to the caller, so the mark captured from the head
-    resolves the family to the concrete endianness the stream actually used.
-    Call this only when the bound discarded the stream's head: the concrete
-    codecs do not strip a mark, so resolving while the mark is still retained
-    would leave a leading U+FEFF in the payload. ``_BoundedAccumulator`` keeps
-    the family name in that case, and the decoder removes the mark for it.
+    Call this only when the bound discarded the stream's head, because both
+    resolutions below assume the mark can no longer be retained; applying them
+    while it survives would leave a leading U+FEFF in the payload. A head that
+    is gone also means the retained tail must be trimmed for the resolved
+    codec rather than the one the caller named: ``utf-8-sig`` strips a mark, so
+    its name cannot say where a cut inside a code point landed, and the
+    ``utf-16``/``utf-32`` family names accept no bytes at all without one.
 
     Parameters
     ----------
@@ -169,18 +168,38 @@ def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettin
     Returns
     -------
     _DecodeSettings
-        *settings* when its encoding is not mark-selected, otherwise the same
-        decoding spelled as the concrete codec the mark names. An absent or
-        unrecognized mark leaves *settings* unchanged: the stream was going to
-        fail that decode anyway, and inventing an order would misread it.
+        *settings* with its encoding resolved to the concrete codec the
+        stream's head selects: the mark's endianness where there is one, the
+        platform's native order where the family name carried no mark, and
+        plain UTF-8 for ``utf-8-sig``, whose mark cannot have survived a
+        dropped head. An encoding that is not mark-selected is returned
+        unchanged.
     """
     family = _canonical_encoding(settings.encoding)
+    if family == "utf-8-sig":
+        return dc.replace(settings, encoding="utf-8")
     if family not in _BOM_SELECTED_CODECS:
         return settings
-    codec = _mark_selected_codec(family, prefix)
-    if codec is None:
-        return settings
+    codec = _mark_selected_codec(family, prefix) or _native_codec(family)
     return dc.replace(settings, encoding=codec)
+
+
+def _native_codec(family: str) -> str:
+    """Return the concrete codec *family* assumes when its stream has no mark.
+
+    The ``utf-16`` and ``utf-32`` decoders fall back to the platform's byte
+    order when no mark is present, so a dropped head must not discard that
+    rule and invent one. The platform's decoder rejects a headless stream
+    before it gets this far, so only the bounded path ever needs it.
+
+    Returns
+    -------
+    str
+        The concrete little- or big-endian codec the platform's decoder would
+        select for *family*.
+    """
+    little, big = _BOM_SELECTED_CODECS[family]
+    return little if sys.byteorder == "little" else big
 
 
 def _render(retained: bytes, settings: _DecodeSettings) -> str | bytes:

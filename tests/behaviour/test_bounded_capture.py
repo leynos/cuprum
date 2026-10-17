@@ -1,27 +1,36 @@
 """Behavioural coverage for per-stream capture policies on a pipeline (#443).
 
 A capture policy bounds or moves what a *run reports* about a stream. It must
-not touch what a stage hands to the stage after it: the relay is the child's
-own pipe, and a bound the parent applies while reading beside it cannot reach
-into it. That distinction is invisible to a single command, which has no
-downstream stage to have been starved, so these scenarios run real pipelines
-and read the second stage's verdict.
+not touch any other view of the same bytes: neither what a stage hands to the
+stage after it, nor what an echo sink receives. The relay is the child's own
+pipe, which the parent never reads, so no capture policy can reach it; the
+echo mirror is the parent's own copy of the chunks it reads beside the
+capture, so a bound that leaked into the echo would be visible there and
+nowhere else. Each distinction needs its own run: a single command has no
+downstream stage to starve, and only an echoing run has a mirror to compare.
 
-Every scenario derives its expected values from two module constants, the
-payload and the bound, so what a run must report is a value the test computes
-rather than a substring it hopes for. The payload is strictly larger than the
-bound. In the relay-measurement scenario the last stage writes fewer bytes
-than the bound allows, so a bound that leaked into the relay would show up as
-a shortened count rather than as a captured tail nothing compares against.
-The other scenarios end in the relay stage, whose own output is the whole
-payload and so exceeds the bound.
+Every scenario derives its expected values from module constants — the
+payload, the bound, and the relay's stderr — so what a run must report is a
+value the test computes rather than a substring it hopes for. Both the
+payload and the relay's stderr are strictly larger than the bound, so a
+scenario that asserts a whole stream cannot pass by retaining a tail that
+happened to fit. In the relay-measurement scenario the last stage writes
+fewer bytes than the bound allows, so a bound that leaked into the relay
+would show up as a shortened count rather than as a captured tail nothing
+compares against. The echo scenario asserts the mirror holds the whole
+payload, which is only a meaningful comparison because the payload exceeds
+the bound. The remaining scenarios end in the relay stage, whose stdout is
+the whole payload and whose stderr is longer still.
 """
 
 from __future__ import annotations
 
+import io
+import typing as typ
+
 from pytest_bdd import given, scenario, then, when
 
-from cuprum import ScopeConfig, scoped
+from cuprum import ExecutionContext, ScopeConfig, scoped
 from cuprum.capture_policy import BoundedCapture, CapturedStream, FullCapture
 from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions, SafeCmd
 from tests.helpers.catalogue import build_python_catalogue_env
@@ -36,6 +45,13 @@ _TAIL = _PAYLOAD[-_BOUND:]
 _DROPPED = _PAYLOAD_LEN - _BOUND
 _ANNOUNCEMENT = str(_PAYLOAD_LEN)
 
+# The relay's stderr is longer than the bound on purpose: a whole-stream
+# assertion needs a case where the whole differs from the tail. The marker is
+# the one byte a run would retain if it bounded this stream, and combining it
+# with the announcement makes the two values differ in both content and length.
+_STDERR_MARKER = "e"
+_STDERR_LEN = 4 * _BOUND
+
 # The producer writes its payload and exits; it neither reads nor reports.
 _PRODUCER_SOURCE = f"import sys; sys.stdout.write({_PAYLOAD!r})"
 
@@ -43,10 +59,19 @@ _PRODUCER_SOURCE = f"import sys; sys.stdout.write({_PAYLOAD!r})"
 # stderr. Two assertions ride on this: the relayed stdout proves the second
 # stage read the whole stream, and the stderr announcement proves a second
 # stream's policy ran independently of the first's.
+_STDERR_FILLER_COUNT = _STDERR_LEN - len(_ANNOUNCEMENT)
 _RELAY_SOURCE = (
     "import sys; data = sys.stdin.read(); "
-    "sys.stdout.write(data); sys.stderr.write(str(len(data)))"
+    "sys.stdout.write(data); "
+    f"sys.stderr.write(str(len(data)) + {_STDERR_MARKER!r} * {_STDERR_FILLER_COUNT})"
 )
+
+# What the relay's stderr must hold: the announcement followed by the filler,
+# so its length is *not* the announcement's. A run that applied the stdout
+# bound here would report a tail shorter than the bound (because the retained
+# tail is bounded), and one that reported only the announcement would fail the
+# exact comparison.
+_STDERR_TEXT = _ANNOUNCEMENT + _STDERR_MARKER * (_STDERR_LEN - len(_ANNOUNCEMENT))
 
 # The consumer of the relay scenario: reports only the number of bytes it read.
 # Its whole output is a couple of bytes, far below the bound, so what it
@@ -54,7 +79,12 @@ _RELAY_SOURCE = (
 _REPORTER_SOURCE = "import sys; sys.stdout.write(str(len(sys.stdin.read())))"
 
 
-def _run_pipeline(stages: list[str], options: RunOutputOptions) -> PipelineResult:
+def _run_pipeline(
+    stages: list[str],
+    options: RunOutputOptions,
+    *,
+    context: ExecutionContext | None = None,
+) -> PipelineResult:
     """Build and run *stages* under one catalogue scope, applying *options*.
 
     ``SafeCmd.__or__`` returns a ``Pipeline`` while the fold starts at a single
@@ -63,6 +93,17 @@ def _run_pipeline(stages: list[str], options: RunOutputOptions) -> PipelineResul
     makes the narrowing honest rather than assumed: every scenario here runs a
     real two-stage pipeline, and a fold that had somehow left a bare command
     would have nothing to relay between.
+
+    Parameters
+    ----------
+    stages : list[str]
+        The Python source for each stage, in pipeline order.
+    options : RunOutputOptions
+        The output behaviour the scenario exercises.
+    context : ExecutionContext | None
+        Where the run's echo sinks go. ``None`` keeps the default, which
+        writes to the test process's own streams; the echo scenario passes
+        sinks so it can read what was mirrored.
 
     Returns
     -------
@@ -78,7 +119,7 @@ def _run_pipeline(stages: list[str], options: RunOutputOptions) -> PipelineResul
         f"these scenarios run pipelines, so the fold must produce one; got {pipeline!r}"
     )
     with scoped(ScopeConfig(allowlist=frozenset({env.program}))):
-        return pipeline.run_sync(output=options)
+        return pipeline.run_sync(output=options, context=context)
 
 
 def _capture(result: PipelineResult, stream: str) -> CapturedStream:
@@ -108,10 +149,18 @@ def test_bound_does_not_reach_the_relay() -> None:
 
 @scenario(
     "../features/bounded_capture.feature",
-    "A stage's streams are configured independently",
+    "A bound on stdout leaves stderr complete, though both exceed it",
 )
 def test_streams_are_configured_independently() -> None:
     """Behavioural coverage for per-stream policy independence."""
+
+
+@scenario(
+    "../features/bounded_capture.feature",
+    "A bound never reaches the echo mirror",
+)
+def test_bound_does_not_reach_the_echo() -> None:
+    """Behavioural coverage for the echo mirror being independent of capture."""
 
 
 @given("a curated Python command for testing")
@@ -171,6 +220,61 @@ def when_run_with_full_stderr(stages: list[str]) -> PipelineResult:
             capture_stdout=BoundedCapture(max_bytes=_BOUND),
             capture_stderr=FullCapture(),
         ),
+    )
+
+
+@when(
+    "I run the pipeline with stdout bounded and echoed",
+    target_fixture="mirror",
+)
+def when_run_echoing_stdout(stages: list[str]) -> io.StringIO:
+    """Bound and echo the final stage's stdout, returning the echo mirror.
+
+    The mirror is the parent's own copy of what it read, so it is the one
+    place a bound could leak into a *second* view of the same bytes. The sink
+    receives the whole payload only if the echo tap sees the chunk untrimmed:
+    the accumulator trims a retained tail at finalization, and a tap that
+    echoed *its* output instead would write only the bound-long tail.
+
+    Returns
+    -------
+    io.StringIO
+        The sink the run mirrored its echoed stdout into.
+    """
+    mirror = io.StringIO()
+    _run_pipeline(
+        stages,
+        RunOutputOptions(
+            capture_stdout=BoundedCapture(max_bytes=_BOUND),
+            capture_stderr=False,
+            echo_stdout=True,
+            echo_stderr=False,
+        ),
+        context=ExecutionContext(
+            stdout_sink=typ.cast("typ.IO[str]", mirror),
+            stderr_sink=typ.cast("typ.IO[str]", io.StringIO()),
+        ),
+    )
+    return mirror
+
+
+@then("the echo mirror holds the whole payload")
+def then_echo_saw_everything(mirror: io.StringIO) -> None:
+    """Assert the echoed copy is the whole payload, not the bounded tail.
+
+    A mirrored view is a *second* view of bytes the capture policy also
+    retained, so a bound applied before the echo tap would shorten it while
+    leaving the capture record correct. Comparing against the payload — and
+    against its length — is what separates the two.
+    """
+    echoed = mirror.getvalue()
+    assert echoed == _PAYLOAD, (
+        "the echo mirror must hold every byte the child wrote, not the "
+        f"bounded tail; got {echoed!r} rather than {_PAYLOAD!r}"
+    )
+    assert len(echoed) > _BOUND, (
+        "the payload must exceed the bound, or a leak into the mirror would "
+        f"be indistinguishable from a correct one; got {len(echoed)} bytes"
     )
 
 
@@ -236,28 +340,31 @@ def then_downstream_saw_everything(result: PipelineResult) -> None:
     )
 
 
-@then("the reported stderr capture is the payload's whole length")
+@then("the reported stderr capture is the whole stderr, which exceeds the bound")
 def then_stderr_is_complete(result: PipelineResult) -> None:
     """Assert stderr is complete while stdout is bounded, in one run.
 
     The two policies in this run differ, so a resolution that collapsed them
     onto one field — the joint switch this obligation excludes — would apply
-    the bound to stderr as well. The length is a value the relay computed, so
-    the assertion is against the payload rather than against a substring.
+    the bound to stderr as well. That would be visible twice over: the
+    reported text would be the bound-long tail rather than the whole
+    ``_STDERR_TEXT``, and the record would count dropped bytes. Asserting
+    both, against a stderr longer than the bound, is what keeps a record that
+    merely named the policy from passing.
     """
     record = _capture(result, "stderr")
     assert record.policy == "full", (
         "stderr was declared complete, so the run must report 'full'; "
         f"got {record.policy!r}"
     )
-    assert result.final.stderr == _ANNOUNCEMENT, (
-        f"the relay must announce the whole payload length {_ANNOUNCEMENT!r}; "
-        f"got {result.final.stderr!r}"
+    assert result.final.stderr == _STDERR_TEXT, (
+        "the relay must announce the payload's length and then its filler; "
+        f"got {result.final.stderr!r} rather than {_STDERR_TEXT!r}"
     )
     assert record.dropped_bytes == 0, (
         f"a complete stderr capture drops nothing; got {record.dropped_bytes}"
     )
-    assert record.total_bytes == len(_ANNOUNCEMENT), (
-        f"the relay announced {_PAYLOAD_LEN}, so stderr holds "
-        f"{len(_ANNOUNCEMENT)} bytes; got {record.total_bytes}"
+    assert record.total_bytes == _STDERR_LEN, (
+        f"a complete stderr capture counts all {_STDERR_LEN} bytes; "
+        f"got {record.total_bytes}"
     )

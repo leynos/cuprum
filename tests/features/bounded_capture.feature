@@ -24,9 +24,15 @@ Feature: Bounded capture policy on pipeline stages
     When I run the pipeline with stderr left uncaptured
     Then the downstream stage reports the payload's whole length
 
-  Scenario: A stage's streams are configured independently
+  Scenario: A bound on stdout leaves stderr complete, though both exceed it
     Given a producer stage whose payload exceeds the bound
     And a stage that relays its input to stdout and to stderr
     When I run the pipeline with stderr captured in full
     Then the reported stdout capture is the tail of the payload
-    And the reported stderr capture is the payload's whole length
+    And the reported stderr capture is the whole stderr, which exceeds the bound
+
+  Scenario: A bound never reaches the echo mirror
+    Given a producer stage whose payload exceeds the bound
+    And a stage that relays its input to stdout and to stderr
+    When I run the pipeline with stdout bounded and echoed
+    Then the echo mirror holds the whole payload

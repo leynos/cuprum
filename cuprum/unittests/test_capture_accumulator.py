@@ -15,6 +15,7 @@ byte for byte, so a caller who configured nothing cannot see a difference.
 
 from __future__ import annotations
 
+import sys
 import typing as typ
 
 import pytest
@@ -36,13 +37,18 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._capture_types import CaptureSink
-    from cuprum.capture_policy import CapturedStream, CaptureStreamName
+    from cuprum.capture_policy import CaptureStreamName
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
 # The same decode, but the child's own bytes are the payload. Both modes are
 # exercised by the same cases, so a mode that quietly decoded — or a text mode
 # that quietly returned bytes — cannot pass by running only its own arm.
 _BYTES = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=True)
+
+# The concrete codec a mark-less ``utf-16``/``utf-32`` stream reads as: the
+# decoders fall back to the platform's byte order when there is no mark.
+_NATIVE_UTF16 = "utf-16-le" if sys.byteorder == "little" else "utf-16-be"
+_NATIVE_UTF32 = "utf-32-le" if sys.byteorder == "little" else "utf-32-be"
 
 # Corpora chosen for what a retention bug would have to do to pass them. The
 # multibyte and split-code-point entries are the ones a length-based trim gets
@@ -145,27 +151,31 @@ def test_bounded_capture_retains_a_suffix_within_its_bound(
 
     Every bound from 1 to 4096 is exercised over a corpus whose multibyte
     entries are longer than several of those bounds, so the trim has real work
-    to do rather than passing on payloads that fit whole. The bound is
-    checked on the *retained bytes*, read back from the record's own counts,
-    because a payload compared as text would hide a byte-level overrun behind
-    the trim's forward movement.
+    to do rather than passing on payloads that fit whole. The bound is checked
+    on the bytes the payload encodes back to, not on the record's own counts:
+    reading the count back from the record would let a policy that retained
+    more than it reported satisfy the bound with arithmetic it supplied
+    itself.
     """
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
     _absorb(sink, _chunks(payload, 1))
     final = sink.finalize()
     record = final.capture
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    retained = len(final.payload.encode())
 
     assert record.total_bytes == len(payload), (
         "the record must count the whole stream, not just the retained tail"
     )
-    assert record.dropped_bytes + _retained_len(record) == len(payload), (
+    assert record.dropped_bytes + retained == len(payload), (
         "the lemma dropped + retained == total must hold; "
-        f"got dropped={record.dropped_bytes}, total={record.total_bytes}"
+        f"got dropped={record.dropped_bytes}, retained={retained}, "
+        f"total={record.total_bytes}"
     )
-    assert _retained_len(record) <= max_bytes, (
-        f"retention must stay within the bound; got {_retained_len(record)} "
-        f"bytes for max_bytes={max_bytes}"
+    assert retained <= max_bytes, (
+        f"retention must stay within the bound; got {retained} bytes for "
+        f"max_bytes={max_bytes}"
     )
     # The retained bytes are a suffix: dropping the first ``dropped`` bytes of
     # the stream has to leave exactly what the payload decodes to. A trim that
@@ -317,20 +327,25 @@ def test_a_repeated_finalize_reports_the_same_drop_count(max_bytes: int) -> None
 
 
 @pytest.mark.parametrize(
-    ("encoding", "max_bytes"),
+    ("encoding", "max_bytes", "expected"),
     [
         # The mark is 2 bytes for UTF-16 and 3 for UTF-8-SIG, so these bounds
         # leave the tail wholly mark-less. UTF-32's mark is 4 bytes, and a
         # 4-byte bound would retain it whole; 6 keeps a complete code unit
         # while still cutting the mark away.
-        pytest.param("utf-16", 2, id="utf-16"),
-        pytest.param("utf-32", 6, id="utf-32"),
-        pytest.param("utf-8-sig", 2, id="utf-8-sig"),
+        pytest.param("utf-16", 2, "中", id="utf-16"),
+        pytest.param("utf-32", 6, "中", id="utf-32"),
+        # ``中`` is three bytes in UTF-8, so a bound of 2 retains only part of
+        # it and the leading trim drops what is left; a bound of 3 retains it
+        # whole behind no continuation byte.
+        pytest.param("utf-8-sig", 2, "", id="utf-8-sig-keeps-no-codepoint"),
+        pytest.param("utf-8-sig", 3, "中", id="utf-8-sig-keeps-the-codepoint"),
     ],
 )
 def test_a_bound_that_discards_the_mark_still_decodes(
     encoding: str,
     max_bytes: int,
+    expected: str,
 ) -> None:
     """A byte-order mark the bound dropped is resolved from the stream's head.
 
@@ -339,6 +354,10 @@ def test_a_bound_that_discards_the_mark_still_decodes(
     guessing an order. The stream is encoded *with* the family name, so the
     mark is really there, and the bound is set so the retained tail cannot
     contain it.
+
+    The payload is compared exactly, not merely for being a suffix: every
+    string ends with the empty string, so a suffix assertion would pass
+    vacuously had the whole tail been trimmed away.
     """
     settings = _DecodeSettings(encoding, "strict", capture_bytes=False)
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
@@ -348,9 +367,127 @@ def test_a_bound_that_discards_the_mark_still_decodes(
     final = sink.finalize()
 
     assert isinstance(final.payload, str), "text mode must decode to text"
-    assert text.endswith(final.payload), (
+    assert final.payload == expected, (
         f"a mark-less tail must still decode as the stream's own {encoding}; "
-        f"got {final.payload!r} from {text!r}"
+        f"got {final.payload!r}, expected {expected!r} from {text!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("family", "native", "max_bytes"),
+    [
+        # A code unit is 2 bytes wide, so a bound of one unit keeps exactly
+        # the last character.
+        pytest.param("utf-16", _NATIVE_UTF16, 2, id="utf-16"),
+        # A code unit is 4 bytes wide here, so a bound of one unit keeps the
+        # last character and nothing before it.
+        pytest.param("utf-32", _NATIVE_UTF32, 4, id="utf-32"),
+    ],
+)
+def test_a_mark_less_family_name_reads_the_tail_as_the_platform_does(
+    family: str,
+    native: str,
+    max_bytes: int,
+) -> None:
+    """A family name with no mark decodes as its full-stream decoder would.
+
+    ``utf-16`` and ``utf-32`` assume the platform's byte order when the stream
+    carries no mark whose order they could read. A bound can cut the stream
+    before any mark arrives, or the child may write no mark at all, so the
+    tail must be trimmed and decoded under that same assumption rather than
+    under the family name, which rejects a mark-less head outright.
+
+    The payload is encoded with the concrete native codec, so the stream is
+    genuinely mark-less; the family name is what the caller configured. A
+    payload encoded with the family name would carry a mark, and then the
+    head would resolve the codec and this rule would never be reached. The
+    bound keeps one whole character, so a resolution that merely avoided the
+    decoder's mark check could not pass by trimming everything away.
+    """
+    settings = _DecodeSettings(family, "strict", capture_bytes=False)
+    sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
+
+    sink.absorb("ab中".encode(native))
+    final = sink.finalize()
+
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert final.payload == "中", (
+        f"a mark-less {family} tail must decode as native text; "
+        f"got {final.payload!r} for {max_bytes} bytes"
+    )
+
+
+@pytest.mark.parametrize(
+    ("family", "native", "max_bytes"),
+    [
+        # Two code units of four bytes each, so a bound of 5 keeps the second
+        # character and one byte of the first.
+        pytest.param("utf-16", _NATIVE_UTF16, 5, id="utf-16"),
+        # One code unit is four bytes, so a bound of 5 keeps the second
+        # character and the first byte of the first.
+        pytest.param("utf-32", _NATIVE_UTF32, 5, id="utf-32"),
+    ],
+)
+def test_a_mark_less_family_name_trims_the_leading_edge_to_its_units(
+    family: str,
+    native: str,
+    max_bytes: int,
+) -> None:
+    """The platform rule applies to the leading edge, not only to the decode.
+
+    A fixed-width encoding realigns by absolute stream offset, so the tail
+    must be trimmed under the concrete codec's unit width. Under the family
+    name the trim would leave the partial unit in place and the strict decode
+    would raise; under UTF-8's width it would not move at all.
+    """
+    settings = _DecodeSettings(family, "strict", capture_bytes=False)
+    sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
+    payload = "\U0001f600\U0001f601".encode(native)
+
+    sink.absorb(payload)
+    final = sink.finalize()
+
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert final.payload == "\U0001f601", (
+        f"a mark-less {family} tail must keep the whole character the bound "
+        f"covers and drop the partial one; got {final.payload!r} for "
+        f"{max_bytes} bytes"
+    )
+
+
+@pytest.mark.parametrize(
+    ("max_bytes", "expected"),
+    [
+        # ``中`` is three bytes in UTF-8. A bound of 2 retains only part of it,
+        # which the leading trim drops, and a bound of 3 retains it whole.
+        pytest.param(2, "", id="part-of-a-character"),
+        pytest.param(3, "中", id="one-character"),
+    ],
+)
+def test_a_mark_less_utf_8_sig_tail_trims_as_utf_8(
+    max_bytes: int,
+    expected: str,
+) -> None:
+    """``utf-8-sig`` accepts a stream with no mark, so a tail must too.
+
+    The mark is optional when decoding, which makes ``utf-8-sig`` a valid way
+    to say "UTF-8, BOM or not". A bound that dropped the head then leaves a
+    plain UTF-8 tail, but the family name is not the codec the tail has to be
+    *trimmed* under: it names a mark-stripping wrapper whose boundaries the
+    leading trim cannot read. Resolving it to ``utf-8`` once the head is gone
+    is what keeps a cut inside a code point from being decoded as a
+    continuation byte.
+    """
+    settings = _DecodeSettings("utf-8-sig", "strict", capture_bytes=False)
+    sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
+
+    sink.absorb("ab中".encode())
+    final = sink.finalize()
+
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert final.payload == expected, (
+        "a mark-less utf-8-sig tail must trim as UTF-8; "
+        f"got {final.payload!r} for {max_bytes} bytes"
     )
 
 
@@ -440,8 +577,3 @@ def _chunks(payload: bytes, size: int) -> list[bytes]:
         The chunks, in stream order, whose concatenation is *payload*.
     """
     return [payload[start : start + size] for start in range(0, len(payload), size)]
-
-
-def _retained_len(record: CapturedStream) -> int:
-    """Report how many bytes the record's policy retained, from its own counts."""
-    return record.total_bytes - record.dropped_bytes
