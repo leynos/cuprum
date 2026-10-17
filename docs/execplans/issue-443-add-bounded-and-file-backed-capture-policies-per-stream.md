@@ -284,8 +284,19 @@ Thresholds that trigger escalation when breached.
   `cuprum/capture_presence.py`; `capture_policy.py` returns to 375 lines.
   Lesson: a duplication repair is a size change too, so the 400-line ceiling
   has to be re-checked after one, not just the duplication gate.
-- [ ] Run the full commit-gate set through `scrutineer` at the final HEAD, then
-  push and open the draft pull request.
+- [x] (2026-10-17) Run the full commit-gate set through `scrutineer` at the
+  final HEAD, then push and open the draft pull request. All six gates are
+  green at `b8b42fc27`, and each log records that head in its own header. The
+  first post-rebase full run had never exercised the Rust nextest and doctest
+  stages; this one did. Counts: pytest `3493 passed, 93 skipped`; nextest
+  `167 tests run: 167 passed (1 slow), 0 skipped`; doctests
+  `0 passed, 0 failed, 3 ignored` across all three crates.
+- Lesson: a gate log's filename is not provenance. The `-6` logs are green and
+  the `-7` `check-fmt` log is green, but the nearby `-6` `check-fmt` log is a
+  *red* run at `c14cce55c`; reading filenames instead of each log's own `head=`
+  line would have certified the wrong SHA. The headers were written
+  inconsistently (`head=` first versus on the `# gate=` line), so both forms
+  have to be read.
 
 ## Surprises & discoveries
 
