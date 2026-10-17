@@ -372,6 +372,23 @@ _Applications upgrading from 0.1 should follow the
   [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) now leads with an
   upgrade checklist covering every breaking change since 0.1
   ([#634](https://github.com/leynos/cuprum/pull/634)).
+- **Streaming stdin:** `StdinStream(chunks=...)` feeds an async producer's
+  chunks to the child one at a time, writing and draining each before pulling
+  the next, so input larger than the parent would buffer is delivered without
+  holding the whole payload. A `str` chunk is encoded with the context's
+  `encoding` and `errors`, a `bytes` chunk verbatim. A producer failure ends
+  the run as `StdinSourceError` with the producer's exception chained, and an
+  early child-side close is recorded as a `stdin_error` observation rather than
+  failing the run ([#445](https://github.com/leynos/cuprum/issues/445)).
+- **Explicit standard-stream redirection:** `RunOutputOptions.stdout` and
+  `.stderr` accept a `StdioTarget` — a library pipe, the inherited parent
+  stream, a file **cuprum owns** (opened before the spawn, closed in a
+  `finally` immediately after), or a **borrowed** descriptor or file object
+  cuprum never closes and flushes before the spawn. Contradictory combinations
+  are rejected at construction: capture or echo with a redirected stream, one
+  path for both streams, and a `stdin` that names a file or descriptor, since
+  only `pipe()` and `inherit()` are meaningful for an input stream
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed

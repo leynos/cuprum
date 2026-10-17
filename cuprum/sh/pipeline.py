@@ -11,6 +11,11 @@ breaks its own: each side defers the import it needs to the point of use.
 
 ``cuprum/sh/__init__.py`` re-exports both classes unchanged, so importers of
 ``cuprum.sh`` see the same objects they always did.
+
+The output-option helpers this class calls — the deprecated flat
+``capture``/``echo`` resolution and the refusal of standard-stream targets —
+live in ``cuprum.sh.pipeline_output``. They are re-exported here because
+``cuprum.sh`` and its callers import them from this module's path.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -32,10 +37,15 @@ from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.sh.execution import ExecutionContext
-from cuprum.sh.output import (
-    RunOutputOptions,
-    _DeprecatedOutputFlags,
-    _resolve_pipeline_output,
+from cuprum.sh.output import RunOutputOptions
+from cuprum.sh.pipeline_output import (
+    _DeprecatedOutputFlags as _DeprecatedOutputFlags,
+)
+from cuprum.sh.pipeline_output import (
+    _reject_stdio_targets as _reject_stdio_targets,
+)
+from cuprum.sh.pipeline_output import (
+    _resolve_pipeline_output as _resolve_pipeline_output,
 )
 from cuprum.sh.results import BytesPipelineResult, PipelineResult
 
@@ -157,13 +167,16 @@ class Pipeline:
         Raises
         ------
         ValueError
-            If ``output`` is combined with deprecated flags.
+            If ``output`` is combined with deprecated flags, or if it names a
+            ``stdin``/``stdout``/``stderr`` target, which pipeline stages do
+            not honour.
         PermissionError
             If a pipeline command is not allowed by the active scope.
         TimeoutError
             If execution exceeds the effective timeout.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through pipeline helpers
         out = _resolve_pipeline_output(output, deprecated_flags)
+        _reject_stdio_targets(out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
             output=out,
@@ -212,7 +225,9 @@ class Pipeline:
         Raises
         ------
         ValueError
-            If ``output`` is combined with deprecated flags.
+            If ``output`` is combined with deprecated flags, or if it names a
+            ``stdin``/``stdout``/``stderr`` target, which pipeline stages do
+            not honour.
         PermissionError
             If a pipeline command is not allowed by the active scope.
         TimeoutError

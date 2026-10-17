@@ -65,6 +65,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "stdout": "cuprum_stdout_lines_total",
     "stderr": "cuprum_stderr_lines_total",
     "stdin_error": "cuprum_stdin_errors_total",
+    "stdio_error": "cuprum_stdio_errors_total",
     "timeout": "cuprum_timeouts_total",
     "teardown_error": "cuprum_teardown_errors_total",
     "capture_eof_grace_expired": "cuprum_capture_eof_grace_expired_total",
@@ -305,6 +306,22 @@ def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
         return _settled_operations(event)
     if phase == "group_teardown":
         return _group_teardown_operations(event)
+    if phase == "stdio_error":
+        # A per-boundary label rather than a fourth common one: the boundary
+        # category belongs only on this counter, and adding it to the common
+        # label set would attach it to every series the hook emits, where it
+        # is ``None`` for all but this phase. The metric name still comes
+        # from ``_PHASE_COUNTERS``, so it has one definition like the other
+        # unit counters.
+        labels = (
+            {}
+            if event.error_category is None
+            else {"error_category": str(event.error_category)}
+        )
+        # Read from the mapping rather than repeated as a literal: the comment
+        # above claims the metric name has one definition, and hardcoding it
+        # here would give it two that could drift apart.
+        return (_CounterOp(_PHASE_COUNTERS["stdio_error"], 1.0, labels),)
     counter_name = _PHASE_COUNTERS.get(phase)
     if counter_name is None:
         raise _UnhandledMetricsPhaseError(phase)

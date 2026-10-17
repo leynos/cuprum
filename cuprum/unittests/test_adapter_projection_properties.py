@@ -19,6 +19,7 @@ from cuprum.events import (
     ExecPhase,
     GroupTeardownOutcome,
     ResourceUsageMode,
+    StdioFailureCategory,
     TerminalOutcome,
 )
 from cuprum.program import Program
@@ -39,6 +40,7 @@ _OPTIONAL_FIELDS = (
     "terminal_outcome",
     "resolved_path",
     "capture_mode",
+    "error_category",
 )
 # Deliberately absent from ``_OPTIONAL_FIELDS``: ``owns_group``,
 # ``group_outcome``, and ``settle_s`` are not common fields, so
@@ -59,6 +61,31 @@ _GROUP_TEARDOWN_LOG_FIELDS = (
     ("group_outcome", "cuprum_group_outcome"),
     ("settle_s", "cuprum_settle_s"),
 )
+
+
+# The bounded whitelist each unwinding phase may expose, keyed by phase. Each
+# entry names fields the event itself carries; the oracle keeps only the ones
+# that are present, which is the same rule the adapter applies. ``program`` is
+# added unconditionally, so it is not repeated here.
+_LOG_FIELD_WHITELISTS: typ.Final[dict[str, tuple[str, ...]]] = {
+    "stdio_error": (
+        "pid",
+        "operation",
+        "error_type",
+        "error_category",
+        "exec_id",
+    ),
+    "capture_eof_grace_expired": (
+        "pid",
+        "project",
+        "exec_id",
+        "operation",
+        "eof_grace_s",
+        "pending_readers",
+        "env_mode",
+        "capture_mode",
+    ),
+}
 
 
 def _expected_group_teardown_fields(event: ExecEvent) -> set[str]:
@@ -162,6 +189,11 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         owns_group=draw(st.none() | st.booleans()),
         group_outcome=draw(st.none() | st.sampled_from(GroupTeardownOutcome)),
         settle_s=draw(st.none() | st.floats(min_value=0.0, max_value=30.0)),
+        # Drawn independently of the phase, like every other optional field, so
+        # the ``stdio_error`` branch is exercised with and without it. It is a
+        # ``StrEnum``, so the projection must render the member's value rather
+        # than pass the member through.
+        error_category=draw(st.none() | st.sampled_from(StdioFailureCategory)),
     )
 
 
@@ -279,23 +311,32 @@ class TestAdapterProjectionProperties:
         """
         if event.phase == "pipeline_fail_fast":
             return (canonical - {"argv"}) | {"exec_id"}
-        if event.phase == "capture_eof_grace_expired":
-            trusted_fields = (
-                "pid",
-                "project",
-                "exec_id",
-                "operation",
-                "eof_grace_s",
-                "pending_readers",
-                "env_mode",
-                "capture_mode",
-            )
-            return {"program"} | {
-                field for field in trusted_fields if getattr(event, field) is not None
-            }
-        if event.phase == "group_teardown":
-            return _expected_group_teardown_fields(event)
-        return canonical
+        whitelist = _LOG_FIELD_WHITELISTS.get(event.phase)
+        if whitelist is None:
+            if event.phase == "group_teardown":
+                return _expected_group_teardown_fields(event)
+            return canonical
+        return {"program"} | {
+            field for field in whitelist if getattr(event, field) is not None
+        }
+
+    @staticmethod
+    def _assert_extra_mirrors_field(
+        extra: dict[str, object],
+        extra_key: str,
+        event_value: object,
+        message: str,
+    ) -> None:
+        """Assert an extra mirrors its event field whenever the event has one.
+
+        Shared by the phases that may or may not be inside a run: the value is
+        only there to be compared when the event records one, so an absent
+        field is a case this rule has nothing to say about rather than a
+        failure. Each caller words its own message, because the phases report
+        which field went missing to a reader of the log.
+        """
+        if event_value is not None:
+            assert extra[extra_key] == event_value, message
 
     @staticmethod
     def _assert_phase_specific_logging_rules(
@@ -303,6 +344,7 @@ class TestAdapterProjectionProperties:
         extra: dict[str, object],
     ) -> None:
         """Assert phase-specific privacy and correlation rules for log extras."""
+        mirrors = TestAdapterProjectionProperties._assert_extra_mirrors_field
         if event.phase == "pipeline_fail_fast":
             assert extra["cuprum_exec_id"] == event.exec_id, (
                 "fail-fast extras must preserve the execution correlation token"
@@ -310,14 +352,32 @@ class TestAdapterProjectionProperties:
             assert "cuprum_argv" not in extra, (
                 "fail-fast extras must omit the raw argument vector"
             )
+        elif event.phase == "stdio_error":
+            assert "cuprum_argv" not in extra, (
+                "stdio-failure extras must omit the raw argument vector"
+            )
+            mirrors(
+                extra,
+                "cuprum_exec_id",
+                event.exec_id,
+                "stdio-failure extras must preserve execution correlation",
+            )
+            mirrors(
+                extra,
+                "cuprum_error_category",
+                event.error_category,
+                "stdio-failure extras must name the failing boundary",
+            )
         elif event.phase == "capture_eof_grace_expired":
             assert "cuprum_argv" not in extra, (
                 "grace-expiry extras must omit the raw argument vector"
             )
-            if event.exec_id is not None:
-                assert extra["cuprum_exec_id"] == event.exec_id, (
-                    "grace-expiry extras must preserve execution correlation"
-                )
+            mirrors(
+                extra,
+                "cuprum_exec_id",
+                event.exec_id,
+                "grace-expiry extras must preserve execution correlation",
+            )
         elif event.phase == "group_teardown":
             _assert_group_teardown_rules(event, extra)
         else:

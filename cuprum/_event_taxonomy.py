@@ -53,6 +53,12 @@ type ExecPhase = typ.Literal[
     "settled",
     "stdin",
     "stdin_error",
+    # The standard-stream failure diagnostic. It names a boundary rather than a
+    # lifecycle step: ``stdin_error`` reports a failure writing to a child,
+    # while this reports any of the stream boundaries — the producer, an
+    # invalid chunk, the encoder, opening a cuprum-owned target, or flushing a
+    # borrowed file — and carries the category that separates them.
+    "stdio_error",
     "timeout",
     "teardown_error",
     "capture_eof_grace_expired",

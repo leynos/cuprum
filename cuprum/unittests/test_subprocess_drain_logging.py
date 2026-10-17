@@ -15,6 +15,7 @@ import typing as typ
 
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
+    _ConsumerPair,
     _drain_stream_consumers,
     _DrainContext,
 )
@@ -22,7 +23,6 @@ from cuprum._subprocess_wait import (
 if typ.TYPE_CHECKING:
     import pytest
 
-    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 # The drain moved to ``cuprum._stream_drain``, but its logger name did not:
 # ``_stream_drain`` still logs under ``cuprum._subprocess_wait`` so existing log
@@ -146,9 +146,7 @@ def test_an_expired_grace_window_is_recorded_with_its_pending_readers(
             completed,
         )
 
-        async def expire_immediately(
-            _consumers: tuple[ConsumerTask, ConsumerTask],
-        ) -> None:
+        async def expire_immediately(_consumers: _ConsumerPair) -> None:
             """Close the test grace window without elapsed wall-clock time."""
 
         await _drain_stream_consumers(

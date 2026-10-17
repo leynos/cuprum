@@ -1,16 +1,52 @@
 """Subprocess stdin writing helpers.
 
 Owns the ``cuprum.stdin`` logger and the stdin pipe lifecycle: writing
-caller-provided bytes, closing the pipe, and emitting observable
-diagnostics when the pipe fails early.
+caller-provided bytes, closing the pipe, and emitting observable diagnostics
+when the pipe fails early.
+
+The bounded diagnostic the *other* standard-stream boundaries report through —
+the producer, an invalid chunk, the encoder, opening a cuprum-owned target
+file, and flushing a caller's borrowed file object — lives in
+:mod:`cuprum._stdio_diagnostics` rather than here, because this module is at
+its line-count budget, and because those boundaries are reached from modules
+this one does not import. Both emitters express the same rule that a diagnostic
+never carries exception text, so a boundary added later inherits it rather than
+re-deriving it.
+
+The two sources differ in how much of the payload exists at once. A payload
+(``StdinInput``) is already complete in memory, so it is written in one go;
+that writer lives here. A producer (``StdinStream``) is pulled one chunk at a
+time and is handled by ``cuprum._subprocess_stdin_stream``, which this module's
+dispatcher starts when a caller supplies one. The dispatcher reads a resolved
+:class:`~cuprum._stdio_plan._StdinPlan` rather than the caller's raw argument,
+so the inherited/payload/producer decision is made once, when the stdio is
+resolved, instead of being re-derived here.
+
+Taking back a writer that is still running — the settle window, the cancel, and
+the shielded wait that keeps a cancellation from abandoning either — lives in
+``cuprum._subprocess_stdin_reclaim``, the split that brought this module back
+under the ceiling. The pipe primitives stay here because every writer on every
+path uses them, while the reclaim policy is reached only by the paths that end
+a run.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import typing as typ
 
 from cuprum._pipeline_internals import _EventDetails, _StageObservation
+from cuprum._stdio_plan import (
+    _NoStdin,
+    _PayloadStdin,
+    _PipeStdin,
+    _StdinPlan,
+    _StreamStdin,
+)
+
+if typ.TYPE_CHECKING:
+    from cuprum._subprocess_stdin_stream import _StdinCodec
 
 _LOGGER = logging.getLogger("cuprum.stdin")
 
@@ -28,13 +64,21 @@ def _emit_stdin_error(
     *,
     operation: str,
 ) -> None:
-    """Emit an observable diagnostic for stdin pipe write failures."""
+    """Emit an observable diagnostic for stdin pipe write failures.
+
+    Bounded on purpose. The record names the failing operation and the
+    exception's *class*; it does not carry the exception's message and does not
+    attach a traceback. Both used to travel here, and both are caller data: an
+    ``OSError`` from a pipe write quotes whatever the caller's own machinery
+    put in it, and a logged traceback retains every local in the frames it
+    passed through. The caller still sees the full failure — the observed
+    event is a signal, not the channel that carries the error.
+    """
     _LOGGER.error(
         "stdin_%s_failed pid=%s error=%s",
         operation,
         process.pid,
         type(exc).__name__,
-        exc_info=exc,
         extra={
             "cuprum_pid": process.pid,
             "cuprum_stdin_operation": operation,
@@ -47,7 +91,6 @@ def _emit_stdin_error(
             pid=process.pid,
             operation=operation,
             error_type=type(exc).__name__,
-            note=f"{type(exc).__name__}: {exc!s}",
         ),
     )
 
@@ -57,7 +100,15 @@ async def _write_stdin(
     stdin_data: bytes,
     observation: _StageObservation,
 ) -> None:
-    """Write caller-provided stdin bytes and close the pipe."""
+    """Write caller-provided stdin bytes and close the pipe.
+
+    *stdin_data* is always a real ``bytes`` value: the only caller is
+    :func:`_spawn_stdin_writer`, which returns before starting this task for an
+    inherited stdin and routes a producer to the streaming writer instead. The
+    payload is empty only for a run that explicitly asked for a stdin pipe and
+    supplied no source, and writing nothing before closing is exactly the
+    child-side view that request describes.
+    """
     stdin = process.stdin
     if stdin is None:
         _LOGGER.debug("stdin_writer_skipped pid=%s reason=no_pipe", process.pid)
@@ -78,83 +129,200 @@ async def _write_stdin(
     except (OSError, RuntimeError) as exc:
         _emit_stdin_error(process, observation, exc, operation="write")
     finally:
-        await _close_stdin(stdin, process, observation)
+        await _close_stdin(process, stdin, observation)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
 async def _close_stdin(
-    stdin: asyncio.StreamWriter,
     process: asyncio.subprocess.Process,
+    stdin: asyncio.StreamWriter,
     observation: _StageObservation,
 ) -> None:
-    """Close the child's stdin without letting the close outlive the writer.
+    """Close the child's stdin pipe, releasing the transport if that stalls.
 
-    ``wait_closed`` cannot be allowed to block here. The transport only reports
-    its buffer flushed once the *reader* end drains it, and the reader is the
-    child or a descendant — so when a descendant inherits stdin and never reads
-    it, the buffer never drains and this await never returns. That is harmless
-    for a writer running to completion, but this task is cancelled precisely
-    when the run is ending, and a ``finally`` that cannot be interrupted turns
-    every such cancellation into a hang: the task stays alive, and whoever is
-    waiting for it — the deadline's own reconciliation, or the run's writer
-    await — waits indefinitely. Observed directly: the task parked at
-    ``wait_closed`` with ``cancelling() == 1`` for as long as the probe ran.
+    The wait is bounded, and deliberately so. ``wait_closed`` does not merely
+    flush what cuprum wrote: it waits for the transport's ``connection_lost``,
+    which needs the child-side pipe end to reach EOF. A grandchild that
+    inherited the child's stdin read end holds that pipe open past the child's
+    own exit, so the callback never fires and the wait never returns.
+
+    That would be survivable if the wait were interruptible, but it is not:
+    this coroutine runs inside the writer task's ``finally``, and a
+    cancellation delivered there does not skip the ``await`` — it schedules
+    one more cancellation, so ``close()`` still runs and the ``await`` still
+    blocks. A caller could therefore cancel the writer and still wait forever
+    for it, which is what turned a stalled run's deadline into an endless one.
 
     The close is still given a bounded grace, because a transport whose reader
     is still draining should get the chance to flush what it can. What is
     removed is the *unbounded* wait, not the flush. A timeout here is expected
     rather than exceptional: it is the signal that the reader end is still
-    open, so it is logged at debug and not reported as a pipe failure.
+    open, so the expiry is logged at debug and never reported as a pipe
+    failure.
+
+    Expiring the window therefore has to *end* the close rather than merely
+    stop waiting for it. A graceful ``close()`` only flushes buffered bytes and
+    asks the transport to shut down once they are gone; when the reader never
+    drains, that request never completes and the pipe stays open. ``abort()``
+    is the transport's own unconditional release — it discards buffered data
+    and closes the descriptor — which is the right trade at this point,
+    because the run is over, the child that would have read those bytes is
+    gone, and the alternative is a descriptor held open by a descendant that
+    may never exit. Refusing to outlive the run is not the same as releasing
+    what the run still owned.
+
+    Cancellation lands here as well as expiry, and needs the same release. The
+    teardown paths reclaim the writer by cancelling its task, and that
+    cancellation can be delivered while this coroutine is suspended in the
+    bounded wait — the "one more cancellation" the paragraph above describes.
+    The close has then been started and abandoned exactly as an expired window
+    leaves it, so the abort is owed on this path too before the cancellation
+    continues outward.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the writer is cancelled while the bounded wait is pending. The
+        transport is released first, so the descriptor does not depend on the
+        cancelled task being awaited again.
     """
-    _LOGGER.debug("stdin_writer_close_start pid=%s", process.pid)
     try:
         stdin.close()
         async with asyncio.timeout(_CLOSE_GRACE_S):
             await stdin.wait_closed()
     except TimeoutError:
         # Expected when the reader end is still open, and not a pipe failure:
-        # ``TimeoutError`` is an ``OSError``, so this arm has to come first or
-        # the bound below is reported as a broken pipe.
-        _LOGGER.debug(
-            "stdin_writer_close_pending pid=%s reason=reader_still_open",
-            process.pid,
-        )
+        # cuprum wrote everything it was given, and the pipe's reader
+        # outliving the child is a fact about the child's own descendants
+        # rather than a fault in this pipe. ``TimeoutError`` is an ``OSError``,
+        # so this arm has to come first or the bound below is reported as a
+        # broken pipe. Expiring the window still has to *end* the close rather
+        # than only stop waiting for it, which is what the abort releases.
+        _abort_stdin_transport(process, stdin)
+    except asyncio.CancelledError:
+        # Released before re-raising, so the descriptor does not depend on the
+        # cancelled task ever being awaited again — the reclaim path gives it a
+        # bounded window and then moves on regardless.
+        _abort_stdin_transport(process, stdin)
+        raise
     except (OSError, RuntimeError) as exc:
         _emit_stdin_error(process, observation, exc, operation="close")
 
 
-async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
-    """Cancel and drain a stdin writer task, tolerating any raised error.
+def _abort_stdin_transport(
+    process: asyncio.subprocess.Process,
+    stdin: asyncio.StreamWriter,
+) -> None:
+    """Release a stdin transport whose graceful close did not finish.
 
-    Used on the timeout and cancellation paths to reclaim a writer that may be
-    blocked draining bytes into an unread pipe, so its cleanup cannot delay the
-    surrounding failure handling.
+    Split out because the abort is itself best-effort: a transport already gone
+    raises from ``abort()``, and a close path for an already-finished run must
+    not turn that into a new failure. Whatever the transport does here, the
+    run's own outcome is already decided.
+
+    Parameters
+    ----------
+    process : asyncio.subprocess.Process
+        The child the pipe was bound to, named in the diagnostic.
+    stdin : asyncio.StreamWriter
+        The transport to release unconditionally.
     """
-    if stdin_task is None:
-        return
-    stdin_task.cancel()
-    await asyncio.gather(stdin_task, return_exceptions=True)
+    try:
+        stdin.transport.abort()
+    except (OSError, RuntimeError, AttributeError) as exc:
+        # AttributeError covers a writer whose transport exposes no ``abort``;
+        # an alternative implementation is not a reason to fail the close.
+        _LOGGER.debug(
+            "stdin_writer_close_abort_failed pid=%s error=%s",
+            process.pid,
+            type(exc).__name__,
+        )
+    else:
+        _LOGGER.debug(
+            "stdin_writer_close_aborted pid=%s reason=reader_still_open",
+            process.pid,
+        )
+
+
+def _spawn_payload_writer(
+    process: asyncio.subprocess.Process,
+    payload: bytes,
+    observation: _StageObservation,
+) -> asyncio.Task[None]:
+    """Start the writer that sends one complete payload and closes the pipe.
+
+    Both payload-shaped plan variants land here, and deliberately so: an
+    explicitly requested empty stdin pipe and an empty payload are the same
+    child-side view, so they share one writer rather than growing a second path
+    that expresses the same thing twice.
+
+    Returns
+    -------
+    asyncio.Task[None]
+        The payload writer task, already scheduled.
+    """
+    _LOGGER.debug(
+        "stdin_writer_task_start pid=%s bytes=%s",
+        process.pid,
+        len(payload),
+        extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(payload)},
+    )
+    return asyncio.create_task(_write_stdin(process, payload, observation))
 
 
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
-    stdin_data: bytes | None,
+    plan: _StdinPlan,
+    codec: _StdinCodec,
     observation: _StageObservation,
 ) -> asyncio.Task[None] | None:
-    """Start stdin writing when direct stdin data was supplied."""
-    if stdin_data is None:
-        return None
-    _LOGGER.debug(
-        "stdin_writer_task_start pid=%s bytes=%s",
-        process.pid,
-        len(stdin_data),
-        extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(stdin_data)},
-    )
-    return asyncio.create_task(_write_stdin(process, stdin_data, observation))
+    """Start the stdin writer that a resolved plan calls for, if any.
+
+    The plan decides, and its four variants map onto three outcomes. An
+    inherited stdin needs no task: there is no pipe of cuprum's to write to or
+    close. A producer gets the streaming writer, which owns its own backpressure
+    and finalization. A payload — including the empty one that
+    :class:`~cuprum._stdio_plan._PipeStdin` reduces to — goes to the payload
+    writer, which writes what it was given and closes the pipe. Reusing that
+    writer for an explicitly requested empty pipe is deliberate: the variant was
+    reached by asking for a pipe and supplying no source, so the child should
+    see exactly what an empty payload gives it, without a second code path
+    expressing the same thing.
+
+    Returns
+    -------
+    asyncio.Task[None] | None
+        The writer task, or ``None`` for an inherited stdin, which has no pipe
+        of cuprum's to write to or close.
+    """
+    # The streaming writer imports this module back for the pipe primitives, so
+    # a module-level import of it would close a cycle at load time, when neither
+    # module is complete. Deferring the import also keeps the name looked up on
+    # the module, which is where the test suite's monkeypatch seams replace it.
+    from cuprum._subprocess_stdin_stream import _write_stdin_stream
+
+    match plan:
+        case _NoStdin():
+            # An inherited stdin has no pipe of cuprum's, so no writer and
+            # nothing to close: the child uses the parent's own descriptor.
+            return None
+        case _StreamStdin(stream=producer):
+            _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
+            return asyncio.create_task(
+                _write_stdin_stream(process, producer, codec, observation)
+            )
+        case _PipeStdin():
+            # Requested a pipe, supplied no source: the child should see exactly
+            # what an empty payload gives it, so the payload writer is reused
+            # rather than a second code path expressing the same thing.
+            return _spawn_payload_writer(process, b"", observation)
+        case _PayloadStdin(data=payload):
+            return _spawn_payload_writer(process, payload, observation)
 
 
 __all__ = [
-    "_cancel_stdin_writer",
+    "_abort_stdin_transport",
+    "_close_stdin",
     "_emit_stdin_error",
     "_spawn_stdin_writer",
     "_write_stdin",

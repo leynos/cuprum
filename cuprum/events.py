@@ -26,6 +26,7 @@ from cuprum._event_taxonomy import (
     TimeoutMode,
     new_exec_id,
 )
+from cuprum.stdio_events import StdioFailureCategory
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -70,6 +71,20 @@ class ExecEvent:
         exception propagates unchanged: no ``exit`` event follows and no
         ``TimeoutExpired`` is raised, so an ancillary diagnostic may be the
         last event a consumer sees for that execution.
+
+        ``stdio_error`` is the best-effort counterpart to ``stdin_error`` for
+        the standard-stream boundaries that fail *outside* the stdin writer's
+        own pipe operations: the caller's producer, an invalid chunk, the
+        encoder, opening a cuprum-owned target file, and flushing a caller's
+        borrowed file object. It is emitted where the failing boundary is
+        known, and never in place of the caller-visible exception — a producer
+        failure still raises ``StdinSourceError`` with the producer's own
+        exception chained, and a failed owned-path open still raises the
+        ``OSError`` :func:`~cuprum._stdio_plan._open_owned_path` builds. It
+        carries ``error_category`` rather than an exception message, because
+        several of these boundaries raise the same exception type and the
+        category is what separates them.
+
     program:
         The allowlisted program that is executing.
     argv:
@@ -223,6 +238,15 @@ class ExecEvent:
         program's logical identity to a specific path. ``None`` when no
         binding applied, in which case the child ran under the name in
         ``argv[0]``.
+    error_category:
+        Bounded category naming which failure boundary produced a diagnostic
+        event. See :class:`~cuprum.stdio_events.StdioFailureCategory`, also
+        re-exported here. Carried on ``stdio_error``; ``None`` for every other
+        phase, including the pre-existing ``stdin_error`` events, whose
+        ``operation`` already names its boundary. It is a typed field rather
+        than part of ``note`` because ``error_type`` cannot carry it, and the
+        value is low-cardinality, so it is the one failure attribute safe to
+        attach to a metric series.
 
         It is the *executable*, not the command: ``argv`` still carries the
         arguments, and ``program`` still carries the catalogue identity that
@@ -309,6 +333,13 @@ class ExecEvent:
     # ``group_outcome`` labels a bounded counter, so it is typed as the closed
     # enum rather than as a string that a caller could set freely.
     owns_group: bool | None = dc.field(default=None, kw_only=True)
+    # Declared ahead of ``terminal_outcome`` — and keyword-only — because
+    # ``terminal_outcome`` arrived on ``main`` already holding the last
+    # positional slot. An optional field with a default declared *after* it
+    # would take that slot instead and silently rebind a caller passing the
+    # outcome positionally, so the declaration order is load-bearing and
+    # ``test_terminal_outcome_keeps_its_positional_slot`` pins it.
+    error_category: StdioFailureCategory | None = dc.field(default=None, kw_only=True)
     group_outcome: GroupTeardownOutcome | None = dc.field(default=None, kw_only=True)
     settle_s: float | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
@@ -325,6 +356,7 @@ __all__ = [
     "ExecPhase",
     "GroupTeardownOutcome",
     "ResourceUsageMode",
+    "StdioFailureCategory",
     "TerminalOutcome",
     "TimeoutMode",
     "new_exec_id",

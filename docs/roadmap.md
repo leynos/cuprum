@@ -9,9 +9,17 @@ done.
 
 - [x] `StdinInput` parameter object with mutual-exclusion enforcement in
   `__post_init__` and `resolve(ctx)` encoding helper.
-- [x] `_SubprocessExecution.stdin_data` field; `_spawn_subprocess` opens
-  `stdin=asyncio.subprocess.PIPE` only when data is present, falling back to
-  `None` to inherit parent stdin.
+- [x] `_ExecutionState.stdin_data` field; `_stdin_stdio` asks `Popen` for
+  `stdin=asyncio.subprocess.PIPE` for every plan that is not `_NoStdin`, and
+  falls back to `None` only to inherit parent stdin. Issue `#445` widened the
+  field from `bytes | None` to `bytes | StdinStream | None` and moved the
+  PIPE-or-`None` decision out of `_SubprocessExecution` into
+  `_subprocess_spawn`, where it reads a `_StdinPlan` resolved from the field,
+  so the byte-level spelling above is history rather than the current shape.
+  The condition is deliberately "not `_NoStdin`" rather than "carries input":
+  an explicit `StdioTarget.pipe()` on stdin with no source resolves to
+  `_PipeStdin`, which must still get a pipe — a library-owned one nothing
+  writes to, closed for EOF — instead of inheriting the parent's stdin.
 - [x] Concurrent stdin writer task (`_spawn_stdin_writer` / `_write_stdin`)
   with `stdin_error` event emission, `cuprum.stdin` logging, and
   `cuprum_stdin_bytes_total` / `cuprum_stdin_errors_total` metrics for
@@ -22,6 +30,12 @@ done.
 - [x] `RunOutputOptions` parameter object replacing flat `capture` / `echo`
   kwargs on `SafeCmd.run` and `run_sync`.
 - [x] `IOOptions` retained as a deprecated alias for `RunOutputOptions`.
+- [x] Streaming stdin and explicit standard-stream redirection (issue `#445`):
+  `StdinStream` pulls an async producer one chunk at a time under backpressure;
+  `RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget` that names a
+  library-owned pipe, the parent's stream, a file cuprum opens and closes
+  around the spawn, or a borrowed descriptor cuprum never closes; contradictory
+  combinations are rejected at construction.
 
 ## 1. Foundation
 

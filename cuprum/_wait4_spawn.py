@@ -28,6 +28,7 @@ import dataclasses as dc
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated spawn seam builds the child from a validated argv.
 import typing as typ
 
+from cuprum._constants import STDERR_STREAM, STDIN_STREAM, STDOUT_STREAM, PipeStream
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._rusage import (
     ChildResourceUsage,
@@ -52,6 +53,22 @@ class DirectProcessConfig:
     routes — :func:`_spawn_popen` and ``asyncio.create_subprocess_exec`` —
     accept it, and a single field keeps the two routes from drifting apart on
     the ownership policy.
+
+    *pipes* names the streams cuprum holds a parent-side pipe for, and it is
+    carried separately from the three stdio values because that value cannot
+    express it: by the time it reaches the spawn layer a non-consuming pipe has
+    been folded down to ``DEVNULL``, and ``Popen`` leaves ``stdout`` and
+    ``stderr`` as ``None`` for ``DEVNULL`` just as it does for a borrowed
+    descriptor, so neither the child object nor the value distinguishes the two.
+    Funding the ``wait4`` route from this set is what keeps it from attaching a
+    reader to a stream cuprum does not own. The default covers every stream,
+    which is what a caller who omits the field and passes real ``PIPE``
+    sentinels means.
+
+    The fallback backend does not consult *pipes*: ``create_subprocess_exec``
+    attaches a reader only to the ``PIPE`` sentinel, and a raw descriptor
+    reaches the child with ``Process.stdout`` left ``None``, so the computed
+    stdio values already say everything it needs.
     """
 
     argv: tuple[str, ...]
@@ -61,6 +78,11 @@ class DirectProcessConfig:
     env: cabc.Mapping[str, str] | None
     cwd: str | None
     start_new_session: bool = False
+    pipes: frozenset[PipeStream] = frozenset({
+        STDIN_STREAM,
+        STDOUT_STREAM,
+        STDERR_STREAM,
+    })
 
 
 def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
@@ -103,7 +125,7 @@ async def spawn_wait4_process(
         The spawned child, with its pipes attached.
     """
     loop = asyncio.get_running_loop()
-    process = _Wait4Process(_spawn_popen(config), loop)
+    process = _Wait4Process(_spawn_popen(config), loop, config.pipes)
     try:
         await process.connect_pipes()
     except BaseException:
@@ -143,7 +165,24 @@ async def _settle_spawned_child(
 async def spawn_direct_process(
     config: DirectProcessConfig,
 ) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
+    """Spawn a direct process using ``wait4`` where it can own the reap.
+
+    The three stdio values reach the fallback exactly as the spawn layer
+    computed them. They must not be rewritten here: ``DEVNULL`` is what an
+    unread pipe target resolves to, and promoting it back to ``PIPE`` — because
+    the stream appears in *pipes* — would leave the parent holding a pipe
+    nobody reads, so a child writing past the buffer would hang in ``write``
+    instead of discarding its output. ``create_subprocess_exec`` attaches a
+    reader only to the ``PIPE`` sentinel itself; a raw descriptor passes
+    through to the child and leaves ``Process.stdout`` ``None``, exactly as
+    ``Popen`` does, so no value here needs translating for either backend.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The spawned child, wrapped by :class:`_Wait4Process` when ``wait4``
+        can own its reap and by asyncio's own transport otherwise.
+    """
     if wait4_resource_measurement_available():
         return await spawn_wait4_process(config)
     return await asyncio.create_subprocess_exec(

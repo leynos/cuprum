@@ -44,6 +44,7 @@ _KNOWN_PHASES = (
     "stderr",
     "stdin",
     "stdin_error",
+    "stdio_error",
     "timeout",
     "teardown_error",
     "capture_eof_grace_expired",
@@ -205,12 +206,13 @@ def test_each_phase_logs_at_its_configured_level(
 ) -> None:
     """Phases with a configured level use it; others fall back to ``DEBUG``.
 
-    ``plan``, ``start``, ``stdout``, ``stderr``, and ``exit`` are mapped to
-    ``levels`` and must log at their configured level. ``stdin`` and
-    ``stdin_error`` are known phases that have no entry in the mapping, and
-    any unknown phases must fall back to ``logging.DEBUG`` rather than raise
-    — phases are part of the event contract and may grow, and a logging hook
-    is the wrong place to discover that.
+    ``plan``, ``start``, ``stdout``, ``stderr``, ``exit``, ``settled``,
+    ``pipeline_fail_fast``, and ``stdio_error`` are mapped to ``levels`` and
+    must log at their configured level. ``stdin`` and ``stdin_error`` are
+    known phases that have no entry in the mapping, and any unknown phases must
+    fall back to ``logging.DEBUG`` rather than raise — phases are part of the
+    event contract and may grow, and a logging hook is the wrong place to
+    discover that.
 
     The expected level is derived here independently rather than by accepting
     any configured value: a permissive check passes even if a phase is dropped
@@ -227,6 +229,7 @@ def test_each_phase_logs_at_its_configured_level(
             "exit": levels.exit_level,
             "settled": levels.exit_level,
             "pipeline_fail_fast": levels.fail_fast_level,
+            "stdio_error": levels.stdio_error_level,
         }.get(event.phase, logging.DEBUG)
 
         assert capture.records[0].levelno == expected, (

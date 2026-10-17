@@ -22,34 +22,40 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # No ``from __future__ import annotations`` here: the public signatures are
 # introspected with ``typing.get_type_hints``, so annotations are evaluated
 # eagerly and every name they use is a genuine runtime import. Only the forward
-# references to ``SafeCmd`` and ``Pipeline`` inside the class bodies are quoted.
+# reference to ``Pipeline`` inside ``SafeCmd``'s own class body is quoted; the
+# module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
 
-from cuprum._bytes_run import (
-    _bytes_output,
-    _require_bytes_command_result,
-    _require_command_result,
-    _validate_bytes_output,
-)
+from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
     _build_subprocess_execution,
     _ExecutionState,
     _prepare_execution_observation,
     _run_prepared_command,
 )
-from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
-from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._process_handle.owned_start import _OwnedStart
-from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
-from cuprum.context import current_context
 from cuprum.program import Program
-from cuprum.sh.execution import ExecutionContext, StdinInput
+from cuprum.sh.bytes_entry_points import _BytesEntryPoints
+from cuprum.sh.execution import (
+    ExecutionContext,
+    StdinSource,
+    _resolve_stdin_source,
+)
+from cuprum.sh.line_options import (
+    # Re-exported under this module's name as well as imported for use here.
+    # This module is where the line-iteration path has always been read from;
+    # re-importing the helpers elsewhere would give a test double a second
+    # binding that no production call path resolves.
+    _line_iteration_tracking,
+    _reject_redirected_lines_stdout,
+)
 from cuprum.sh.output import RunOutputOptions
-from cuprum.sh.results import BytesCommandResult, CommandResult
+from cuprum.sh.results import CommandResult
 
 __all__ = [
     "SafeCmd",
@@ -57,7 +63,7 @@ __all__ = [
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd(_OwnedStart):
+class SafeCmd(_OwnedStart, _BytesEntryPoints):
     """Typed representation of a curated command ready for execution."""
 
     program: Program
@@ -94,7 +100,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
@@ -109,8 +115,18 @@ class SafeCmd(_OwnedStart):
             timeout in ``context``.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source. ``StdinInput`` supplies one complete bytes
+            or text payload; ``StdinStream`` supplies an async producer whose
+            chunks are pulled one at a time, written, and drained before the
+            next is pulled. That backpressure limits how far *ahead* the
+            producer runs — it does not stop the writer pulling ahead of the
+            child's reads, because ``drain()`` returns at the transport's
+            low-water mark rather than on an empty buffer, and the OS pipe
+            holds bytes of its own. The payload is never held whole, and
+            retained memory is roughly the chunk currently being written plus
+            those buffers, so yield bounded-size chunks when that matters.
+            ``None`` inherits the parent's stdin.
 
         Returns
         -------
@@ -126,11 +142,14 @@ class SafeCmd(_OwnedStart):
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails. The child is
+            terminated before this is raised.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through execution helpers
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        stdin_source = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return _require_command_result(
             await _run_prepared_command(
@@ -138,135 +157,10 @@ class SafeCmd(_OwnedStart):
                 _ExecutionState(
                     context=ctx,
                     output=out,
-                    stdin_data=stdin_data,
+                    stdin_data=stdin_source,
                     timeout=effective_timeout,
                 ),
             )
-        )
-
-    async def run_bytes(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
-        context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
-    ) -> BytesCommandResult:
-        """Execute the command, capturing its output as bytes.
-
-        The run itself is the one ``run()`` performs; only what happens to the
-        captured streams differs. Bytes are returned exactly as the child wrote
-        them — no decoding, no replacement characters — so values that are not
-        valid text survive the round trip.
-
-        Echoing, sink presentation, and idle reporting all behave as they do
-        in text mode. A sink exposing a ``buffer`` receives the child's own
-        bytes; a text-only sink decodes them for display only, and a mirror it
-        cannot render is disabled without disturbing what was captured.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: bytes mode
-            returns the child's own bytes, so a callback carrying decoded text
-            would be a second, contradictory contract for the same stream. Use
-            the text-mode entry point when lines are wanted.
-        timeout : float | None, default=None
-            Maximum execution time in seconds. An explicit value overrides the
-            timeout in ``context``.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
-
-        Returns
-        -------
-        BytesCommandResult
-            The command outcome, carrying ``bytes`` for each captured stream
-            when ``output.capture`` is true and ``None`` for each stream that
-            was not captured.
-
-        Raises
-        ------
-        ValueError
-            If ``output.on_line`` is set.
-        PermissionError
-            If the command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        UnicodeEncodeError
-            If text stdin cannot be encoded by the execution context.
-
-        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        out = _bytes_output(output)
-        _validate_bytes_output(out)
-        ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return _require_bytes_command_result(
-            await _run_prepared_command(
-                self,
-                _ExecutionState(
-                    context=ctx,
-                    output=out,
-                    stdin_data=stdin_data,
-                    timeout=effective_timeout,
-                    capture_bytes=True,
-                ),
-            )
-        )
-
-    def run_bytes_sync(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,
-        context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
-    ) -> BytesCommandResult:
-        """Execute the command synchronously, capturing its output as bytes.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: bytes mode
-            returns the child's own bytes, so a callback carrying decoded text
-            would be a second, contradictory contract for the same stream. Use
-            the text-mode entry point when lines are wanted.
-        timeout : float | None, default=None
-            Maximum execution time in seconds.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
-
-        Returns
-        -------
-        BytesCommandResult
-            The command outcome, carrying ``bytes`` for each captured stream
-            when capture is enabled and ``None`` for each stream that was not
-            captured.
-
-        Raises
-        ------
-        ValueError
-            If ``output.on_line`` is set.
-        PermissionError
-            If the command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        UnicodeEncodeError
-            If text stdin cannot be encoded by the execution context.
-
-        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        return asyncio.run(
-            self.run_bytes(
-                output=output,
-                timeout=timeout,
-                context=context,
-                stdin=stdin,
-            ),
         )
 
     def lines(
@@ -275,7 +169,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> LineStream:
         """Iterate the command's output lines as they arrive.
 
@@ -294,7 +188,7 @@ class SafeCmd(_OwnedStart):
         context:
             Optional execution settings such as env, cwd, and cancel grace.
         stdin:
-            Optional ``StdinInput`` data to feed to the subprocess.
+            Optional stdin source, as for :meth:`run`.
 
         Returns
         -------
@@ -310,25 +204,24 @@ class SafeCmd(_OwnedStart):
             If *timeout* elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
+        ValueError
+            If *output* redirects stdout: line iteration reads stdout through
+            a parent-side pipe, so a redirected stdout has nothing to iterate.
+            Use :meth:`run` when stdout goes to a file or descriptor.
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        _reject_redirected_lines_stdout(out)
+        stdin_source = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        tracking = _ExecutionTracking(
-            execution_hooks=_collect_hooks(current_context()),
-            pending_tasks=[],
-            # Line iteration never opens a presentation session: the line
-            # events are the caller's own consumption of the streams, so there
-            # is no adapter framing to bracket. The empty bracket keeps the
-            # required field satisfied.
-            sink_bracket=_SinkBracket(None),
-        )
+        tracking = _line_iteration_tracking()
         state = _ExecutionState(
             context=ctx,
             output=out,
-            stdin_data=stdin_data,
+            stdin_data=stdin_source,
             timeout=effective_timeout,
         )
         observation = _prepare_execution_observation(self, state, tracking)
@@ -350,7 +243,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult:
         """Execute the command synchronously.
 
@@ -364,8 +257,8 @@ class SafeCmd(_OwnedStart):
             Maximum execution time in seconds.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source, as for :meth:`run`.
 
         Returns
         -------
@@ -381,17 +274,22 @@ class SafeCmd(_OwnedStart):
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
 
 
-# Imported at the foot of the module, after both classes exist, to break the
+# Imported at the foot of the module, after ``SafeCmd`` exists, to break the
 # mutual dependency with ``cuprum.sh.pipeline``: that module imports this one
-# for its ``SafeCmd`` annotation, so importing it at the head would leave it
-# reading a half-built module. ``__or__`` needs the real class rather than a
-# postponed name, because ``Pipeline.concat`` is called on it.
+# for its ``SafeCmd``, so importing it at the head would leave it reading a
+# half-built module. ``__or__`` needs the real class rather than a postponed
+# name, because ``Pipeline.concat`` is called on it — and a function-local
+# import would fire too late for ``typing.get_type_hints``, which
+# ``cuprum.sh`` uses to resolve ``__or__``'s quoted annotation against this
+# module's namespace alone.
 from cuprum.sh.pipeline import (  # ruff: ignore[module-import-not-at-top-of-file]  # deferred to break the cuprum.sh.pipeline dependency cycle
     Pipeline,
 )

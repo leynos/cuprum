@@ -44,6 +44,7 @@ _KNOWN_PHASES: list[str] = [
     "stderr",
     "stdin",
     "stdin_error",
+    "stdio_error",
     "timeout",
     "teardown_error",
     "capture_eof_grace_expired",
@@ -57,6 +58,11 @@ _UNIT_COUNTER_PHASES = (
     ("stdout", "cuprum_stdout_lines_total"),
     ("stderr", "cuprum_stderr_lines_total"),
     ("stdin_error", "cuprum_stdin_errors_total"),
+    # The boundary category rides on this counter's per-operation labels, and
+    # this collector is label-blind, so the oracle below counts by name alone
+    # exactly as it does for every other unit counter. The labels themselves
+    # are pinned by the projection snapshot and the adapter's own tests.
+    ("stdio_error", "cuprum_stdio_errors_total"),
     ("timeout", "cuprum_timeouts_total"),
     ("teardown_error", "cuprum_teardown_errors_total"),
     ("capture_eof_grace_expired", "cuprum_capture_eof_grace_expired_total"),

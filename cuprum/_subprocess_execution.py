@@ -286,6 +286,12 @@ def _build_command_result(
     )
 
 
+# The execution bundle, its spawn start, the spawn seam itself, and the
+# stream-consumer trio are re-exported from ``cuprum._subprocess_spawn`` and
+# ``cuprum._subprocess_streams``. They stay in this module's namespace because
+# the single-command run, the line-stream coordinator, the owned-handle start,
+# and the test modules that replace them all reach for the orchestration
+# module's own name.
 __all__ = [
     "_DirectCompletion",
     "_DirectRunStart",

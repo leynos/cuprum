@@ -18,6 +18,7 @@ import time
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
+from cuprum._constants import STDERR_STREAM, STDIN_STREAM, STDOUT_STREAM, PipeStream
 from cuprum._process_exit import (
     _NON_REAPING_PROBE_AVAILABLE,
     _await_child_waitable,
@@ -85,13 +86,22 @@ class _Wait4Process(asyncio.subprocess.Process):
         self,
         popen: subprocess.Popen[bytes],
         loop: asyncio.AbstractEventLoop,
+        pipes: frozenset[PipeStream],
     ) -> None:
-        """Wrap a spawned child before attaching its pipes to ``loop``."""
+        """Wrap a spawned child before attaching its pipes to ``loop``.
+
+        ``pipes`` is the set the spawn config named, and it is recorded rather
+        than re-derived: ``Popen`` sets ``stdout``/``stderr`` only for the
+        ``PIPE`` sentinel, leaving them ``None`` for ``DEVNULL`` and for a
+        borrowed descriptor alike, so the child object alone cannot say whether
+        cuprum holds a reader to attach.
+        """
         self._popen = popen
         # The inherited signal methods delegate to this transport. Popen offers
         # the same signalling interface, while this class keeps reaping local.
         self._transport = popen
         self._loop = loop
+        self._pipes = pipes
         self._returncode: int | None = None
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
@@ -118,12 +128,21 @@ class _Wait4Process(asyncio.subprocess.Process):
         return self._resource_usage
 
     async def connect_pipes(self) -> None:
-        """Attach the Popen pipes to asyncio readers and writers."""
-        if self._popen.stdout is not None:
+        """Attach the pipes cuprum owns to asyncio readers and writers.
+
+        Both conditions are required, though only the ``Popen`` one can be the
+        deciding factor here. A stream named in ``pipes`` but absent from the
+        ``Popen`` is the case the guard exists for: nothing was handed over to
+        connect. The converse — a child-side stream the resolution did not name
+        as a pipe — cannot arise, because ``Popen`` sets ``stdout``/``stderr``
+        only for the ``PIPE`` sentinel, and ``DEVNULL`` and a borrowed
+        descriptor leave them ``None``.
+        """
+        if STDOUT_STREAM in self._pipes and self._popen.stdout is not None:
             self.stdout = await self._connect_reader(self._popen.stdout)
-        if self._popen.stderr is not None:
+        if STDERR_STREAM in self._pipes and self._popen.stderr is not None:
             self.stderr = await self._connect_reader(self._popen.stderr)
-        if self._popen.stdin is not None:
+        if STDIN_STREAM in self._pipes and self._popen.stdin is not None:
             self.stdin = await self._connect_writer(self._popen.stdin)
 
     async def _connect_reader(self, pipe: typ.IO[bytes]) -> asyncio.StreamReader:

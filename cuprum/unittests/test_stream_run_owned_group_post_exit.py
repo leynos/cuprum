@@ -34,7 +34,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _subprocess_stream_run, _subprocess_streams
+from cuprum import _subprocess_stream_run
 from cuprum.sh import StdinInput
 from cuprum.unittests._post_exit_teardown_support import (
     PARKING_STDIN_BYTES,
@@ -56,7 +56,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum._pipeline_types import _StageObservation
     from cuprum.sh import SafeCmd
 
 # The fixture is imported rather than defined here because every module that
@@ -174,30 +173,15 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
     cancellation lands on the await this test names, and the writer is then
     asserted to have been live at that moment — otherwise a run that had
     already cleared the writer could be mistaken for one cancelled at it.
+
+    ``SpawnedWriter`` supplies the handle rather than a local double doing it,
+    because it is the same instrumentation the heartbeat case needs and its
+    two-module rebinding has one definition to keep in step with the run.
     """
     pid_file = tmp_path / "post-exit-writer.pid"
     gate = Gate()
-    spawned: list[asyncio.Task[None] | None] = []
-    real_spawn = _subprocess_stream_run._spawn_stdin_writer
+    watch = SpawnedWriter(monkeypatch)
     real_await_writer = _subprocess_stream_run._await_stdin_writer
-
-    def watching_spawn(
-        process: asyncio.subprocess.Process,
-        stdin_data: bytes | None,
-        observation: _StageObservation,
-    ) -> asyncio.Task[None] | None:
-        """Spawn the writer unchanged, keeping a handle on the task it made."""
-        task = real_spawn(process, stdin_data, observation)
-        spawned.append(task)
-        return task
-
-    # Both spawn sites are rebound: the direct run resolves the name in
-    # ``_subprocess_stream_run``, and the streamed path resolves it in
-    # ``_subprocess_streams``, which is where the shared spawn construction
-    # lives. Patching only the former would leave this test watching a name
-    # the run under test never reads.
-    monkeypatch.setattr(_subprocess_stream_run, "_spawn_stdin_writer", watching_spawn)
-    monkeypatch.setattr(_subprocess_streams, "_spawn_stdin_writer", watching_spawn)
     monkeypatch.setattr(
         _subprocess_stream_run,
         "_await_stdin_writer",
@@ -218,13 +202,12 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
                 pid_file,
                 context="the descendant a cancelled run must still reach",
             )
-            writer_task = spawned[0] if spawned else None
-            assert writer_task is not None, (
+            assert watch.task is not None, (
                 "the run reached the writer await with no writer outstanding, "
                 "so the cancellation was not delivered to the await this test "
                 "names"
             )
-            assert not writer_task.done(), (
+            assert not watch.task.done(), (
                 "the writer had already finished when the run was cancelled, so "
                 "the cancellation did not land on the await this test names"
             )

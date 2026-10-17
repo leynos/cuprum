@@ -47,9 +47,24 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _cancel_stdin_writer,
+    _settle_stdin_writer,
+)
+from cuprum._subprocess_stdin_stream import _stdin_codec
+from cuprum._subprocess_stream_exit import (
+    # Re-exported under this module's name as well as imported for use: the
+    # module is where the repository's commentary points for the exit wait, and
+    # ``__all__`` below keeps that path open. ``_reconcile_shielded`` is *not*
+    # re-imported, because it is reached only from inside the exit module and a
+    # second binding here would be one no call path resolves.
+    _wait_for_streamed_process_exit,
+)
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
+    _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
     _reconcile_run_tasks,
@@ -99,65 +114,6 @@ async def _settle_owned_group_before_draining(
     )
 
 
-async def _reconcile_shielded(
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-    *,
-    capture: bool,
-) -> _StreamPayloadPair:
-    """Reconcile every task the run owns under one shield."""
-    # The shield is what makes the reconciliation a guarantee: a caller
-    # cancelling now would otherwise abandon the consumers mid-drain and leak
-    # them. *capture* is the caller's, because the routes disagree about what
-    # the drained text is for — a capturing route hands it to the caller's
-    # ``TimeoutExpired``, and a route re-raising some other error settles
-    # promptly rather than spending the capture grace on text nobody will read.
-    return await _shielded_cleanup(
-        _reconcile_run_tasks(
-            tasks,
-            _drain_context(execution, tasks, pid, capture=capture),
-        )
-    )
-
-
-async def _wait_for_streamed_process_exit(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
-    try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
-        )
-    except TimeoutError as exc:
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_text, stderr_text = await _reconcile_shielded(
-            execution,
-            tasks,
-            pid,
-            capture=execution.capture,
-        )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
-            timeout=execution.timeout,
-        )
-    except BaseException:
-        # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation. Do not capture
-        # stream text while another error propagates, but settle every task
-        # before re-raising the original failure unchanged.
-        await _reconcile_shielded(execution, tasks, pid, capture=False)
-        raise
-
-
 async def _run_subprocess_without_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -173,24 +129,37 @@ async def _run_subprocess_without_streams(
     runs cannot abandon it. An unexpected stdin-writer failure after the process
     exits normally propagates unchanged.
 
+    The wait is raced against that same writer — see
+    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure` — so a
+    producer that dies at once ends the run with its own failure rather than
+    being reported later as a slow child.
+
     Returns
     -------
     tuple[int, float]
         The process exit code and the observation's monotonic exit timestamp.
     """
     stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
+        process,
+        execution.stdio.stdin,
+        _stdin_codec(execution.ctx),
+        execution.observation,
     )
     try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        exit_code, exited_at = await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            stdin_task,
         )
     except BaseException:
         await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
         raise
-    if stdin_task is not None:
-        await stdin_task
+    # Settled rather than awaited: this path has no shared post-exit deadline
+    # scope over it (that scope belongs to the streamed path), so a producer
+    # parked in ``anext`` would make a bare await outlast the run's own
+    # deadline — the terminator would fire, the child would be killed, and the
+    # caller would go on waiting for the producer. See
+    # :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`.
+    await _settle_stdin_writer(stdin_task)
     return exit_code, exited_at
 
 
@@ -209,11 +178,20 @@ async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     boundary is woken only after the writer has finished dying, including the
     close grace it bounds. The shield returns the cancellation at once instead.
     It is a latency improvement and *not* what makes the run terminate: the
-    writer's bounded close does that (ADR 021 records the measurements).
+    writer's own bounded settle does that (ADR 021 records the measurements).
+
+    The shielded await is a *settle* rather than a bare await of the task, and
+    that is what supplies the bound the shield only protects. The writer's
+    ``_close_stdin`` grace bounds a write already in flight, but it is reached
+    only once the producer has finished producing; a producer parked in
+    ``anext`` never gets there, so a bare await would sit on this line with the
+    child already reaped and outlast the run's own deadline. The settle window
+    plus the cancel it falls back to is what makes the wait terminate in that
+    case, and it reclaims the task rather than leaving it parked.
     """
     if tasks.stdin_task is None:
         return
-    await asyncio.shield(tasks.stdin_task)
+    await asyncio.shield(_settle_stdin_writer(tasks.stdin_task))
 
 
 async def _settle_group_and_reconcile_consumers(
@@ -301,7 +279,9 @@ async def _collect_stream_output(
         async with asyncio.timeout(_deadline_for_collection(execution)):
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
-            stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+            stdout_text, stderr_text = await asyncio.gather(
+                *(_consumer_awaitable(task) for task in tasks.consumers)
+            )
     except TimeoutError as exc:
         # Capture-aware, matching the exit-wait route: a capturing run's text
         # is what the resulting ``TimeoutExpired`` reports, so discarding it

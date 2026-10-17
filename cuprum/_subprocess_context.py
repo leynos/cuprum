@@ -101,16 +101,19 @@ def _ownership_spawn_kwargs(
 class _ShModule(typ.Protocol):
     """Structural view of the ``cuprum.sh`` members reached lazily.
 
-    Only the constructors below are accessed through :func:`_sh_module`:
+    The names below are the ones accessed through :func:`_sh_module`:
     ``CommandResult`` and ``BytesCommandResult`` in
     ``cuprum._subprocess_execution``, where the run's mode picks between them,
-    and ``TimeoutExpired`` in ``cuprum._subprocess_timeout``. Naming them keeps
-    the lazy-import shim typed without reintroducing the import cycle.
+    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``, and
+    ``StdinSourceError`` in ``cuprum._subprocess_stdin_errors``, so naming
+    them keeps the lazy-import shim typed without reintroducing the import
+    cycle.
     """
 
     CommandResult: type[CommandResult]
     BytesCommandResult: type[BytesCommandResult]
     TimeoutExpired: type[TimeoutExpired]
+    StdinSourceError: type[Exception]
 
 
 def _sh_module() -> _ShModule:

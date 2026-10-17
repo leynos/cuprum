@@ -7,12 +7,14 @@ route is what these cases drive: :func:`_without_the_probe` in
 :mod:`cuprum.unittests._wait4_process_support` turns it on, because the route
 is selected by a capability the host either has or has not.
 
-Three promises are asserted here. A delivery arriving while the fallback's
+Four promises are asserted here. A delivery arriving while the fallback's
 collection is in flight waits for the publication rather than racing it. A
 delivery to a child that is still alive does not wait on the reap at all — the
 lock must not span the pump's own waiting, which is the shape the fallback
-exists to avoid. And the fallback's reap still reports one owning collection,
-the child's own status, and its resource usage.
+exists to avoid. The fallback's reap still reports one owning collection, the
+child's own status, and its resource usage. And the stdio the spawn layer
+computed reaches the fallback unchanged, so a stream that resolved to
+``DEVNULL`` is not promoted back into a pipe nobody reads.
 
 What the probe-less route owes a child that has already ended, and what it must
 not do to one that is still running, is in
@@ -24,7 +26,9 @@ route's own window is in
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
+import sys
 import typing as typ
 
 from cuprum import _wait4_process, _wait4_spawn
@@ -45,6 +49,7 @@ from cuprum.unittests._wait4_process_support import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import threading
 
     import pytest
@@ -235,3 +240,144 @@ def test_fallback_delivery_to_a_live_child_does_not_wait_for_the_reap(
         "the fallback must reap the child the delivery signalled and report "
         f"the signal's negation, got {observed['status']!r}"
     )
+
+
+# Enough to overrun the host's pipe buffer (65 536 bytes here) several times
+# over, which is what turns "nobody reads this pipe" into a blocked child
+# rather than a merely wasteful one. The margin is deliberate: a buffer of any
+# size the kernel could plausibly report is still smaller than this, so the
+# test cannot pass for the wrong reason on a machine with a larger buffer.
+_OVERRUNS_ANY_PIPE_BUFFER = 4 * 1024 * 1024
+
+
+def _record_fallback_stdio(monkeypatch: pytest.MonkeyPatch) -> dict[str, int | None]:
+    """Patch the fallback spawn to record the stdio it was handed.
+
+    The real ``create_subprocess_exec`` is captured before the replacement is
+    installed, and both happen here, so "capture first, patch second" is a
+    property of this helper rather than a rule a caller has to remember.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        The test's patcher, used to install the replacement.
+
+    Returns
+    -------
+    dict[str, int | None]
+        The mapping the replacement fills in, keyed by stream name.
+    """
+    observed: dict[str, int | None] = {}
+    real_spawn = _wait4_spawn.asyncio.create_subprocess_exec
+
+    async def _record(*argv: object, **kwargs: object) -> object:
+        """Record the stdio the fallback was handed, then spawn for real.
+
+        Both the call and its forwarding are casts. Mirroring the transport's
+        own parameters costs one per keyword it accepts — ``stdin``,
+        ``stdout``, ``stderr``, ``env``, ``cwd``, ``start_new_session`` — which
+        is six against a project ceiling of five, so an exact mirror cannot be
+        written at all. This is the same trade as
+        ``_stdio_redirect_support._recording_transport``: the cast is confined
+        to the forwarding call, so every argument still meets the real
+        signature there, and a wrapper that drifted from it would raise rather
+        than record the wrong thing.
+
+        Returns
+        -------
+        asyncio.subprocess.Process
+            The process the real spawn produced, so the test can await it.
+        """
+        observed.update({
+            "stdin": typ.cast("int | None", kwargs.get("stdin")),
+            "stdout": typ.cast("int | None", kwargs.get("stdout")),
+            "stderr": typ.cast("int | None", kwargs.get("stderr")),
+        })
+        spawn = typ.cast("cabc.Callable[..., cabc.Awaitable[object]]", real_spawn)
+        return await spawn(*argv, **kwargs)
+
+    monkeypatch.setattr(_wait4_spawn.asyncio, "create_subprocess_exec", _record)
+    return observed
+
+
+async def _run_unread_overrunning_child(observed: dict[str, int | None]) -> None:
+    """Run a child that writes far more than a pipe buffer, with nothing reading.
+
+    Parameters
+    ----------
+    observed : dict[str, int | None]
+        What the recorder saw the fallback hand the spawn, keyed by stream
+        name. Read by the assertion below rather than returned, because the
+        assertion has to run against it before the child is awaited.
+    """
+    config = _wait4_spawn.DirectProcessConfig(
+        argv=(
+            sys.executable,
+            "-c",
+            f"import sys; sys.stdout.write('x' * {_OVERRUNS_ANY_PIPE_BUFFER})",
+        ),
+        stdin=None,
+        # Computed exactly as the spawn layer computes it: a pipe target
+        # that nothing consumes. ``None`` would be inherited, not
+        # discarded, and the child would block on a full pipe for a
+        # different reason than the one under test.
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=None,
+        cwd=None,
+        pipes=frozenset({"stdout", "stderr"}),
+    )
+    process = await _wait4_spawn.spawn_direct_process(config)
+    try:
+        # Checked here, on the value the backend was handed and before the
+        # child is awaited: a no-op in the passing case, and in the failing
+        # case the only assertion that can run at all, since the child is
+        # blocked in ``write`` for as long as the parent declines to read.
+        assert observed.get("stdout") == asyncio.subprocess.DEVNULL, (
+            "an unread stream must reach the fallback as DEVNULL, not as "
+            f"a pipe the parent never reads; got {observed.get('stdout')!r}"
+        )
+        returncode = await asyncio.wait_for(process.wait(), timeout=30)
+    finally:
+        # A child left mid-``write`` on an unread pipe outlives the run
+        # that stranded it, so it is both signalled and collected here
+        # rather than abandoned to the interpreter's exit. ``kill`` raises
+        # once the child has already been collected, which is exactly the
+        # passing case; the ``wait`` below then returns the stored code.
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+    assert returncode == 0, "an unread child must still exit cleanly"
+
+
+def test_unread_pipe_stays_devnull_on_the_fallback_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback must not turn an unread stream's ``DEVNULL`` into a pipe.
+
+    A pipe target with nothing consuming it resolves to ``DEVNULL`` before the
+    spawn, and that value has to reach ``create_subprocess_exec`` unchanged.
+    Rewriting it to ``PIPE`` — because the stream appears in ``pipes`` — leaves
+    the parent holding a pipe nobody reads, so a child that writes past the
+    buffer blocks in ``write`` and the run hangs instead of discarding the
+    output.
+
+    Two assertions cover that, deliberately in this order. The first checks the
+    value the backend was handed, which is where the two outcomes differ and
+    which fails in milliseconds naming the wrong value. The second awaits the
+    overrunning child, so the test also proves the run completes rather than
+    merely that the right sentinel was passed; the overrun is sized past any
+    plausible buffer so a machine with a large one cannot make it pass for the
+    wrong reason.
+
+    The value check runs *before* the await on purpose. Under the promotion bug
+    the child is stuck in ``write`` for as long as the parent declines to read,
+    so awaiting first would report the defect as a timeout — the wrong reason —
+    and would leave the blocked child behind. The ``finally`` collects whatever
+    is left instead.
+    """
+    monkeypatch.setattr(
+        _wait4_spawn, "wait4_resource_measurement_available", lambda: False
+    )
+    observed = _record_fallback_stdio(monkeypatch)
+    asyncio.run(_run_unread_overrunning_child(observed))

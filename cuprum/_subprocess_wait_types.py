@@ -29,15 +29,18 @@ if typ.TYPE_CHECKING:
 # untouched in the byte-exact one.
 type _StreamPayload = str | bytes
 type _StreamConsumerTask = asyncio.Task[_StreamPayload | None]
+# A stream cuprum holds no pipe for — one the caller redirected to a file, a
+# borrowed descriptor, or the parent's own stream — carries no consumer task.
+# The slot is kept rather than removed, because the drain's results are read
+# positionally: dropping a slot would shift stderr's payload into stdout's.
+type _Consumer = _StreamConsumerTask | None
+type _ConsumerPair = tuple[_Consumer, _Consumer]
 # One stream's settled payload, in the pair order every waiter uses: stdout
 # first, then stderr. Spelled once because both the line-stream teardown and
 # the stream-run waiter hand back this pair, and a reader should not have to
 # work out from two separate annotations whether the order means anything.
 type _StreamPayloadPair = tuple[_StreamPayload | None, _StreamPayload | None]
-type _EofGraceWaiter = cabc.Callable[
-    [tuple[_StreamConsumerTask, _StreamConsumerTask]],
-    cabc.Awaitable[object],
-]
+type _EofGraceWaiter = cabc.Callable[[_ConsumerPair], cabc.Awaitable[object]]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -72,13 +75,15 @@ class _RunTaskOwnership:
     """
 
     stdin_task: asyncio.Task[None] | None
-    consumers: tuple[_StreamConsumerTask, _StreamConsumerTask]
+    consumers: _ConsumerPair
     discard_on_cancel: asyncio.Event
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
     idle: _IdleMonitor | None = None
 
 
 __all__ = [
+    "_Consumer",
+    "_ConsumerPair",
     "_DrainContext",
     "_EofGraceWaiter",
     "_RunTaskOwnership",

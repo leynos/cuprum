@@ -21,7 +21,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, scoped, sh
+from cuprum import RunOutputOptions, ScopeConfig, StdioTarget, scoped, sh
 from cuprum._process_handle import tasks as handle_tasks
 from cuprum.events import ExecEvent, TerminalOutcome
 from tests.helpers.catalogue import python_catalogue
@@ -222,6 +222,48 @@ def test_failed_task_attachment_is_reclaimed_and_settled() -> None:
         assert events[-1].terminal_outcome is TerminalOutcome.ERROR, (
             f"the terminal outcome must be error, got {events[-1].terminal_outcome}"
         )
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        # One row per redirected stream: a handle forces capture on, so either
+        # target contradicts it, and a single row could not show both.
+        (
+            RunOutputOptions(capture=False, stdout=StdioTarget.inherit()),
+            "stdout cannot be redirected",
+        ),
+        (
+            RunOutputOptions(capture=False, stderr=StdioTarget.inherit()),
+            "stderr cannot be redirected",
+        ),
+    ],
+)
+def test_start_rejects_a_redirected_stream(
+    output: RunOutputOptions,
+    expected: str,
+) -> None:
+    """A handle forces capture, so it cannot own a stream bound elsewhere.
+
+    ``start()`` exists so its caller can inspect the child after the fact, and
+    a stream bound to the parent has no parent-side pipe to inspect. The
+    refusal is raised while the options are resolved — before any child
+    exists — so a rejected call leaves nothing running and nothing to reclaim.
+    This pins the contract the users' guide states for ``start()``: redirect a
+    stream with ``run()`` or ``run_sync()``, not with a handle.
+    """
+
+    async def run_case() -> None:
+        """Ask a real command to start with the redirected options."""
+        command, python_program = _python_command()
+
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            pytest.raises(ValueError, match=expected),
+        ):
+            await command.start(output=output)
 
     asyncio.run(run_case())
 

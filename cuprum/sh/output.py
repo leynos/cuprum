@@ -2,10 +2,12 @@
 
 ``RunOutputOptions`` (and its deprecated ``IOOptions`` alias) configure how a
 command or pipeline's stdout and stderr are captured, mirrored, and
-optionally reframed through a presentation sink. This module also hosts the
-deprecated flat ``capture``/``echo`` keyword resolution used by
-``Pipeline.run``/``run_sync``. The ``cuprum.sh`` package re-exports the
-public names.
+optionally reframed through a presentation sink. The ``cuprum.sh`` package
+re-exports the public names.
+
+The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
+policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported
+here so ``cuprum.sh.output`` remains a usable import path for it.
 """
 
 from __future__ import annotations
@@ -17,6 +19,12 @@ import warnings
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh.stdio import (
+    StdioTarget as StdioTarget,
+)
+from cuprum.sh.stdio_rules import (
+    _validate_stdio_targets as _validate_stdio_targets,
+)
 
 # ``GitHubActionsSink`` comes from the same package surface rather than its
 # ``github_actions`` submodule: the package publishes it in ``__all__``, and the
@@ -34,6 +42,7 @@ if typ.TYPE_CHECKING:
 __all__ = [
     "IOOptions",
     "RunOutputOptions",
+    "StdioTarget",
 ]
 
 
@@ -123,6 +132,16 @@ class RunOutputOptions:
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
         loop. Requires ``idle_after``.
+    stdin : StdioTarget | None, default=None
+        Where the child's standard input is bound, for the two variants that
+        describe the stream itself. ``StdioTarget.pipe()`` asks for a
+        library-owned pipe that nothing writes to, so a child reading stdin
+        sees EOF instead of the parent's terminal; ``StdioTarget.inherit()``
+        asks for the parent's stdin, which is the default. The actual input is
+        supplied through ``SafeCmd.run``'s ``stdin=`` argument --- a
+        ``StdinInput`` payload or a ``StdinStream`` producer --- and either
+        form implies a pipe. A ``path`` or ``fd`` target is rejected here: an
+        input descriptor belongs to the source, not to these options.
     sink : sinks.OutputSink | None, default=None
         Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
         given, it may reframe the parent-facing output of this run (for
@@ -209,6 +228,18 @@ class RunOutputOptions:
     sink: sinks.OutputSink | None = None
     group: bool = False
     annotate_failure: bool = False
+    # The three standard streams default to ``None``. ``stdin`` then inherits
+    # the parent's stream; ``stdout`` and ``stderr`` resolve to a pipe when
+    # capture, echo, idle reporting, or line observation needs one, and to
+    # ``/dev/null`` when it does not --- never to the parent's own descriptor,
+    # which would echo an unread child into the caller's terminal. Naming a
+    # target explicitly overrides that choice; see ``StdioTarget``. ``stdin``
+    # accepts only the two variants that describe the *pipe* itself ---
+    # ``pipe()`` and ``inherit()`` --- because a file or a borrowed descriptor
+    # for stdin belongs in a ``StdinInput``/``StdinStream`` source, not here.
+    stdin: StdioTarget | None = None
+    stdout: StdioTarget | None = None
+    stderr: StdioTarget | None = None
     # `dataclasses.replace` forwards init fields. Keep the generated identity
     # separate so reusing its sink in a new options object remains explicit.
     _synthesized_sink: sinks.OutputSink | None = dc.field(
@@ -246,6 +277,7 @@ class RunOutputOptions:
             _parse_broken_pipe_policy(self.broken_pipe_policy),
         )
         _validate_convenience_flags(self)
+        _validate_stdio_targets(self)
         self._synthesize_sink_from_flags()
 
         if self.max_echo_line_bytes is None:
@@ -337,43 +369,3 @@ class IOOptions(RunOutputOptions):
             DeprecationWarning,
             stacklevel=2,
         )
-
-
-class _DeprecatedOutputFlags(typ.TypedDict, total=False):
-    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
-
-    capture: bool
-    echo: bool
-
-
-def _resolve_pipeline_output(
-    output: RunOutputOptions | None,
-    flags: _DeprecatedOutputFlags,
-) -> RunOutputOptions:
-    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
-    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
-    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
-    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
-    # here to preserve the strict keyword surface.
-    unknown = set(flags) - {"capture", "echo"}
-    if unknown:
-        joined = ", ".join(sorted(unknown))
-        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
-        raise TypeError(msg)
-    if not flags:
-        return output or RunOutputOptions()
-    if output is not None:
-        # Reject combining the deprecated flat flags with ``output``: the
-        # caller's intent would otherwise be ambiguous.
-        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
-        raise ValueError(msg)
-    warnings.warn(
-        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
-        "deprecated; pass output=RunOutputOptions(...) instead",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    return RunOutputOptions(
-        capture=flags.get("capture", True),
-        echo=flags.get("echo", False),
-    )
