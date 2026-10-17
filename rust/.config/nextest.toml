@@ -16,7 +16,7 @@ nextest-version = "0.9.100"
 
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
-global-timeout = "30m"
+global-timeout = "40m"
 
 # `trybuild` compiles a scratch crate per UI case into `rust/target/tests/`,
 # so its tests are bounded by a build rather than by test work. They inherit
@@ -27,9 +27,10 @@ global-timeout = "30m"
 # queue gate on 2026-10-15 exceeded the 600 s allowance after nested Cargo
 # waited on package-cache locks and the trybuild scratch build finished in
 # 9m35s. A 2026-10-16 gate reached the 900 s allowance while nested Cargo
-# still waited on that lock. The 1200 s allowance adds five minutes beyond
-# that observed cutoff; the 30-minute run budget leaves time for the sibling
-# UI test and the rest of the suite.
+# still waited on that lock. A 2026-10-17 run reached 1200 s while nested
+# Cargo was still compiling. The 1800 s allowance adds ten minutes beyond that
+# observed cutoff; the 40-minute run budget leaves time for the sibling UI test
+# and the rest of the suite.
 [[profile.default.overrides]]
 filter = 'binary(compile_tests)'
-slow-timeout = { period = "60s", terminate-after = 20 }
+slow-timeout = { period = "60s", terminate-after = 30 }

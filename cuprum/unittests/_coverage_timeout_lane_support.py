@@ -46,15 +46,13 @@ COVERAGE_ACTION: typ.Final[str] = (
 #: merely as present, because the value equals nothing memorable and a
 #: silent drift back towards the action's default would be invisible.
 #:
-#: Sized from run history rather than guessed. The coverage step has
-#: never exceeded 418 s, on run 34071469378, read across roughly fifty
-#: successful runs of both workflows; the trunk lane's worst was 322 s on
-#: run 34062626757. None of those was a genuinely cold compile.
-#: rstest-bdd's cold run took about four times its warm one, which would
-#: put this repository at the old 1,800 s default's shoulder, so the
-#: budget is six times the worst seen and a cold first run on a branch
-#: finishes inside it.
-EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
+#: Sized from the nested timers: the 2400 s nextest run budget, its 60 s
+#: termination allowance, and a 600 s cold-build allowance total 3060 s.
+#: The 3300 s watchdog leaves four minutes for timing variation while
+#: containing all three. Historical coverage runs were shorter: the worst
+#: coverage step was 418 s and the worst trunk step was 322 s across roughly
+#: fifty successful runs, none of them genuinely cold.
+EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 3300
 
 #: What a cold instrumented compile may add before the run reaches a test.
 #:
