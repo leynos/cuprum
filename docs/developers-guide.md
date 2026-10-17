@@ -2525,8 +2525,8 @@ synchronization of its own.
 single `match`, and each phase falls into exactly five categories: span
 lifecycle (`start` opens a span, `exit` records child details, and `settled`
 closes the span), span event (`stdout`, `stderr`, `stdin_error`, `stdio_error`,
-`timeout`, `teardown_error`, and `capture_eof_grace_expired` record a
-`cuprum.<phase>` event on the already-open span), fail-fast
+`timeout`, `teardown_error`, `capture_eof_grace_expired`, and `group_teardown`
+record a `cuprum.<phase>` event on the already-open span), fail-fast
 (`pipeline_fail_fast` is routed to `_record_fail_fast`, which attributes the
 decision to the failing stage's span), deliberately ignored (`plan` and `stdin`
 carry no tracing semantics), or unhandled (the `case _` logs via
@@ -2545,29 +2545,30 @@ internal `threading.Lock`:
   cannot stall other executions' handlers; each replaced span is still ended
   exactly once because it is already unreachable via the map.
 - **output and ancillary stream phases:** `stdout`, `stderr`, `stdin_error`,
+  `stdio_error`, `timeout`, `teardown_error`, `capture_eof_grace_expired`, and
+  `group_teardown` all route through the single `_record_span_event` helper: it
+  looks up the span for the event's `exec_id` under the lock, then, outside the
+  lock, copies whichever of the `line`, `operation`, `error_type`, `note`,
+  `timeout_s`, `timeout_mode`, `eof_grace_s`, `pending_readers`, and
+  `error_category` fields are set on the event onto a `cuprum.<phase>` span
+  event (for example `cuprum.stdout`, `cuprum.timeout`, or
+  `cuprum.teardown_error`). The grace-expiry event carries only `eof_grace_s`
+  and `pending_readers` in addition to the common correlation fields.
+  `error_category` is the one field whose value is an enum member rather than a
+  plain string, so a backend receives its value rather than the member's
+  `repr`; it is what lets a `stdio_error` distinguish two boundaries that raise
+  the same exception class. New event-recording phases should extend this
+  shared field set rather than add a bespoke per-phase method. The helper never
+  sets the span status or ends the span — only `settled` does that — so
+  `stdin_error` (the child process may legitimately ignore its stdin),
   `stdio_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
-  all route through the single `_record_span_event` helper: it looks up the
-  span for the event's `exec_id` under the lock, then, outside the lock, copies
-  whichever of the `line`, `operation`, `error_type`, `note`, `timeout_s`,
-  `timeout_mode`, `eof_grace_s`, `pending_readers`, and `error_category` fields
-  are set on the event onto a `cuprum.<phase>` span event (for example
-  `cuprum.stdout`, `cuprum.timeout`, or `cuprum.teardown_error`). The
-  grace-expiry event carries only `eof_grace_s` and `pending_readers` in
-  addition to the common correlation fields. `error_category` is the one field
-  whose value is an enum member rather than a plain string, so a backend
-  receives its value rather than the member's `repr`; it is what lets a
-  `stdio_error` distinguish two boundaries that raise the same exception class.
-  New event-recording phases should extend this shared field set rather than
-  add a bespoke per-phase method. The helper never sets the span status or ends
-  the span — only `settled` does that — so `stdin_error` (the child process may
-  legitimately ignore its stdin), `stdio_error`, `timeout`, `teardown_error`,
-  and `capture_eof_grace_expired` are all recorded as diagnostics without
-  failing or closing the execution span. `stdout`/`stderr` recording is gated
-  by the hook's `record_output` flag; ancillary diagnostics are recorded
-  unconditionally, so a stdin-write failure, a timeout, a teardown failure, or
-  an EOF-grace expiry stays diagnosable even when line-by-line output recording
-  is switched off. The grace-expiry event carries no captured stdout or stderr
-  payload. Ancillary diagnostics leave the span open until terminal settlement.
+  are all recorded as diagnostics without failing or closing the execution span.
+  `stdout`/`stderr` recording is gated by the hook's `record_output` flag;
+  ancillary diagnostics are recorded unconditionally, so a stdin-write failure,
+  a timeout, a teardown failure, or an EOF-grace expiry stays diagnosable even
+  when line-by-line output recording is switched off. The grace-expiry event
+  carries no captured stdout or stderr payload. Ancillary diagnostics leave the
+  span open until terminal settlement.
 - **exit** looks up the span for the event's `exec_id` and records known child
   exit attributes while leaving the span open.
 - **settled** removes (pops) the span for the event's `exec_id` under the lock,
