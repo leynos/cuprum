@@ -270,14 +270,14 @@ Thresholds that trigger escalation when breached.
 - [x] (2026-10-17) Resolve the first post-rebase gate run's two findings, then
   repair the module-size regression the repair itself introduced. The run at
   `9de942193` passed `check-fmt` and `typecheck` and aborted `make lint` with
-  two live failures: ten MD049 asterisk-emphasis spans across `CHANGELOG.md`
-  and `docs/v0-2-0-migration-guide.md`, and eleven unsuppressed duplication
+  two live failures: ten MD049 asterisk-emphasis spans across `CHANGELOG.md` and
+  `docs/v0-2-0-migration-guide.md`, and eleven unsuppressed duplication
   families plus three stale allow entries. Three genuine extractions landed —
   `CaptureHookRegistration` onto `_TokenTupleRegistration`; the two spill
   storage-failure emitters into `_fail_storage`; and the capture-presence
-  predicate shared by the run options and the pipeline configuration — with
-  the remaining families recorded as reasoned members. **That last extraction
-  pushed `cuprum/capture_policy.py` from 375 to 437 lines**, past the
+  predicate shared by the run options and the pipeline configuration — with the
+  remaining families recorded as reasoned members. **That last extraction pushed
+  `cuprum/capture_policy.py` from 375 to 437 lines**, past the
   `max-module-lines = 400` ceiling, and the next run's `pylint-classic` failed
   with `C0302` before any later lint leaf could run. `3bbaafde1` moves the
   predicate, and the declared capture-setting union with it, to
