@@ -256,9 +256,8 @@ def _build_stage_result(
 
     The streams arrive as whole drain results rather than payloads, because a
     stage reports how each of its streams was retained as well as what it
-    retained. Only the text result carries those records:
-    ``BytesCommandResult`` mirrors ``CommandResult``'s captured-output fields
-    but not this one, exactly as on the single-command path.
+    retained. Both results carry those records: a byte payload cannot itself
+    show that a policy bounded, spilled, or failed to retain a stream.
 
     A ``None`` slot is a stream the spawn attached no consumer to. In a
     pipeline that is also a stream no policy was named for — a stage's stderr
@@ -299,6 +298,7 @@ def _build_stage_result(
             stdout=_require_bytes(stdout_payload, "stdout"),
             stderr=_require_bytes(stderr_payload, "stderr"),
             **measurements.as_kwargs(),
+            captures=_recorded_captures((stdout_capture, stderr_capture)),
         )
     return sh.CommandResult(
         program=inputs.cmd.program,

@@ -9,10 +9,13 @@ payloads someone thought of.
 
 The generator is the part that matters. A page of handwritten examples is
 where a bound bug survives: every case a person writes is a case they already
-had in mind. The properties below are stated so that the interesting classes —
-a stream longer than its bound, a stream shorter, an exactly-fitting stream, a
-tail that begins inside a code point — are reached and *counted*, so a run that
-never generated one is reported as a failure rather than as a pass.
+had in mind. The properties below therefore run over generated text and
+publish each example's retention class through ``hypothesis.event``, so a
+run's statistics show whether a stream longer than its bound, a stream
+shorter, an exactly-fitting stream, and a tail that begins inside a code point
+were actually exercised. Statistics alone do not fail a run that misses a
+class, so the deterministic corpus tests below pin that each class is
+reachable through the same accumulator seam.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ import io
 import typing as typ
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, event, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
@@ -36,8 +39,9 @@ if typ.TYPE_CHECKING:
 
 _PROPERTY_MAX_EXAMPLES = 150
 # Long enough that a bound of 1 spends most of the stream dropping, short
-# enough that a hundred and fifty examples stay cheap.
-_PAYLOAD_MAX_BYTES = 48
+# enough that a hundred and fifty examples stay cheap. It bounds the generated
+# *characters*, which is what the strategy below measures.
+_PAYLOAD_MAX_CHARS = 48
 # Chosen for what a byte-oriented bound gets wrong. The CJK and emoji entries
 # are three and four bytes wide, so a bound expressed as a character count
 # would retain the wrong number of bytes, and an ASCII-only alphabet would let
@@ -55,8 +59,10 @@ _TEXT_ALPHABET = st.sampled_from([
     "\U0001f600",
     "\U0001f4a9",
 ])
-_PAYLOADS = st.text(alphabet=_TEXT_ALPHABET, max_size=_PAYLOAD_MAX_BYTES)
-_BOUNDS = st.integers(min_value=1, max_value=_PAYLOAD_MAX_BYTES + 8)
+_PAYLOADS = st.text(alphabet=_TEXT_ALPHABET, max_size=_PAYLOAD_MAX_CHARS)
+# Bounded by the largest possible encoded size, so a bound can fall beyond the
+# stream as well as inside it.
+_BOUNDS = st.integers(min_value=1, max_value=4 * _PAYLOAD_MAX_CHARS + 8)
 
 
 class _Stats:
@@ -128,10 +134,23 @@ def _retain(
         stats.under_budget += len(payload) < max_bytes
         stats.exactly_budget += len(payload) == max_bytes
         stats.multibyte += any(byte >= 0x80 for byte in payload)
-        # A trim that cost more than the overflow is the class the suffix
-        # property exists for: the bound was met by cutting into a code point.
         stats.trimmed += record.dropped_bytes > max(0, len(payload) - max_bytes)
     return record
+
+
+def _announce_retention(payload: bytes, record: CapturedStream, max_bytes: int) -> None:
+    """Publish this example's classes to the property run's statistics.
+
+    Only the Hypothesis properties call this: ``event`` is invalid outside a
+    generated example, and the deterministic corpus tests share the same
+    retention seam without being generated runs.
+    """
+    event("over-budget" if len(payload) > max_bytes else "within-budget")
+    event("multibyte" if any(byte >= 0x80 for byte in payload) else "ascii")
+    # A trim that cost more than the overflow is the class the suffix property
+    # exists for: the bound was met by cutting into a code point.
+    if record.dropped_bytes > max(0, len(payload) - max_bytes):
+        event("trimmed")
 
 
 def _retained_bytes(payload: bytes, record: CapturedStream) -> bytes:
@@ -165,6 +184,7 @@ def test_a_bounded_capture_retains_exactly_a_suffix_within_its_bound(
     """
     raw = payload.encode("utf-8")
     record = _retain(raw, max_bytes)
+    _announce_retention(raw, record, max_bytes)
 
     assert record.total_bytes == len(raw), (
         "the record must count the whole stream, not just the tail"
@@ -198,10 +218,12 @@ def test_no_bound_splits_a_code_point(payload: str, max_bytes: int) -> None:
     points constantly; a length-only trim fails here with ``UnicodeDecodeError``
     rather than returning something subtly wrong.
     """
+    raw = payload.encode("utf-8")
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
-    sink.absorb(payload.encode("utf-8"))
+    sink.absorb(raw)
     final = sink.finalize()
+    _announce_retention(raw, final.capture, max_bytes)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert payload.endswith(final.payload), (
@@ -266,8 +288,13 @@ def test_the_drain_config_owns_the_accumulator_its_policy_names() -> None:
     assert reread is not None, "the policy is still bounded on re-read"
     final = reread.finalize()
 
-    assert isinstance(config.capture, BoundedCapture)
-    assert config.capture.max_bytes == 8
+    assert isinstance(config.capture, BoundedCapture), (
+        f"the config must report the bounded policy it was given; got "
+        f"{config.capture!r}"
+    )
+    assert config.capture.max_bytes == 8, (
+        f"the config must keep the original bound; got {config.capture.max_bytes}"
+    )
     assert final.capture.total_bytes == 12, (
         "the config must retain the accumulator the bytes were written to, "
         f"not build a fresh one per read; got {final.capture.total_bytes} bytes"
@@ -276,7 +303,9 @@ def test_the_drain_config_owns_the_accumulator_its_policy_names() -> None:
 
 def test_a_config_without_a_policy_owns_no_accumulator() -> None:
     """No policy means no sink, which is how a discarded stream is configured."""
-    assert _config(None).capture_sink is None
+    assert _config(None).capture_sink is None, (
+        "no policy must mean no accumulator, not an empty one"
+    )
 
 
 def _run_drain(payload: bytes, policy: CapturePolicy | None) -> _CapturedDrain:
@@ -348,8 +377,12 @@ def test_the_drain_retains_through_the_policy_it_was_configured_with(
     assert payload.endswith(result.payload.encode("utf-8")), (
         f"the drain's payload must be the stream's tail; got {result.payload!r}"
     )
-    assert result.capture is not None
-    assert result.capture.truncated is True
+    assert result.capture is not None, (
+        "a bounded drain must report a capture record; got None"
+    )
+    assert result.capture.truncated is True, (
+        "a payload the bound cut must report truncation"
+    )
 
 
 def test_the_drain_reports_an_uncaptured_stream_as_empty() -> None:
@@ -377,11 +410,21 @@ def test_the_drain_with_a_full_policy_is_unchanged_by_the_bound_machinery() -> N
     payload = b"a complete stream\nwith two lines\n"
     result = _run_drain(payload, FullCapture())
 
-    assert result.payload == payload.decode()
-    assert result.capture is not None
-    assert result.capture.total_bytes == len(payload)
-    assert result.capture.dropped_bytes == 0
-    assert result.capture.truncated is False
+    assert result.payload == payload.decode(), (
+        f"the full policy must return the decoded stream; got {result.payload!r}"
+    )
+    assert result.capture is not None, (
+        "a full drain must report a capture record; got None"
+    )
+    assert result.capture.total_bytes == len(payload), (
+        f"the record must count every byte; got {result.capture.total_bytes}"
+    )
+    assert result.capture.dropped_bytes == 0, (
+        f"a full capture drops nothing; got {result.capture.dropped_bytes}"
+    )
+    assert result.capture.truncated is False, (
+        "a capture that dropped nothing must not report truncation"
+    )
 
 
 @pytest.mark.parametrize("max_bytes", [1, 7, 8, 9, 16, 4096])
@@ -429,10 +472,18 @@ def test_a_zero_length_stream_is_a_complete_empty_capture() -> None:
     # capture says the payload is the file, so an idle bounded capture has to
     # report empty text rather than borrow that signal for having nothing.
     assert final.payload is not None, "an idle bounded capture still reports text"
-    assert not final.payload
-    assert final.capture.total_bytes == 0
-    assert final.capture.dropped_bytes == 0
-    assert final.capture.truncated is False
+    assert not final.payload, (
+        "an idle stream retains the empty string, not whatever was buffered"
+    )
+    assert final.capture.total_bytes == 0, (
+        f"an idle stream wrote no bytes; got {final.capture.total_bytes}"
+    )
+    assert final.capture.dropped_bytes == 0, (
+        f"an idle stream drops nothing; got {final.capture.dropped_bytes}"
+    )
+    assert final.capture.truncated is False, (
+        "an idle stream is a complete empty capture, not a truncation"
+    )
 
 
 def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
@@ -457,11 +508,13 @@ def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
     assert not final.payload, (
         "no suffix of one byte decodes on its own, so nothing may be retained"
     )
-    assert final.capture.total_bytes == len(payload)
+    assert final.capture.total_bytes == len(payload), (
+        f"the record must count the whole stream; got {final.capture.total_bytes}"
+    )
     assert final.capture.dropped_bytes == len(payload), (
         "the bytes the trim cost must be counted as dropped"
     )
-    assert final.capture.truncated is True
+    assert final.capture.truncated is True, "a trimmed capture must report truncation"
 
 
 def test_a_bound_exactly_the_stream_length_drops_nothing() -> None:
@@ -472,9 +525,15 @@ def test_a_bound_exactly_the_stream_length_drops_nothing() -> None:
     sink.absorb(payload)
     final = sink.finalize()
 
-    assert final.capture.dropped_bytes == 0
-    assert final.capture.truncated is False
-    assert final.payload == payload.decode()
+    assert final.capture.dropped_bytes == 0, (
+        f"an inclusive bound drops nothing; got {final.capture.dropped_bytes}"
+    )
+    assert final.capture.truncated is False, (
+        "a capture that dropped nothing must not report truncation"
+    )
+    assert final.payload == payload.decode(), (
+        f"a stream at the bound must survive whole; got {final.payload!r}"
+    )
 
 
 def test_a_bound_one_byte_short_of_the_stream_drops_exactly_one_byte() -> None:
@@ -485,9 +544,16 @@ def test_a_bound_one_byte_short_of_the_stream_drops_exactly_one_byte() -> None:
     sink.absorb(payload)
     final = sink.finalize()
 
-    assert final.capture.dropped_bytes == 1
-    assert final.payload == payload[1:].decode()
-    assert final.capture.truncated is True
+    assert final.capture.dropped_bytes == 1, (
+        f"exactly one byte is over the bound; got {final.capture.dropped_bytes}"
+    )
+    assert final.payload == payload[1:].decode(), (
+        f"the retained payload must be the stream minus its first byte; got "
+        f"{final.payload!r}"
+    )
+    assert final.capture.truncated is True, (
+        "a capture that dropped a byte must report truncation"
+    )
 
 
 def test_a_bound_larger_than_the_stream_retains_everything() -> None:
@@ -498,10 +564,18 @@ def test_a_bound_larger_than_the_stream_retains_everything() -> None:
     sink.absorb(payload)
     final = sink.finalize()
 
-    assert final.payload == payload.decode()
-    assert final.capture.total_bytes == len(payload)
-    assert final.capture.dropped_bytes == 0
-    assert final.capture.truncated is False
+    assert final.payload == payload.decode(), (
+        f"a stream under the bound must survive whole; got {final.payload!r}"
+    )
+    assert final.capture.total_bytes == len(payload), (
+        f"the record must count every byte; got {final.capture.total_bytes}"
+    )
+    assert final.capture.dropped_bytes == 0, (
+        f"a stream under the bound drops nothing; got {final.capture.dropped_bytes}"
+    )
+    assert final.capture.truncated is False, (
+        "a capture that dropped nothing must not report truncation"
+    )
 
 
 def test_the_accumulator_counts_bytes_across_arbitrary_chunk_partitions() -> None:
@@ -519,8 +593,13 @@ def test_the_accumulator_counts_bytes_across_arbitrary_chunk_partitions() -> Non
         sink.absorb(payload[start : start + 3])
     final = sink.finalize()
 
-    assert final.capture.total_bytes == len(payload)
-    assert final.capture.dropped_bytes == len(payload) - 8
+    assert final.capture.total_bytes == len(payload), (
+        f"the count must span the whole stream; got {final.capture.total_bytes}"
+    )
+    assert final.capture.dropped_bytes == len(payload) - 8, (
+        "the drop count must be measured against the concatenated stream, not "
+        f"per chunk; got {final.capture.dropped_bytes}"
+    )
     assert final.payload == payload[-8:].decode(), (
         "the retained tail must be the stream's last eight bytes, not the "
         "last eight bytes of each read"
@@ -565,8 +644,13 @@ def test_a_byte_mode_bound_hands_back_the_child_bytes_untouched() -> None:
     assert final.payload == payload, (
         f"a byte-exact capture must return the child's own bytes; got {final.payload!r}"
     )
-    assert final.capture.dropped_bytes == 0
-    assert final.capture.truncated is False
+    assert final.capture.dropped_bytes == 0, (
+        "a byte-exact capture must not count a trim it never made; got "
+        f"{final.capture.dropped_bytes}"
+    )
+    assert final.capture.truncated is False, (
+        "a byte-exact capture that dropped nothing must not report truncation"
+    )
 
 
 def test_a_byte_mode_bound_keeps_a_continuation_shaped_leading_byte() -> None:

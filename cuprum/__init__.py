@@ -14,6 +14,8 @@ Example:
 from __future__ import annotations
 
 from cuprum._constants import PACKAGE_NAME
+from cuprum.capture_events import CaptureEvent, CaptureEventCategory
+from cuprum.capture_observation import CaptureHookRegistration, observe_capture
 from cuprum.catalogue import (
     CORE_OPS_PROJECT,
     DEFAULT_CATALOGUE,
@@ -156,6 +158,9 @@ __all__ = [
     "BrokenPipePolicy",
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CaptureEvent",
+    "CaptureEventCategory",
+    "CaptureHookRegistration",
     "CapturePolicy",
     "CapturePolicyKind",
     "CapturedResult",
@@ -236,6 +241,7 @@ __all__ = [
     "merge_env_overlays",
     "merge_executable_bindings",
     "observe",
+    "observe_capture",
     "observe_control",
     "observe_echo",
     "observe_line_stream",

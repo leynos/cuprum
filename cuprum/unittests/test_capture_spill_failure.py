@@ -29,7 +29,7 @@ from cuprum._capture_decode import _DecodeSettings
 from cuprum._capture_file import _FileAccumulator
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import observe_capture
-from cuprum.capture_policy import FileBackedCapture
+from cuprum.capture_policy import CaptureStreamName, FileBackedCapture
 
 if typ.TYPE_CHECKING:
     import io
@@ -173,12 +173,12 @@ def _accumulator(
     *,
     directory: pathlib.Path,
     threshold: int = 1,
-    stream: str = "stderr",
+    stream: CaptureStreamName = "stderr",
 ) -> _FileAccumulator:
     """Build a file-backed accumulator that spills into *directory*."""
     return _FileAccumulator(
         policy=FileBackedCapture(spill_threshold_bytes=threshold, directory=directory),
-        stream=typ.cast("typ.Any", stream),
+        stream=stream,
         settings=_TEXT,
     )
 
@@ -523,7 +523,7 @@ def test_a_vanished_spill_file_is_absorbed_when_byte_mode_reads_it_back(
         policy=FileBackedCapture(
             spill_threshold_bytes=1, directory=tmp_path, keep_file=True
         ),
-        stream=typ.cast("typ.Any", "stdout"),
+        stream="stdout",
         settings=settings,
     )
     events: list[CaptureEvent] = []

@@ -276,11 +276,9 @@ def _build_command_result(
     rules are read from :mod:`cuprum._result_assembly` rather than restated
     here.
 
-    Only the text result carries ``captures``. ``BytesCommandResult`` mirrors
-    ``CommandResult``'s captured-output fields but not this one, so a byte run
-    reports how its stream was retained by its type and its payload alone; the
-    records are the metadata a text caller reads, and the byte entry points
-    were never part of this change.
+    Both classes carry ``captures``. A byte-exact run needs it most: a spilled
+    stream is read back, so a failed write or a failed flush can shorten the
+    payload it hands over, and the payload alone cannot say so.
 
     Returns
     -------
@@ -298,6 +296,7 @@ def _build_command_result(
             stdout=_require_bytes(completion.stdout_text, "stdout"),
             stderr=_require_bytes(completion.stderr_text, "stderr"),
             **measurements.as_kwargs(),
+            captures=_recorded_captures(completion.captures),
         )
     if execution.capture:
         return sh.CapturedResult(

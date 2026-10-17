@@ -86,12 +86,15 @@ escalation, not a workaround.
 - **`stdout`/`stderr` stay `str | None`.** File-backed capture reports `None`
   there and puts the path in `captures`; the public type contract is not
   widened to a union with a handle type.
-- **Byte-exact mode reports no capture metadata.** `BytesCommandResult` has no
-  `captures` field, so a `run_bytes()` run cannot report a spill or a
-  truncation; the bytes are all it says. The policies still apply there, and a
-  spilled stream is read back so the caller receives the child's bytes in full,
-  but that read is O(stream size) and gives byte mode none of the
-  bounded-memory guarantee that text mode gets.
+- **Byte-exact mode reports the same capture metadata, but reads a spill back.**
+  `BytesCommandResult` carries the same keyword-only `captures` tuple as
+  `CommandResult`, and `BytesPipelineResult.captures` reads the final stage, so
+  a `run_bytes()` caller can tell a bounded tail from a complete stream, name a
+  spill, and see a storage failure. It matters most here: the bytes alone
+  cannot distinguish a complete capture from a shortened one. A spilled stream
+  is read back so the caller receives the child's bytes in full, and that read
+  is O(stream size), so byte mode gets none of the bounded-memory guarantee
+  that text mode gets.
 - **No new runtime dependency.** The spill file uses the standard library's
   `tempfile`; nothing is added to `pyproject.toml`.
 - **No public API removal.** `RunOutputOptions.capture`, `.echo`,
@@ -361,6 +364,20 @@ Thresholds that trigger escalation when breached.
   generalized one scenario's property to all of them, a test parameter
   annotated narrower than its rows, and an ExecPlan conformance source naming a
   `/tmp` file no reader can open.
+- [x] (2026-10-18) Clear the sixth CodeRabbit review's findings. The major one
+  was a gap rather than a defect: `BytesCommandResult` had no `captures` field,
+  so a `run_bytes()` caller could not learn that a policy bounded, spilled, or
+  failed to retain a stream — exactly the case where the payload cannot say so
+  itself. Both byte result classes now carry the records, filled from the same
+  drain data as the text classes, and `BytesPipelineResult.captures` reads the
+  final stage. The new `test_byte_capture_records.py` fails all four byte cases
+  when either construction site omits the records. The rest were the four
+  missing `__all__` entries for the capture-event surface, tests for the byte
+  records, the users' and migration guides now stating that byte results carry
+  `captures`, the ExecPlan's three stale "byte mode reports no metadata" claims,
+  `typ.Any` casts replaced with `CaptureStreamName`, bare asserts given
+  messages, and the generated-input classes published through
+  `hypothesis.event` beside the deterministic corpus counts.
 
 ## Surprises & discoveries
 
@@ -821,7 +838,7 @@ Thresholds that trigger escalation when breached.
   in the module. Date/Author: 2026-10-17, implementation agent.
 
 - Observation (review round 4, `finalize` was a command):
-  `_BoundedAccumulator .finalize` did
+  `_BoundedAccumulator.finalize` did
   `self._dropped += len(raw) - len(retained)`, so a second read of the same
   capture reported a larger `dropped_bytes` than the first — breaking
   `dropped + retained == total` for whichever record the caller actually held —
@@ -877,17 +894,19 @@ Thresholds that trigger escalation when breached.
   assertion is updated, the first is not. Date/Author: 2026-10-14,
   implementation agent.
 
-- Decision: the policies also apply to `run_bytes()`; `BytesCommandResult`
-  keeps its `bytes | None` fields and gains no `captures` field. Rationale:
-  issue #443 is about the `str` result, and the first cut scoped the policies
-  to the text path. That left `run_bytes()` silently ignoring a policy the
-  caller had named, which the issue does not sanction. Applying them costs one
-  branch — a spilled stream is read back — and the result type stays unchanged
-  because there is no record to put a spill in. The `bytes | None` contract is
-  therefore honest but silent: byte mode cannot distinguish a complete capture
-  from a truncated one, and the read-back is O(stream size). Both limits are
-  documented in `docs/users-guide.md`. Date/Author: 2026-10-14, implementation
-  agent; rewritten after review.
+- Decision: the policies also apply to `run_bytes()`, and the byte-exact
+  results report them. Rationale: issue #443 is about the `str` result, and the
+  first cut scoped the policies to the text path. That left `run_bytes()`
+  silently ignoring a policy the caller had named, which the issue does not
+  sanction. Applying them costs one branch — a spilled stream is read back —
+  and a byte run's payload cannot say on its own whether a policy shortened it.
+  `BytesCommandResult` therefore carries the same keyword-only `captures` tuple
+  as `CommandResult`, filled from the same drain records at both construction
+  sites, and `BytesPipelineResult.captures` reads the final stage's. The
+  `bytes | None` payload fields keep their annotation; the read-back remains
+  O(stream size), which is documented in `docs/users-guide.md`. Date/Author:
+  2026-10-14, implementation agent; rewritten after review, and revised when
+  review found the byte result classes could not report a spill.
 
 - Decision: reuse `_echo_truncation._encode_prefix`'s incremental
   decoder/encoder walk instead of adding a second UTF-8 boundary finder.
@@ -1534,8 +1553,9 @@ no longer claims capture is a joint switch. Conformance check:
 - No unapproved trust-boundary or persisted-format change.
 - Trace links current.
 Recovery: documentation-only revert is safe. Remaining gaps:
-`BytesCommandResult` reports no capture metadata, so byte mode cannot flag a
-truncation or a spill. Compatibility decision: `<none>`.
+`FileBackedCapture` in byte-exact mode reads the whole spill back, so byte mode
+does not carry text mode's bounded-memory guarantee. Compatibility decision:
+`<none>`.
 
 ## Concrete steps
 

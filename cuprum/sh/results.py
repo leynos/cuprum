@@ -328,6 +328,13 @@ class BytesCommandResult:
     stderr:
         Captured bytes, with the same ``b""``/``None`` distinction as
         ``stdout``.
+    captures:
+        One record per captured stream, in stdout-then-stderr order, with the
+        meaning :class:`CommandResult` documents. A byte run has no text to
+        point at, so these records are the only way it can report that a
+        policy discarded bytes, that a stream spilled, or that a storage call
+        failed: the payload alone cannot tell a complete capture from a
+        shortened one. Empty when the run captured nothing.
 
     """
 
@@ -347,6 +354,10 @@ class BytesCommandResult:
     system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     resolved_path: str | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
+    # ``kw_only`` so ``relay_fallbacks`` keeps the seventh positional slot, as
+    # it does in ``CommandResult``; declared after it so the two classes read
+    # the same way.
+    captures: tuple[CapturedStream, ...] = dc.field(default=(), kw_only=True)
 
     @property
     def ok(self) -> bool:
@@ -377,6 +388,19 @@ class BytesPipelineResult:
 
     stages: tuple[BytesCommandResult, ...]
     failure_index: int | None = None
+
+    @property
+    def captures(self) -> tuple[CapturedStream, ...]:
+        """The final stage's capture records.
+
+        Returns
+        -------
+        tuple[CapturedStream, ...]
+            One record per stream the final stage captured, in
+            stdout-then-stderr order, with the meaning
+            :class:`CommandResult` documents. Empty when it captured nothing.
+        """
+        return self.final.captures
 
     @property
     def final(self) -> BytesCommandResult:

@@ -527,7 +527,10 @@ output fields are `bytes | None` rather than `str | None`. Each stage of a
 `BytesPipelineResult` is a `BytesCommandResult`. All measurement fields — `pid`,
 `started_at`, `duration`, `max_rss_bytes`, `user_cpu_seconds`,
 `system_cpu_seconds`, and `relay_fallbacks` — are unchanged, so nothing is lost
-by capturing exactly.
+by capturing exactly. `BytesCommandResult` carries the same `captures` records
+as `CommandResult`, and `BytesPipelineResult.captures` reads the final stage's,
+because a byte payload alone cannot show that a policy bounded, spilled, or
+failed to retain it.
 
 Two behaviours are worth noting before adopting it:
 
@@ -1115,7 +1118,8 @@ assert default.stderr == "kept"
 is a byte count rather than a character count, and it never splits a code
 point, so the tail it retains is always decodable and the count is what a
 caller can reason about without knowing the encoding. The run also reports what
-it dropped, on the new `captures` field of `CommandResult` and `PipelineResult`:
+it dropped, on the new `captures` field of `CommandResult` and `PipelineResult`
+(and of their byte-exact counterparts):
 
 <!-- tested-example: migration-capture-metadata -->
 
@@ -1158,8 +1162,8 @@ guarantee. The file is removed by the run before it returns unless
 cancellation. Set `keep_file=True` if the caller wants the file, and read
 `record.owned` to know which case applies.
 
-A failure to create, write, or read back the spill file does not fail the run:
-it is reported on the record as `storage_failed=True` and through a
+A failure to create, write, flush, or read back the spill file does not fail
+the run: it is reported on the record as `storage_failed=True` and through a
 `CaptureEvent`, because a failure to _retain_ output is not a failure of the
 command that produced it. If the file could not be created the stream stays in
 memory and is still reported complete; if an append failed the record holds

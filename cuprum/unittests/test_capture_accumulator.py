@@ -104,10 +104,16 @@ def test_full_capture_reproduces_the_stream_it_replaced(
     assert final.payload == expected, (
         f"a full capture must return the decoded stream; got {final.payload!r}"
     )
-    assert final.capture.policy is CapturePolicyKind.FULL
-    assert final.capture.total_bytes == len(payload)
+    assert final.capture.policy is CapturePolicyKind.FULL, (
+        f"the record must name the full policy; got {final.capture.policy!r}"
+    )
+    assert final.capture.total_bytes == len(payload), (
+        f"the record must count every byte; got {final.capture.total_bytes}"
+    )
     assert final.capture.dropped_bytes == 0, "a full capture drops nothing"
-    assert final.capture.storage == "memory"
+    assert final.capture.storage == "memory", (
+        f"a full capture stays on the heap; got {final.capture.storage!r}"
+    )
     assert final.handle is None, "a full capture owns no file"
 
 
@@ -122,7 +128,11 @@ def test_full_capture_in_bytes_mode_returns_the_original_bytes(
 
     _absorb(sink, _chunks(payload, chunk_size))
 
-    assert sink.finalize().payload == payload
+    final = sink.finalize()
+
+    assert final.payload == payload, (
+        f"byte mode must return the stream untouched; got {final.payload!r}"
+    )
 
 
 @pytest.mark.parametrize("payload", _CORPUS)
@@ -269,7 +279,9 @@ def test_bounded_capture_drops_from_the_front_not_the_back(
     assert final.payload == payload[1:].decode(), (
         f"the tail must be kept and the head dropped; got {final.payload!r}"
     )
-    assert final.capture.dropped_bytes == 1
+    assert final.capture.dropped_bytes == 1, (
+        f"exactly one byte is over the bound; got {final.capture.dropped_bytes}"
+    )
 
 
 @pytest.mark.parametrize("max_bytes", [1, 2, 3])
@@ -375,7 +387,9 @@ def test_a_bound_the_stream_fits_reports_the_same_text_as_a_full_capture(
 
 def test_build_accumulator_returns_nothing_for_an_uncaptured_stream() -> None:
     """No policy means no accumulator, which is how a discarded stream is said."""
-    assert build_accumulator(None, stream="stdout", settings=_TEXT) is None
+    assert build_accumulator(None, stream="stdout", settings=_TEXT) is None, (
+        "an absent policy must build no accumulator rather than an empty one"
+    )
 
 
 def test_build_accumulator_selects_the_file_backed_sink() -> None:
@@ -387,7 +401,9 @@ def test_build_accumulator_selects_the_file_backed_sink() -> None:
     )
 
     assert sink is not None, "a file-backed policy must build an accumulator"
-    assert sink.finalize().capture.policy is CapturePolicyKind.FILE_BACKED
+    assert sink.finalize().capture.policy is CapturePolicyKind.FILE_BACKED, (
+        "the file-backed policy must reach its own accumulator"
+    )
 
 
 def test_build_accumulator_rejects_a_value_that_is_not_a_policy() -> None:
@@ -407,8 +423,12 @@ def test_build_accumulator_rejects_a_value_that_is_not_a_policy() -> None:
 
 def test_the_two_accumulators_are_distinguishable_by_type() -> None:
     """Each policy builds the class that implements it, not a shared one."""
-    assert isinstance(_sink(FullCapture()), _FullAccumulator)
-    assert isinstance(_sink(BoundedCapture(max_bytes=8)), _BoundedAccumulator)
+    assert isinstance(_sink(FullCapture()), _FullAccumulator), (
+        "the full policy must build the full accumulator"
+    )
+    assert isinstance(_sink(BoundedCapture(max_bytes=8)), _BoundedAccumulator), (
+        "the bounded policy must build the bounded accumulator"
+    )
 
 
 def _chunks(payload: bytes, size: int) -> list[bytes]:

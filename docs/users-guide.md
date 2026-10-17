@@ -760,6 +760,14 @@ each command or stage keeps the full set of measurements (`pid`, `started_at`,
 `bytes | None`, and each stage of a `BytesPipelineResult` is a
 `BytesCommandResult`.
 
+Byte-exact results carry `captures` too, with the same records and meaning as
+in text mode, and `BytesPipelineResult.captures` reads the final stage exactly
+as its `stdout` does. A byte payload cannot say on its own whether a policy
+shortened it, moved it to a file, or failed to retain it, so the records are
+how a `run_bytes()` caller learns any of that. A bounded byte capture returns
+the retained bytes and reports the discarded count, and a spilled byte capture
+returns the bytes read back from its file.
+
 Text remains the default, and the mode is explicit: `run()` never returns bytes
 and `run_bytes()` never returns text, so a mismatch is a bug rather than a
 runtime surprise. Everything the text-mode entry points promise still holds —
