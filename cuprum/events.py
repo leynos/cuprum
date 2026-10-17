@@ -333,10 +333,16 @@ class ExecEvent:
     # ``group_outcome`` labels a bounded counter, so it is typed as the closed
     # enum rather than as a string that a caller could set freely.
     owns_group: bool | None = dc.field(default=None, kw_only=True)
+    # Declared ahead of ``terminal_outcome`` — and keyword-only — because
+    # ``terminal_outcome`` arrived on ``main`` already holding the last
+    # positional slot. An optional field with a default declared *after* it
+    # would take that slot instead and silently rebind a caller passing the
+    # outcome positionally, so the declaration order is load-bearing and
+    # ``test_terminal_outcome_keeps_its_positional_slot`` pins it.
+    error_category: StdioFailureCategory | None = dc.field(default=None, kw_only=True)
     group_outcome: GroupTeardownOutcome | None = dc.field(default=None, kw_only=True)
     settle_s: float | None = dc.field(default=None, kw_only=True)
     terminal_outcome: TerminalOutcome | None = None
-    error_category: StdioFailureCategory | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
