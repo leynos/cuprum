@@ -55,6 +55,10 @@ from cuprum.sinks._github_actions_options import (
     _GitHubActionsSinkOptionsKwargs,
     _normalize_github_actions_sink_options,
 )
+from cuprum.sinks._github_actions_titles import (
+    _redacted_session_titles,
+    _session_titles,
+)
 from cuprum.sinks.base import (
     SessionOutcome,
     SessionStart,
@@ -354,36 +358,21 @@ class GitHubActionsSink:
         """
         if not self._is_active():
             return None
-        has_argv_title = False
-        if self.title is not None:
-            label = self.title
-            annotation_label = self.title
-        elif start.argv:
-            label = " ".join(start.argv)
-            annotation_label = start.label
-            has_argv_title = True
-        else:
-            label = start.label
-            annotation_label = start.label
-        has_user_supplied_title = self.title is not None
-        has_configured_group_title = has_user_supplied_title or has_argv_title
-        should_redact_group_title = self.emit_group and has_configured_group_title
-        should_redact_annotation_title = (
-            self.emit_annotation and has_user_supplied_title
+        titles = _redacted_session_titles(
+            _session_titles(start, self.title),
+            self.redaction,
+            emit_group=self.emit_group,
+            emit_annotation=self.emit_annotation,
         )
-        if self.redaction is not None and should_redact_group_title:
-            label = self.redaction.apply_text(label)
-        if self.redaction is not None and should_redact_annotation_title:
-            annotation_label = self.redaction.apply_text(annotation_label)
         # The annotation keeps the bounded label even when the group is titled
         # with argv: an annotation is a workflow command property, so publishing
         # arguments there would leak them into the run summary.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
             log,
-            label,
+            titles.group,
             annotation_label=_Annotation(
-                label=annotation_label,
+                label=titles.annotation,
                 emit_group=self.emit_group,
                 emit_annotation=self.emit_annotation,
             ),

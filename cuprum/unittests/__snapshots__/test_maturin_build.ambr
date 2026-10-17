@@ -172,6 +172,7 @@
       'cuprum/sh/safe_cmd.py',
       'cuprum/sinks/__init__.py',
       'cuprum/sinks/_github_actions_options.py',
+      'cuprum/sinks/_github_actions_titles.py',
       'cuprum/sinks/base.py',
       'cuprum/sinks/github_actions.py',
       'cuprum/stream_events.py',

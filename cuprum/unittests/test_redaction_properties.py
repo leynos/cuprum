@@ -12,23 +12,24 @@ def _literal_union_projection(text: str, literals: tuple[str, ...]) -> str:
     """Project the union of literal match ranges using a coverage oracle."""
     covered = [False] * len(text)
     for literal in literals:
-        offset = 0
-        while (start := text.find(literal, offset)) >= 0:
-            for index in range(start, start + len(literal)):
-                covered[index] = True
-            offset = start + 1
+        _mark_literal_matches(text, literal, covered)
 
     projected: list[str] = []
-    index = 0
-    while index < len(text):
-        if not covered[index]:
-            projected.append(text[index])
-            index += 1
+    previous_was_covered = False
+    for character, is_covered in zip(text, covered, strict=True):
+        if is_covered and previous_was_covered:
             continue
-        while index < len(text) and covered[index]:
-            index += 1
-        projected.append("[REDACTED]")
+        projected.append("[REDACTED]" if is_covered else character)
+        previous_was_covered = is_covered
     return "".join(projected)
+
+
+def _mark_literal_matches(text: str, literal: str, covered: list[bool]) -> None:
+    """Mark every possibly overlapping occurrence in the coverage oracle."""
+    offset = 0
+    while (start := text.find(literal, offset)) >= 0:
+        covered[start : start + len(literal)] = [True] * len(literal)
+        offset = start + 1
 
 
 @given(
