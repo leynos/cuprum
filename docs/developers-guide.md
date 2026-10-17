@@ -7020,9 +7020,10 @@ are kept, and `verdict.txt` carries a header saying which is standing. Because
 The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`,
 `cuprum/_subprocess_stream_run.py`, `cuprum/_subprocess_streams.py`,
-`cuprum/_stdio_plan.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_stdin_errors.py`,
-`cuprum/_subprocess_stdin_reclaim.py`, `cuprum/_subprocess_stdin_write.py`,
+`cuprum/_stdio_plan.py`, `cuprum/_stdio_ownership.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_stdin_stream.py`,
+`cuprum/_subprocess_stdin_errors.py`, `cuprum/_subprocess_stdin_reclaim.py`,
+`cuprum/_subprocess_stdin_write.py`, `cuprum/_subprocess_stream_exit.py`,
 `cuprum/_stdio_binding_guards.py`, `cuprum/_stdio_diagnostics.py`,
 `cuprum/stdio_events.py`, `cuprum/_subprocess_timeout.py`,
 `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
@@ -7105,14 +7106,32 @@ tests that monkeypatch them by module path resolve the same names as before:
   because whether the run call also supplied a source is unknown when the
   options are built; `cuprum/_command_internals.py` calls it from the run's
   preparation instead.
-- `cuprum/sh/pipeline.py` owns `Pipeline`, which `cuprum.sh` re-exports, plus
-  the deprecated flat `capture`/`echo` adapter `_resolve_pipeline_output` and
-  its `_DeprecatedOutputFlags` payload. `Pipeline.run`/`run_sync` call
-  `_reject_stdio_targets`, which refuses an explicit `stdin`, `stdout`, or
-  `stderr` target: the stage wiring that would carry a target to the right
-  stage does not exist, so accepting one would silently discard it and the run
-  would exit `0` with the file the caller named never created. Redirect a single
-  `SafeCmd` instead.
+- `cuprum/sh/pipeline.py` owns `Pipeline`, which `cuprum.sh` re-exports, and
+  re-exports the deprecated flat `capture`/`echo` adapter
+  `_resolve_pipeline_output` with its `_DeprecatedOutputFlags` payload from
+  `cuprum/sh/pipeline_output.py`. That module owns the whole question of what a
+  pipeline call's output configuration means, and `Pipeline.run`/`run_sync`
+  call its `_reject_stdio_targets`, which refuses an explicit `stdin`,
+  `stdout`, or `stderr` target: the stage wiring that would carry a target to
+  the right stage does not exist, so accepting one would silently discard it
+  and the run would exit `0` with the file the caller named never created.
+  Redirect a single `SafeCmd` instead.
+- `cuprum/sh/safe_cmd.py` keeps `SafeCmd` itself, and re-exports two pairs of
+  helpers it used to define. `cuprum/sh/line_options.py` holds the pre-flight
+  checks a line iteration applies to one command's options; the driver that
+  consumes their output stays in `cuprum._line_iteration`.
+  `cuprum/sh/bytes_entry_points.py` holds `run_bytes` and `run_bytes_sync` as a
+  `__slots__ = ()` mixin that `SafeCmd` inherits, exactly as
+  `cuprum/_process_handle/owned_start.py` contributes `SafeCmd.start`. Both
+  splits exist to keep `safe_cmd` under the module ceiling without changing a
+  public signature: the byte mixin deliberately omits
+  `from __future__ import annotations`, because those methods are public and
+  `typing.get_type_hints` evaluates their annotations eagerly.
+- `cuprum/adapters/logging_adapter.py` re-exports `_build_extra` and
+  `_format_message` from `cuprum/adapters/_logging_projection.py`. The
+  projection module is pure — an `ExecEvent` in, a record's `extra` mapping or
+  its message out — and holds no state, no logger, and no level policy; the
+  adapter keeps the hook, the levels, and the JSON formatter.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It spawns through
 `_start_owned_process`, decides in `_await_direct_completion` which streams to

@@ -2083,6 +2083,104 @@ likelihood, and mitigation.
       base, not a deletion. Recorded because the same artefact will recur in
       any audit written this way.
 
+- [x] 2026-10-16: the rebase onto `main` (`51697321e`) combined both sides'
+  additions into five production modules that were **each under the 400-line
+  ceiling on both sides independently**, so the merged result breaches
+  `max-module-lines` where neither input did. Measured with
+  `git show <ref>:<path> | wc -l`:
+
+  | module                               | merge-base `e4e4c4ad` | target `51697321e` | pre-rebase head `36d35801b` | rebased head `3457a2794` |
+  | ------------------------------------ | --------------------- | ------------------ | --------------------------- | ------------------------ |
+  | `cuprum/_subprocess_spawn.py`        | (absent)              | 209                | 358                         | **552**                  |
+  | `cuprum/_subprocess_stream_run.py`   | 214                   | 393                | 276                         | **437**                  |
+  | `cuprum/sh/safe_cmd.py`              | 395                   | 397                | 343                         | **472**                  |
+  | `cuprum/sh/pipeline.py`              | (absent)              | 347                | 264                         | **432**                  |
+  | `cuprum/adapters/logging_adapter.py` | 342                   | 398                | 435                         | 435                      |
+
+  `_subprocess_spawn.py` grew 358 → 552 on the rebase alone, because the
+  branch's stdio-ownership work and the target's additions landed in the same
+  file. This is a *rebase* artefact, not a branch regression, and the same
+  class of breach will recur on any rebase that touches these files.
+
+- [x] 2026-10-16: **confirmed the cap is actually gated**, rather than
+  inferring it from the earlier diagnosis. Reproduced the gate's own invocation
+  — repo-local PyPy 3.12, `pylint==4.0.9`, `astroid==4.0.4`,
+  `--rcfile=pyproject.toml`, target `cuprum`, private `PYLINTHOME` — and it
+  exits **16** with five `C0302` messages:
+
+  ```plaintext
+  cuprum/_subprocess_spawn.py:1:0: C0302: Too many lines in module (552/400)
+  cuprum/_subprocess_stream_run.py:1:0: C0302: Too many lines in module (437/400)
+  cuprum/sh/safe_cmd.py:1:0: C0302: Too many lines in module (472/400)
+  cuprum/sh/pipeline.py:1:0: C0302: Too many lines in module (432/400)
+  cuprum/adapters/logging_adapter.py:1:0: C0302: Too many lines in module (435/400)
+  ```
+
+  `make lint` therefore cannot pass at this head until all five are split. The
+  cap reaches every one of them: `cuprum/sh/` and `cuprum/adapters/` both have
+  their own `__init__.py`, so `PYLINT_STRICT_TARGETS`'s walk descends into
+  them, and the `cuprum/*.py` modules are reached directly.
+
+- [x] 2026-10-17: the five breaches are split at seams the modules already
+  drew, and the sizes are re-measured from the working tree rather than
+  inferred from the diff. `wc -l` at `d5db39a8`:
+
+  | module                               | before | after |
+  | ------------------------------------ | ------ | ----- |
+  | `cuprum/_subprocess_spawn.py`        | 552    | 308   |
+  | `cuprum/_subprocess_stream_run.py`   | 437    | 373   |
+  | `cuprum/sh/safe_cmd.py`              | 472    | 295   |
+  | `cuprum/sh/pipeline.py`              | 432    | 362   |
+  | `cuprum/adapters/logging_adapter.py` | 435    | 255   |
+
+  The new homes measure 295 (`_stdio_ownership`), 118
+  (`_subprocess_stream_exit`), 217 (`_logging_projection`), 130
+  (`sh/pipeline_output`), 88 (`sh/line_options`), and 173
+  (`sh/bytes_entry_points`). `SafeCmd.run_bytes` and `run_bytes_sync` moved
+  into a `__slots__ = ()` mixin, matching `_OwnedStart`'s existing treatment of
+  `SafeCmd.start`; `cuprum.sh.SafeCmd.run_bytes` still binds as an ordinary
+  method, which the seam test asserts by identity.
+
+  Ten Ruff findings came with the first cut of the move, and none of them was
+  cosmetic: three were `typing-only-*` imports that the moved annotations now
+  postpone under `from __future__ import annotations` (`asyncio`,
+  `collections.abc`, `_ResolvedStdio`, `RunOutputOptions`), one was a genuinely
+  unused `StdinInput` left behind by the byte-entry move, and one was
+  `_reconcile_shielded` re-imported into `_subprocess_stream_run` for no
+  reader. Ruff's safe fix for that last class is to delete the binding, which
+  is why the seam test came first.
+
+- [x] 2026-10-17: the byte-only flush defect the rebase's regression window
+  exposed is fixed at its cause. `_flush_encoder` built an incremental encoder
+  in order to ask whether one held anything; for `utf-8-sig` and its relatives
+  the first `encode` call emits a byte-order mark, so a producer that yielded
+  only `bytes` reached the child with a mark appended, and a producer that
+  yielded nothing sent three bytes where the child should have seen end-of-file.
+  `_StreamSink.has_encoder` now records whether text processing ever built
+  one, and the flush returns when it did not. The escape-owing codecs stay in
+  the flushed set by construction: the escape is owed because a `str` chunk was
+  encoded, and encoding one is what builds the encoder.
+  `test_stdin_byte_only_stream` asserts from the child's side against a file,
+  because a mark decodes cleanly and an absorbed codec failure reads as success
+  from the exit code alone.
+
+- [x] 2026-10-17: two rebase-merger defects that main's tests would have
+  caught only at the end are repaired, and both were found by reading the
+  merged result rather than by a gate. (1) `ExecEvent.error_category` was
+  appended *after* `terminal_outcome`, which is the last positional slot
+  inherited from `main`; the new optional field took that slot, so a caller
+  passing the outcome positionally would bind it to the category and silently
+  receive `terminal_outcome=None`. It is now declared ahead of
+  `terminal_outcome` and keyword-only.
+  `test_terminal_outcome_keeps_its_positional_slot` is what detects the
+  mistake, and it reports the displaced field by name —
+  `got 'error_category'` — rather than only reporting a mismatched tail. (2)
+  The stdin-cancellation probe patched `_settle_stdin_writer` on
+  `cuprum._subprocess_execution`, which holds no such name, so four streaming
+  suites failed at setup with an `AttributeError` before reaching the window
+  they arrange. Only `_subprocess_stream_run` imports the name, and both of its
+  run loops call that global, so the one patch covers both routes.
+
 ## Surprises & discoveries
 
 - Observation: **a gate log that records its head at the start is not enough
