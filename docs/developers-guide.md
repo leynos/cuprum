@@ -3083,6 +3083,13 @@ maturin build --release --out wheelhouse \
   --manifest-path rust/cuprum-rust/Cargo.toml
 ```
 
+The declared `uv_build` backend builds the pure-Python artefacts; native wheels
+use the pinned Maturin CLI directly. Native-wheel CI sets
+`MATURIN_NO_MISSING_BUILD_BACKEND_WARNING=1` on direct builds and forwards it
+into the Linux Maturin containers to suppress this intentional backend-split
+warning. Keep the setting scoped to native-wheel builds so other Maturin
+diagnostics remain visible.
+
 Linux wheels are built inside a manylinux-compatible container, with a matching
 compatibility tag and an explicit interpreter. The interpreter only drives the
 build: every native wheel targets the CPython 3.12 stable ABI.

@@ -64,8 +64,9 @@ WORKSPACE_MANIFEST: typ.Final[Path] = Path("rust") / "Cargo.toml"
 #: healthy cold build under shared queueing is. The 2026-10-15 gate exceeded
 #: 600 s after the trybuild build completed in 9m35s; a 2026-10-16 gate then
 #: reached 900 s while Cargo still waited on its package-cache lock. The
-#: 1200 s tier adds five minutes beyond that observed cutoff.
-EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 20 * 60
+#: The 1800 s tier adds ten minutes beyond the 2026-10-17 cutoff, which
+#: expired while nested Cargo was still compiling.
+EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 30 * 60
 
 COMPILE_TEST_SOURCES: typ.Final[tuple[str, ...]] = (
     "rust/cuprum-rust/tests/compile_tests.rs",
@@ -198,7 +199,8 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     shared-queue run then exceeded the 600 s override after nested Cargo
     waited on package-cache locks and its trybuild build finished in 9m35s.
     A 2026-10-16 run reached the 900 s override while Cargo still waited on
-    that lock. The 1200 s tier adds five minutes beyond that cutoff while
+    that lock. A 2026-10-17 run reached 1200 s while nested Cargo was still
+    compiling. The 1800 s tier adds ten minutes beyond that cutoff while
     keeping the allowance finite. The override is asserted to exist, to
     carry the expected filter, and to exceed the profile's allowance.
 
@@ -238,7 +240,8 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
         f"s, not the {EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS} s sized for it. "
         f"Exceeding the profile is not the requirement; covering a healthy "
         f"shared-queue build is. The 2026-10-15 gate timed out at 600 s after "
-        f"the trybuild build completed in 9m35s, so the reviewed tier is "
-        f"1200 s"
+        f"the trybuild build completed in 9m35s and the 2026-10-17 run reached "
+        f"1200 s while nested Cargo was still compiling, so the reviewed tier "
+        f"is {EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS} s"
     )
     _assert_filter_selects_the_pinned_sources()

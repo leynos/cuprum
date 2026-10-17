@@ -1027,14 +1027,14 @@ jobs:
     runs-on: >-
       ${{ github.event.pull_request.head.repo.fork
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
-    # Above the 2,700 s cargo watchdog set below plus the work either side
-    # of the coverage step, which reached 43 s on run 34071469378. Fifty
+    # Above the 3,300 s cargo watchdog set below plus the work either side
+    # of the coverage step, which reached 43 s on run 34071469378. Sixty
     # minutes is the requirement, and the estate's rule is fifteen above
     # it rather than merely reaching it, because a ceiling sitting on its
     # requirement is cancelled by the job timer on the first run that
     # spends the full watchdog, and a cancellation discards the log that
-    # would have explained it. This was 60, which is ten above.
-    timeout-minutes: 65
+    # would have explained it. The 75-minute ceiling leaves that margin.
+    timeout-minutes: 75
     # The workflow default also grants `actions: read`, which this lane never
     # uses; the shared contract holds a pull-request coverage job to exactly
     # `contents: read`.
@@ -1050,10 +1050,10 @@ jobs:
       # 34071469378 and read across roughly fifty successful runs, but none
       # of those was a genuinely cold compile. rstest-bdd's cold run took
       # about four times its warm one, which would put this at the old
-      # default's shoulder. 2,700 s is six times the worst seen, so a cold
-      # first run on a branch finishes inside it rather than being killed
-      # and read as a hang.
-      RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
+      # default's shoulder. The 3,300 s watchdog contains nextest's 40-minute
+      # whole-run budget, its termination allowance, and the 600 s cold-build
+      # budget, with four minutes of headroom.
+      RUN_RUST_CARGO_WAIT_TIMEOUT: '3300'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
       MDTABLEFIX_VERSION: '0.6.1'

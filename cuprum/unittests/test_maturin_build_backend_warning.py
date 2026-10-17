@@ -1,4 +1,10 @@
-"""Contracts for the intentional PEP 517 and native-wheel build split."""
+"""Protect native-wheel warning suppression in both wheel-build entry points.
+
+The tests parse the wheel workflow and composite action to verify that Linux
+container builds and direct Maturin builds receive the suppression setting.
+This records the intentional split between the declared ``uv_build`` backend
+for pure-Python wheels and Maturin's direct native-wheel CLI invocation.
+"""
 
 from __future__ import annotations
 
