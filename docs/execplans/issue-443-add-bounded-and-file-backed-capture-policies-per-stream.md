@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 ## Purpose / big picture
 
@@ -310,6 +310,30 @@ Thresholds that trigger escalation when breached.
   directory is empty afterwards. Reverting `_pipeline_internals.py` to its
   pre-fix shape fails the after-hook case with a leaked file, so the finding's
   fix is now covered by a test rather than only by the review argument.
+- [x] (2026-10-17) Clear the eleven findings from the second CodeRabbit
+  review, then rebase onto `origin/main` (`304779c25`). Six findings were
+  production changes: a `lines()` completion path that never closed its spill
+  handle; two pipeline failure paths that drained observers and released sinks
+  as two separately shielded steps; a spawn-failure path with the same split; a
+  per-chunk flush on the event loop, replaced by one flush in
+  `_finalize_spilled` (with `_flushed_bytes`, so a failed flush reports the
+  bytes that reached the file); and `RunOutputOptions` writing its resolution
+  back over the init fields, which made
+  `dataclasses.replace(..., capture=False)` silently keep capturing. The
+  remaining five were test hygiene (assert messages, spill-handle close-out, a
+  wrongly worded predicate message, a stream name that described the wrong
+  stream) and an ExecPlan interface section that still described the single
+  `_capture_sink.py` module the split replaced. The `lines()` fix and the
+  `replace` fix were both mutation-measured: removing the call, and restoring
+  the write-back respectively, each fail the new tests. The rebase replayed
+  thirty commits; the only conflict was `pyproject.toml`, where `main`'s
+  three-line build-backend comment above `[build-system]` was inserted beneath
+  this branch's Skylos and duplication-gate entries. The full gate set was
+  green at `c42e57292` — pytest `3509 passed, 93 skipped`, nextest
+  `167 tests run: 167 passed (2 slow), 0 skipped`, doctests
+  `0 failed, 3 ignored` — and the plan and PR-body updates that follow it are
+  documentation-only, so the gates are re-run once more at the documentation
+  commit before the review is requested.
 
 ## Surprises & discoveries
 
@@ -944,6 +968,42 @@ Thresholds that trigger escalation when breached.
   through a local `_kind` helper, so the test states the distinction the drain
   implements — an uncaptured stream is the absence of a call, not a policy that
   classifies to `None`. Date/Author: 2026-10-15, implementation agent.
+
+- Decision: keep the resolved capture pair in a non-init `_resolved_capture`
+  field rather than writing it back over `capture_stdout`/`capture_stderr`.
+  Rationale: `dataclasses.replace` re-passes every init field, so a resolution
+  stored in one returns to the constructor as an explicit per-stream
+  declaration and outranks the replacement's shorthand. The consequence was
+  silent: `replace(options, capture=False)` kept capturing both streams, so
+  every caller adapting shared options would lose the ability to turn capture
+  off. A non-init field is never copied, so a replacement resolves from the
+  fields the caller actually wrote; `_synthesized_sink` already sits there for
+  the same reason. Date/Author: 2026-10-17, implementation agent; raised by
+  review.
+
+- Decision: defer the spill file's flush to `_finalize_spilled`, and track
+  `_flushed_bytes` separately from `_spilled_bytes`. Rationale: `_append` runs
+  once per chunk on the run's event loop, so a flush there is one blocking
+  syscall per read on the loop that also drives the other stream, the deadline,
+  and cancellation; nothing reads the file before finalization and the close
+  flushes whatever is left. Once the flush moves, the two counts can diverge,
+  and a failed flush must report the bytes that reached the file rather than
+  every byte handed to the buffered writer — which is what
+  `test_a_failed_append_flush_is_reported_as_a_flush_failure` asserts.
+  Date/Author: 2026-10-17, implementation agent; raised by review.
+
+- Decision: compose each drain-then-release pair into one coroutine so a single
+  `_shielded_cleanup` covers both, rather than shielding the two steps
+  separately. Rationale: `_shielded_cleanup` finishes *its* coroutine and then
+  re-raises the caller's cancellation; two sequential shielded calls are not
+  one shielded sequence, so a cancellation between them leaves the second step
+  unrun. That is exactly the state these paths exist to avoid — sinks unclosed
+  and spill files on disk — and the `lines()` completion path, the pipeline
+  timeout and failed-assembly paths, the spawn-failure path, and the
+  single-command finalize were all affected. In the spawn-failure case the
+  gather is kept first inside the composed coroutine, because a stage task the
+  cancel has not finished unwinding may still be appending to the file.
+  Date/Author: 2026-10-17, implementation agent; raised by review.
 
 ## Outcomes & retrospective
 
