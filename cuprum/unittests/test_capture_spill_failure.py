@@ -209,9 +209,15 @@ def test_a_failed_create_keeps_the_stream_in_memory(
     assert final.payload == _PAYLOAD.decode(), (
         "a failed spill must not lose the stream; the caller still reads it"
     )
-    assert final.capture.storage == "memory"
-    assert final.capture.storage_failed is True
-    assert final.capture.total_bytes == len(_PAYLOAD)
+    assert final.capture.storage == "memory", (
+        "a failed create leaves the capture on the heap, with no file to name"
+    )
+    assert final.capture.storage_failed is True, (
+        "the refusal must be visible on the record, not only in the event"
+    )
+    assert final.capture.total_bytes == len(_PAYLOAD), (
+        "the record counts every byte the child wrote, not only what was kept"
+    )
     assert final.handle is None, "there is no file to hand over"
 
 
@@ -230,7 +236,7 @@ def test_a_failed_create_reports_the_error_class_and_not_its_message(
 
     assert [event.category for event in recorder] == [
         CaptureEventCategory.STORAGE_WRITE_FAILED
-    ]
+    ], f"the refused create must be reported once; got {recorder!r}"
     event = recorder[0]
     # The concrete class, not ``OSError``: ``errno.EACCES`` constructs a
     # ``PermissionError``, and naming the base would hide which failure it was.
@@ -240,7 +246,9 @@ def test_a_failed_create_reports_the_error_class_and_not_its_message(
     assert _LEAKY_MESSAGE not in repr(event), (
         f"the event must not carry the exception's message; got {event!r}"
     )
-    assert event.stream == "stderr"
+    assert event.stream == "stderr", (
+        f"the event must name its stream; got {event.stream!r}"
+    )
 
 
 def test_a_failed_create_is_reported_once_however_the_stream_grows(
@@ -276,8 +284,12 @@ def test_a_failed_create_is_reported_once_however_the_stream_grows(
     assert [event.category for event in recorder] == [
         CaptureEventCategory.STORAGE_WRITE_FAILED
     ], f"the refusal must be reported exactly once; got {len(recorder)} events"
-    assert recorder[0].error_type == "OSError"
-    assert final.capture.storage_failed is True
+    assert recorder[0].error_type == "OSError", (
+        f"the event names the error class; got {recorder[0].error_type!r}"
+    )
+    assert final.capture.storage_failed is True, (
+        "the single refusal must still be visible on the record"
+    )
     assert final.payload == "chunk" * 10, (
         "every chunk must still reach the caller after the failure"
     )
@@ -304,9 +316,15 @@ def test_a_failed_first_write_removes_the_half_made_file(
     assert not files.only.path.exists(), (
         "a file that never held the capture must not be left behind"
     )
-    assert final.capture.storage == "memory"
-    assert final.capture.storage_failed is True
-    assert final.payload == _PAYLOAD.decode()
+    assert final.capture.storage == "memory", (
+        "a create that failed leaves the capture on the heap"
+    )
+    assert final.capture.storage_failed is True, (
+        "the failed transition must be reported on the record"
+    )
+    assert final.payload == _PAYLOAD.decode(), (
+        "the failed transition must not lose the stream"
+    )
 
 
 def test_a_failed_append_keeps_the_prefix_that_reached_the_file(
@@ -335,7 +353,9 @@ def test_a_failed_append_keeps_the_prefix_that_reached_the_file(
     assert final.capture.storage_failed is True, (
         "a stopped append must report the capture as incomplete"
     )
-    assert final.capture.path is not None
+    assert final.capture.path is not None, (
+        "the failed append must still name the file that exists"
+    )
     assert final.capture.path.read_bytes() == _PREFIX, (
         "the file must hold exactly what reached it before the failure; "
         f"got {final.capture.path.read_bytes()!r}"
@@ -405,14 +425,20 @@ def test_a_failed_append_flush_is_reported_as_a_flush_failure(
         CaptureEventCategory.SPILLED_TO_FILE,
         CaptureEventCategory.STORAGE_FLUSH_FAILED,
     ], f"a failed flush must report itself as one; got {recorder!r}"
-    assert recorder[1].error_type == "OSError"
+    assert recorder[1].error_type == "OSError", (
+        f"the flush event names the error class; got {recorder[1].error_type!r}"
+    )
     assert recorder[1].spilled_bytes == len(_PREFIX), (
         "the event must report the bytes that did reach the file; "
         f"got {recorder[1].spilled_bytes}"
     )
-    assert final.capture.storage == "file"
-    assert final.capture.storage_failed is True
-    assert final.capture.path is not None
+    assert final.capture.storage == "file", (
+        "the failed flush keeps the file-backed record"
+    )
+    assert final.capture.storage_failed is True, (
+        "a refused flush must mark the capture incomplete"
+    )
+    assert final.capture.path is not None, "the record must still name the file"
     assert final.capture.path.read_bytes() == _PREFIX, (
         "a refused flush must leave the file holding the prefix that arrived"
     )
@@ -440,8 +466,12 @@ def test_a_failed_flush_during_the_spill_abandons_the_file(
     accumulator.absorb(_PAYLOAD)
     final = accumulator.finalize()
 
-    assert final.capture.storage == "memory"
-    assert final.capture.storage_failed is True
+    assert final.capture.storage == "memory", (
+        "an abandoned spill leaves the capture on the heap"
+    )
+    assert final.capture.storage_failed is True, (
+        "the abandoned spill must be reported on the record"
+    )
     assert final.payload == _PAYLOAD.decode(), (
         "the prefix must still reach the caller after a failed transition"
     )
@@ -508,7 +538,9 @@ def test_a_vanished_spill_file_is_absorbed_when_byte_mode_reads_it_back(
     assert final.payload is None, (
         "a spill whose bytes cannot be read is not a payload the caller can use"
     )
-    assert final.capture.storage == "file"
+    assert final.capture.storage == "file", (
+        "a failed read-back keeps the file-backed record"
+    )
     assert final.capture.storage_failed is True, (
         "the record must say the capture is incomplete rather than merely short"
     )
@@ -542,8 +574,12 @@ def test_a_vanished_spill_file_is_still_reported_as_text_in_text_mode(
     assert final.payload is None, (
         "text mode reports the spill as a path rather than reading its bytes"
     )
-    assert final.capture.storage == "file"
-    assert final.capture.path == path
+    assert final.capture.storage == "file", (
+        "a completed spill keeps the file-backed record"
+    )
+    assert final.capture.path == path, (
+        f"the record must name the kept file; got {final.capture.path!r}"
+    )
     assert final.capture.storage_failed is False, (
         "nothing the text-mode capture asked for failed"
     )

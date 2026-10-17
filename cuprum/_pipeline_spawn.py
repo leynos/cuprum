@@ -239,9 +239,15 @@ async def _cancel_stage_tasks_and_sinks(
     the spill files they own — unclosed, on a path that is already dealing with
     a failed spawn. The cleanup runs after the gather because a task the cancel
     has not finished unwinding may still be appending to the file it holds.
+
+    The gather passes ``return_exceptions=True``, so it cannot raise; the
+    ``finally`` states the ordering as an invariant rather than relying on that
+    flag staying as it is.
     """
-    await asyncio.gather(*tasks, return_exceptions=True)
-    await _cleanup_capture_sinks(staged.captures.sinks)
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        await _cleanup_capture_sinks(staged.captures.sinks)
 
 
 async def _spawn_pipeline_processes(

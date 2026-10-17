@@ -127,14 +127,18 @@ async def _reconcile_pipeline_run_failure(
     cancelled consumer is what this path exists for, and it never finalizes, so
     its accumulator is the only remaining owner of the spill file; closing that
     file before the cancel has landed would race a reader that is still
-    appending.
+    appending. It runs in ``finally`` because the drain can raise: an observe
+    task that fails during cleanup still must not strand the spill files, and
+    the group the drain raises then propagates unchanged.
     """
     await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
     after_process_cleanup()
-    await _drain_tasks_during_cleanup(
-        pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
-    )
-    await _cleanup_capture_sinks(spawn.captures.sinks)
+    try:
+        await _drain_tasks_during_cleanup(
+            pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
+        )
+    finally:
+        await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_timeout_cleanup(
@@ -149,14 +153,18 @@ async def _finalize_timeout_cleanup(
     carries text rather than handles: this run's result is never constructed,
     so nothing downstream will close these files. A cancellation arriving
     between two separately shielded steps would leave the sinks unclosed and
-    the spill files on disk.
+    the spill files on disk. The release sits in ``finally`` for the same
+    reason: a failing observe task raises out of the drain, and that must not
+    become the exit that leaks the file.
     """
-    await _drain_tasks_during_cleanup(
-        observers.pending_tasks,
-        timeout_error,
-        message=_PIPELINE_FINALIZATION_ERROR,
-    )
-    await _cleanup_capture_sinks(spawn.captures.sinks)
+    try:
+        await _drain_tasks_during_cleanup(
+            observers.pending_tasks,
+            timeout_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
+        )
+    finally:
+        await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_result_failure_cleanup(
@@ -170,14 +178,18 @@ async def _finalize_result_failure_cleanup(
     gathered carried spill handles into an assembly that has just failed, and
     no result will be built from them. The accumulators — which own the same
     files, and close idempotently — are what removes them, so the drain and the
-    release have to survive a cancellation together.
+    release have to survive a cancellation together. The release runs in
+    ``finally`` as well, so a failing observe task cannot take the file down
+    with the group it raises.
     """
-    await _drain_tasks_during_cleanup(
-        observers.pending_tasks,
-        result_error,
-        message=_PIPELINE_FINALIZATION_ERROR,
-    )
-    await _cleanup_capture_sinks(spawn.captures.sinks)
+    try:
+        await _drain_tasks_during_cleanup(
+            observers.pending_tasks,
+            result_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
+        )
+    finally:
+        await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_pipeline_run_failure(

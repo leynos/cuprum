@@ -212,17 +212,23 @@ def test_file_backed_capture_defaults_to_the_package_constant() -> None:
     assert DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES == 1024 * 1024, (
         "the constant itself must stay one MiB (1024 * 1024 bytes)"
     )
-    assert FileBackedCapture(spill_threshold_bytes=None).spill_threshold_bytes is None
+    assert (
+        FileBackedCapture(spill_threshold_bytes=None).spill_threshold_bytes is None
+    ), "None is a valid threshold that spills on the first byte"
 
 
 def test_file_backed_capture_normalizes_a_string_directory() -> None:
     """A ``str`` directory becomes a ``Path``, as the docstring promises."""
     capture = FileBackedCapture(directory="spill-dir")
-    assert capture.directory == pathlib.Path("spill-dir")
+    assert capture.directory == pathlib.Path("spill-dir"), (
+        f"the directory must be normalized; got {capture.directory!r}"
+    )
     assert isinstance(capture.directory, pathlib.Path), (
         "the directory must be normalized so the spill code never sees a str"
     )
-    assert FileBackedCapture().directory is None
+    assert FileBackedCapture().directory is None, (
+        "the default directory must stay unset so the temp dir is used"
+    )
 
 
 @pytest.mark.parametrize(
@@ -269,8 +275,12 @@ def test_policies_are_frozen_and_hashable() -> None:
     policy = BoundedCapture(max_bytes=8)
     with pytest.raises(dc.FrozenInstanceError):
         policy.max_bytes = 16  # ty: ignore[invalid-assignment] - the frozen write is the assertion
-    assert hash(policy) == hash(BoundedCapture(max_bytes=8))
-    assert len({FullCapture(), FullCapture()}) == 1
+    assert hash(policy) == hash(BoundedCapture(max_bytes=8)), (
+        "equal policies must hash alike"
+    )
+    assert len({FullCapture(), FullCapture()}) == 1, (
+        "equal policies must collapse in a set"
+    )
 
 
 @pytest.mark.parametrize(
@@ -296,11 +306,11 @@ def test_captured_stream_reports_the_applied_policy(
         policy=policy_kind(policy),
         total_bytes=16,
     )
-    assert record.policy is expected
+    assert record.policy is expected, f"the record must report {expected!r}"
     assert record.truncated is False, "an untruncated capture is not truncated"
-    assert record.storage == "memory"
-    assert record.path is None
-    assert record.owned is False
+    assert record.storage == "memory", "a fresh record defaults to memory storage"
+    assert record.path is None, "a memory-backed record names no file"
+    assert record.owned is False, "a memory-backed record owns no file"
 
 
 def test_captured_stream_reports_truncation_from_its_drop_count() -> None:
@@ -311,7 +321,9 @@ def test_captured_stream_reports_truncation_from_its_drop_count() -> None:
         total_bytes=16,
         dropped_bytes=8,
     )
-    assert record.truncated is True
+    assert record.truncated is True, (
+        "a record with dropped bytes must report itself truncated"
+    )
 
 
 def test_read_text_refuses_a_memory_backed_capture() -> None:
@@ -337,4 +349,6 @@ def test_read_text_reads_a_spilled_capture(tmp_path: pathlib.Path) -> None:
         path=spill,
         owned=True,
     )
-    assert record.read_text() == "héllo"
+    assert record.read_text() == "héllo", (
+        f"read_text must decode the file; got {record.read_text()!r}"
+    )

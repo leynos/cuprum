@@ -248,11 +248,13 @@ class CapturedStream:
         what this field answers is who must clean up. Always ``False`` for a
         memory-backed capture.
     storage_failed:
-        Whether a write or flush to the spill file failed. The run still
-        completes, the child is still reaped, and the file holds whatever
-        reached it before the failure; the failure is reported through the
-        capture event channel, which names the error class. ``False`` for
-        every capture that did not spill.
+        Whether a create, write, flush, or read-back of the spill file failed.
+        The run still completes and the child is still reaped; the failure is
+        reported through the capture event channel, which names the error
+        class. With ``storage="file"`` the file holds the prefix that reached
+        it before the failure. With ``storage="memory"`` the file was never
+        created and the complete text is on ``stdout``/``stderr``. ``False``
+        for every full or bounded capture.
 
     Examples
     --------

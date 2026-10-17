@@ -691,7 +691,8 @@ together with `storage`, because the pair distinguishes the cases:
 A failed removal sets nothing: it is housekeeping, and cleanup runs on the way
 out of every run, including one already carrying the caller's own timeout or
 cancellation. An error about a temporary file must not replace either, so that
-route absorbs its own failure and is reported only as a `CaptureEvent`.
+route absorbs its own failure silently: it sets no flag and emits no
+`CaptureEvent`, and the surviving file is the only trace.
 
 ### Reading a stream's capture metadata
 

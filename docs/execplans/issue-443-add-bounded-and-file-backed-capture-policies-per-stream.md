@@ -743,6 +743,40 @@ Thresholds that trigger escalation when breached.
   refuses, so the case is witnessed rather than assumed. Date/Author:
   2026-10-17, implementation agent.
 
+- Observation (review round 3, cleanup ordering): composing the observe-task
+  drain and the capture release into one coroutine made them survive a
+  cancellation together, but not a *drain failure*.
+  `_drain_tasks_during_cleanup` raises a `BaseExceptionGroup` when an observe
+  task fails, so the release that followed it was skipped on all three pipeline
+  failure paths — the run-failure path, the timeout path, and the
+  failed-assembly path — and the spill file leaked. Each release is now in a
+  `finally`. `test_pipeline_cleanup_finally.py` fails a drain on each path and
+  asserts the sink closed; removing the `finally` from the timeout path alone
+  makes that case fail and leaves the other two passing, which is what shows
+  the three cases are separately witnessed rather than one case counted three
+  times. Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review round 3, documentation contradictions): three separate
+  documents each stated a contract the code does not have. The users guide said
+  a failed removal "is reported only as a `CaptureEvent`", but
+  `CaptureEventCategory` has no removal category and the design document and
+  migration guide both describe that route as silent. The `CapturedStream`
+  docstring said `storage_failed` is "``False`` for every capture that did not
+  spill", but a failed *create* leaves the stream on the heap with
+  `storage_failed=True`. And the M1 section of this plan credited every policy
+  with an "`object.__setattr__`-free `__post_init__`", when `FileBackedCapture`
+  uses one to normalize a `str` directory. All three now say what the code
+  does. Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review round 3, test documentation and messages): the byte-mode
+  accumulator test claimed "Byte mode is trimmed too", contradicting both
+  `_BoundedAccumulator.finalize` and the sibling test that pins the raw tail;
+  its docstring now names the front-drop in `absorb` as the mechanism that
+  holds the bound. Two test modules also carried bare assertions, which the
+  path instructions forbid; every assertion in `test_capture_policy.py` and
+  `test_capture_spill_failure.py` now names the contract it checks.
+  Date/Author: 2026-10-17, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -1005,6 +1039,19 @@ Thresholds that trigger escalation when breached.
   cancel has not finished unwinding may still be appending to the file.
   Date/Author: 2026-10-17, implementation agent; raised by review.
 
+- Decision: each capture release sits in a `finally` around its observe-task
+  drain, at every pipeline failure path, rather than relying on the composed
+  coroutine's statement order. Rationale: composing the two halves made them
+  survive a *cancellation* together, which was the round-2 concern, but the
+  drain's own failure is a separate exit. `_drain_tasks_during_cleanup` raises
+  a group when an observe task fails, so the release it preceded was skipped
+  exactly where the run was already failing. A `finally` covers both exits and
+  does not reorder the two: the release still runs after the cancels, which is
+  what keeps a cancelled consumer from racing the close. The spawn-failure
+  gather gets the same treatment so its ordering is an invariant rather than a
+  consequence of `return_exceptions=True`. Date/Author: 2026-10-17,
+  implementation agent; raised by review.
+
 ## Outcomes & retrospective
 
 Delivered: capture is a per-stream policy. `RunOutputOptions` gained
@@ -1260,18 +1307,18 @@ Four milestones, each a coherent plateau that ends green.
 
 **EP-M1 — Vocabulary and public surface (Task 1).** Add
 `cuprum/capture_policy.py` with the three frozen slotted policy dataclasses, the
-`CapturePolicy` and `CaptureStreamName` type aliases, validation via
-`object.__setattr__`-free `__post_init__` raising `ValueError` for non-positive
-bounds, and a frozen slotted `CapturedStream` metadata record with a
-`read_text()` accessor. Add `DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES` to
-`cuprum/_constants.py`. Add `capture_stdout`/`capture_stderr` to
-`RunOutputOptions` — declared `kw_only` so the pinned first six positional
-slots do not move — resolve them from `capture` in `__post_init__`, and expose
-`resolved_capture`. Add the trailing `kw_only` `captures` field to
-`CommandResult` and a `captures` property to `PipelineResult`. Export the new
-names from `cuprum/sh/__init__.py` and `cuprum/__init__.py`. Nothing consumes
-the policies yet, so M1 is a pure addition and every existing test passes
-unchanged.
+`CapturePolicy` and `CaptureStreamName` type aliases, validation in
+`__post_init__` raising `ValueError` for non-positive bounds (with
+`FileBackedCapture` also normalizing a `str` directory to a `Path`), and a
+frozen slotted `CapturedStream` metadata record with a `read_text()` accessor.
+Add `DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES` to `cuprum/_constants.py`. Add
+`capture_stdout`/`capture_stderr` to `RunOutputOptions` — declared `kw_only` so
+the pinned first six positional slots do not move — resolve them from `capture`
+in `__post_init__`, and expose `resolved_capture`. Add the trailing `kw_only`
+`captures` field to `CommandResult` and a `captures` property to
+`PipelineResult`. Export the new names from `cuprum/sh/__init__.py` and
+`cuprum/__init__.py`. Nothing consumes the policies yet, so M1 is a pure
+addition and every existing test passes unchanged.
 
 **EP-M2 — Accumulators, events, and the drain tap (Task 2).** Add
 `cuprum/_capture_sink.py` with the three accumulators behind one interface: a

@@ -229,7 +229,11 @@ def test_bounded_capture_never_splits_a_code_point(max_bytes: int) -> None:
 def test_bounded_capture_in_bytes_mode_is_never_longer_than_the_bound(
     max_bytes: int,
 ) -> None:
-    """Byte mode is trimmed too, so the bound holds in the child's own bytes."""
+    """Byte mode keeps the raw tail untrimmed, and the bound still holds.
+
+    The front-drop in ``absorb`` alone keeps the buffer within ``max_bytes``;
+    no code-point trim runs in byte mode.
+    """
     payload = "\U0001f600\U0001f601\U0001f602".encode()
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=_BYTES)
 
