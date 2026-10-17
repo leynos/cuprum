@@ -253,6 +253,20 @@ Thresholds that trigger escalation when breached.
   `/tmp/check-fmt-cuprum-issue-443-...out` and
   `/tmp/python-lint-cuprum-issue-443-...out` each record `MAKE_EXIT=0`;
   `/tmp/focused-capturefix-cuprum-issue-443-...out` records `46 passed`.
+- [x] (2026-10-17) Rebase the 18-commit branch onto `origin/main`
+  (`ad3ffc404`) before running gates. `main` had gained the nose duplication
+  gate (`51697321e`) and the stateful harness repair (`065855728`) across
+  fourteen files this branch also touches, and gate evidence only describes
+  what CI will build if it is taken against the merge base. The rebase replayed
+  every commit and resolved six conflicts: `weave` auto-resolved the run
+  machinery against `main`'s unified `_prepare_stream_spawn`; the
+  `_wait_for_streamed_process_exit` conflict was settled by keeping `main`'s
+  deletion and moving our `_reconcile_shielded` helper beside the split
+  post-exit module, so no duplicate definition survives; the migration guide's
+  capture section was appended to the 0.2.0 feature list rather than dropped
+  by the section renumbering; and the `pyproject.toml` dead-code entry points
+  merged entry-by-entry. Backup branch
+  `backup/issue443-pre-rebase-20261017` retains the pre-rebase tip.
 - [ ] Run the full commit-gate set through `scrutineer`, then push and open
   the draft pull request.
 
@@ -538,6 +552,21 @@ Thresholds that trigger escalation when breached.
   speculative generality rather than a real contract. This is the same
   preference `cuprum/_streams_pump.py` records when it chooses a separate value
   over overloading a return. Date/Author: 2026-10-15, implementation agent.
+
+- Observation (rebase): the 2026-10-17 rebase onto `origin/main` was not
+  mechanical for two reasons worth recording. First, `main` had independently
+  unified the three stream wiring sites behind `_prepare_stream_spawn`, which
+  is the same seam this branch had reached from the capture side; the
+  resolution kept upstream's helper and threaded the capture accumulators
+  through it, so both improvements survive as one entry point rather than as
+  two overlapping ones. Second, the `_wait_for_streamed_process_exit` conflict
+  reported "modified in ours, deleted in theirs" because `339a3d8c0` had
+  already moved that function into `_subprocess_stream_post_exit.py`; keep-both
+  would have produced two definitions, and the duplicate-definition guard that
+  caught the earlier `policy_kind` stubs would have caught these too. The
+  `_reconcile_shielded` helper moved beside its only callers in the split
+  module instead, leaving no re-export for the run module to shadow.
+  Date/Author: 2026-10-17, implementation agent.
 
 ## Decision log
 
