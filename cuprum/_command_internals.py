@@ -62,6 +62,7 @@ from cuprum.events import CaptureMode
 from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import (
         ExecutionContext,
@@ -224,23 +225,52 @@ def _build_subprocess_execution(
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything preceding the
         # spawn is the parent's work, and must not read as the child's silence.
-        idle=_build_idle_monitor(
-            state.output.idle_after,
-            state.output.on_idle,
-            _idle_subject(str(cmd.program)),
-            # Resolved the way the stderr drain resolves its own sink — the
-            # same session, sink, and last resort — because the keepalive
-            # shares that stream's incomplete-line state, so writing it
-            # elsewhere would land outside the group an active session claims.
-            _resolve_stream_sink(
-                sink_session,
-                state.context.stderr_sink,
-                sys.stderr,
-            ),
-        ),
+        idle=_resolve_idle_monitor(cmd, state, sink_session),
         # Read from the context here so the bundle's spawn and teardown stages
         # share one decision instead of each consulting the context separately.
         process_group=state.context.resolved_process_group,
+    )
+
+
+def _resolve_idle_monitor(
+    cmd: SafeCmd,
+    state: _ExecutionState,
+    sink_session: sinks.OutputSession | None,
+) -> _IdleMonitor | None:
+    """Build this run's idle monitor, resolved against the run's own streams.
+
+    The heartbeat's keepalive is written to the same place the stderr drain
+    writes: the sink session's log, then the context's stderr sink, then the
+    process's own stderr. That is not a stylistic choice — the keepalive
+    shares the drain's incomplete-line state, so writing it anywhere else
+    would land outside the group an active session claims.
+
+    Built during the parent's own preparation, before the child exists, so
+    that the run owns the monitor by the time it spawns; it is *armed* only
+    once the child is actually running, because everything preceding the spawn
+    is the parent's work and must not read as the child's silence.
+
+    Parameters
+    ----------
+    cmd : SafeCmd
+        The command whose program names the idle subject.
+    state : _ExecutionState
+        The run's already-resolved inputs, carrying the idle settings and the
+        context's stderr destination.
+    sink_session : sinks.OutputSession | None
+        The run's open sink session, or ``None`` when it has none.
+
+    Returns
+    -------
+    _IdleMonitor | None
+        The monitor to carry on the execution bundle, or ``None`` when the
+        caller asked for no idle reporting.
+    """
+    return _build_idle_monitor(
+        state.output.idle_after,
+        state.output.on_idle,
+        _idle_subject(str(cmd.program)),
+        _resolve_stream_sink(sink_session, state.context.stderr_sink, sys.stderr),
     )
 
 

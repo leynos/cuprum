@@ -22,6 +22,7 @@ nothing at run time — which is also what keeps the cycle out.
 """
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 from cuprum._bytes_run import (
@@ -114,27 +115,17 @@ class _BytesEntryPoints:
             If a ``StdinStream`` producer or its encoder fails.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        out = _bytes_output(output)
-        _validate_bytes_output(out)
-        ctx = context or ExecutionContext()
-        # ``Self`` narrows to the mixin, not to the ``SafeCmd`` that inherits
-        # it, so the run helpers below are handed the concrete command. This
-        # mirrors ``_OwnedStart.start``, which casts for the same reason.
-        cmd = typ.cast("SafeCmd", self)
-        _enforce_allowlist(cmd)
-        stdin_data = _resolve_stdin_source(stdin, ctx)
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        state = _prepare_bytes_run(
+            self,
+            _BytesRunRequest(
+                output=output,
+                timeout=timeout,
+                context=context,
+                stdin=stdin,
+            ),
+        )
         return _require_bytes_command_result(
-            await _run_prepared_command(
-                cmd,
-                _ExecutionState(
-                    context=ctx,
-                    output=out,
-                    stdin_data=stdin_data,
-                    timeout=effective_timeout,
-                    capture_bytes=True,
-                ),
-            )
+            await _run_prepared_command(typ.cast("SafeCmd", self), state)
         )
 
     def run_bytes_sync(
@@ -192,3 +183,49 @@ class _BytesEntryPoints:
                 stdin=stdin,
             ),
         )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _BytesRunRequest:
+    """The four optional arguments of a byte entry-point call, bundled.
+
+    They travel together through resolution and are never read apart, so the
+    four parameters they would otherwise be are one value here.
+    """
+
+    output: RunOutputOptions | None
+    timeout: float | None
+    context: ExecutionContext | None
+    stdin: StdinSource | None
+
+
+def _prepare_bytes_run(
+    mixin: _BytesEntryPoints,
+    request: _BytesRunRequest,
+) -> _ExecutionState:
+    """Resolve a byte entry point's arguments into a runnable execution state.
+
+    The resolution order is the text-mode one, and is preserved here rather
+    than regrouped: a caller that both asks for ``on_line`` and names a command
+    outside the allowlist still sees the ``ValueError`` the bytes contract
+    rejects first. ``Self`` narrows to the mixin, not to the ``SafeCmd`` that
+    inherits it, so the cast to the concrete command happens here — the same
+    reason ``_OwnedStart.start`` casts.
+
+    Returns
+    -------
+    _ExecutionState
+        The resolved inputs the run should be prepared from, in bytes mode.
+    """
+    out = _bytes_output(request.output)
+    _validate_bytes_output(out)
+    ctx = request.context or ExecutionContext()
+    cmd = typ.cast("SafeCmd", mixin)
+    _enforce_allowlist(cmd)
+    return _ExecutionState(
+        context=ctx,
+        output=out,
+        stdin_data=_resolve_stdin_source(request.stdin, ctx),
+        timeout=_resolve_timeout(timeout=request.timeout, context=request.context),
+        capture_bytes=True,
+    )

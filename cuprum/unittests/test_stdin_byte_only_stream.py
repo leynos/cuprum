@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -114,26 +115,55 @@ _RECORD_STDIN_HEX = (
 # the stream to justify it.
 _BOM_ENCODINGS = ("utf-8-sig", "utf-16", "utf-32")
 
-# The byte-only producer shapes that must reach the child with no encoder
-# involved. The empty producer and the one yielding only empty chunks are kept
-# apart deliberately: the first never enters the per-chunk path at all, while
-# the second is pulled through it and produces nothing.
-_BYTE_ONLY_PRODUCERS = (
-    pytest.param((b"raw",), id="bytes"),
-    pytest.param((), id="no-chunks"),
-    pytest.param((b"", b""), id="empty-bytes"),
-)
+
+@dc.dataclass(frozen=True, slots=True)
+class _ByteOnlyCase:
+    """One byte-only producer shape crossed with one codec.
+
+    The two axes are bundled because they are chosen together by the test and
+    read together by its body: a case is a claim that *this* producer under
+    *that* codec reaches the child untouched. Passing them separately would
+    make the codec one more positional parameter on a test that already takes
+    a fixture, a strategy, a record path, and a builder.
+    """
+
+    encoding: str
+    values: tuple[bytes, ...]
 
 
-@pytest.mark.parametrize("encoding", _BOM_ENCODINGS)
-@pytest.mark.parametrize("values", _BYTE_ONLY_PRODUCERS)
+def _byte_only_cases() -> list[typ.Any]:
+    """Cross every BOM-emitting codec with every byte-only producer shape.
+
+    The empty producer and the one yielding only empty chunks are kept apart
+    deliberately: the first never enters the per-chunk path at all, while the
+    second is pulled through it and produces nothing.
+
+    Returns
+    -------
+    list[typ.Any]
+        The parametrization, one case per codec and producer shape.
+    """
+    return [
+        pytest.param(
+            _ByteOnlyCase(encoding=encoding, values=values),
+            id=f"{shape}-{encoding}",
+        )
+        for encoding in _BOM_ENCODINGS
+        for shape, values in (
+            ("bytes", (b"raw",)),
+            ("no-chunks", ()),
+            ("empty-bytes", (b"", b"")),
+        )
+    ]
+
+
+@pytest.mark.parametrize("case", _byte_only_cases())
 def test_a_byte_only_stream_is_never_encoded(
     python_builder: cabc.Callable[..., SafeCmd],
     *,
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
-    encoding: str,
-    values: tuple[bytes, ...],
+    case: _ByteOnlyCase,
 ) -> None:
     """``bytes`` chunks reach the child untouched by any codec."""
     _, execute = execution_strategy
@@ -143,16 +173,16 @@ def test_a_byte_only_stream_is_never_encoded(
     result = execute(
         command,
         {
-            "stdin": StdinStream(_chunks(*values)),
-            "context": ExecutionContext(encoding=encoding, errors="strict"),
+            "stdin": StdinStream(_chunks(*case.values)),
+            "context": ExecutionContext(encoding=case.encoding, errors="strict"),
         },
     )
 
     assert result.exit_code == 0, "a byte-only stream should exit cleanly"
-    expected = b"".join(values)
+    expected = b"".join(case.values)
     assert record.read_text(encoding="utf-8") == expected.hex(), (
-        f"the child must receive exactly the bytes produced under {encoding!r}, "
-        f"with no codec involved; expected {expected.hex()!r}"
+        f"the child must receive exactly the bytes produced under "
+        f"{case.encoding!r}, with no codec involved; expected {expected.hex()!r}"
     )
 
 
