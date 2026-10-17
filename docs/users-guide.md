@@ -1,40 +1,59 @@
 # Cuprum users' guide
 
 Cuprum helps Python applications run a known set of external programs without
-building shell command strings. This guide starts with a complete command, then
-continues through output, failures, pipelines, policy, and production use. Each
-Python example is executed from this document by the behavioural suite. The
-[glossary](#glossary) at the end defines recurring terms.
+building shell command strings. This guide describes Cuprum 0.2.0. It starts
+with a complete command, then continues through failures, output, input,
+pipelines, policy, and production use. Each section builds on the ones before
+it, so reading from the top is the gentlest route; each section also stands
+alone for readers arriving from a search or a link.
+
+Every Python example in this guide is executed by the project's test suite, so
+it runs as printed. Copy any of them into a file and run it with `python` to
+experiment. The examples that launch a child use the current Python interpreter
+(`sys.executable`), which avoids assuming that an optional executable such as
+git is installed. The [glossary](#glossary) at the end defines recurring terms.
 
 ## Choose a path
 
-- **First command:** [Run a command](#run-a-command).
-- **Existing subprocess caller:** [Migrate a caller](#migrate-a-caller) and the
-  [0.2.0 migration guide](v0-2-0-migration-guide.md).
-- **Working application:** [Handle failure](#handle-failure),
-  [control output](#control-output), and [apply a policy](#apply-a-policy).
-- **Long-running child:**
-  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) and
-  stop it when the caller decides.
-- **Several commands:** [Connect a pipeline](#connect-a-pipeline) or
-  [run commands concurrently](#run-commands-concurrently).
-- **Growing an application:** [Going further](#going-further) has task
-  recipes for catalogues, builders, streaming, hooks, and telemetry.
-- **Exact contracts:** the
-  [operational reference](#operational-reference) lists events, metrics, log
-  records, and backend behaviour.
+The guide has three parts. Table 1 suggests where to start.
 
-The examples that launch a child use the current Python interpreter. This
-avoids assuming that an optional executable such as git is installed.
+| Part                                                                       | Read it when                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [Install Cuprum](#install-cuprum) to [Migrate a caller](#migrate-a-caller) | Learning Cuprum: one task per section, in the order most people need them.            |
+| [Going further](#going-further)                                            | An application relies on Cuprum: complete recipes for common tasks.                   |
+| [Operational reference](#operational-reference)                            | Diagnosing or integrating: exact events, metrics, log records, and backend behaviour. |
+
+_Table 1: The three parts of this guide._
+
+Or jump straight to a task:
+
+- **Run a first command:** [Run a command](#run-a-command).
+- **Replace `subprocess` calls:** [Migrate a caller](#migrate-a-caller), then
+  the [0.2.0 migration guide](v0-2-0-migration-guide.md) when upgrading from
+  Cuprum 0.1.
+- **Make a script dependable:** [handle failure](#handle-failure),
+  [control output](#control-output), and
+  [supply input and a deadline](#supply-input-environment-and-a-deadline).
+- **Run several commands:** [connect a pipeline](#connect-a-pipeline) or
+  [run commands concurrently](#run-commands-concurrently).
+- **Limit what may run:** [apply a policy](#apply-a-policy).
+- **Supervise a long-running child:**
+  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
+- **Watch runs in production:**
+  [observe production runs](#observe-production-runs).
+- **Something went wrong:** [troubleshoot a run](#troubleshoot-a-run).
 
 ## Install Cuprum
 
-Cuprum requires Python 3.12 or newer. Install it with pip:
+Cuprum requires Python 3.12 or newer. Cuprum 0.2.0 is currently published as a
+beta, and installers skip prereleases unless asked, so a bare
+`pip install cuprum` installs the older 0.1.0 release, which lacks most of what
+this guide describes. Name the beta explicitly when installing with pip:
 
 <!-- shell-example: install-pip -->
 
 ```shell
-python -m pip install cuprum
+python -m pip install "cuprum>=0.2.0b2"
 ```
 
 Or add it to a uv project:
@@ -42,14 +61,17 @@ Or add it to a uv project:
 <!-- shell-example: install-uv -->
 
 ```shell
-uv add cuprum
+uv add "cuprum>=0.2.0b2"
 ```
 
-The pure Python installation has no runtime dependencies. On glibc-based Linux,
-macOS, and Windows x86_64, pip selects a native wheel instead, which adds
-optional Rust acceleration for pipelines; behaviour is the same either way. See
-[Optional Rust acceleration](#choosing-a-stream-backend)
-for details.
+The same requirement keeps working once 0.2.0 itself is released. To confirm
+which version is installed, check `importlib.metadata.version("cuprum")`.
+
+The pure Python installation has no runtime dependencies. On glibc-based Linux
+(x86_64 and aarch64, glibc 2.28 or newer), macOS (x86_64 and arm64), and
+Windows (x86_64), pip selects a native wheel instead, which adds optional Rust
+acceleration for pipelines; behaviour is the same either way. See
+[Choosing a stream backend](#choosing-a-stream-backend) for details.
 
 Each release also publishes a source distribution (`cuprum-<version>.tar.gz`)
 on PyPI and on the GitHub Release, alongside the wheels. pip and uv install it
@@ -60,22 +82,36 @@ matters to packagers and to people building from source. Building or installing
 from it always yields the pure Python package: its build backend (`uv_build`)
 never compiles the Rust extension, even when a Rust toolchain is present, so
 `is_rust_available()` then returns `False`. Install a platform wheel for native
-acceleration; see [Optional Rust acceleration](#choosing-a-stream-backend).
+acceleration; see [Choosing a stream backend](#choosing-a-stream-backend).
 
 Cuprum ships a `py.typed` marker, so type checkers read its annotations under
 [PEP 561](https://peps.python.org/pep-0561/) and infer the real types of the
-symbols it exports. Every distribution carries the marker — the pure Python
-wheel, the native wheel, and both source archives — so a source build keeps the
-same typing support as a binary install. No configuration is needed: a checker
-that resolves the installed package picks the marker up on its own.
+symbols it exports. Every published distribution carries the marker — the pure
+Python wheel, the native wheels, and the source distribution — so a source
+build keeps the same typing support as a binary install. No configuration is
+needed: a checker that resolves the installed package picks the marker up on
+its own.
 
 ## Run a command
 
-Declare the executable, make a builder, build an argument vector, then run it.
-`sh.make()` consults a catalogue before returning a builder. The default
-catalogue contains common tools such as `ECHO`, `GIT`, `LS`, `RSYNC`, and
-`TAR`. For an application-specific executable, build a catalogue explicitly and
-pass it, either as an argument or by activating it in a scope:
+Running a command takes four steps, and each one has a job:
+
+1. **Declare the program.** `Program("git")` names an executable. It is a typed
+   string, so a program name cannot be confused with an ordinary argument.
+2. **Approve it in a catalogue.** A `ProgramCatalogue` is the list of programs
+   the application may build commands for. Cuprum refuses to build anything
+   that is not listed, which is how a typo or an unexpected tool is caught
+   before it runs.
+3. **Make a builder.** `sh.make()` checks the program against the catalogue
+   and returns a builder. Calling the builder with arguments produces a
+   `SafeCmd`: the program plus an argument vector, never a shell string.
+4. **Run it.** `run_sync()` (or `await run()`) starts the child, waits for it,
+   and returns a `CommandResult`.
+
+The default catalogue already contains common tools such as `ECHO`, `GIT`, `LS`,
+`RSYNC`, and `TAR`, so `sh.make(GIT)` works without one. For any other
+executable, build a catalogue and pass it, either as an argument, as here, or
+by activating it in a [scope](#apply-a-policy):
 
 <!-- tested-example: first-command -->
 
@@ -136,45 +172,45 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts
-`str | int | float | bool | Path | os.PathLike[str]` in positional and keyword
-positions alike. Keyword arguments become `--name=value`; underscores in names
-become hyphens. This suits tools that actually accept that form. For flags such
-as `--check`, pass a positional argument: `check=True` would produce
-`--check=True`. Booleans are values, not presence switches: `porcelain=True`
-produces `--porcelain=True`, and `porcelain=False` produces `--porcelain=False`.
-`None` raises `TypeError` in either position, so decide whether to omit or
-substitute an optional flag before building. An argument containing spaces
-remains one argument.
+Each argument passed to a builder becomes exactly one entry in the child's
+argument vector. An argument containing spaces remains one argument, and quotes,
+`*`, `|`, and `$` are passed through literally because no shell is involved.
 
-Any other type raises `TypeError` naming the real type, not rendering it with
-`str()`: `bytes`, `list`, and a bare `object()` all fail. A path-like value is
-converted with `os.fspath()`, so a `pathlib.Path` and any other object
-implementing `__fspath__` both serialize to the same text; this matches the
-convention the standard library follows for command arguments. `ArgValue` names
-`os.PathLike[str]` rather than the unparameterized `os.PathLike` because only a
-`__fspath__` returning text is accepted: one returning `bytes` is rejected with
-the offending value quoted, as are `bytes` arguments generally, so decode bytes
-before passing them to the builder. Rejection tests the value's real type, so a
-proxy that reports a supported `__class__` while remaining a different type is
-still refused. That domain is the `ArgValue` alias, importable from both
-`cuprum` and `cuprum.sh`; the builder `sh.make()` returns is a
-`SafeCmdBuilder`, and this is the contract a static type checker enforces at
-the call site.
+Positional and keyword arguments both accept `str`, `int`, `float`, `bool`,
+`pathlib.Path`, and other path-like objects. Keyword arguments become
+`--name=value`, with underscores in the name turned into hyphens, which suits
+tools that accept that form:
 
-`os.fsdecode()` converts caller-held filesystem bytes to text using the
-configured filesystem encoding and error handler. On POSIX, the default
-`surrogateescape` handler maps undecodable bytes to surrogate code points,
-which round-trip unchanged when Python encodes the argument for the child
-process. On Windows, the default `surrogatepass` handler rejects undecodable
-bytes such as `b"v\xff"` with `UnicodeDecodeError`, so only byte sequences the
-filesystem encoding accepts can pass through.
+<!-- tested-example: arguments -->
 
-Names that configure _how_ a command runs are reserved: the fields of
-`ExecutionContext` (`env`, `cwd`, `cancel_grace`, `native_pump_cleanup_grace`,
-`timeout`, `stdout_sink`, `stderr_sink`, `encoding`, `errors`, `tags`) and the
-parameters of `run_sync` (`output`, `timeout`, `context`, `stdin`). Passing one
-as a keyword raises `TypeError` instead of rendering it as a child flag.
+```python
+import sys
+from pathlib import Path
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="arguments")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "print('two words')", Path("data.txt"), log_level=3)
+assert command.argv == ("-c", "print('two words')", "data.txt", "--log-level=3")
+assert command.argv_with_program == (sys.executable, *command.argv)
+```
+
+For a presence flag such as `--check`, pass it positionally: `check=True` would
+produce `--check=True`. Booleans are values, not presence switches:
+`porcelain=True` produces `--porcelain=True`, and `porcelain=False` produces
+`--porcelain=False`. `None` raises `TypeError` in either position, so decide
+whether to omit or substitute an optional flag before building.
+
+### Execution options are not child flags
+
+Names that configure _how_ a command runs are reserved: every field of
+`ExecutionContext` (currently `env`, `env_mode`, `cwd`, `cancel_grace`,
+`native_pump_cleanup_grace`, `timeout`, `stdout_sink`, `stderr_sink`,
+`encoding`, `errors`, `tags`, and `process_group`) and the parameters of
+`run_sync` (`output`, `timeout`, `context`, `stdin`). Passing one to a builder
+as a keyword raises `TypeError` instead of rendering it as a child flag, and
+the message names the right place for it:
 
 <!-- tested-example: reserved-execution-options -->
 
@@ -210,7 +246,31 @@ shows. A tool whose command line genuinely takes such a flag still receives it
 positionally, as `"--cwd=<dir>"`. Names merely resembling the reserved ones,
 such as `working_dir` or `stdin_file`, are unaffected.
 
-<!-- tested-example: arguments -->
+### Exactly which values are accepted
+
+The accepted domain is published as the `ArgValue` alias,
+`str | int | float | bool | Path | os.PathLike[str]`, importable from both
+`cuprum` and `cuprum.sh`. The builder `sh.make()` returns is a
+`SafeCmdBuilder`, whose signature states that domain, so a static type checker
+rejects a bad argument at the call site as well as Cuprum rejecting it at run
+time.
+
+Any other type raises `TypeError` naming the real type, rather than being
+rendered with `str()`: `bytes`, `list`, and a bare `object()` all fail. A
+path-like value is converted with `os.fspath()`, so a `pathlib.Path` and any
+other object implementing `__fspath__` both serialize to the same text; this
+matches the convention the standard library follows for command arguments.
+`ArgValue` names `os.PathLike[str]` rather than the unparameterized
+`os.PathLike` because only a `__fspath__` returning text is accepted: one
+returning `bytes` is rejected with the offending value quoted. Rejection tests
+the value's real type, so a proxy that reports a supported `__class__` while
+remaining a different type is still refused.
+
+`bytes` arguments are rejected for the same reason, so decode caller-held
+filesystem bytes before building the command. `os.fsdecode()` does that using
+the configured filesystem encoding and error handler:
+
+<!-- tested-example: filesystem-bytes-arguments -->
 
 ```python
 import os
@@ -218,13 +278,26 @@ import sys
 
 from cuprum import Program, ProgramCatalogue, sh
 
-catalogue = ProgramCatalogue.from_programs(sys.executable, name="arguments")
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="fs-bytes")
 python = sh.make(Program(sys.executable), catalogue=catalogue)
 filesystem_argument = os.fsdecode(b"v\xc3\xbf")
-command = python("-c", "print('two words')", filesystem_argument)
-assert command.argv == ("-c", "print('two words')", filesystem_argument)
-assert command.argv_with_program == (sys.executable, *command.argv)
+command = python("-c", "pass", filesystem_argument)
+assert command.argv == ("-c", "pass", filesystem_argument)
+try:
+    python("-c", "pass", b"v\xc3\xbf")
+except TypeError:
+    pass
+else:
+    raise AssertionError("bytes arguments should be rejected")
 ```
+
+On POSIX, the default `surrogateescape` handler maps undecodable bytes to
+surrogate code points, which round-trip unchanged when Python encodes the
+argument for the child process. On Windows, the default `surrogatepass` handler
+rejects undecodable bytes such as `b"v\xff"` with `UnicodeDecodeError`, so only
+byte sequences the filesystem encoding accepts can pass through.
+
+### Validated builders and project metadata
 
 For domain-specific constraints, use the typed builders in `cuprum.builders`
 for Git, rsync, and tar. They validate relevant paths, refs, and options at
@@ -245,32 +318,193 @@ complete example.
 
 ### Capture and echo
 
-Capture is on and echo is off by default. `stdout` and `stderr` are decoded
-strings when capture is on; they are `None` when it is off. Echo sends output
-to parent-facing sinks and can be enabled per stream. Capture and echo are
-independent. `RunOutputOptions.on_line` observes decoded lines even when
-capture and echo are off. Its callback runs synchronously and should return
-promptly; line order is guaranteed within each stream, not across streams.
+By default Cuprum captures a child's output and keeps it quiet: `stdout` and
+`stderr` on the result hold the decoded text, and nothing appears on the
+terminal. _Echo_ mirrors output to the parent's streams as it arrives, which
+suits progress a person is watching. The two are independent, so a run can
+capture, echo, do both, or do neither. When capture is off, `stdout` and
+`stderr` are `None`.
+
+<!-- tested-example: capture-and-echo -->
+
+```python
+import io
+import sys
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, RunOutputOptions, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="capture-and-echo")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import sys; print('out'); print('err', file=sys.stderr)")
+
+captured = command.run_sync()
+assert captured.stdout == "out\n" and captured.stderr == "err\n"
+
+# Echo to a sink of our choosing, without keeping a copy.
+terminal = io.StringIO()
+echoed = command.run_sync(
+    output=RunOutputOptions(capture=False, echo=True),
+    context=ExecutionContext(stdout_sink=terminal, stderr_sink=terminal),
+)
+assert echoed.stdout is None and echoed.stderr is None
+assert sorted(terminal.getvalue().splitlines()) == ["err", "out"]
+```
+
+`echo=True` mirrors both streams to `sys.stdout` and `sys.stderr` unless the
+`ExecutionContext` names other sinks. `echo_stdout` and `echo_stderr` choose
+each stream separately; either overrides `echo` for its own stream.
+
+Echo normally limits each mirrored line to 64 KiB, including its truncation
+marker and terminator; captured output remains complete. Set
+`max_echo_line_bytes=None` only when unbounded mirroring is appropriate.
+
+### Line-level output
+
+To react to each line as it arrives, pass a callback as `on_line`. It receives a
+`LineEvent` carrying the stream name, the arrival time, and the line's text
+without its terminator. It observes decoded lines even when capture and echo
+are both off:
+
+<!-- tested-example: output -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="output")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+lines = []
+result = python("-c", "print('one'); print('two')").run_sync(
+    output=RunOutputOptions(capture=False, on_line=lines.append),
+)
+assert result.ok and result.stdout is None
+assert [(line.stream, line.text) for line in lines] == [
+    ("stdout", "one"),
+    ("stdout", "two"),
+]
+```
+
+The callback runs synchronously and should return promptly. Line order is
+guaranteed within each stream, not across streams.
+
+For async consumers needing backpressure, `SafeCmd.lines()` returns a
+`LineStream`: an async iterator of `LineEvent(stream, at, text)` whose `result`
+is available after iteration finishes.
+[Stream lines as they arrive](#stream-lines-as-they-arrive) shows it in use.
+Breaking out of the loop does not stop the child: close the stream with
+`async with cmd.lines() as stream:` or `await stream.aclose()` to guarantee
+teardown. Pipelines have no `lines()` method; `on_line` on a pipeline run
+observes final-stage stdout and every stage's stderr. Interior stdout feeds the
+next stage instead.
+
+Line observation decodes for display, so an undecodable byte in text mode
+raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
+[byte-exact mode](#binary-output)
+is the one place observation replaces such bytes instead, so that the bytes
+returned to the caller are not decided by a decode the caller never asked for.
+
+### When an echo destination fails
+
+A sink can fail while echoing: a text-only console may be unable to encode the
+child's output, or the reader at the other end of a pipe may go away.
+`CommandResult.relay_fallbacks` records each handled sink failure by stream,
+without including output content. A text-only sink that cannot encode the
+child's bytes is always handled: echo stops for that stream while capture
+completes. A sink whose destination has closed is handled only when the run
+opts in.
+
+Pass `RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` to
+stop echoing the affected stream when it raises `BrokenPipeError`, so capture,
+line observation, and child reaping continue and `run_sync` still returns a
+result whose `relay_fallbacks` names the `broken_pipe` category. The default,
+`BrokenPipePolicy.STRICT`, propagates the error and aborts the run. Only
+`BrokenPipeError` is affected; any other sink `OSError` propagates under both
+policies.
+
+`BrokenPipePolicy` is exported from the package root next to
+`RunOutputOptions`, so an existing
+`from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
+needs `BrokenPipePolicy` added to it.
+
+### Quiet children
+
+A long build or download can go quiet for minutes, and a silent terminal is
+hard to tell apart from a stuck one. `RunOutputOptions(idle_after=30.0)`
+enables an optional heartbeat after 30 seconds without outward output, then
+once per further silent interval. The default is off. The built-in notification
+is one line, such as `[cuprum] still running cargo (idle 30s, total 4m10s)`,
+written to the configured stderr sink or `sys.stderr`; it is never mixed into
+captured child output. A pipeline monitors its final stdout and all stage
+stderr streams.
+
+`on_idle(total, idle)` replaces the built-in notification, receiving the
+seconds since the run started and since output was last seen:
+
+<!-- tested-example: idle-heartbeat -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="idle")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+heartbeats = []
+result = python("-c", "import time; time.sleep(0.6)").run_sync(
+    output=RunOutputOptions(
+        idle_after=0.1,
+        on_idle=lambda total, idle: heartbeats.append((total, idle)),
+    ),
+)
+assert result.ok
+assert heartbeats, "a silent child should produce at least one heartbeat"
+```
+
+Keep the callback and sink writes prompt: they run on the command's event loop.
+A heartbeat reports silence, not a deadlock, and does not alter the deadline or
+exit status.
 
 ### Binary output
 
 Capture decodes by default, so `stdout` and `stderr` are strings and bytes the
 child wrote that are not valid UTF-8 arrive with each offending byte replaced by
 `U+FFFD`. That is the right answer for text and the wrong one for anything
-else: a decoded capture cannot be turned back into the bytes the child wrote,
-so a caller who needs the original would have to pick a surrogate encoding and
-undo it afterwards.
+else, such as an archive or an image: a decoded capture cannot be turned back
+into the bytes the child wrote.
 
 `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
 counterparts, are the same runs as `run()` and `run_sync()` with capture left
-undecoded. They take the same `output`, `timeout`, `context`, and (for a single
-command) `stdin` arguments, and return `BytesCommandResult` or
+undecoded:
+
+<!-- tested-example: binary-output -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="binary-output")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+result = python(
+    "-c", f"import sys; sys.stdout.buffer.write({payload!r})"
+).run_bytes_sync()
+assert result.ok
+assert result.stdout == payload
+```
+
+The same command through `run_sync()` reports `stdout` as text: a `str` of the
+same length whose invalid bytes have each become `U+FFFD`, which is why the
+comparison above can only pass in binary mode.
+
+The byte-mode entry points take the same `output`, `timeout`, `context`, and
+(for a single command) `stdin` arguments, and return `BytesCommandResult` or
 `BytesPipelineResult` instead of their text-mode counterparts. Those two
-classes declare the same fields as `CommandResult` and `PipelineResult`,
-including the full set of measurements (`pid`, `started_at`, `duration`,
-`max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
-`relay_fallbacks`), so a caller that needs the byte-exact value does not lose
-the diagnostics. The output fields of a `BytesCommandResult` are
+classes declare the same fields as `CommandResult` and `PipelineResult`, so
+each command or stage keeps the full set of measurements (`pid`, `started_at`,
+`duration`, `max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
+`relay_fallbacks`). The output fields of a `BytesCommandResult` are
 `bytes | None`, and each stage of a `BytesPipelineResult` is a
 `BytesCommandResult`.
 
@@ -296,129 +530,36 @@ decoded lines, so undecodable bytes are replaced in the _event_ while the
 captured payload keeps the child's own bytes. The two travel on separate
 channels, and neither is a substitute for the other.
 
-A refused call never reaches the spawn, so it emits no execution event; the
-rejection is recorded as a warning on the `cuprum._bytes_run` logger naming the
-mode that was turned away. Without that record the only trace of a byte-exact
-run the caller asked for and did not get would be the exception the caller saw.
-The warning names the refused callback no more than the exception does —
-neither renders the callback object itself.
-
-Every run also reports which mode it used through its structured telemetry: the
-`cuprum_capture_mode` log extra, the `cuprum.capture_mode` span attribute, and
-the `capture_mode` label on `cuprum_executions_total` and
-`cuprum_failures_total`. The label carries only the mode, never the captured
-payload, so a byte-exact run stays distinguishable from a text one in
-dashboards without any captured output entering the metrics series.
-
 That replacement is scoped to byte mode. `ExecutionContext.errors` keeps its
 meaning everywhere else: a text-mode run with `errors="strict"` still raises
-`UnicodeDecodeError` from line observation and from echo on undecodable bytes,
-exactly as it did before the byte-exact mode existed. A byte-exact run instead
-returns the child's own bytes for the caller to validate — the run cannot both
-promise bytes nobody decoded and let a decode decide its outcome.
+`UnicodeDecodeError` from line observation and from echo on undecodable bytes.
+A byte-exact run instead returns the child's own bytes for the caller to
+validate — the run cannot both promise bytes nobody decoded and let a decode
+decide its outcome.
 
 For a pipeline, the same rule applies to each stage: only the final stage's
 stdout is captured, interior stdout feeds the next stage and is reported as
 `None`, and each stage reports its own `stderr`.
-
-<!-- tested-example: binary-output -->
-
-```python
-import sys
-
-from cuprum import Program, ProgramCatalogue, sh
-
-catalogue = ProgramCatalogue.from_programs(sys.executable, name="binary-output")
-python = sh.make(Program(sys.executable), catalogue=catalogue)
-payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
-result = python(
-    "-c", f"import sys; sys.stdout.buffer.write({payload!r})"
-).run_bytes_sync()
-assert result.ok
-assert result.stdout == payload
-```
-
-The same command through `run_sync()` reports `stdout` as text: a `str` of the
-same length whose invalid bytes have each become `U+FFFD`, which is why the
-comparison above can only pass in binary mode.
-
-### Line-level output
-
-<!-- tested-example: output -->
-
-```python
-import sys
-
-from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
-
-catalogue = ProgramCatalogue.from_programs(sys.executable, name="output")
-python = sh.make(Program(sys.executable), catalogue=catalogue)
-lines = []
-result = python("-c", "print('one'); print('two')").run_sync(
-    output=RunOutputOptions(capture=False, on_line=lines.append),
-)
-assert result.ok and result.stdout is None
-assert [(line.stream, line.text) for line in lines] == [
-    ("stdout", "one"),
-    ("stdout", "two"),
-]
-```
-
-For async consumers needing backpressure, `SafeCmd.lines()` returns an async
-iterator of `LineEvent(stream, at, text)`; its `result` is available after
-iteration finishes. Breaking out of the loop does not stop the child: close the
-stream with `async with cmd.lines() as stream:` or `await stream.aclose()` to
-guarantee teardown. Pipelines have no `lines()` method; `on_line` on a pipeline
-run observes final-stage stdout and every stage's stderr. Interior stdout feeds
-the next stage instead.
-
-Line observation decodes for display, so an undecodable byte in text mode
-raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
-[byte-exact mode](#binary-output)
-is the one place observation replaces such bytes instead, so that the bytes
-returned to the caller are not decided by a decode the caller never asked for.
-
-Echo normally limits each mirrored line to 64 KiB, including its truncation
-marker and terminator; captured output remains complete. Set
-`max_echo_line_bytes=None` only when unbounded mirroring is appropriate.
-`CommandResult.relay_fallbacks` records handled sink failures by stream without
-including output content: a text-only sink that cannot encode the child's bytes
-is always handled, and a sink whose destination has closed is handled only when
-the run opted in. Pass
-`RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` to stop
-echoing the affected stream when it raises `BrokenPipeError`, so capture, line
-observation, and child reaping continue and `run_sync` still returns a result
-whose `relay_fallbacks` names the `broken_pipe` category. The default,
-`BrokenPipePolicy.STRICT`, propagates the error and aborts the run. Only
-`BrokenPipeError` is affected; any other sink `OSError` propagates under both
-policies.
-
-`BrokenPipePolicy` is exported from the package root next to
-`RunOutputOptions`, so an existing
-`from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
-needs `BrokenPipePolicy` added to it.
-
-### Quiet children
-
-`RunOutputOptions(idle_after=30.0)` enables an optional heartbeat after 30
-seconds without outward output, then once per further silent interval. The
-default is off. The built-in notification goes to the configured stderr sink or
-`sys.stderr`; it is not captured child output. A pipeline monitors its final
-stdout and all stage stderr streams. `on_idle(total, idle)` replaces the
-built-in notification. Keep the callback and sink writes prompt: they run on
-the command's event loop. A heartbeat reports silence, not a deadlock, and does
-not alter the deadline or exit status.
+[Byte-exact runs in telemetry](#byte-exact-runs-in-telemetry) describes how
+logs, metrics, and traces tell the two modes apart.
 
 ## Supply input, environment, and a deadline
 
-`StdinInput(text=...)` uses the context's encoding. Use `StdinInput(data=...)`
-for bytes; specify only one. `ExecutionContext.env` composes over the live
-parent environment under the default `EnvMode.OVERLAY`; an empty mapping still
-inherits it. `EnvMode.REPLACE` instead starts the child from an empty
-environment, so only the supplied mapping is visible (see
-[the environment policy](#choose-how-a-child-environment-is-composed)). `cwd`
-changes the child's working directory. A call-level `timeout` overrides
-`ExecutionContext.timeout`.
+Everything about _how_ a command runs, as opposed to _what_ it runs, is passed
+to `run_sync()` or `run()` rather than to the builder:
+
+- **Input:** `stdin=StdinInput(text=...)` sends text, encoded with the
+  context's encoding; `StdinInput(data=...)` sends bytes. Specify only one.
+- **Environment and directory:** `context=ExecutionContext(...)` carries `env`,
+  `cwd`, and the other per-run settings. `env` is layered over the live parent
+  environment under the default `EnvMode.OVERLAY`, so an empty mapping still
+  inherits it. `EnvMode.REPLACE` (imported from `cuprum.context`) instead
+  starts the child from an empty environment, so only the supplied mapping is
+  visible; see
+  [Choose how a child environment is composed](#choose-how-a-child-environment-is-composed).
+  `cwd` changes the child's working directory.
+- **Deadline:** `timeout=` sets a limit in seconds. A call-level `timeout`
+  overrides `ExecutionContext.timeout`.
 
 <!-- tested-example: input-and-context -->
 
@@ -440,11 +581,13 @@ result = command.run_sync(
 assert result.stdout == "ready hello\n"
 ```
 
-A timeout raises `TimeoutExpired`; cancellation of an async run also starts
-child teardown. `cancel_grace` in `ExecutionContext` configures the wait
-between termination and forced kill. Catch timeout separately from child exit.
-When the caller needs to decide later when a child stops, `start()` hands back
-an owned handle to stop by hand instead; see
+A timeout raises `TimeoutExpired` rather than returning a result, so catch it
+separately from a non-zero exit;
+[Handle a slow command](#handle-a-slow-command) shows how. Cancelling an async
+run also starts child teardown. `cancel_grace` in `ExecutionContext` configures
+the wait between termination and forced kill, and defaults to 0.5 seconds. When
+the caller needs to decide later when a child stops, `start()` hands back an
+owned handle to stop by hand instead; see
 [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
 
 ## Connect a pipeline
@@ -621,48 +764,112 @@ untrusted arguments into metric labels or log fields.
 
 ## Observe production runs
 
-For quiet jobs, set `idle_after` as above. For per-line progress, choose
-`on_line` or `lines()`. For lower-volume diagnostics, use lifecycle events,
-aggregate Python stream-operation observation, or optional Rust-pump events.
-These channels report different facts: a heartbeat means no monitored output
-was read; it says nothing about whether the child is stuck. A Rust pump decline
-means Cuprum used another stream path, not that the child failed. Keep
-callbacks bounded and avoid recording payloads as metric labels.
+Cuprum offers several observation channels, and each answers a different
+question. Choose by the question:
 
-`RunOutputOptions(group=True, annotate_failure=True)`, or an explicit
-`GitHubActionsSink` from `cuprum.sinks`, frames echoed output and failures on
-GitHub Actions; see
-[Present output in GitHub Actions](#present-output-in-github-actions). The
-[migration guide](v0-2-0-migration-guide.md) shows adoption forms and optional
-stream metrics.
+- **Is a quiet job still alive?** Set `idle_after`; see
+  [Quiet children](#quiet-children). A heartbeat means no monitored output was
+  read; it says nothing about whether the child is stuck.
+- **What is the child printing right now?** Use `on_line` or `lines()`; see
+  [Line-level output](#line-level-output).
+- **What ran, for how long, and how did it end?** Register lifecycle hooks or
+  the ready-made logging, metrics, and tracing adapters; see
+  [Log, measure, and trace runs](#log-measure-and-trace-runs).
+- **How is the job presented in CI?** On GitHub Actions,
+  `RunOutputOptions(group=True, annotate_failure=True)` frames echoed output
+  and failures; see
+  [Present output in GitHub Actions](#present-output-in-github-actions).
+- **How are the stream paths behaving?** Aggregate stream-operation events and
+  Rust-pump events cover throughput and routing; see
+  [Other observation channels](#other-observation-channels). A Rust pump
+  decline means Cuprum used another stream path, not that the child failed.
+
+Keep callbacks bounded, and avoid recording payloads or arguments as metric
+labels.
 
 ## Migrate a caller
 
-Replace a shell string with a declared executable and separate arguments. Keep
-flags positional unless the tool accepts `--name=value`. Replace
-`subprocess.run(..., check=True)` with a result check according to the
-application's error policy. A replacement environment is selected with
-`EnvMode.REPLACE` on the `ExecutionContext`, not implemented by the caller. The
-[0.2.0 migration guide](v0-2-0-migration-guide.md)
-covers line observation, result measurements, heartbeats, and presentation
-sinks.
+Moving a `subprocess` call to Cuprum is mostly a matter of moving each argument
+to its new home. Here is the same command before and after:
+
+<!-- tested-example: migrate-from-subprocess -->
+
+```python
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, sh
+
+script = "import os; print(os.path.basename(os.getcwd()))"
+workdir = tempfile.mkdtemp()
+
+# Before: subprocess, checking the exit status and capturing text.
+before = subprocess.run(
+    [sys.executable, "-c", script],
+    capture_output=True,
+    text=True,
+    check=True,
+    cwd=workdir,
+)
+
+# After: declare the program once, then build and run the command.
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="migrated")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+result = python("-c", script).run_sync(context=ExecutionContext(cwd=workdir))
+if not result.ok:
+    raise RuntimeError(f"exited with {result.exit_code}: {result.stderr}")
+
+assert result.stdout == before.stdout == f"{Path(workdir).name}\n"
+Path(workdir).rmdir()
+```
+
+Table 2 maps the other common `subprocess` arguments.
+
+| `subprocess`                             | Cuprum                                                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `"git status --short"` with `shell=True` | `sh.make(GIT)("status", "--short")`: one Python argument per child argument                       |
+| `capture_output=True, text=True`         | The default: `result.stdout` and `result.stderr` hold decoded text                                |
+| `check=True`                             | Test `result.ok` and raise according to the application's error policy                            |
+| `cwd=...`                                | `context=ExecutionContext(cwd=...)`                                                               |
+| `env=...` (replaces the environment)     | `context=ExecutionContext(env=..., env_mode=EnvMode.REPLACE)`                                     |
+| `input=...`                              | `stdin=StdinInput(text=...)` or `StdinInput(data=...)`                                            |
+| `timeout=...`                            | `timeout=...`; catch `cuprum.TimeoutExpired`, a `TimeoutError`                                    |
+| A shell pipe, `a \| b`                   | `(a_cmd \| b_cmd).run_sync()`; see [Connect a pipeline](#connect-a-pipeline)                      |
+| `stdout=None` (inherit the terminal)     | `output=RunOutputOptions(capture=False, echo=True)`                                               |
+| `subprocess.Popen` and `.terminate()`    | `await cmd.start()`; see [Hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) |
+
+_Table 2: Where each `subprocess` argument goes in Cuprum._
+
+Note the environment row: `subprocess` replaces the child's environment with
+`env=`, whereas Cuprum layers `ExecutionContext.env` over the parent's unless
+`EnvMode.REPLACE` (from `cuprum.context`) asks for a replacement. Keep flags
+positional unless the tool accepts `--name=value`; see
+[Build arguments deliberately](#build-arguments-deliberately). Applications
+upgrading from Cuprum 0.1 should also read the
+[0.2.0 migration guide](v0-2-0-migration-guide.md).
 
 ## Troubleshoot a run
 
-| Symptom                  | Check                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| `UnknownProgramError`    | Register the exact program in the builder's catalogue.                                    |
-| `ForbiddenProgramError`  | Inspect the active scope and parent allowlist.                                            |
-| `FileNotFoundError`      | Confirm the executable path or inherited `PATH`.                                          |
-| `TimeoutExpired`         | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
-| `SignalAfterExitError`   | The child has already exited; treat the recorded outcome as the command's ending.         |
-| `UnsupportedSignalError` | Use `terminate()` or `kill()`, which use the platform's own signals.                      |
-| Non-zero `exit_code`     | Use captured stderr and the tool's documented exit codes.                                 |
-| No visible output        | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
-| No heartbeat             | Supply a positive `idle_after`; output activity resets its clock.                         |
-| No native speed-up       | The optional extension may be unavailable or this operation may use Python.               |
+| Symptom                                                    | Check                                                                                                 |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ImportError` or `AttributeError` for a name in this guide | An older Cuprum may be installed; see [Install Cuprum](#install-cuprum).                              |
+| `UnknownProgramError`                                      | Register the exact program in the builder's catalogue, or in the active `scoped(catalogue=...)`.      |
+| `ForbiddenProgramError`                                    | Inspect the active scope and parent allowlist; see [Two enforcement points](#two-enforcement-points). |
+| `TypeError` while building a command                       | The message names the problem: an unsupported value type, `None`, or a reserved execution option.     |
+| `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                      |
+| `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                   |
+| `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                              |
+| `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                     |
+| `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                  |
+| Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                             |
+| No visible output                                          | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`.             |
+| No heartbeat                                               | Supply a positive `idle_after`; output activity resets its clock.                                     |
+| Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.     |
+| No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                           |
 
-_Table 1: First checks for common execution outcomes._
+_Table 3: First checks for common execution outcomes._
 
 For the optional native extension, see
 [Choosing a stream backend](#choosing-a-stream-backend) and
@@ -727,14 +934,17 @@ permit `git` found on `PATH`.
 Centralize argument construction in small functions that validate input and
 return a `SafeCmd`. Callers then cannot build an unvalidated command line.
 `cuprum.builders` provides ready-made builders for git, rsync, and tar, plus the
-`safe_path()` and `git_ref()` validators they use. Those builders use the
-default catalogue, so building their commands does not require the tools to be
-installed; running them does.
+`safe_path()` and `git_ref()` validators they use. Those builders resolve
+their program from the active catalogue — the default catalogue outside any
+`scoped(catalogue=...)` block — so building their commands does not require the
+tools to be installed; running them does. Inside a catalogue scope, that
+scope's catalogue must list the tool.
 
 <!-- tested-example: project-builders -->
 
 ```python
 import sys
+import tempfile
 from pathlib import Path
 
 from cuprum import Program, ProgramCatalogue, SafeCmd, sh
@@ -751,8 +961,11 @@ def count_lines(path: Path) -> SafeCmd:
     return sh.make(PYTHON, catalogue=CATALOGUE)("-c", script, str(checked))
 
 
-result = count_lines(Path("README.md")).run_sync()
-assert result.ok and int(result.stdout) > 0
+with tempfile.TemporaryDirectory() as workdir:
+    notes = Path(workdir) / "notes.txt"
+    notes.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    result = count_lines(notes).run_sync()
+assert result.ok and result.stdout == "3\n"
 
 command = git_rev_parse("main")
 assert command.argv_with_program == ("git", "rev-parse", "main")
@@ -882,6 +1095,10 @@ because the clock a timeout is measured against starts at the wait that asks
 for one. Capture is always on for a handle, so a stopped child still reports
 its output on the result.
 
+`terminate(grace=...)` overrides the cancel grace for one call. The example's
+exit code of `-15` is the POSIX convention for a child ended by `SIGTERM`; one
+that had to be killed reports `-9`.
+
 `signal()` delivers one POSIX signal without settling the run. The two refusals
 are separate errors because the remedy differs: `SignalAfterExitError` (a
 `ProcessLookupError`) means the child has gone, and `UnsupportedSignalError`
@@ -965,24 +1182,26 @@ directory is supplied, the binding is passed through unchanged and the platform
 resolves it: a bare name is looked up on `PATH`, and a relative path with a
 separator is taken as relative to the process's own directory. The bound
 directory is also the one the event reports, so `ExecEvent.cwd` (and its
-`cuprum_cwd` and `cuprum.cwd` projections) carries whatever spelling the caller
-configured, not an anchored form. Prefer an absolute binding when the same file
-must run regardless of where the execution starts.
+`cuprum_cwd` and `cuprum.cwd` projections) carries the directory the caller
+configured, normalized as a `Path`, not an anchored form. Prefer an absolute
+binding when the same file must run regardless of where the execution starts.
 
 A resolver must return a `str`. Returning anything else is rejected, because
 `None` is reserved to mean "no binding"; a resolver returning it silently runs
 the catalogued name instead of the executable the caller selected.
 
 Which exception reports that rejection depends on the boundary. Calling
-`resolve_binding()` directly raises `TypeError` naming the type the resolver
-returned. Running a command or pipeline that reaches the same resolver raises
-`ExecutableResolutionError` instead, with that `TypeError` chained as
-`__cause__`. At the execution boundary, whatever a resolver raises or returns
-wrongly is reported as `ExecutableResolutionError`, which names the logical
-program and chains the resolver's own exception as its `__cause__`. It
-subclasses `RuntimeError`, so `except FileNotFoundError` around the call no
-longer catches a resolver that failed to find its virtual environment, and
-`except TypeError` does not catch a resolver that returned the wrong type.
+`resolve_binding(binding, cwd=...)` from `cuprum.executable_binding` directly
+raises `TypeError` naming the type the resolver returned. Running a command or
+pipeline that reaches the same resolver raises `ExecutableResolutionError`
+instead, with that `TypeError` chained as `__cause__`. At the execution
+boundary, whatever a resolver raises or returns wrongly is reported as
+`ExecutableResolutionError`, which names the logical program and chains the
+resolver's own exception as its `__cause__`. Import it from
+`cuprum.executable_binding`. It subclasses `RuntimeError`, so
+`except FileNotFoundError` around the call no longer catches a resolver that
+failed to find its virtual environment, and `except TypeError` does not catch a
+resolver that returned the wrong type.
 
 <!-- tested-example: executable-bindings -->
 
@@ -1008,9 +1227,11 @@ with (
 
 Path validation is advisory, not a guarantee. Construction rejects an empty
 path, a relative path unless `allow_relative=True`, and a path containing NUL or
-`..` segments, but the file may still be replaced between that check and the
-`exec`. Keeping the bound path unwritable to the executing user, and read-only
-where binaries must not change, is the operator's responsibility; see
+`..` segments, raising `InvalidExecutableBindingError` (a `ValueError`, from
+`cuprum.executable_binding`) that names the program and the path. The file may
+still be replaced between that check and the `exec`. Keeping the bound path
+unwritable to the executing user, and read-only where binaries must not change,
+is the operator's responsibility; see
 [§5.1.2 of the design document](cuprum-design.md#512-executable-bindings).
 
 ### Choose how a child environment is composed
@@ -1066,7 +1287,7 @@ Precedence, from lowest to highest, is:
 manually. `ExecutionContext.cwd` remains a per-call setting, independent of
 `env_mode`. On POSIX, executable lookup uses the child environment's `PATH` and
 the supplied `cwd`; a replacement policy that omits `PATH` can therefore make a
-bare executable name fail to resolve. Prefer an absolute programme path when
+bare executable name fail to resolve. Prefer an absolute program path when
 using a deliberately minimal replacement environment.
 
 ### Run code around every command
@@ -1163,6 +1384,71 @@ contents, so the extra holds no output, argument vector, or other unbounded
 value. Without it a byte-exact run and a text run of the same command are
 identical in every record and counter, and a timeout or teardown failure cannot
 be attributed to the mode that hit it.
+
+### Other observation channels
+
+`sh.observe()` reports each execution's lifecycle. A few narrower facts travel
+on channels of their own, so that a dashboard can count them without parsing
+logs and without every lifecycle hook having to understand them. Each channel
+is registered the same way: call its `observe_*` function with a hook, and use
+the returned registration as a context manager or call its `detach()` method.
+Registrations are context-local, like the policy registrations in
+[Apply a policy](#apply-a-policy).
+
+| Channel               | Register with                    | Reports                                                                                                                                             | Ready-made metrics hook                                             |
+| --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Execution lifecycle   | `sh.observe(hook)`               | An `ExecEvent` per phase; see [Structured execution events](#structured-execution-events)                                                           | `MetricsHook` in `cuprum.adapters.metrics_adapter`                  |
+| Control operations    | `observe_control(hook)`          | A `ControlEvent` per `signal()`, `terminate()`, or `kill()` on a `RunningCommand`                                                                   | `control_metrics_hook` in `cuprum.adapters.control_metrics`         |
+| Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line or a sink fails to encode or has closed                                                                   | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
+| Line-stream lifecycle | `observe_line_stream(hook)`      | A `LineStreamEvent` as a `SafeCmd.lines()` stream spawns, saturates, tears down, or ends                                                            | `line_stream_metrics_hook` in `cuprum.adapters.line_stream_metrics` |
+| Stream operations     | `observe_stream_operation(hook)` | A `StreamOperationEvent` per completed drain or transfer; see [Aggregate Python stream-operation events](#aggregate-python-stream-operation-events) | `stream_operation_metrics_hook` in `cuprum.adapters.stream_metrics` |
+| Rust-pump routing     | `observe_pump(hook)`             | A `PumpEvent` per routing decision; see [Counting pump routing decisions](#counting-pump-routing-decisions)                                         | `PumpMetricsHook` in `cuprum.adapters.pump_metrics`                 |
+| Rust-pump hop spans   | `observe_pump_span(tracer)`      | A span per native hop; see [Rust-pump executor-hop spans](#rust-pump-executor-hop-spans)                                                            | Not applicable                                                      |
+
+_Table 4: Observation channels and their metrics adapters._
+
+The `observe_*` functions are importable from `cuprum`, except
+`observe_stream_operation`, which lives in `cuprum.stream_observation`. For
+example, a supervisor can record how each stop request went:
+
+<!-- tested-example: control-observation -->
+
+```python
+import asyncio
+import sys
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, observe_control, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="control")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import time; time.sleep(30)")
+events = []
+
+
+async def stop_a_child() -> None:
+    async with await command.start(
+        context=ExecutionContext(cancel_grace=0.2),
+    ) as handle:
+        await handle.terminate()
+
+
+with observe_control(events.append):
+    asyncio.run(stop_a_child())
+assert [(event.operation, event.outcome) for event in events] == [
+    ("terminate", "delivered"),
+]
+```
+
+An outcome of `escalated` means the child ignored `SIGTERM` and had to be
+killed; `refused_exited` and `refused_unsupported` mirror the two `signal()`
+refusals described under
+[Hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
+
+Only `sh.observe()` hooks can fail a run. Every other channel is fail-open: a
+hook that raises an ordinary exception is logged at `WARNING` with its
+traceback, and the operation it was observing carries on. Their events carry
+only bounded values — no output, argument vectors, or exception text — so the
+metrics hooks can label series without unbounded cardinality.
 
 ### Present output in GitHub Actions
 
@@ -1296,8 +1582,7 @@ the same situation
 addresses. In that case the timeout expires as normal, settling the process
 group rather than merely giving up on the readers, so the descendant is
 reclaimed and the run reports `TimeoutExpired` just as it would have if the
-child itself had overrun. Without this, a timeout on an owning run would have
-covered only the wait for the child and not the reading that follows it.
+child itself had overrun.
 
 #### Where a timeout comes from
 
@@ -1401,8 +1686,8 @@ child. A run whose child has already exited — even one already reaped — is
 still torn down, and the group is signalled again, for as long as the group
 holds a member. That is what reaches a descendant the child left behind before
 teardown began: the child's exit alone settles nothing while its group outlives
-it. `INHERIT` keeps the old rule, where a completed direct child settles the
-run and no group signal is involved at all.
+it. Under `INHERIT`, a completed direct child settles the run and no group
+signal is involved at all.
 
 Session leadership also detaches the child from the controlling terminal, and
 that trade-off is worth stating because it is not obvious from the name.
@@ -1420,12 +1705,12 @@ and siblings are outside the group for the same reason. Containment of
 processes that actively escape needs a supervisor, a cgroup, or a container; a
 command runner cannot promise it.
 
-`OWN_GROUP` raises `ValueError` on Windows, where POSIX process groups do not
-exist. The nearest equivalent, a Job Object, cannot be assigned atomically with
-process creation, so containment there could begin only after the child had a
-chance to spawn a descendant. Cuprum refuses rather than accepting the option
-and delivering no containment. `INHERIT` works everywhere and remains the
-default on every platform.
+`OWN_GROUP` raises `ValueError` at spawn on Windows, where POSIX process groups
+do not exist. The nearest equivalent, a Job Object, cannot be assigned
+atomically with process creation, so containment there could begin only after
+the child had a chance to spawn a descendant. Cuprum refuses rather than
+accepting the option and delivering no containment. `INHERIT` works everywhere
+and remains the default on every platform.
 
 **Do not signal a process group the run does not lead.** Under `INHERIT` the
 child stays in the caller's group, and the documented limitation applies in the
@@ -1455,9 +1740,11 @@ can only come from a run that owns its group. Each record goes to the
   may not signal, so it was reported unreachable rather than settled. Also
   recorded only for a run that owns its group.
 
-A refused signal therefore reads as `cuprum.teardown_signal_failed`, carrying
-`pid`, `signal`, `owns_group`, and `error` fields — for example
-`pid=4319 signal=9 owns_group=True`. The trailing clause states the
+A refused signal therefore reads as `cuprum.teardown_signal_failed`, and the
+message reports `pid=… signal=… owns_group=… error=…` — for example
+`pid=4319 signal=9 owns_group=True`. These values are part of the message text
+rather than separate attributes on the log record; the `group_teardown` event
+described below carries them as fields. The trailing clause states the
 consequence: the target was not signalled, so a process the run believes is
 running may have outlived its teardown.
 
@@ -1473,7 +1760,9 @@ not the record's prose — the metrics adapter turns that into
 observation on the settlement timeout alone, which is the only outcome that
 measured a wait. A run that reaches teardown with no execution to report
 against — a spawn failure, or a run already abandoned — keeps the log record
-alone; see the developers' guide for why.
+alone; see
+[Observability of group teardown](developers-guide.md#observability-of-group-teardown)
+in the developers' guide for why.
 
 #### Timeout diagnostics
 
@@ -1532,6 +1821,12 @@ hooks receive `ExecEvent` values describing:
 
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).
+
+- `group_teardown` — a teardown outcome Cuprum could not resolve, as listed
+  under [Cleanup diagnostics](#cleanup-diagnostics) (ancillary). It carries
+  `owns_group`, the bounded `group_outcome` (`signal_refused`,
+  `settlement_timeout`, or `unsignalable`), and `settle_s` for a settlement
+  timeout.
 
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
@@ -1593,10 +1888,11 @@ Every event also carries `env_mode`: the effective environment policy for the
 execution, once the active context and any per-call policy have been composed.
 It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`, or `EnvMode.REPLACE`, and it
 is present on every phase — including `plan`, `pipeline_fail_fast`, and the
-ancillary `timeout`, `teardown_error`, and `capture_eof_grace_expired` events —
-because it is known before the child is spawned and describes the whole
-execution rather than one measurement. The value is `None` only on legacy or
-manually constructed events; the execution paths always resolve a mode.
+ancillary `timeout`, `teardown_error`, `capture_eof_grace_expired`, and
+`group_teardown` events — because it is known before the child is spawned and
+describes the whole execution rather than one measurement. The value is `None`
+only on legacy or manually constructed events; the execution paths always
+resolve a mode.
 
 `capture_mode` travels the same way and for the same reason. It is
 `CaptureMode.TEXT` for a decoded run and `CaptureMode.BYTES` for one started
@@ -1611,21 +1907,9 @@ tag key; `None` appears only on legacy or hand-built events.
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
-Observing lines is cheaper than it was: Cuprum no longer rebuilds the invariant
-part of a line event — program, argv, cwd, env, pid, stream, tags, project, and
-exec id — for every line. Nothing else changed. The payloads are the same
-`ExecEvent` values, the hook ordering is the same, a hook that raises still
-fails the run exactly as described under
-[When an observe hook raises](#when-an-observe-hook-raises), and each line
-still carries a fresh event and a fresh timestamp. In the benchmarked
-line-callback workload the median wall time fell 30.96% under the profiler and
-26.28% unprofiled.
-
-That is not a universal speedup. The gain is confined to line-callback
-workloads that emit events per line: a run with no observe hook and no
-`on_line` callback creates no line callback at all, and is unaffected. Treat
-the figure as a property of the emission path, not a promise about an
-application.
+Each output line produces a fresh `ExecEvent` with a fresh timestamp. A run
+with no observe hook and no `on_line` callback creates no line callback at all,
+so observing lines costs nothing until something asks for them.
 
 #### Aggregate Python stream-operation events
 
@@ -1694,10 +1978,10 @@ differ in when a failure surfaces:
   first is raised.
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
-reject unknown values. `pipeline_fail_fast` arrived in 0.2.0, and `settled`
-adds another phase, so such a hook written earlier raises on it — and so fails
-the run — until it grows an arm for it. A hook that must never influence the
-run should catch its own exceptions.
+reject unknown values. The set of phases can grow between releases, so such a
+hook raises on a new phase — and so fails the run — until it grows an arm for
+it. Give exhaustive hooks a default arm that ignores phases they do not track.
+A hook that must never influence the run should catch its own exceptions.
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
@@ -1811,10 +2095,13 @@ The hook creates spans with these attributes:
 - `cuprum.duration_s`: Duration in seconds, when an `exit` event occurred
 - `cuprum.terminal_outcome`: Bounded terminal category set on `settled`
 - `cuprum.project`: Project name from tags
+- `cuprum.resolved_path`: The bound executable that ran, when an
+  [executable binding](#bind-a-catalogued-program-to-a-specific-executable)
+  applied
 - `cuprum.env_mode`: The execution's effective environment policy
-  (`inherit`, `overlay`, or `replace`), set on spans for every phase
-- `cuprum.capture_mode`: The run's capture mode (`text` or `bytes`), set on
-  spans for every phase for the same reason as `cuprum.env_mode`
+  (`inherit`, `overlay`, or `replace`), set when the span starts
+- `cuprum.capture_mode`: The run's capture mode (`text` or `bytes`), set when
+  the span starts
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,
@@ -1829,16 +2116,18 @@ Output lines (stdout/stderr) are recorded as span events when
 
 #### Ancillary span events
 
-The `stdin_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
-phases are recorded as `cuprum.<phase>` events on the execution's open span.
-They leave the span neither ended nor marked; `settled` closes it and sets its
-status from the terminal category. `timeout` is followed by `exit` and then
-`settled`, while spawn failure and cancellation can settle without `exit`.
+The `stdin_error`, `timeout`, `teardown_error`, `capture_eof_grace_expired`, and
+`group_teardown` phases are recorded as `cuprum.<phase>` events on the
+execution's open span. They leave the span neither ended nor marked; `settled`
+closes it and sets its status from the terminal category. `timeout` is followed
+by `exit` and then `settled`, while spawn failure and cancellation can settle
+without `exit`.
 
 Ancillary events carry whichever of the `line`, `operation`, `error_type`,
-`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers`
-fields are set. An event without a matching open span is dropped. The
-grace-expiry event carries no captured stdout or stderr payload.
+`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, `pending_readers`,
+`owns_group`, `group_outcome`, and `settle_s` fields are set. An event without
+a matching open span is dropped. The grace-expiry event carries no captured
+stdout or stderr payload.
 
 #### Correlating events with spans
 
@@ -1863,6 +2152,23 @@ caused it. No separate span is started, and each stage's `settled` event closes
 and marks its span.
 
 OpenTelemetry integrations implement the `Tracer` and `Span` protocols.
+
+### Byte-exact runs in telemetry
+
+Every run reports which capture mode it used through its structured telemetry:
+the `cuprum_capture_mode` log extra, the `cuprum.capture_mode` span attribute,
+and the `capture_mode` label on `cuprum_executions_total` and
+`cuprum_failures_total`. The label carries only the mode, `text` or `bytes`,
+never the captured payload, so a byte-exact run stays distinguishable from a
+text one in dashboards without any captured output entering the metrics series.
+
+A `run_bytes()` call that also asks for `on_line` is refused before the spawn,
+so it emits no execution event. The refusal is recorded instead as a warning on
+the `cuprum._bytes_run` logger naming the mode that was turned away; without
+that record the only trace of a byte-exact run the caller asked for and did not
+get would be the exception the caller saw. The warning names the refused
+callback no more than the exception does — neither renders the callback object
+itself.
 
 ### Choosing a stream backend
 
@@ -1965,7 +2271,7 @@ aggregate fields, and nothing else:
 | `operation_count`  | `int`   | Completed operations in the group.                               |
 | `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, for the group. |
 
-_Table 2: Aggregate fields of each `stream_telemetry` group._
+_Table 5: Aggregate fields of each `stream_telemetry` group._
 
 The telemetry observes only the pure-Python drain and pipeline-transfer paths. A
 `pipeline_transfer` group may therefore be absent when the Rust backend
@@ -1984,11 +2290,12 @@ resolution, then register a `Tracer` with `observe_pump_span` in the context
 where the pipeline runs. The registration is context-local and can be used as a
 context manager.
 
-One span is opened for each registered tracer and each Rust-pump hop that is
-actually scheduled. A fast-path decline creates no hop span. The span starts
-immediately before executor scheduling and ends from the completion callback,
-after the native worker has settled; cancellation therefore includes the
-cleanup drain. The pump's own Rust-side span is not parented to it, because
+`observe_pump_span` is importable from `cuprum`. One span, named
+`cuprum.rust_pump_hop`, is opened for each registered tracer and each Rust-pump
+hop that is actually scheduled. A fast-path decline creates no hop span. The
+span starts immediately before executor scheduling and ends from the completion
+callback, after the native worker has settled; cancellation therefore includes
+the cleanup drain. The pump's own Rust-side span is not parented to it, because
 trace context does not cross PyO3, the layer that binds the Rust extension to
 Python.
 
@@ -2023,7 +2330,7 @@ values:
 | `duplicate_fds_unavailable` | a transport descriptor closed before the worker's copy of it could be made                     |
 | `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use      |
 
-_Table 3: Reasons an inter-stage hop declines the Rust pump._
+_Table 6: Reasons an inter-stage hop declines the Rust pump._
 
 These records sit at `DEBUG` rather than `WARNING` because a fall-back is a
 routing decision, not a fault; on platforms where the fast path does not apply,
@@ -2073,12 +2380,20 @@ teardown problem worth investigating.
 ### A pump hand-off failed before submission
 
 When Cuprum cannot prepare the worker-owned descriptors, it rolls the hand-off
-back and the hop falls back to the Python pump. A writer that could not be
-duplicated records `duplicate_writer_failed`, and descriptors that could not be
-switched to blocking mode record `blocking_setup_failed`. The
-`cuprum._pipeline_streams` logger records a bounded `DEBUG` diagnostic with
-`cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
-when available.
+back and the hop falls back to the Python pump. Each failed step records a
+bounded `DEBUG` diagnostic with `cuprum_action="rust_pump_handoff_failed"`,
+`cuprum_outcome="failed"`, a `cuprum_phase` naming the step,
+`cuprum_error_type` holding the exception class, and `cuprum_errno` when one is
+available. The `duplicate_writer` and `executor_submission` phases log on
+`cuprum._pipeline_streams`; the `reader_preparation` and
+`platform_writer_transfer` phases log on `cuprum._streams_rs`.
+
+A writer that could not be duplicated records the `duplicate_writer` phase,
+declines with `duplicate_fds_unavailable`, and counts the
+`duplicate_writer_failed` hand-off outcome. Descriptors that could not be
+switched to blocking mode write no hand-off record: the hop declines with
+`blocking_mode_unavailable`, and `blocking_setup_failed` appears only as the
+hand-off outcome counted by the [pump metrics](#pump-metrics).
 
 Two setup failures still reach the caller. A rejected executor submission
 reports `executor_submission_rejected` and re-raises after rollback, because
@@ -2196,7 +2511,7 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
 
-_Table 4: Metrics emitted by `PumpMetricsHook`._
+_Table 7: Metrics emitted by `PumpMetricsHook`._
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -2217,8 +2532,8 @@ raw-handle rejection exposed by the Python shim. `outcome` is the only label on
 this counter. Descriptor numbers, Windows handle values, errno values,
 exception types, exception messages, and tracebacks never become metric labels.
 
-The `reason` label takes exactly the values in Table 3, plus `unknown`, and
-nothing else. Table 3's values are published as the `RustPumpDeclineReason`
+The `reason` label takes exactly the values in Table 6, plus `unknown`, and
+nothing else. Table 6's values are published as the `RustPumpDeclineReason`
 enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
 a dashboard can enumerate the series it will see:
 
@@ -2325,6 +2640,8 @@ to read the full benchmark output.
 - **Builder:** the callable that `sh.make()` returns. Calling it with arguments
   produces a `SafeCmd`. Its catalogue is fixed when `sh.make()` is called, so
   the builder still works after the scope that supplied the catalogue exits.
+- **Capture:** keeping a child's output on the result as `stdout` and
+  `stderr`. On by default; independent of echo.
 - **Catalogue:** a `ProgramCatalogue`, the set of programs for which builders
   may be created, grouped into projects with metadata. Checked when a builder
   is created. `sh.make()` uses an explicit `catalogue` argument first, then the
@@ -2332,8 +2649,13 @@ to read the full benchmark output.
   outside any catalogue scope still names its application catalogue.
 - **Descriptor:** an operating-system handle for an open pipe or file. The Rust
   pump borrows the descriptors of the pipes it connects.
+- **Echo:** mirroring a child's output to the parent's streams, or to the
+  sinks an `ExecutionContext` names, as it arrives. Off by default.
 - **End of file (EOF):** the signal that a pipe's writer has closed and no more
   data will arrive.
+- **Executable binding:** a scoped mapping, made with `bind_executable()`, from
+  a catalogued program to the file that actually runs, leaving the program's
+  catalogue identity unchanged.
 - **Execution ID (`exec_id`):** a token shared by every event from one
   execution, used to correlate events with each other and with trace spans.
 - **Global interpreter lock (GIL):** the CPython lock that lets only one thread
@@ -2346,8 +2668,16 @@ to read the full benchmark output.
   Numbers are reused, so Cuprum correlates by execution ID instead.
 - **Pump:** the component that performs a hop, either in Python or in the
   optional Rust extension.
+- **Program:** a `Program`, the typed name of an executable. It is both the
+  catalogue's identity for the program and, unless bound, the name the
+  operating system runs.
 - **Resident set size (RSS):** the memory a process holds in RAM; Cuprum
   reports the child's peak where the platform measures it.
+- **Running-command handle:** the `RunningCommand` that `SafeCmd.start()`
+  returns, which owns a started child until it is waited for or stopped.
+- **SafeCmd:** a built command — a program plus its argument vector — ready to
+  run. Builders produce them; `run()`, `run_sync()`, `lines()`, and `start()`
+  execute them.
 - **Scope:** a `with scoped(...)` block that narrows the allowlist and can add
   hooks, a timeout, or environment overlays for the code inside it. A
   `scoped(catalogue=...)` scope also activates that catalogue for `sh.make()`
