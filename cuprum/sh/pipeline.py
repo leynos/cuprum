@@ -12,9 +12,10 @@ breaks its own: each side defers the import it needs to the point of use.
 ``cuprum/sh/__init__.py`` re-exports both classes unchanged, so importers of
 ``cuprum.sh`` see the same objects they always did.
 
-The module also hosts the deprecated flat ``capture``/``echo`` keyword
-resolution, ``_resolve_pipeline_output``, because ``Pipeline.run`` and
-``run_sync`` are its only callers.
+The output-option helpers this class calls — the deprecated flat
+``capture``/``echo`` resolution and the refusal of standard-stream targets —
+live in ``cuprum.sh.pipeline_output``. They are re-exported here because
+``cuprum.sh`` and its callers import them from this module's path.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -24,7 +25,6 @@ resolution, ``_resolve_pipeline_output``, because ``Pipeline.run`` and
 import asyncio
 import dataclasses as dc
 import typing as typ
-import warnings
 
 from cuprum._bytes_run import (
     _bytes_output,
@@ -38,88 +38,18 @@ from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.sh.execution import ExecutionContext
 from cuprum.sh.output import RunOutputOptions
+from cuprum.sh.pipeline_output import (
+    _DeprecatedOutputFlags as _DeprecatedOutputFlags,
+)
+from cuprum.sh.pipeline_output import (
+    _reject_stdio_targets as _reject_stdio_targets,
+)
+from cuprum.sh.pipeline_output import (
+    _resolve_pipeline_output as _resolve_pipeline_output,
+)
 from cuprum.sh.results import BytesPipelineResult, PipelineResult
 
 __all__ = ["Pipeline"]
-
-
-class _DeprecatedOutputFlags(typ.TypedDict, total=False):
-    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
-
-    capture: bool
-    echo: bool
-
-
-def _resolve_pipeline_output(
-    output: RunOutputOptions | None,
-    flags: _DeprecatedOutputFlags,
-) -> RunOutputOptions:
-    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
-    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
-    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
-    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
-    # here to preserve the strict keyword surface.
-    unknown = set(flags) - {"capture", "echo"}
-    if unknown:
-        joined = ", ".join(sorted(unknown))
-        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
-        raise TypeError(msg)
-    if not flags:
-        return output or RunOutputOptions()
-    if output is not None:
-        # Reject combining the deprecated flat flags with ``output``: the
-        # caller's intent would otherwise be ambiguous.
-        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
-        raise ValueError(msg)
-    warnings.warn(
-        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
-        "deprecated; pass output=RunOutputOptions(...) instead",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    return RunOutputOptions(
-        capture=flags.get("capture", True),
-        echo=flags.get("echo", False),
-    )
-
-
-def _reject_stdio_targets(output: RunOutputOptions) -> None:
-    """Refuse standard-stream targets a pipeline cannot honour.
-
-    ``RunOutputOptions`` carries ``stdin``/``stdout``/``stderr`` targets
-    wherever it is accepted, but a pipeline reads only the capture, echo,
-    sink, idle, and line-hook fields: the stage wiring that would carry a
-    target to the right stage does not exist. Accepting one would be the
-    silent loss ``RunOutputOptions`` refuses everywhere else — the run
-    succeeds, exits ``0``, and the file the caller named is never created.
-
-    Refusing is deliberately the whole fix. Making a target *mean* something
-    for a pipeline is a design decision about which stage a stream belongs to,
-    and that decision belongs with the stage wiring rather than being guessed
-    here.
-
-    Parameters
-    ----------
-    output : RunOutputOptions
-        The resolved options a pipeline run was given.
-
-    Raises
-    ------
-    ValueError
-        If any of the three standard streams names a target.
-    """
-    named = [
-        stream
-        for stream in ("stdin", "stdout", "stderr")
-        if getattr(output, stream) is not None
-    ]
-    if not named:
-        return
-    msg = (
-        f"Pipeline.run does not support RunOutputOptions "
-        f"{', '.join(named)} targets; redirect a single SafeCmd instead"
-    )
-    raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)

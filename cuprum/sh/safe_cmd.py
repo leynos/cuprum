@@ -27,87 +27,35 @@ handle path resolves its own run inputs, so it lives with the handle package.
 import asyncio
 import dataclasses as dc
 
-from cuprum._bytes_run import (
-    _bytes_output,
-    _require_bytes_command_result,
-    _require_command_result,
-    _validate_bytes_output,
-)
+from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
     _build_subprocess_execution,
     _ExecutionState,
     _prepare_execution_observation,
     _run_prepared_command,
 )
-from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
-from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._process_handle.owned_start import _OwnedStart
-from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
-from cuprum.context import current_context
 from cuprum.program import Program
+from cuprum.sh.bytes_entry_points import _BytesEntryPoints
 from cuprum.sh.execution import (
     ExecutionContext,
-    StdinInput,
     StdinSource,
     _resolve_stdin_source,
 )
+from cuprum.sh.line_options import (
+    # Re-exported under this module's name as well as imported for use here.
+    # This module is where the line-iteration path has always been read from;
+    # re-importing the helpers elsewhere would give a test double a second
+    # binding that no production call path resolves.
+    _line_iteration_tracking,
+    _reject_redirected_lines_stdout,
+)
 from cuprum.sh.output import RunOutputOptions
-from cuprum.sh.results import BytesCommandResult, CommandResult
-
-
-def _line_iteration_tracking() -> _ExecutionTracking:
-    """Build the hook bookkeeping one line iteration travels with.
-
-    Line iteration never opens a presentation session: the line events are the
-    caller's own consumption of the streams, so there is no adapter framing to
-    bracket. The empty bracket keeps the required field satisfied.
-
-    Returns
-    -------
-    _ExecutionTracking
-        Tracking whose sink bracket owns nothing and whose pending-task list
-        starts empty.
-    """
-    return _ExecutionTracking(
-        execution_hooks=_collect_hooks(current_context()),
-        pending_tasks=[],
-        sink_bracket=_SinkBracket(None),
-    )
-
-
-def _reject_redirected_lines_stdout(output: RunOutputOptions) -> None:
-    """Reject a stdout target where line iteration needs a parent-side pipe.
-
-    ``RunOutputOptions`` cannot make this call on its own: the very same
-    object is a valid argument to :meth:`SafeCmd.run`, which reads nothing
-    back from stdout and is happy to send it to a file. The requirement is
-    specific to line iteration, so the check belongs where the requirement is
-    known.
-
-    Parameters
-    ----------
-    output : RunOutputOptions
-        The options about to drive a line iteration.
-
-    Raises
-    ------
-    ValueError
-        If ``output.stdout`` names anything other than a pipe. ``None`` means
-        "unspecified", which resolves to a pipe for this path, so it is
-        accepted.
-    """
-    if output.stdout is None or output.stdout.kind == "pipe":
-        return
-    msg = (
-        f"SafeCmd.lines requires stdout to be a pipe, but output.stdout is "
-        f"{output.stdout.kind!r}; there is no parent-side stream to iterate. "
-        f"Use SafeCmd.run when stdout is redirected to a file or descriptor."
-    )
-    raise ValueError(msg)
-
+from cuprum.sh.results import CommandResult
 
 __all__ = [
     "SafeCmd",
@@ -115,7 +63,7 @@ __all__ = [
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd(_OwnedStart):
+class SafeCmd(_OwnedStart, _BytesEntryPoints):
     """Typed representation of a curated command ready for execution."""
 
     program: Program
@@ -213,131 +161,6 @@ class SafeCmd(_OwnedStart):
                     timeout=effective_timeout,
                 ),
             )
-        )
-
-    async def run_bytes(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
-        context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
-    ) -> BytesCommandResult:
-        """Execute the command, capturing its output as bytes.
-
-        The run itself is the one ``run()`` performs; only what happens to the
-        captured streams differs. Bytes are returned exactly as the child wrote
-        them — no decoding, no replacement characters — so values that are not
-        valid text survive the round trip.
-
-        Echoing, sink presentation, and idle reporting all behave as they do
-        in text mode. A sink exposing a ``buffer`` receives the child's own
-        bytes; a text-only sink decodes them for display only, and a mirror it
-        cannot render is disabled without disturbing what was captured.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: bytes mode
-            returns the child's own bytes, so a callback carrying decoded text
-            would be a second, contradictory contract for the same stream. Use
-            the text-mode entry point when lines are wanted.
-        timeout : float | None, default=None
-            Maximum execution time in seconds. An explicit value overrides the
-            timeout in ``context``.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
-
-        Returns
-        -------
-        BytesCommandResult
-            The command outcome, carrying ``bytes`` for each captured stream
-            when ``output.capture`` is true and ``None`` for each stream that
-            was not captured.
-
-        Raises
-        ------
-        ValueError
-            If ``output.on_line`` is set.
-        PermissionError
-            If the command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        UnicodeEncodeError
-            If text stdin cannot be encoded by the execution context.
-
-        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        out = _bytes_output(output)
-        _validate_bytes_output(out)
-        ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return _require_bytes_command_result(
-            await _run_prepared_command(
-                self,
-                _ExecutionState(
-                    context=ctx,
-                    output=out,
-                    stdin_data=stdin_data,
-                    timeout=effective_timeout,
-                    capture_bytes=True,
-                ),
-            )
-        )
-
-    def run_bytes_sync(
-        self,
-        *,
-        output: RunOutputOptions | None = None,
-        timeout: float | None = None,
-        context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
-    ) -> BytesCommandResult:
-        """Execute the command synchronously, capturing its output as bytes.
-
-        Parameters
-        ----------
-        output : RunOutputOptions | None, default=None
-            Capture and echo settings. ``on_line`` is rejected: bytes mode
-            returns the child's own bytes, so a callback carrying decoded text
-            would be a second, contradictory contract for the same stream. Use
-            the text-mode entry point when lines are wanted.
-        timeout : float | None, default=None
-            Maximum execution time in seconds.
-        context : ExecutionContext | None, default=None
-            Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
-
-        Returns
-        -------
-        BytesCommandResult
-            The command outcome, carrying ``bytes`` for each captured stream
-            when capture is enabled and ``None`` for each stream that was not
-            captured.
-
-        Raises
-        ------
-        ValueError
-            If ``output.on_line`` is set.
-        PermissionError
-            If the command is not allowed by the active scope.
-        TimeoutError
-            If execution exceeds the effective timeout.
-        UnicodeEncodeError
-            If text stdin cannot be encoded by the execution context.
-
-        """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        return asyncio.run(
-            self.run_bytes(
-                output=output,
-                timeout=timeout,
-                context=context,
-                stdin=stdin,
-            ),
         )
 
     def lines(

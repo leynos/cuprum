@@ -53,6 +53,14 @@ from cuprum._subprocess_stdin_reclaim import (
     _settle_stdin_writer,
 )
 from cuprum._subprocess_stdin_stream import _stdin_codec
+from cuprum._subprocess_stream_exit import (
+    # Re-exported under this module's name as well as imported for use: the
+    # module is where the repository's commentary points for the exit wait, and
+    # ``__all__`` below keeps that path open. ``_reconcile_shielded`` is *not*
+    # re-imported, because it is reached only from inside the exit module and a
+    # second binding here would be one no call path resolves.
+    _wait_for_streamed_process_exit,
+)
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
@@ -104,78 +112,6 @@ async def _settle_owned_group_before_draining(
         ),
         observations=(execution.observation,),
     )
-
-
-async def _reconcile_shielded(
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-    *,
-    capture: bool,
-) -> _StreamPayloadPair:
-    """Reconcile every task the run owns under one shield."""
-    # The shield is what makes the reconciliation a guarantee: a caller
-    # cancelling now would otherwise abandon the consumers mid-drain and leak
-    # them. *capture* is the caller's, because the routes disagree about what
-    # the drained text is for — a capturing route hands it to the caller's
-    # ``TimeoutExpired``, and a route re-raising some other error settles
-    # promptly rather than spending the capture grace on text nobody will read.
-    return await _shielded_cleanup(
-        _reconcile_run_tasks(
-            tasks,
-            _drain_context(execution, tasks, pid, capture=capture),
-        )
-    )
-
-
-async def _wait_for_streamed_process_exit(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-) -> tuple[int, float]:
-    """Wait for the exit or a stdin failure, reconciling when that wait fails.
-
-    The stdin writer runs alongside the exit wait, so a producer that fails
-    ends the run there rather than after the child's own exit — see
-    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
-    Whatever that race raises — a deadline expiry, a producer failure, a
-    cancellation — lands in the handlers below, which already reconcile every
-    stream task before the error propagates.
-
-    Returns
-    -------
-    tuple[int, float]
-        The exit code and exit timestamp, as produced by the race.
-    """
-    try:
-        return await _await_exit_or_writer_failure(
-            _wait_for_exit_code_within_timeout(process, execution),
-            tasks.stdin_task,
-        )
-    except TimeoutError as exc:
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_text, stderr_text = await _reconcile_shielded(
-            execution,
-            tasks,
-            pid,
-            capture=execution.capture,
-        )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
-            timeout=execution.timeout,
-        )
-    except BaseException:
-        # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation. Do not capture
-        # stream text while another error propagates, but settle every task
-        # before re-raising the original failure unchanged.
-        await _reconcile_shielded(execution, tasks, pid, capture=False)
-        raise
 
 
 async def _run_subprocess_without_streams(
