@@ -399,6 +399,7 @@ _Applications upgrading from 0.1 should follow the
   Those invocations now suppress only the intentional backend mismatch warning,
   leaving other Maturin diagnostics visible
   ([#430](https://github.com/leynos/cuprum/issues/430)).
+
 ## [0.2.0-beta1] - 2026-09-24
 
 <!-- markdownlint-disable-next-line MD024 -->
