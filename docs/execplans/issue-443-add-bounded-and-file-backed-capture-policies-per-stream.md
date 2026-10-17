@@ -263,10 +263,10 @@ Thresholds that trigger escalation when breached.
   `_wait_for_streamed_process_exit` conflict was settled by keeping `main`'s
   deletion and moving our `_reconcile_shielded` helper beside the split
   post-exit module, so no duplicate definition survives; the migration guide's
-  capture section was appended to the 0.2.0 feature list rather than dropped
-  by the section renumbering; and the `pyproject.toml` dead-code entry points
-  merged entry-by-entry. Backup branch
-  `backup/issue443-pre-rebase-20261017` retains the pre-rebase tip.
+  capture section was appended to the 0.2.0 feature list rather than dropped by
+  the section renumbering; and the `pyproject.toml` dead-code entry points
+  merged entry-by-entry. Backup branch `backup/issue443-pre-rebase-20261017`
+  retains the pre-rebase tip.
 - [ ] Run the full commit-gate set through `scrutineer`, then push and open
   the draft pull request.
 
