@@ -43,3 +43,9 @@ Feature: Telemetry adapters for structured execution events
     Given an in-memory pump-hop tracer
     When I cancel a Rust-pump executor hop while its worker owns descriptors
     Then the pump-hop span is cancelled after the worker returns
+
+  Scenario: Shared redaction sanitizes exports without changing execution
+    Given a shared policy for telemetry redaction
+    When I run a command with sentinel values through redacted telemetry
+    Then configured telemetry exports contain no sentinel values
+    And execution and raw observations retain every sentinel value

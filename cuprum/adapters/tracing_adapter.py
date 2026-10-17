@@ -68,11 +68,10 @@ import threading
 import typing as typ
 
 from cuprum.adapters._support import (
-    _event_common_fields,
     _log_unhandled_phase,
-    _prefixed,
     _project_tag,
 )
+from cuprum.adapters._tracing_attributes import _build_tracing_attributes
 from cuprum.adapters._tracing_control_join import (
     _ControlJoinTracingMixin,
     record_control_events,
@@ -86,6 +85,7 @@ from cuprum.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
+    from cuprum.redaction import RedactionPolicy
 
 
 @dc.dataclass(slots=True)
@@ -123,29 +123,52 @@ class TracingHook(
         A :class:`Tracer` implementation for the target backend.
     record_output:
         If True, record stdout/stderr lines as span events. Default True.
+    redaction:
+        Optional policy applied to event copies before span projection.
+        Defaults to ``None``; raw observations and execution remain unchanged.
     """
 
     __slots__ = (
         "_active_spans",
         "_lock",
         "_record_output",
+        "_redaction",
         "_tracer",
     )
 
-    def __init__(self, tracer: Tracer, *, record_output: bool = True) -> None:
+    def __init__(
+        self,
+        tracer: Tracer,
+        *,
+        record_output: bool = True,
+        redaction: RedactionPolicy | None = None,
+    ) -> None:
         """Initialize the tracing hook with a tracer."""
         self._tracer = tracer
         self._record_output = record_output
+        self._redaction = redaction
         self._active_spans: dict[ExecId, _ActiveSpan] = {}
         self._lock = threading.Lock()
 
     def __call__(self, event: ExecEvent) -> None:
         """Process an execution event and update tracing."""
+        original_project_tag = _project_tag(event)
+        if self._redaction is not None:
+            event = self._redaction.redact_event(event)
+        self._handle_event(event, original_project_tag=original_project_tag)
+
+    def _handle_event(
+        self,
+        event: ExecEvent,
+        *,
+        original_project_tag: str | None = None,
+    ) -> None:
+        """Dispatch an event after applying the optional projection policy."""
         match event.phase:
             case "plan" | "stdin":
                 pass
             case "start":
-                self._handle_start(event)
+                self._handle_start(event, original_project_tag=original_project_tag)
             case (
                 "stdout"
                 | "stderr"
@@ -166,7 +189,12 @@ class TracingHook(
             case _:
                 _log_unhandled_phase("tracing", event.phase)
 
-    def _handle_start(self, event: ExecEvent) -> None:
+    def _handle_start(
+        self,
+        event: ExecEvent,
+        *,
+        original_project_tag: str | None = None,
+    ) -> None:
         """Start a new span for command execution.
 
         Spans are keyed on ``event.exec_id`` (see the class ``Correlation``
@@ -197,7 +225,9 @@ class TracingHook(
 
         # Tracer setup is independent of the span bookkeeping; do it before
         # taking the lock so unrelated handlers are not blocked on it.
-        attributes = self._build_attributes(event)
+        attributes = self._build_attributes(
+            event, original_project_tag=original_project_tag
+        )
         span_name = f"cuprum.exec {event.program}"
         active_span = _ActiveSpan(self._tracer.start_span(span_name, attributes))
 
@@ -312,24 +342,23 @@ class TracingHook(
             active.span.end()
 
     @staticmethod
-    def _build_attributes(event: ExecEvent) -> dict[str, object]:
+    def _build_attributes(
+        event: ExecEvent,
+        *,
+        original_project_tag: str | None = None,
+    ) -> dict[str, object]:
         """Build initial span attributes from an event."""
-        attrs = dict(
-            _event_common_fields(event, _prefixed("cuprum."), argv=list),
+        return _build_tracing_attributes(
+            event, original_project_tag=original_project_tag
         )
 
-        project = _project_tag(event)
-        if project is not None:
-            attrs["cuprum.project"] = project
-        if "pipeline_stage_index" in event.tags:
-            attrs["cuprum.pipeline_stage_index"] = event.tags["pipeline_stage_index"]
-        if "pipeline_stages" in event.tags:
-            attrs["cuprum.pipeline_stages"] = event.tags["pipeline_stages"]
 
-        return attrs
-
-
-def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
+def tracing_hook(
+    tracer: Tracer,
+    *,
+    record_output: bool = True,
+    redaction: RedactionPolicy | None = None,
+) -> ExecHook:
     """Create a tracing observe hook for the given tracer.
 
     This is a convenience factory that returns a :class:`TracingHook` instance
@@ -341,6 +370,8 @@ def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
         A :class:`Tracer` implementation.
     record_output:
         If True, record stdout/stderr lines as span events. Default True.
+    redaction:
+        Optional policy applied before span projection. Defaults to ``None``.
 
     Returns
     -------
@@ -348,7 +379,7 @@ def tracing_hook(tracer: Tracer, *, record_output: bool = True) -> ExecHook:
         A hook suitable for use with ``sh.observe()``.
 
     """
-    return TracingHook(tracer, record_output=record_output)
+    return TracingHook(tracer, record_output=record_output, redaction=redaction)
 
 
 __all__ = [

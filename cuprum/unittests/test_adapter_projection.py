@@ -32,6 +32,8 @@ from cuprum.events import (
     new_exec_id,
 )
 from cuprum.program import Program
+from cuprum.redaction import RedactionPolicy
+from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -327,4 +329,60 @@ class TestAdapterProjection:
         assert projections == snapshot, (
             "per-phase adapter projections must match the redacted wire-contract "
             "snapshot"
+        )
+
+    def test_configured_redaction_locks_sanitized_exports(
+        self, snapshot: SnapshotAssertion
+    ) -> None:
+        """Configured field sentinels disappear while metric labels stay bounded."""
+        sentinels = tuple(
+            f"{field}-sentinel-442" for field in ("argv", "env", "line", "note", "tag")
+        )
+        event = _make_exec_event(
+            phase="stdin_error",
+            overrides={
+                "program": Program("echo"),
+                "project": "proj",
+                "exec_id": None,
+                "argv": ("echo", sentinels[0]),
+                "env": {"TOKEN": sentinels[1]},
+                "line": sentinels[2],
+                "note": sentinels[3],
+                "operation": "write",
+                "tags": {
+                    "project": "proj",
+                    "credential": sentinels[4],
+                    "pipeline_stages": sentinels[4],
+                },
+            },
+        )
+        projected = RedactionPolicy(literals=sentinels).redact_event(event)
+        labels = dict(MetricsHook._extract_labels(projected))
+        projections = {
+            "logging_extra": self._redact(_build_extra(projected)),
+            "tracing_attributes": self._redact(
+                TracingHook._build_attributes(projected)
+            ),
+            "tracing_span_event": self._span_event_projection(projected),
+            "metrics_labels": labels,
+            "observer_export": {
+                "argv": projected.argv,
+                "env": dict(projected.env or {}),
+                "note": projected.note,
+                "tags": dict(projected.tags),
+            },
+        }
+        assert all(value not in repr(projections) for value in sentinels), (
+            "configured values must be absent from every selected export"
+        )
+        assert dict(projected.env or {}) == {"TOKEN": "[REDACTED]"}, (
+            "environment values must reach opted-in consumers only after redaction"
+        )
+        assert (
+            labels
+            == dict(MetricsHook._extract_labels(event))
+            == {"program": "echo", "project": "proj"}
+        ), "the label vocabulary and values must remain unchanged"
+        assert projections == snapshot, (
+            "sanitized exports must retain their wire contract"
         )
