@@ -96,8 +96,12 @@ class _RefusingClose(pathlib.Path):
     portable across the POSIX and Windows runs in CI.
     """
 
-    def unlink(self, *, missing_ok: bool = False) -> None:
+    # Spelled as an override of ``Path.unlink`` so the typechecker accepts it:
+    # positional-or-keyword, with a default that is not a boolean literal
+    # (a boolean *default* is what the boolean-trap rule forbids).
+    def unlink(self, missing_ok: bool | None = None) -> None:
         """Refuse the removal, whatever the caller asked for."""
+        _ = missing_ok
         raise PermissionError(13, "Operation not permitted")
 
 
