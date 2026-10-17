@@ -4121,26 +4121,27 @@ and why a passing result cannot be vacuous.
   the owned assertions and fails these; POSIX-only descriptor checks are
   skipped on Windows with an explicit marker rather than silently omitted.
 
-- Obligation: `INV-6 — piped-only consumers and writers`. A stream left as a
-  pipe has a parent-side `StreamReader` and, for stdin, a writer; a stream
-  bound to a file, a borrowed descriptor, or the parent's own stream has
-  neither, and a pipe nobody consumes is spawned as `DEVNULL` rather than as a
-  pipe the parent never reads. Method: end-to-end runs asserting that each
-  redirected stream yields no captured text while each still-piped stream
-  yields its bytes, paired with construction-time tests for the stdin domain.
-  Rationale: the invariant's observable is the result of a live run — a
-  redirected stream reports `stdout is None`, a piped one reports its bytes —
-  so these runs pin the contract while the private bookkeeping that implements
-  it (`_StdioBinding.is_pipe`, `_ResolvedStdio.pipes`) is left unasserted; a
-  test of that bookkeeping would restate the implementation rather than the
-  contract. Domain: `stdin` admits only `pipe` and `inherit`, because
-  `_reject_redirected_stdin` refuses `path` and `fd`: the input arrives through
-  `stdin=StdinInput(...)` or `stdin=StdinStream(...)`, and a second spelling
-  would leave one of the two silently ignored. `stdout` and `stderr` admit all
-  four variants; `stdout` is exercised live through every one of them, `stderr`
-  through `path`, `pipe`, and a borrowed file object on the `lines()` path, with
-  `inherit` covered where `SafeCmd.start()` refuses it. Both streams are also
-  redirected at once. Artefact: `cuprum/unittests/test_safe_cmd_redirect.py`
+- Obligation: `INV-6 — piped-only consumers and writers`. A piped **stdout**
+  or **stderr** has a parent-side `StreamReader`, and a piped **stdin** has a
+  parent-side `StreamWriter`; a stream bound to a file, a borrowed descriptor,
+  or the parent's own stream has neither, and a pipe nobody consumes is spawned
+  as `DEVNULL` rather than as a pipe the parent never reads. Method: end-to-end
+  runs asserting that each redirected stream yields no captured text while each
+  still-piped stream yields its bytes, paired with construction-time tests for
+  the stdin domain. Rationale: the invariant's observable is the result of a
+  live run — a redirected stream reports `stdout is None`, a piped one reports
+  its bytes — so these runs pin the contract while the private bookkeeping that
+  implements it (`_StdioBinding.is_pipe`, `_ResolvedStdio.pipes`) is left
+  unasserted; a test of that bookkeeping would restate the implementation
+  rather than the contract. Domain: `stdin` admits only `pipe` and `inherit`,
+  because `_reject_redirected_stdin` refuses `path` and `fd`: the input arrives
+  through `stdin=StdinInput(...)` or `stdin=StdinStream(...)`, and a second
+  spelling would leave one of the two silently ignored. `stdout` and `stderr`
+  admit all four variants; `stdout` is exercised live through every one of them,
+  `stderr` through `path`, `pipe`, and a borrowed file object on the `lines()`
+  path, with `inherit` covered where `SafeCmd.start()` refuses it. Both streams
+  are also redirected at once. Artefact:
+  `cuprum/unittests/test_safe_cmd_redirect.py`
   (`test_redirected_stream_is_not_captured`,
   `test_inherit_target_leaves_the_parent_stream_alone`,
   `test_both_streams_can_be_redirected_at_once`, and the near-miss
@@ -4157,12 +4158,11 @@ and why a passing result cannot be vacuous.
   same options with `StdioTarget.pipe()` capture as usual, and a `path` target
   refused for stdin is accepted for stdout — so a rule that refused every
   target would fail them. The `connect_pipes()` membership test is
-  defence-in-depth rather than load-bearing: `Popen` hands back a stream object
-  only for `PIPE`, so `DEVNULL` and a borrowed descriptor already leave the
-  child-side stream `None`, and `is_pipe` short-circuits the check. Removing it
-  would not cause a hang; it would attach a reader to a descriptor cuprum does
-  not own. The `connect_pipes` tests in `test_wait4_process_reaping.py` inject
-  a failure to check cleanup, not pipe-ness.
+  defence-in-depth. For supported spawn configurations, removing only this
+  check does not attach borrowed descriptors: the remaining non-`None` check
+  excludes them because `Popen` exposes parent-side streams only for `PIPE`. The
+  `connect_pipes` tests in `test_wait4_process_reaping.py` inject a failure to
+  check cleanup, not pipe-ness.
 
 - Obligation: `INV-7 — existing behaviour unchanged`. With no new arguments,
   every existing test in the suite passes unmodified. Method: the existing
