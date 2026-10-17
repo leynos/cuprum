@@ -39,26 +39,72 @@ def _regex_union_projection(
     patterns: tuple[re.Pattern[str], ...],
 ) -> str:
     """Project regex matches through an independent character-coverage oracle."""
-    spans = tuple(
+    spans = _regex_match_spans(text, patterns)
+    nonzero_spans = _nonzero_regex_spans(spans)
+    covered = _covered_regex_characters(text, nonzero_spans)
+    standalone_zero_positions = _standalone_regex_positions(spans, nonzero_spans)
+    return _project_regex_coverage(text, covered, standalone_zero_positions)
+
+
+def _regex_match_spans(
+    text: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Collect independent pattern matches from the original text."""
+    return tuple(
         match.span() for pattern in patterns for match in pattern.finditer(text)
     )
-    nonzero_spans = tuple((start, end) for start, end in spans if start < end)
-    covered = [False] * len(text)
-    for start, end in nonzero_spans:
-        covered[start:end] = [True] * (end - start)
 
-    standalone_zero_positions = {
-        start
-        for start, end in spans
-        if start == end
-        and not any(
-            span_start <= start <= span_end for span_start, span_end in nonzero_spans
-        )
+
+def _nonzero_regex_spans(
+    spans: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Select non-empty regex spans for the coverage oracle."""
+    return tuple((start, end) for start, end in spans if start < end)
+
+
+def _covered_regex_characters(
+    text: str,
+    spans: tuple[tuple[int, int], ...],
+) -> list[bool]:
+    """Mark source characters covered by any non-empty regex span."""
+    covered = [False] * len(text)
+    for start, end in spans:
+        covered[start:end] = [True] * (end - start)
+    return covered
+
+
+def _standalone_regex_positions(
+    spans: tuple[tuple[int, int], ...],
+    nonzero_spans: tuple[tuple[int, int], ...],
+) -> set[int]:
+    """Keep zero-width positions outside every non-empty span boundary."""
+    zero_width_positions = {start for start, end in spans if start == end}
+    return {
+        position
+        for position in zero_width_positions
+        if not _is_inside_regex_span_boundary(position, nonzero_spans)
     }
+
+
+def _is_inside_regex_span_boundary(
+    position: int,
+    spans: tuple[tuple[int, int], ...],
+) -> bool:
+    """Check whether a zero-width position touches a non-empty match."""
+    return any(start <= position <= end for start, end in spans)
+
+
+def _project_regex_coverage(
+    text: str,
+    covered: list[bool],
+    zero_width_positions: set[int],
+) -> str:
+    """Render the covered characters and standalone zero-width positions."""
     projected: list[str] = []
     previous_character_was_covered = False
     for position in range(len(text) + 1):
-        if position in standalone_zero_positions:
+        if position in zero_width_positions:
             projected.append("[REDACTED]")
         if position == len(text):
             break
