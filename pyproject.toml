@@ -753,8 +753,13 @@ members = [
     "cuprum/sh/output.py::captures_any_stream",
     "cuprum/_pipeline_config.py::captures_any_stream",
 ]
-reason = "Two properties that now delegate to the same predicate and so read almost identically. Both bodies call `cuprum.capture_policy.captures_any_stream`, which is where the reading lives; what the detector still matches is the two-line docstring lead-in plus that one call, and the two docstrings deliberately differ because one documents a public options property and the other a private pipeline configuration. Deleting either property to leave one would put a `sh` type on an internal pipeline class or the reverse, so the delegation is the smallest shared form."
-
+reason = "Two properties that now delegate to the same predicate and so read almost identically. Both bodies call `cuprum.capture_presence.captures_any_stream`, which is where the reading lives; what the detector still matches is the two-line docstring lead-in plus that one call, and the two docstrings deliberately differ because one documents a public options property and the other a private pipeline configuration. Deleting either property to leave one would put a `sh` type on an internal pipeline class or the reverse, so the delegation is the smallest shared form."
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_process_handle/coordinator.py",
+    "cuprum/_subprocess_stream_post_exit.py",
+]
+reason = "Two modules importing the same run-machinery surface before each declares its own `if typ.TYPE_CHECKING:` block. Import declarations cannot be factored into a shared helper, for the reason the import-family entries above record. The overlap is `_reconcile_run_tasks` and `_wait_for_exit_code_within_timeout` from `cuprum._subprocess_wait` plus `_shielded_cleanup` and `_TeardownPolicy`, each bound into its own namespace; the owned-handle run loop and the streamed-run post-exit phase below them are different orchestrations. This family grew here from the earlier `_subprocess_stream_run ~ _process_handle/coordinator` pair, which it replaces because a family must match every key of an entry."
 # --- Parallel structures -------------------------------------------------
 #
 # These are families whose members are genuinely similar in shape but are not

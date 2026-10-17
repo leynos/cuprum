@@ -18,7 +18,7 @@ import typing as typ
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
-from cuprum.capture_policy import captures_any_stream as _captures_any_stream
+from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
 from cuprum.sh._capture_options import _resolved_capture as _resolved_capture
