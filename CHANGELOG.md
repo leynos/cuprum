@@ -2,7 +2,7 @@
 
 ## [0.2.0-beta2] - 2026-10-17
 
-_If you are upgrading from 0.1: see the
+_Applications upgrading from 0.1 should follow the
 [0.2.0 migration guide](docs/v0-2-0-migration-guide.md)._
 
 ### Changed
@@ -158,27 +158,28 @@ _If you are upgrading from 0.1: see the
   filesystem ownership, permissions, and read-only deployment remain the
   operator's responsibility
   ([#440](https://github.com/leynos/cuprum/issues/440)).
-- **Opt-in process-group ownership:** `ExecutionContext(process_group=…)`
-  accepts a `ProcessGroupPolicy`. `INHERIT` remains the default and tears down
-  only the direct child, exactly as before. `OWN_GROUP` spawns the child as its
-  own session and process-group leader on POSIX (`PGID == PID`) and tears the
-  whole group down through `os.killpg`, so a descendant the direct child left
-  behind — including one that ignores `SIGTERM` and keeps an inherited pipe
-  open — is reclaimed and the run settles within the documented bounds instead
-  of waiting out the drain's grace window. For an owning run, settlement is the
-  group rather than the direct child, so a descendant is still reached after
-  the child has exited and even after it has been reaped; `INHERIT` keeps the
-  direct-child-only behaviour, where a reaped child settles the run and no
-  group is signalled. Only the group the spawn created is signalled, so
-  unrelated processes and the caller's own group are untouched. The guarantee
-  is bounded and stated as such: a descendant that leaves the group with
-  `setsid()` or `setpgid()` is out of reach, as are ancestors and siblings.
-  `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX process groups
-  and would need a Job Object whose assignment cannot be made atomic with
-  process creation, so containment could begin only after a child might already
-  have spawned a descendant. A teardown signal the kernel refuses with an
-  `OSError` wider than the tolerated race — a group this process may not
-  signal, or a name already handed on — is reported as
+- **Opt-in process-group ownership:**
+  `ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)` opts in; the
+  field accepts a `ProcessGroupPolicy`. `INHERIT` remains the default and tears
+  down only the direct child, exactly as before. `OWN_GROUP` spawns the child
+  as its own session and process-group leader on POSIX (`PGID == PID`) and
+  tears the whole group down through `os.killpg`, so a descendant the direct
+  child left behind — including one that ignores `SIGTERM` and keeps an
+  inherited pipe open — is reclaimed and the run settles within the documented
+  bounds instead of waiting out the drain's grace window. For an owning run,
+  settlement is the group rather than the direct child, so a descendant is
+  still reached after the child has exited and even after it has been reaped;
+  `INHERIT` keeps the direct-child-only behaviour, where a reaped child settles
+  the run and no group is signalled. Only the group the spawn created is
+  signalled, so unrelated processes and the caller's own group are untouched.
+  The guarantee is bounded and stated as such: a descendant that leaves the
+  group with `setsid()` or `setpgid()` is out of reach, as are ancestors and
+  siblings. `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX
+  process groups and would need a Job Object whose assignment cannot be made
+  atomic with process creation, so containment could begin only after a child
+  might already have spawned a descendant. A teardown signal the kernel refuses
+  with an `OSError` wider than the tolerated race — a group this process may
+  not signal, or a name already handed on — is reported as
   `cuprum.teardown_signal_failed`, naming the signal, so a failed teardown is
   not read as an orderly one; a target that had already gone stays silent, as
   that race is expected. The refusals, an unsignalable group, and a capped
@@ -369,7 +370,8 @@ _If you are upgrading from 0.1: see the
   from `subprocess`, and documents the control, echo, and line-stream
   observation channels. The
   [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) now leads with an
-  upgrade checklist covering every breaking change since 0.1 (PRLINK).
+  upgrade checklist covering every breaking change since 0.1
+  ([#634](https://github.com/leynos/cuprum/pull/634)).
 
 ## [0.2.0-beta1] - 2026-09-24
 

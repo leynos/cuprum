@@ -14,13 +14,14 @@ by the project's test suite, so it runs as printed.
 ## Before you upgrade
 
 Cuprum 0.2.0 is currently published as a beta, and installers skip prereleases
-unless asked. Request it explicitly, and pin it in the application's
-requirements so a later prerelease is a deliberate choice:
+unless asked. Request it explicitly, and pin the exact beta in the
+application's requirements so that moving to a later prerelease, which may
+bring further breaking changes, is a deliberate choice:
 
 <!-- shell-example: migration-install -->
 
 ```shell
-python -m pip install "cuprum>=0.2.0b2,<0.3"
+python -m pip install "cuprum==0.2.0b2"
 ```
 
 Then work through Table 1. Each row names a change, the code it affects, and
@@ -834,9 +835,9 @@ inherited pipe descriptors open after the child is reaped — the case a timeout
 most often creates, because the work a wedged command is waiting on is usually
 a grandchild.
 
-`ExecutionContext(process_group=…)` is an opt-in policy for that. It defaults to
-`ProcessGroupPolicy.INHERIT`, which tears down only the direct child, so a run
-that does not opt in behaves as before.
+`ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)` is an opt-in
+policy for that. It defaults to `ProcessGroupPolicy.INHERIT`, which tears down
+only the direct child, so a run that does not opt in behaves as before.
 
 To adopt the policy, name it on the run's execution context:
 
