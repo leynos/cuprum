@@ -6888,26 +6888,29 @@ collection paths.
 ## Output behaviour carrier
 
 `RunOutputOptions` is the canonical carrier for command output behaviour: it
-holds `capture`, the `echo` shorthand, the resolved `echo_stdout` and
-`echo_stderr` gates, and the idle-reporting fields `idle_after` and `on_idle`.
-`capture` is one joint switch for both streams, while an unset per-stream gate
-inherits `echo`. The idle fields follow the same rule as the rest of the
-carrier: spawn paths read `idle_after` and `on_idle` off the object rather than
-threading them as separate arguments, and a run that sets neither idle field
-keeps the existing no-stream fast path. Public command execution should accept
-or construct this object rather than threading separate `capture` and `echo`
-keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
-handling stays explicit, testable, and compatible with the `IOOptions`
-deprecation path.
+holds the `capture` and `echo` shorthands, the per-stream `capture_stdout`,
+`capture_stderr`, `echo_stdout` and `echo_stderr` fields, and the
+idle-reporting fields `idle_after` and `on_idle`. Resolution is one rule for
+both options: a per-stream field left at `None` inherits its shorthand, and an
+explicit value wins for its own stream. `resolved_capture` and `resolved_echo`
+are the queries that apply it, and `captures_any_stream` reports whether either
+resolved policy retains anything. The idle fields follow the same rule as the
+rest of the carrier: spawn paths read `idle_after` and `on_idle` off the object
+rather than threading them as separate arguments, and a run that sets neither
+idle field keeps the existing no-stream fast path. Public command execution
+should accept or construct this object rather than threading separate `capture`
+and `echo` keyword arguments through new APIs. Keep that carrier intact so
+stdout/stderr handling stays explicit, testable, and compatible with the
+`IOOptions` deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
-`output.capture` / `output.echo` for the observation tags. `Pipeline.run` /
-`run_sync` use the same `output` parameter and resolve it before building the
-pipeline execution config. There is no parallel internal `(capture, echo)`
-value object: the former `_IOBehaviour` was redundant with `RunOutputOptions`
-and has been removed. `IOOptions` remains only as a deprecated subclass alias
-that emits a `DeprecationWarning`.
+`output.captures_any_stream` / `output.resolved_echo` for the observation tags.
+`Pipeline.run` / `run_sync` use the same `output` parameter and resolve it
+before building the pipeline execution config. There is no parallel internal
+`(capture, echo)` value object: the former `_IOBehaviour` was redundant with
+`RunOutputOptions` and has been removed. `IOOptions` remains only as a
+deprecated subclass alias that emits a `DeprecationWarning`.
 
 Internal adapters may translate legacy or aggregate configuration into
 `RunOutputOptions` at the boundary. For example, the concurrent runner converts
@@ -6926,9 +6929,10 @@ not obscure the documented ambiguity error.
 
 `RunOutputOptions.__post_init__` resolves the `echo` shorthand into
 `echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
-while an explicit field overrides it for that stream alone. `capture` remains
-one joint boolean, so a stream that is not echoed is still captured when
-`capture` is `True`.
+while an explicit field overrides it for that stream alone. Capture resolves by
+the same rule into one policy per stream, so a run may bound stdout while
+leaving stderr complete; a stream that is not echoed is still captured when its
+own policy retains it, and the `capture` shorthand alone still sets both.
 
 `ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
 fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.

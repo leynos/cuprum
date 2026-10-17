@@ -1332,3 +1332,57 @@ and the other was a private method — so `cuprum/sh/__init__.py` and
 `cuprum/__init__.py` are untouched by this addendum. `cuprum/sh/output.py` is
 the only importer, and `make pylint-classic` reports 10.00/10 on both passes
 with no module-size suppression anywhere in the tree.
+
+## Addendum (2026-10-18): four splits forced by per-stream capture
+
+The per-stream capture policies of issue #443 added a policy object, a decoded
+configuration, an accumulator factory, and a second resolution rule to modules
+that were already near the ceiling. Four more splits came out of that, each cut
+along a boundary that predates the feature rather than purely by line count.
+
+`cuprum/_stream_config.py` now owns `_StreamConfig`, the value a drain is
+handed for one of a child's two streams. It moved out of `cuprum/_streams.py`
+because that module also holds the consumption predicates and the echo and pipe
+plumbing, and the config is the one part of it whose construction _derives_ an
+accumulator — which is what makes a cancelled drain's spill file reachable from
+the run's reconciliation point. `cuprum._streams` re-exports the type, so the
+handful of modules that import it from there are unchanged; the new module is a
+leaf and nothing imports it except through that re-export.
+
+`cuprum/_subprocess_stream_post_exit.py` now owns the three awaits between a
+streamed child's exit and its completed gather: settling an owned process
+group, waiting through the deadline path, and waiting for the stdin writer.
+These came out of `cuprum/_subprocess_stream_run.py`, which keeps the run loop,
+and every await is written to hand a failure to the coordinator rather than
+repair it locally, so the module reads as one policy. The run module re-imports
+all three names under `as` aliases of themselves. That re-import is
+load-bearing: the callers stayed behind in the run module, so it is that
+module's globals they resolve, and the teardown-boundary tests patch the names
+where the production path still reads them. Moving the definitions without
+keeping those bindings would have left the tests patching a name nothing calls.
+
+`cuprum/sh/_capture_options.py` now owns `_resolve_capture`, the rule that
+turns one stream's declared value — `None`, a `bool`, or a policy — into a
+policy or `None`. It left `cuprum/sh/output.py` for the same ceiling that drove
+the two addenda above, and the cut is also the resolution rule in one place:
+stdout and stderr resolve identically because they call the same function, and
+the validation raises before a spawn rather than at a drain.
+`cuprum/sh/output.py` re-exports it, so the options class calls it through the
+name it always had.
+
+`cuprum/_line_stream/spawn.py` now owns the part of a `SafeCmd.lines()` run
+that exists before the run is handed back: the spawn, the stdin writer, the
+stream consumers, the chained line hooks, and the unwind of a run that failed
+before it could be returned. It split from
+`cuprum/_line_stream/coordinator.py`, which keeps the settlement and deadline
+logic that follows the hand-back; the coordinator's own docstring already
+described itself in terms of what happens _after_ that point.
+`cuprum/_line_stream/__init__.py` exports `_start_line_stream_run` from the new
+module, so the package's own facade is the only seam callers see.
+
+No public API changes in any of the four: every moved name is private, and the
+three facades that re-export — `cuprum._streams`, `cuprum.sh.output`, and
+`cuprum._line_stream` — preserve the import path each importer already used.
+`cuprum/_subprocess_stream_run.py` additionally preserves the _binding_ in that
+module, for the patch seam described above. `max-module-lines = 400` still has
+no suppression anywhere in the tree.

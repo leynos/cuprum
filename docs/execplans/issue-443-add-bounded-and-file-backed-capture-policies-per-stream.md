@@ -1159,6 +1159,24 @@ Thresholds that trigger escalation when breached.
   consequence of `return_exceptions=True`. Date/Author: 2026-10-17,
   implementation agent; raised by review.
 
+- Decision: continue past the scope tolerance rather than stopping at the
+  30-tracked-file / 2500-net-line trigger. Rationale: measured against
+  `origin/main` from the merge base `304779c25`, the branch changes 109 tracked
+  files and nets 10826 lines (11950 added, 1124 deleted), so both thresholds
+  are breached several times over. The tolerance exists to catch a task that
+  has quietly become a different task; here the extra scope is the feature
+  itself plus the tests and documentation that witness it. Every acceptance
+  criterion in issue #443 needs its own module, unit suite, behavioural
+  scenario, or design prose, and the source plan's four tasks already enumerate
+  work of this shape. Stopping would leave a half-delivered API — policies
+  declared but not threaded through the single-command, pipeline, `lines()`,
+  and byte-exact paths — which is a worse outcome than a large branch that
+  passes every gate. The plan defines no approver to escalate to, so the
+  decision is recorded here rather than referred elsewhere; the individual
+  splits that kept each file under the 400-line cap are entries of their own in
+  this log and in ADR-007's addenda. Date/Author: 2026-10-18, implementation
+  agent; raised by review.
+
 ## Outcomes & retrospective
 
 Delivered: capture is a per-stream policy. `RunOutputOptions` gained

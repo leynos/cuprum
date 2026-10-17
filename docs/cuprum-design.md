@@ -1500,11 +1500,38 @@ parent's memory and is what `capture=True` and the default resolve to.
 the stream on the heap until it passes the threshold, then moves it to a file
 and appends there, so retention stops tracking the child's output.
 
-The bound is a **byte** count, applied at the drain's chunk boundary with the
-same incremental decoder/encoder walk `max_echo_line_bytes` uses, so a retained
-tail never ends mid-code-point and is always decodable on its own. A caller
-reasoning about memory pays for bytes; a caller reading the result sees text
-that is complete at its end.
+The bound is a **byte** count on the raw stream: the accumulator discards the
+oldest buffered bytes as new ones arrive, so retention is bounded by
+construction and a caller reasoning about memory pays for bytes. Discarding raw
+means the *kept* buffer can begin inside a code point, so a text capture needs
+one repair at its *leading* edge when it is finalized. This is a different
+operation from the echoed copy's bound: `max_echo_line_bytes` walks an
+incremental decoder and encoder pair over each line, which keeps the copy's own
+ending intact, whereas a capture bound has already thrown the beginning away
+and can only trim what survived.
+
+The repair runs only when the bound actually discarded bytes. The leading edge
+is moved forwards to a code-point boundary — for UTF-8, past any leading
+continuation byte; for the fixed-width encodings, by realigning against the
+stream offset the retained tail starts at, dropping a leading low surrogate
+half-pair as well — and any *incomplete* trailing code point is then dropped.
+Both edges need a step: a buffer cut arbitrarily can be damaged at either one,
+and a strict decoder raises on both. When the stream was not truncated there is
+no damaged edge, and the raw bytes are decoded exactly as a full capture of the
+same stream would decode them. A byte-exact capture likewise skips the repair:
+its tail is the child's own bytes, and a binary stream ending in a
+continuation-shaped byte is data, not a broken character.
+
+Resolving the codec is part of the same repair, because a bound can discard the
+mark that selected it. A `utf-8-sig` stream whose head is gone is plain UTF-8,
+and the surviving tail must be trimmed under that name rather than one that
+strips a mark; a `utf-16` or `utf-32` family name accepts no bytes at all
+without a mark, so a headless tail is resolved to the platform's native byte
+order, which is the rule the family decoder would itself have applied. Only a
+truncated capture resolves this way: while the mark survives it stays part of
+the retained bytes and the family codec strips it, so the caller is never
+handed a leading U+FEFF that a full capture does not report. The bytes the
+repair costs are counted as dropped, so the reported drop count stays exact.
 
 A capture policy governs what the *result* retains. It does not govern what a
 pipeline stage hands to the next stage: an interior stage's stdout is the
@@ -1602,10 +1629,11 @@ both streams remain `PIPE` for line delivery even when `capture=False` and echo
 is disabled; the resulting `CommandResult` still has `None` for both captured
 fields. For a pipeline, the stdout of a non-final stage is always a `PIPE` so
 that it can relay into the next stage, while the stdout of the final stage and
-the stderr of every stage follow their own independent gates. `capture` remains
-a single joint switch, so both streams are still captured when `capture=True`
-even if neither echoes. The flow ends at the stream consumers:
-`_spawn_stream_consumers` for a single command and
+the stderr of every stage follow their own independent gates. Capture is
+resolved per stream by the same rule as echo — an explicit per-stream policy
+wins, and a stream left at `None` inherits the `capture` shorthand — so a run
+may bound one stream while leaving the other complete. The flow ends at the
+stream consumers: `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 
 ```mermaid
@@ -1623,8 +1651,6 @@ flowchart TD
     E --> K[final stdout and every stderr use independent consumption gates]
     J --> L[_create_stage_capture_tasks]
     K --> L
-    I --> M[Capture remains joint when capture is true]
-    L --> M
 ```
 
 Beyond the tee sinks above, a run may opt into a *presentation sink* through
