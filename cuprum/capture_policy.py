@@ -50,6 +50,7 @@ __all__ = [
     "CapturedStream",
     "FileBackedCapture",
     "FullCapture",
+    "captures_any_stream",
     "policy_kind",
 ]
 
@@ -204,6 +205,15 @@ class FileBackedCapture:
 
 type CapturePolicy = FullCapture | BoundedCapture | FileBackedCapture
 
+type CapturePolicyShorthand = CapturePolicy | bool
+"""A capture policy, or the ``True``/``False`` shorthand for both streams.
+
+The declared type of a ``RunOutputOptions`` per-stream field before its
+constructor resolves it, so a predicate that asks "is this stream captured?"
+accepts either spelling. ``bool`` tests exactly as the policy would:
+``False`` is no policy and ``True`` is the default one.
+"""
+
 
 @dc.dataclass(frozen=True, slots=True)
 class CapturedStream:
@@ -328,6 +338,58 @@ def _is_positive_int(value: object) -> bool:
         Whether *value* is an ``int``, is not a ``bool``, and is positive.
     """
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def captures_any_stream(
+    capture_stdout: CapturePolicy | CapturePolicyShorthand | None,
+    capture_stderr: CapturePolicy | CapturePolicyShorthand | None,
+) -> bool:
+    """Whether a ``(stdout, stderr)`` capture pair captures anything.
+
+    The single-bool reading of a capture pair, in one place because both the
+    run options and the pipeline configuration tag their observation events
+    with "is this a capturing run?" and the two must not disagree. A run that
+    captures anything at all is a capturing run; a run that named no policy for
+    either stream captures nothing.
+
+    A stream is captured when it holds a policy, or the ``True`` shorthand the
+    options constructor has not resolved yet. ``False`` is the shorthand for
+    "no policy", so it must be tested as such: a caller may reach this with a
+    field the constructor has not yet resolved.
+
+    Parameters
+    ----------
+    capture_stdout : CapturePolicy | CapturePolicyShorthand | None
+        The stdout policy, shorthand, or ``None`` when stdout is uncaptured.
+    capture_stderr : CapturePolicy | CapturePolicyShorthand | None
+        The stderr policy, shorthand, or ``None`` when stderr is uncaptured.
+
+    Returns
+    -------
+    bool
+        ``True`` when either stream is captured.
+
+    Examples
+    --------
+    >>> captures_any_stream(FullCapture(), None)
+    True
+    >>> captures_any_stream(False, None)
+    False
+    >>> captures_any_stream(False, True)
+    True
+    """
+    return _is_captured(capture_stdout) or _is_captured(capture_stderr)
+
+
+def _is_captured(capture: CapturePolicyShorthand | None) -> bool:
+    """Whether one stream's capture setting retains anything.
+
+    Returns
+    -------
+    bool
+        ``False`` for ``None`` and ``False``; ``True`` for a policy or ``True``.
+    """
+    return capture is not None and capture is not False
 
 
 def policy_kind(policy: CapturePolicy) -> CapturePolicyKind:

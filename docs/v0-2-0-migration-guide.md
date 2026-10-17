@@ -1040,7 +1040,7 @@ cancellation. Set `keep_file=True` if the caller wants the file, and read
 
 A failure to create or write the spill file does not fail the run: it is
 reported on the record as `storage_failed=True` and through a `CaptureEvent`,
-because a failure to *retain* output is not a failure of the command that
+because a failure to _retain_ output is not a failure of the command that
 produced it. If the file could not be created the stream stays in memory and is
 still reported complete; if an append failed the record holds what reached the
 file before the failure.

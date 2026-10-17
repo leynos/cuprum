@@ -185,7 +185,7 @@ class _FileAccumulator:
         try:
             handle = _open_spill_file(self._policy.directory)
         except OSError as exc:
-            self._abandon_spill(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
+            self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
         try:
             handle.write(buffered)
@@ -217,16 +217,33 @@ class _FileAccumulator:
             handle.close()
         with contextlib.suppress(OSError):
             pathlib.Path(handle.name).unlink(missing_ok=True)
-        self._abandon_spill(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
+        self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
 
-    def _abandon_spill(self, exc: OSError, category: CaptureEventCategory) -> None:
-        """Record a failed spill transition and keep buffering in memory."""
+    def _fail_storage(
+        self,
+        exc: OSError,
+        category: CaptureEventCategory,
+    ) -> None:
+        """Record a failed storage call and report it against the stream.
+
+        One emitter for both halves of the storage contract — a spill that never
+        took the prefix and an append that stopped halfway — because what the
+        channel reports is the same either way: which stream, which call
+        failed, how much the child had written, and how much had reached the
+        file. ``spilled_bytes`` is zero before the transition, so the one body
+        states the same fact for both.
+
+        Reporting is also where the failure is absorbed. The caller continues
+        down whichever recovery applies; this method never raises, because a
+        failure to *retain* output must not become a failure of the command.
+        """
         self._failed = type(exc).__name__
         _emit_capture_event(
             CaptureEvent(
                 stream=self._stream,
                 category=category,
                 total_bytes=self._total,
+                spilled_bytes=self._spilled_bytes,
                 error_type=self._failed,
             )
         )
@@ -241,34 +258,14 @@ class _FileAccumulator:
         try:
             file.write(chunk)
         except OSError as exc:
-            self._fail_append(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
+            self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
         try:
             file.flush()
         except OSError as exc:
-            self._fail_append(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
+            self._fail_storage(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
             return
         self._spilled_bytes += len(chunk)
-
-    def _fail_append(self, exc: OSError, category: CaptureEventCategory) -> None:
-        """Stop writing after a failed append, keeping the spilled prefix.
-
-        Writing stops rather than being retried per chunk: a directory that
-        has become full or read-only does not recover mid-run, and one failed
-        syscall per chunk would turn a bounded capture into an unbounded one.
-        The file is left for cleanup and the record reports ``storage_failed``,
-        so the caller can tell the capture is incomplete.
-        """
-        self._failed = type(exc).__name__
-        _emit_capture_event(
-            CaptureEvent(
-                stream=self._stream,
-                category=category,
-                total_bytes=self._total,
-                spilled_bytes=self._spilled_bytes,
-                error_type=self._failed,
-            )
-        )
 
     def _finalize_buffered(self) -> CaptureFinal:
         """Render a capture that never spilled, as a full capture would."""

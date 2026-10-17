@@ -708,7 +708,7 @@ _Applications upgrading from 0.1 should follow the
   registered with `sh.observe()` is unaffected and still receives decoded
   lines, since capture and line emission travel on separate channels. That
   holds even under `ExecutionContext(errors="strict")`: a byte-exact run's
-  observation and echo render a *view* of the child's bytes and replace
+  observation and echo render a _view_ of the child's bytes and replace
   undecodable input, so an ambient hook cannot raise from the read loop and
   cost the byte-exact run the bytes it had already captured.
 
@@ -750,7 +750,7 @@ _Applications upgrading from 0.1 should follow the
   spawns, so a typo costs an exception rather than a run that captured
   something unintended.
 
-  A capture policy governs the *result*, never the relay. Bytes a pipeline
+  A capture policy governs the _result_, never the relay. Bytes a pipeline
   stage hands the next stage are relayed rather than captured, so a bounded
   stage still delivers a complete stream to its consumer, and a bound does not
   shorten the mirrored copy an echo sink receives, which `max_echo_line_bytes`
@@ -798,7 +798,7 @@ _Applications upgrading from 0.1 should follow the
   disagree. `storage` distinguishes memory from file, `path` names the spill,
   `owned` says who must remove it, and `storage_failed` says the file is
   incomplete rather than merely short. A storage failure is absorbed rather
-  than raised — a failure to *retain* output is not a failure of the command
+  than raised — a failure to _retain_ output is not a failure of the command
   that produced it — so the child is still reaped and the caller still receives
   a result; a failed create leaves the stream on the heap where it is still
   reported complete, while a failed append keeps the prefix that reached the
@@ -806,7 +806,7 @@ _Applications upgrading from 0.1 should follow the
   together with `storage`. `cuprum.capture_events` and
   `cuprum.capture_observation` publish the same facts as `CaptureEvent`s on an
   opt-in `observe_capture` channel carrying only a stream name, a closed-set
-  category, byte counts, and an error *class name* — never the payload, the
+  category, byte counts, and an error _class name_ — never the payload, the
   spill path, or exception text — so a hook may forward them to a metrics
   backend whose labels are low-cardinality by contract
   ([#443](https://github.com/leynos/cuprum/issues/443)).

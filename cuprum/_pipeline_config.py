@@ -25,6 +25,7 @@ from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum.capture_policy import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
@@ -121,7 +122,7 @@ class _PipelineRunConfig:
         captures anything at all is a capturing run, and a run that names no
         policy for either stream captures nothing.
         """
-        return self.capture_stdout is not None or self.capture_stderr is not None
+        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
 
     @property
     def consumes_stdout(self) -> bool:
