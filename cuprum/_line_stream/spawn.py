@@ -14,7 +14,6 @@ re-exported across a module boundary for the step to resolve.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
 import typing as typ
 from time import perf_counter
@@ -38,6 +37,8 @@ from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum._line_stream.line_queue import _LineQueueItem
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import _LineHookFn

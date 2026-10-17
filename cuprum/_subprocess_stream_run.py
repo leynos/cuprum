@@ -49,11 +49,11 @@ from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stdin_reclaim import (
     _cancel_stdin_writer,
     _settle_stdin_writer,
 )
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
@@ -82,16 +82,16 @@ from cuprum._subprocess_wait import (
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum._subprocess_wait_types import (
-    _DrainContext,
-    _DrainPair,
-    _RunTaskOwnership,
-)
 
 if typ.TYPE_CHECKING:
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import (
+        _DrainContext,
+        _DrainPair,
+        _RunTaskOwnership,
+    )
 
 
 async def _run_subprocess_without_streams(
