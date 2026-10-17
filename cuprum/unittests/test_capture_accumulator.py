@@ -342,6 +342,37 @@ def test_a_bound_that_discards_the_mark_still_decodes(
     )
 
 
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-32", "utf-8-sig"])
+def test_a_bound_the_stream_fits_reports_the_same_text_as_a_full_capture(
+    encoding: str,
+) -> None:
+    """Resolving the codec early would leak the mark into the payload.
+
+    A stream within the bound still carries its byte-order mark, and only the
+    family codec strips it. Spelling the family as the concrete codec the mark
+    names keeps the mark in the text, so a bounded capture would report a
+    leading U+FEFF where a full capture of the same bytes reports none.
+    """
+    settings = _DecodeSettings(encoding, "strict", capture_bytes=False)
+    payload = "abc".encode(encoding)
+    full = _sink(FullCapture(), settings=settings)
+    bounded = _sink(BoundedCapture(max_bytes=4096), settings=settings)
+
+    _absorb(full, [payload])
+    _absorb(bounded, [payload])
+    final = bounded.finalize()
+
+    assert final.capture.dropped_bytes == 0, "the stream fits, so nothing was cut"
+    assert final.payload == full.finalize().payload, (
+        f"a bound the stream fits must not change the decoded text for "
+        f"{encoding}; got {final.payload!r}"
+    )
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert final.payload == "abc", (
+        f"the mark must not survive as text; got {final.payload!r}"
+    )
+
+
 def test_build_accumulator_returns_nothing_for_an_uncaptured_stream() -> None:
     """No policy means no accumulator, which is how a discarded stream is said."""
     assert build_accumulator(None, stream="stdout", settings=_TEXT) is None

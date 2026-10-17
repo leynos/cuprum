@@ -123,7 +123,7 @@ def test_each_stream_resolves_from_its_own_field(
 def test_capture_resolution_matrix(
     *,
     capture: bool,
-    declared: bool | str,
+    declared: bool | str | None,
     expected: str | None,
 ) -> None:
     """Every quadrant of shorthand-versus-override resolves as documented."""

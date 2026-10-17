@@ -211,7 +211,16 @@ class _BoundedAccumulator:
         # stream has no damaged edge, so both are handed back untouched: a
         # binary tail ending in a continuation-shaped byte is not a broken
         # character, and trimming it would lose data the caller asked for.
-        settings = _bounded_settings(self.settings, self._prefix)
+        # Resolve the concrete codec only once the head is gone. While the mark
+        # survives it is still part of the retained bytes, and only the family
+        # codec strips it; decoding under the concrete codec would hand the
+        # caller a leading U+FEFF that a full capture of the same stream does
+        # not report.
+        settings = (
+            _bounded_settings(self.settings, self._prefix)
+            if self._dropped
+            else self.settings
+        )
         retained = (
             raw
             if settings.capture_bytes or not self._dropped

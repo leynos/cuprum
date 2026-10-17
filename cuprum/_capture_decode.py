@@ -154,8 +154,10 @@ def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettin
     those decoders a tail without their mark raises, and returning early would
     leave that error to the caller, so the mark captured from the head
     resolves the family to the concrete endianness the stream actually used.
-    The mark stays part of the retained bytes when it survived, because
-    stripping it is the removal the decoder itself performs for those names.
+    Call this only when the bound discarded the stream's head: the concrete
+    codecs do not strip a mark, so resolving while the mark is still retained
+    would leave a leading U+FEFF in the payload. ``_BoundedAccumulator`` keeps
+    the family name in that case, and the decoder removes the mark for it.
 
     Parameters
     ----------

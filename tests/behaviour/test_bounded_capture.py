@@ -10,9 +10,11 @@ and read the second stage's verdict.
 Every scenario derives its expected values from two module constants, the
 payload and the bound, so what a run must report is a value the test computes
 rather than a substring it hopes for. The payload is strictly larger than the
-bound, and the last stage of the reporting scenarios writes fewer bytes than
-the bound allows — so a bound that leaked into the relay would show up as a
-shortened count rather than as a captured tail nothing compares against.
+bound. In the relay-measurement scenario the last stage writes fewer bytes
+than the bound allows, so a bound that leaked into the relay would show up as
+a shortened count rather than as a captured tail nothing compares against.
+The other scenarios end in the relay stage, whose own output is the whole
+payload and so exceeds the bound.
 """
 
 from __future__ import annotations

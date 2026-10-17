@@ -349,6 +349,18 @@ Thresholds that trigger escalation when breached.
   `docs/v0-2-0-migration-guide.md`), an ExecPlan section that had drifted from
   the module split, and `typos.toml`, skipped with the reason recorded in
   `Surprises & discoveries`.
+- [x] (2026-10-18) Clear the four findings from the fifth CodeRabbit review.
+  One was a real behavioural defect introduced by the round-4 BOM fix:
+  `_bounded_settings` was called on every finalization, so a bounded capture of
+  a stream it *fits* decoded under the concrete codec and left the mark in the
+  payload as a leading U+FEFF, where a full capture of the same bytes reports
+  plain text. It now resolves only once the bound has dropped something.
+  Measured across the three families before editing (`'﻿abc'` for all of
+  `utf-16`, `utf-32`, and `utf-8-sig`); the new regression case fails all three
+  parametrizations under mutation. The other three were a module docstring that
+  generalized one scenario's property to all of them, a test parameter
+  annotated narrower than its rows, and an ExecPlan conformance source naming a
+  `/tmp` file no reader can open.
 
 ## Surprises & discoveries
 
@@ -840,6 +852,19 @@ Thresholds that trigger escalation when breached.
   would justify an entry there. Recorded as a reasoned skip rather than an
   edit. Date/Author: 2026-10-17, implementation agent.
 
+- Observation (review round 5, the BOM fix's own blind spot): resolving a
+  mark-selected codec on *every* finalization fixed the cut stream and broke
+  the whole one. `utf-16`, `utf-32`, and `utf-8-sig` strip a leading mark only
+  under the family name; under the concrete codec the mark survives as a
+  leading U+FEFF. A bound of 4096 over `"abc".encode("utf-16")` therefore
+  reported `'﻿abc'` where `FullCapture` reported `'abc'`, on all three families.
+  `_bounded_settings` is now consulted only when `self._dropped` is truthy. The
+  lesson is that the round-4 test asserted a suffix relation only and used only
+  bounds that cut the mark, so it could not see the uncut case; the new case
+  compares against a real `FullCapture` over the same bytes rather than against
+  an independently computed expectation. Date/Author: 2026-10-18,
+  implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -1198,8 +1223,9 @@ The upstream artefacts for this work are:
 - Issue #443, "Add bounded and file-backed capture policies per stream"
   (`https://github.com/leynos/cuprum/issues/443`), which supplies the
   acceptance criteria.
-- The coding plan delivered with the task, held verbatim at
-  `/tmp/issue443-task.md`, which supplies the four-task decomposition.
+- The coding plan delivered with the task, which supplies the four-task
+  decomposition recorded under `Plan of work`. The original text was not
+  committed; `Plan of work` and `Decision log` are its durable record.
 - `docs/cuprum-design.md` §7.4, "Tee and Output Observation", which currently
   states that "Capture stays a single joint switch" and must be updated.
 - ADR-002 (echo and tee acceleration), which phases 6 and 7 of
