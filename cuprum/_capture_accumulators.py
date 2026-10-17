@@ -159,6 +159,10 @@ class _BoundedAccumulator:
     _buffer: bytearray = dc.field(init=False, default_factory=bytearray)
     _total: int = dc.field(init=False, default=0)
     _dropped: int = dc.field(init=False, default=0)
+    # Stream position the retained buffer starts at. A fixed-width encoding can
+    # only be realigned against the whole stream, so discarding the oldest bytes
+    # must move this in step with them.
+    _offset: int = dc.field(init=False, default=0)
 
     def absorb(self, chunk: bytes) -> None:
         """Append one raw chunk and discard whatever no longer fits."""
@@ -167,11 +171,22 @@ class _BoundedAccumulator:
         overflow = len(self._buffer) - self.max_bytes
         if overflow > 0:
             del self._buffer[:overflow]
+            self._offset += overflow
             self._dropped = self._total - len(self._buffer)
 
     def finalize(self) -> CaptureFinal:
         """Render the retained tail and report the bytes it dropped."""
-        retained = _trim_to_code_point(bytes(self._buffer), self.settings)
+        raw = bytes(self._buffer)
+        # Only a text run decodes its capture, and only a cut can land inside a
+        # code point. A byte-exact tail is the child's own bytes and an uncut
+        # stream has no damaged edge, so both are handed back untouched: a
+        # binary tail ending in a continuation-shaped byte is not a broken
+        # character, and trimming it would lose data the caller asked for.
+        retained = (
+            raw
+            if self.settings.capture_bytes or not self._dropped
+            else _trim_to_code_point(raw, self.settings, stream_offset=self._offset)
+        )
         self._dropped += len(self._buffer) - len(retained)
         if self._dropped:
             _emit_capture_event(

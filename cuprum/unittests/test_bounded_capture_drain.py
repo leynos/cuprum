@@ -525,3 +525,92 @@ def test_the_accumulator_counts_bytes_across_arbitrary_chunk_partitions() -> Non
         "the retained tail must be the stream's last eight bytes, not the "
         "last eight bytes of each read"
     )
+
+
+def _byte_sink(policy: CapturePolicy) -> CaptureSink:
+    """Return the accumulator a byte-exact run with *policy* retains into."""
+    config = _StreamConfig(
+        capture=policy,
+        echo_output=False,
+        # The accumulator is all this helper needs, and a byte-exact run's
+        # sink is never written to by it; a text sink keeps the config's
+        # declared type and avoids a bytes stream the echo would never use.
+        sink=io.StringIO(),
+        encoding="utf-8",
+        errors="strict",
+        stream=EchoStream.STDOUT,
+        capture_bytes=True,
+    )
+    sink = config.capture_sink
+    assert sink is not None, "a named policy must build an accumulator"
+    return sink
+
+
+def test_a_byte_mode_bound_hands_back_the_child_bytes_untouched() -> None:
+    r"""A byte-exact capture is never trimmed to a code-point boundary.
+
+    The trim exists to stop a text decode raising or growing a replacement
+    character. A byte-exact run does not decode, so a binary tail that happens
+    to end in a continuation-shaped byte — ``b"\\xc3"`` is the leading byte of
+    a UTF-8 two-byte character and also an ordinary byte in a binary payload —
+    must survive untouched. Trimming it would drop data the caller asked for
+    and count a cut that never happened.
+    """
+    payload = b"\x00\x01\x02\xc3"
+    sink = _byte_sink(BoundedCapture(max_bytes=len(payload) + 4))
+
+    sink.absorb(payload)
+    final = sink.finalize()
+
+    assert final.payload == payload, (
+        f"a byte-exact capture must return the child's own bytes; got {final.payload!r}"
+    )
+    assert final.capture.dropped_bytes == 0
+    assert final.capture.truncated is False
+
+
+def test_a_byte_mode_bound_keeps_a_continuation_shaped_leading_byte() -> None:
+    """A byte-exact tail starting with ``0x80``-``0xBF`` is not a torn code point."""
+    payload = b"\x80\x81\x82\x83"
+    sink = _byte_sink(BoundedCapture(max_bytes=len(payload)))
+
+    sink.absorb(payload)
+    final = sink.finalize()
+
+    assert final.payload == payload, (
+        "a binary prefix must not be mistaken for continuation bytes; "
+        f"got {final.payload!r}"
+    )
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_a_fixed_width_encoding_realigns_the_retained_tail(encoding: str) -> None:
+    """A UTF-16 bound cuts by bytes but must not misalign the code units.
+
+    A UTF-16 low byte can fall in the ``0x80``-``0xBF`` range a UTF-8
+    continuation byte occupies, so a per-byte skip would drop an ordinary code
+    unit's first byte and misalign everything after it. The tail is realigned
+    by stream offset instead, so the decoded suffix is a suffix of the text.
+    """
+    text = "a中b文c"
+    payload = text.encode(encoding)
+    config = _StreamConfig(
+        capture=BoundedCapture(max_bytes=len(payload) - 3),
+        echo_output=False,
+        sink=io.StringIO(),
+        encoding=encoding,
+        errors="strict",
+        stream=EchoStream.STDOUT,
+    )
+    sink = config.capture_sink
+    assert sink is not None, "a named policy must build an accumulator"
+
+    for byte in payload:
+        sink.absorb(bytes([byte]))
+    final = sink.finalize()
+
+    assert isinstance(final.payload, str), "text mode must decode to text"
+    assert text.endswith(final.payload), (
+        "a realigned tail must be a suffix of the text the child wrote; "
+        f"got {final.payload!r} from {text!r}"
+    )

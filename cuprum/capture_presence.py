@@ -44,12 +44,6 @@ def captures_any_stream(
     A run that captures anything at all is a capturing run; a run that named no
     policy for either stream captures nothing.
 
-    The boolean-typed parameter rule is suppressed because these arguments are
-    not flags: they carry a declared field value, where ``bool`` is one of the
-    spellings the field accepts. The alternative is a keyword-only signature
-    that every caller would have to spell out for no gain, or an overload per
-    spelling that would restate the panel rather than share it.
-
     Parameters
     ----------
     capture_stdout : CapturePolicy | bool | None

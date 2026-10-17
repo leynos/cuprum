@@ -16,6 +16,7 @@ removed anything would be witnessing its own setup rather than the teardown.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import typing as typ
 
 from cuprum._capture_cleanup import (
@@ -28,8 +29,6 @@ from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum.capture_policy import FileBackedCapture
 
 if typ.TYPE_CHECKING:
-    import pathlib
-
     from cuprum._capture_types import CaptureFinal
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
@@ -86,6 +85,41 @@ def _spilled_accumulator(
     )
     accumulator.absorb(_SPILLED)
     return accumulator
+
+
+class _RefusingClose(pathlib.Path):
+    """A path whose unlink always fails, as an immutable file's would.
+
+    Everything but ``unlink`` defers to the real path, so the file is really
+    created and really read back; only the removal is refused. Subclassing
+    ``Path`` directly rather than a platform-specific class keeps the test
+    portable across the POSIX and Windows runs in CI.
+    """
+
+    def unlink(self, *, missing_ok: bool = False) -> None:
+        """Refuse the removal, whatever the caller asked for."""
+        raise PermissionError(13, "Operation not permitted")
+
+
+def _spill_at_a_path_that_refuses_removal(
+    directory: pathlib.Path,
+    *,
+    keep_file: bool = False,
+) -> tuple[_FileAccumulator, pathlib.Path]:
+    """Return a spilled accumulator whose handle names an unremovable path.
+
+    Returns
+    -------
+    tuple[_FileAccumulator, pathlib.Path]
+        The accumulator and the ``Path`` its handle names, which is the
+        refusal-carrying subclass the cleanup step will be asked to remove.
+    """
+    accumulator = _spilled_accumulator(directory, keep_file=keep_file)
+    handle = accumulator.finalize().handle
+    assert handle is not None, "the spill must have produced a handle"
+    refusing = _RefusingClose(handle.path)
+    handle.path = refusing
+    return accumulator, refusing
 
 
 def _drain(fin: CaptureFinal) -> _CapturedDrain:
@@ -221,4 +255,45 @@ def test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle(
     assert not path.exists(), (
         "a run whose drain never settled must still remove its spill file; "
         f"{path} survived"
+    )
+
+
+def test_an_unlink_that_fails_is_absorbed_by_the_result_path(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A file that cannot be removed must not fail the run that made it.
+
+    Removing a spill is housekeeping, so a removal the filesystem refuses — an
+    immutable attribute, a directory the caller tightened, an antivirus lock —
+    is a failed *retention* call like any other and is absorbed. The result
+    step runs first and must report rather than raise, or a successful command
+    would be reported as failing because its temporary file outlived it. The
+    surviving file is the witness that the removal was really attempted.
+    """
+    accumulator, path = _spill_at_a_path_that_refuses_removal(tmp_path)
+    final = accumulator.finalize()
+
+    asyncio.run(_finalize_capture_handles((_drain(final),), ()))
+
+    assert path.exists(), (
+        "the case has to leave the file behind for its refusal to mean anything"
+    )
+
+
+def test_an_unlink_that_fails_is_absorbed_by_the_sink_path(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The cancelled-drain path absorbs a refused removal too.
+
+    This is the only path that reaches a drain cancelled mid-await, so an
+    exception escaping here would surface on the teardown of exactly the runs
+    whose primary error the caller most needs to see.
+    """
+    accumulator, path = _spill_at_a_path_that_refuses_removal(tmp_path)
+    accumulator.finalize()
+
+    asyncio.run(_finalize_capture_handles((), (accumulator,)))
+
+    assert path.exists(), (
+        "the case has to leave the file behind for its refusal to mean anything"
     )

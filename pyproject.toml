@@ -737,12 +737,14 @@ reason = "The package's public surface and an adapter's import of the same four 
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_capture_accumulators.py",
-    "cuprum/_capture_file.py",
     "cuprum/capture_observation.py",
     "cuprum/echo_observation.py",
 ]
 reason = "One per-channel reporter body, over each channel's own event type. The overlap is the hook-invocation and hook-result-report shape: `_invoke_capture_hook ~ _invoke_echo_hook`, one `__all__` tail, and one string `ContextVar` declaration whose channel name differs only in the word. Each channel's log action, `extra` keys, and event fields are its own and separately observable API, so a shared emitter would need a mode flag over which vocabulary to read and which log record to write. The `ContextVar` name is a diagnostic identity: two channels sharing one variable would silently merge their hooks. The registration handles are already shared — both subclass `_TokenTupleRegistration` — so only the emission text remains here."
+
+[[tool.duplication_gate.allow]]
+unit = "cuprum/_capture_accumulators.py::cleanup"
+reason = "One key covers both of the full and bounded accumulators' `cleanup` methods, because the family is two methods of one module rather than two modules sharing an idiom. Each drops its retained bytes by rebinding the buffer, because a memory-backed policy owns nothing on disk to remove; the two classes are deliberately unrelated, the shared `CaptureSink` protocol is structural, and a common base would exist only to hold those two lines. The file-backed accumulator's cleanup is genuinely different — it awaits a spill handle — so there is no third body a shared method could cover."
 
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_pipeline_results.py", "cuprum/_subprocess_execution.py"]

@@ -167,6 +167,15 @@ class _FileAccumulator:
 
     def _should_spill(self, buffered: int) -> bool:
         """Whether *buffered* bytes have outgrown the configured threshold."""
+        # A failed spill keeps the stream on the heap for good: retrying would
+        # cost a syscall and a storage-failure event per chunk, turning one
+        # broken directory into a metrics flood. This is safe here because
+        # ``_failed`` is set only by a failed *create* — the one failure after
+        # which there is no file to spill into. A failed append leaves
+        # ``_path`` set, so ``absorb`` takes the append branch and never asks
+        # this question again.
+        if self._failed is not None:
+            return False
         threshold = self._policy.spill_threshold_bytes
         return threshold is None or buffered > threshold
 
@@ -267,6 +276,29 @@ class _FileAccumulator:
             return
         self._spilled_bytes += len(chunk)
 
+    def _read_back(self, path: pathlib.Path) -> bytes | None:
+        """Return the spill file's bytes, or ``None`` when they cannot be read.
+
+        A byte-exact run asked for the child's own bytes, and a spilled capture
+        is the only way to hand back a stream the parent never held whole.
+        Reading it does not consume the file, which still outlives the run when
+        a policy kept it — and which the caller may, as the documented owner,
+        have already read and removed. Because this runs while the result is
+        being built, an unreadable file is absorbed here as every other storage
+        call is: the record reports ``storage_failed`` and the caller gets the
+        path it was pointed at, rather than an exception where a result belongs.
+
+        Returns
+        -------
+        bytes | None
+            The file's contents, or ``None`` when the read failed.
+        """
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            self._fail_storage(exc, CaptureEventCategory.STORAGE_READ_FAILED)
+            return None
+
     def _finalize_buffered(self) -> CaptureFinal:
         """Render a capture that never spilled, as a full capture would."""
         buffered = self._buffer
@@ -283,11 +315,7 @@ class _FileAccumulator:
 
     def _finalize_spilled(self, path: pathlib.Path) -> CaptureFinal:
         """Report the spill file in place of text, or its bytes in byte mode."""
-        # A byte-exact run asked for the child's own bytes, and a spilled
-        # capture is the only way to hand back a stream the parent never held
-        # whole. Reading it does not consume the file, which still outlives
-        # the run when a policy kept it.
-        payload = path.read_bytes() if self._settings.capture_bytes else None
+        payload = self._read_back(path) if self._settings.capture_bytes else None
         handle = self._handle
         return CaptureFinal(
             payload=payload,

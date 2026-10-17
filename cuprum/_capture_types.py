@@ -148,6 +148,16 @@ class SpillHandle:
     async def close(self, *, remove: bool = True) -> None:
         """Flush, close, and — unless the caller kept it — remove the file.
 
+        Removing the file is housekeeping, so a filesystem that refuses the
+        removal — an immutable attribute, a tightened directory, a lock held by
+        something outside the process — is absorbed rather than raised. Cleanup
+        runs on the way out of every run, including the ones already carrying
+        the caller's own timeout or cancellation, and those must not be
+        replaced by a failure to delete a temporary file. The close is guarded
+        for the same reason: a descriptor that cannot be closed still belongs
+        to a process that is ending, and there is no recovery a caller could
+        attempt.
+
         Parameters
         ----------
         remove : bool, default=True
@@ -160,4 +170,5 @@ class SpillHandle:
             with contextlib.suppress(OSError):
                 self.file.close()
         if remove and not self.keep:
-            await asyncio.to_thread(self.path.unlink, missing_ok=True)
+            with contextlib.suppress(OSError):
+                await asyncio.to_thread(self.path.unlink, missing_ok=True)

@@ -44,6 +44,7 @@ class CaptureEventCategory(enum.StrEnum):
     SPILLED_TO_FILE = "spilled_to_file"
     STORAGE_WRITE_FAILED = "storage_write_failed"
     STORAGE_FLUSH_FAILED = "storage_flush_failed"
+    STORAGE_READ_FAILED = "storage_read_failed"
 
 
 @dc.dataclass(frozen=True, slots=True)

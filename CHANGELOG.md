@@ -826,11 +826,12 @@ _Applications upgrading from 0.1 should follow the
   never crosses the threshold is finalized exactly as `FullCapture` would have
   finalized it, so raising the threshold is a pure memory decision and never
   changes what the caller reads. A spilled text-mode capture reports `None` on
-  `stdout`/`stderr` with the bytes at the record's `path`, readable through
-  `CapturedStream.read_text`; a byte-exact run reads the file back instead,
-  because a caller who asked for the child's own bytes cannot be handed
-  anything less, and that read is O(stream size) so byte mode does not carry
-  the bounded-memory guarantee text mode does.
+  `stdout`/`stderr` and names the spill at the record's `path`; the run removes
+  that file before returning, so `CapturedStream.read_text` can read the spill
+  only when the policy was built with `keep_file=True`. A byte-exact run reads
+  the file back before removal instead, because a caller who asked for the
+  child's own bytes cannot be handed anything less, and that read is O(stream
+  size) so byte mode does not carry the bounded-memory guarantee text mode does.
 
   Cuprum owns the file it creates and removes it on every outcome — success,
   non-zero exit, timeout, and cancellation alike — so a long-lived process
@@ -854,7 +855,7 @@ _Applications upgrading from 0.1 should follow the
   incomplete rather than merely short. A storage failure is absorbed rather
   than raised — a failure to _retain_ output is not a failure of the command
   that produced it — so the child is still reaped and the caller still receives
-  a result; a failed create leaves the stream on the heap where it is still
+  a result; a failed creation leaves the stream on the heap where it is still
   reported complete, while a failed append keeps the prefix that reached the
   file and reports `storage_failed`. Both are distinguished by reading the flag
   together with `storage`. `cuprum.capture_events` and

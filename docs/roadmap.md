@@ -1171,7 +1171,7 @@ bound must not shorten what a stage sends to the stage after it.
     is the one case that inverts it.
 - [x] 13.3.3. Absorb a storage failure rather than raising it.
   - Success: the child is still reaped and the caller still receives a result;
-    a failed create leaves the stream in memory and still reported complete,
+    a failed creation leaves the stream in memory and still reported complete,
     while a failed append reports `storage_failed` so an incomplete capture is
     distinguishable from a short one.
 
@@ -1183,8 +1183,8 @@ implemented, and whether a caller can find out what it promises.
 - [x] 13.4.1. Unit and behavioural coverage for every policy and every route.
   - Success: a bound's byte-versus-character semantics, its non-splitting of
     code points, the spill threshold's boundary, both storage-failure routes,
-    and partial output on timeout and cancellation each have a case that fails
-    when the behaviour is removed.
+    partial output on timeout, and spill removal on cancellation each have a
+    case that fails when the behaviour is removed.
 - [x] 13.4.2. State the policies, the field list, and the migration path in the
     users' guide and the migration guide.
   - Success: every documented example is executable and is executed by the

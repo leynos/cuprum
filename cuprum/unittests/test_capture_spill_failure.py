@@ -243,22 +243,22 @@ def test_a_failed_create_reports_the_error_class_and_not_its_message(
     assert event.stream == "stderr"
 
 
-def test_a_failed_create_reports_a_failure_for_every_chunk_it_refuses(
+def test_a_failed_create_is_reported_once_however_the_stream_grows(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A refused spill is re-offered per chunk — the buffered stream keeps growing.
+    """A refused spill is attempted once, and the stream stays on the heap.
 
-    This is the deliberate consequence of the create-failure recovery: the
-    stream stays on the heap and is re-offered to storage as it grows, because
-    abandoning the *stream* to avoid a failed syscall would lose the output the
-    policy exists to retain. What is bounded is the failure's reporting — one
-    event per attempt, none of them carrying the exception — and what is
-    unbounded is only the number of ``O(1)`` failed creates, never the bytes.
+    Retrying would cost one syscall and one ``STORAGE_WRITE_FAILED`` event per
+    chunk that crosses the threshold, so a full or read-only directory would
+    flood a metrics channel with a failure that has already been reported and
+    cannot succeed. The buffer keeps growing either way — the bytes stay on the
+    heap, which is what the create-failure recovery is for — but storage is not
+    asked again.
 
-    Pinned as an exact count rather than a bound, so a future change that
-    stopped re-offering, or that re-offered without reporting, has to be argued
-    here rather than absorbed silently.
+    Pinned as an exact count so a future change that resumed re-offering, or
+    that stopped reporting the single refusal, has to be argued here rather
+    than absorbed silently.
     """
     create = _RefusingCreate(OSError(errno.ENOSPC, "No space left on device"))
     create.install(monkeypatch)
@@ -270,13 +270,13 @@ def test_a_failed_create_reports_a_failure_for_every_chunk_it_refuses(
             accumulator.absorb(b"chunk")
         final = accumulator.finalize()
 
-    assert create.attempts == 10, (
-        f"each growing chunk must be re-offered to storage; got {create.attempts}"
+    assert create.attempts == 1, (
+        f"a refused create must not be retried per chunk; got {create.attempts}"
     )
     assert [event.category for event in recorder] == [
         CaptureEventCategory.STORAGE_WRITE_FAILED
-    ] * 10, f"every refusal must be reported once; got {len(recorder)} events"
-    assert all(event.error_type == "OSError" for event in recorder)
+    ], f"the refusal must be reported exactly once; got {len(recorder)} events"
+    assert recorder[0].error_type == "OSError"
     assert final.capture.storage_failed is True
     assert final.payload == "chunk" * 10, (
         "every chunk must still reach the caller after the failure"
@@ -470,3 +470,78 @@ def test_cleanup_after_a_failed_create_leaves_no_file_and_does_not_raise(
     assert not list(tmp_path.iterdir()), (
         "a failed spill must leave nothing in the spill directory"
     )
+
+
+def test_a_vanished_spill_file_is_absorbed_when_byte_mode_reads_it_back(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A spill that disappears before finalization does not fail the run.
+
+    ``keep_file=True`` transfers the file to the caller, who may read and then
+    remove it before the run materializes its result. Byte mode reads the file
+    back at that point, so the read is a storage call like any other and has to
+    be absorbed the way a failed create or append is: a failure to *retain*
+    output is not a failure of the command that produced it. The record reports
+    ``storage_failed`` because the capture is no longer available in full, and
+    the read failure reaches the event channel like any other storage failure.
+    """
+    settings = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=True)
+    accumulator = _FileAccumulator(
+        policy=FileBackedCapture(
+            spill_threshold_bytes=1, directory=tmp_path, keep_file=True
+        ),
+        stream=typ.cast("typ.Any", "stdout"),
+        settings=settings,
+    )
+    events: list[CaptureEvent] = []
+    accumulator.absorb(_PAYLOAD)
+    path = accumulator._path
+    assert path is not None, "the capture had to spill before it could vanish"
+    path.unlink()
+
+    with observe_capture(events.append):
+        final = accumulator.finalize()
+
+    assert final.payload is None, (
+        "a spill whose bytes cannot be read is not a payload the caller can use"
+    )
+    assert final.capture.storage == "file"
+    assert final.capture.storage_failed is True, (
+        "the record must say the capture is incomplete rather than merely short"
+    )
+    assert [event.category for event in events] == [
+        CaptureEventCategory.STORAGE_READ_FAILED
+    ], "the read failure must reach the event channel"
+    assert events[0].error_type == "FileNotFoundError", (
+        "the event names the error class, never its message"
+    )
+    _cleanup(accumulator)
+
+
+def test_a_vanished_spill_file_is_still_reported_as_text_in_text_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A vanished spill leaves text mode with its path, not an error.
+
+    Text mode never reads the file back, so a file that disappears between the
+    spill and finalization does not change what the caller reads: the record
+    still names the path and the capture is reported as spilled. This is the
+    control for the byte-mode case beside it, which has a read to absorb.
+    """
+    accumulator = _accumulator(directory=tmp_path)
+    accumulator.absorb(_PAYLOAD)
+    path = accumulator._path
+    assert path is not None, "the capture had to spill before it could vanish"
+    path.unlink()
+
+    final = accumulator.finalize()
+
+    assert final.payload is None, (
+        "text mode reports the spill as a path rather than reading its bytes"
+    )
+    assert final.capture.storage == "file"
+    assert final.capture.path == path
+    assert final.capture.storage_failed is False, (
+        "nothing the text-mode capture asked for failed"
+    )
+    _cleanup(accumulator)

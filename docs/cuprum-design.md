@@ -604,7 +604,9 @@ metadata alongside the final output:
 class PipelineResult:
     stages: tuple[CommandResult, ...]
     failure_index: int | None
-    captures: tuple[CapturedStream, ...] = ()
+
+    @property
+    def captures(self) -> tuple[CapturedStream, ...]: ...  # final stage only
 
     @property
     def failure(self) -> CommandResult | None: ...
@@ -626,12 +628,14 @@ Contract notes:
   `ValueError` for an interior stage.
 - When capture is disabled (`RunOutputOptions(capture=False)`),
   `PipelineResult.stdout` is `None`.
-- `captures` reports the policy each stream was captured under, together with
-  what that policy retained and dropped. Only the final stage's stdout is
-  reported for a pipeline, since interior stdout is streamed rather than
-  captured; every stage's stderr is captured and reported independently. The
-  policy for a stream therefore bounds what the *result* keeps and never what a
-  stage hands downstream.
+- `captures` reports the final stage's records: its stdout and its stderr.
+  Interior stdout is relayed to the next stage rather than captured, so it has
+  no record anywhere; each interior stage's stderr is captured and reported on
+  that stage's own `stages[i].captures`, which is where a caller inspecting
+  every stage's stderr reads it. A caller reading only
+  `PipelineResult.captures` sees the final stage alone. The policy for a stream
+  therefore bounds what the *result* keeps and never what a stage hands
+  downstream.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
@@ -1509,10 +1513,13 @@ fidelity is a structural property rather than a property of the bound. Nor does
 a bound shorten the mirrored copy an echo sink receives, which
 `max_echo_line_bytes` bounds separately and on its own path.
 
-Every captured stream contributes one `CapturedStream` record to
-`CommandResult.captures` / `PipelineResult.captures`, in stdout-then-stderr
-order, and an uncaptured stream contributes none — so a record's presence is
-itself the statement that the stream was captured. The record carries
+Every captured stream contributes one `CapturedStream` record, in
+stdout-then-stderr order, and an uncaptured stream contributes none — so a
+record's presence is itself the statement that the stream was captured. For a
+single command the records are on `CommandResult.captures`. For a pipeline,
+`PipelineResult.captures` carries the final stage's records, and each interior
+stage's stderr records are on that stage's own `stages[i].captures`; interior
+stdout is relayed rather than captured, so it has no record. The record carries
 `total_bytes` (what the child wrote) beside `dropped_bytes` (what the bound
 discarded) and a `truncated` property derived from the two, so a caller can
 always tell a short stream from a shortened one and the two counts cannot
@@ -1522,11 +1529,21 @@ the file is incomplete rather than merely short.
 
 A storage failure is absorbed rather than raised: a failure to retain output is
 not a failure of the command that produced it, so the child is still reaped and
-the caller still receives a result. A failed *create* leaves the stream on the
-heap, where it is still reported complete; a failed *append* stops writing,
+the caller still receives a result. A failed *creation* leaves the stream on
+the heap, where it is still reported complete; a failed *append* stops writing,
 keeps the prefix that reached the file, and reports `storage_failed`. Both emit
 a `CaptureEvent` and name the error's class rather than its message, because
 the event channel's consumers treat fields as low-cardinality labels.
+
+A failed *read-back*, which only byte mode performs, reports `storage_failed`
+too: the record's payload is absent, and the file is left where it is for the
+caller to read. A failed *removal* is the one route that sets no flag. Cleanup
+runs on the way out of every run, including ones already carrying the caller's
+own timeout or cancellation, and a failure to delete a temporary file must not
+replace either, so the unlinking call absorbs its own error. The three
+retention routes report `storage_write_failed`, `storage_flush_failed`, and
+`storage_read_failed`; the removal route is silent because its failure changes
+nothing the caller can observe but the presence of the file.
 
 Spill cleanup is a pair of steps with one owner. The run's result-construction
 site closes the handle every settled drain reports, which removes the file

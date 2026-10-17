@@ -141,11 +141,14 @@ class FileBackedCapture:
     ``"memory"`` — so raising the threshold is a pure memory decision and
     never changes what the caller reads.
 
-    A spilled stream is reported as ``None`` on ``stdout``/``stderr``; the
-    bytes are at :attr:`CapturedStream.path`, readable through
-    :meth:`CapturedStream.read_text`. The library created that file and
-    removes it when the run finishes — on success, failure, timeout, and
-    cancellation alike — unless ``keep_file`` transfers it to the caller.
+    A spilled text-mode stream is reported as ``None`` on ``stdout``/``stderr``.
+    The library created the spill file and removes it *before the result is
+    returned* — on success, failure, timeout, and cancellation alike — so the
+    bytes are readable through :meth:`CapturedStream.read_text` only when
+    ``keep_file=True`` transfers the file to the caller. Without it, the record
+    reports the stream's size and the bytes past the threshold are not retained
+    for the caller. Byte mode is different: there the file is read back before
+    it is removed, so ``run_bytes()`` still returns the child's own bytes.
 
     Parameters
     ----------
@@ -233,9 +236,11 @@ class CapturedStream:
         reachable through ``stdout``/``stderr``, ``"file"`` when they are at
         ``path`` instead.
     path:
-        The spill file, or ``None`` for a memory-backed capture. An
-        unreadable path — one under a directory since removed, say — is not
-        detected here.
+        The spill file, or ``None`` for a memory-backed capture. The path is
+        reported even when the run has already removed the file, which it does
+        before returning unless ``keep_file=True``: read it through
+        :meth:`read_text` only for a kept spill. An unreadable path — one under
+        a directory since removed, say — is not detected here.
     owned:
         Whether cuprum still owns this file, and so will remove it. A
         ``keep_file`` policy hands the file to the caller instead, which
@@ -274,12 +279,15 @@ class CapturedStream:
         return self.dropped_bytes > 0
 
     def read_text(self, *, encoding: str = "utf-8", errors: str = "replace") -> str:
-        """Read a spilled capture's bytes back as text.
+        """Read a kept spill file back as text.
 
-        Only a spilled capture has a file to read. A memory-backed capture's
-        text is on the result's ``stdout``/``stderr`` field instead, and this
-        raises rather than returning something ambiguous — an empty string
-        would be indistinguishable from a spilled stream that held nothing.
+        Only a spill the caller kept has a file to read. A run removes its own
+        spill before returning the result, so the default ``keep_file=False``
+        leaves a path that is already gone; read a spill by constructing the
+        policy with ``keep_file=True``. A memory-backed capture's text is on
+        the result's ``stdout``/``stderr`` field instead, and this raises
+        rather than returning something ambiguous — an empty string would be
+        indistinguishable from a spilled stream that held nothing.
 
         The decoding defaults differ from a run's capture defaults on purpose:
         a spilled stream is the child's raw bytes, so ``errors="replace"``

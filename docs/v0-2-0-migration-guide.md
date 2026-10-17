@@ -1158,12 +1158,15 @@ guarantee. The file is removed by the run before it returns unless
 cancellation. Set `keep_file=True` if the caller wants the file, and read
 `record.owned` to know which case applies.
 
-A failure to create or write the spill file does not fail the run: it is
-reported on the record as `storage_failed=True` and through a `CaptureEvent`,
-because a failure to _retain_ output is not a failure of the command that
-produced it. If the file could not be created the stream stays in memory and is
-still reported complete; if an append failed the record holds what reached the
-file before the failure.
+A failure to create, write, or read back the spill file does not fail the run:
+it is reported on the record as `storage_failed=True` and through a
+`CaptureEvent`, because a failure to _retain_ output is not a failure of the
+command that produced it. If the file could not be created the stream stays in
+memory and is still reported complete; if an append failed the record holds
+what reached the file before the failure; if a byte-mode read-back failed the
+file is left in place for the caller to read. A failure to remove the file at
+the end of the run is absorbed silently, so that cleanup cannot replace the
+caller's own timeout or cancellation.
 
 `BoundedCapture` and `FileBackedCapture` are exported from
 `cuprum.capture_policy`. The full field list of a capture record is in

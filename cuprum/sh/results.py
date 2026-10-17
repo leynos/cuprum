@@ -99,7 +99,10 @@ class CommandResult:
         the policy discarded, and where the retained bytes are. Empty when the
         run captured nothing. A file-backed record reports ``storage`` of
         ``"file"``: its text is at ``path`` rather than on
-        ``stdout``/``stderr``, which are ``None`` for that stream.
+        ``stdout``/``stderr``, which are ``None`` for that stream. The run
+        removes the file before returning it unless the policy was built with
+        ``keep_file=True``, so ``path`` is a locator for a kept spill and a
+        record of what happened for one the run cleaned up.
 
     """
 

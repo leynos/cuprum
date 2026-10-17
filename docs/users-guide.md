@@ -560,6 +560,8 @@ run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
 only `pipe()` and `inherit()`: the input itself is passed to the run call's
 `stdin=` argument, as the next section describes.
 
+### Capture policies
+
 Capture is configured per stream, and a stream's policy decides where its bytes
 are kept. `capture=True` and `capture=False` are the shorthands for the
 whole-run switch, and each stream can name its own policy with `capture_stdout`
@@ -668,11 +670,12 @@ job. Without it, `record.owned` is `True` and the run removes the file before
 returning the result — on the success path, on a non-zero exit, on a timeout,
 and on cancellation alike.
 
-A failure to create or write the spill file is absorbed rather than raised: a
-failure to _retain_ output is not a failure of the command that produced it.
-The run still completes and the caller still receives a result, with
-`storage_failed=True` on the record. Read that flag together with `storage`,
-because the pair distinguishes the two failures:
+A failure on any of the spill file's routes — create, append, read back in byte
+mode, or remove at the end of the run — is absorbed rather than raised: a
+failure of the storage is not a failure of the command that produced it. The
+run still completes and the caller still receives a result, and the three
+retention failures set `storage_failed=True` on the record. Read that flag
+together with `storage`, because the pair distinguishes the cases:
 
 - The file could not be created. The stream never left memory, so `storage`
   stays `"memory"`, `path` is `None`, and the capture is _complete_ — the
@@ -681,6 +684,14 @@ because the pair distinguishes the two failures:
   names the file, but the capture holds only whatever reached it before the
   failure. That is what tells the difference between a short capture and an
   incomplete one.
+- Byte-mode read-back failed. `storage` is `"file"` but no text or bytes are
+  reported, because the bytes could not be recovered. The file is left in
+  place, so the caller can still try to read it.
+
+A failed removal sets nothing: it is housekeeping, and cleanup runs on the way
+out of every run, including one already carrying the caller's own timeout or
+cancellation. An error about a temporary file must not replace either, so that
+route absorbs its own failure and is reported only as a `CaptureEvent`.
 
 ### Reading a stream's capture metadata
 
@@ -1087,6 +1098,9 @@ question. Choose by the question:
   Rust-pump events cover throughput and routing; see
   [Other observation channels](#other-observation-channels). A Rust pump
   decline means Cuprum used another stream path, not that the child failed.
+- **What did a capture policy do to the output?** `observe_capture` reports a
+  `CaptureEvent` when a bound discards bytes or a spill file is moved, written,
+  or fails; see [Other observation channels](#other-observation-channels).
 
 Keep callbacks bounded, and avoid recording payloads or arguments as metric
 labels.
@@ -1773,6 +1787,7 @@ Registrations are context-local, like the policy registrations in
 | --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | Execution lifecycle   | `sh.observe(hook)`               | An `ExecEvent` per phase; see [Structured execution events](#structured-execution-events)                                                           | `MetricsHook` in `cuprum.adapters.metrics_adapter`                  |
 | Control operations    | `observe_control(hook)`          | A `ControlEvent` per `signal()`, `terminate()`, or `kill()` on a `RunningCommand`                                                                   | `control_metrics_hook` in `cuprum.adapters.control_metrics`         |
+| Capture outcomes      | `observe_capture(hook)`          | A `CaptureEvent` when a bound discards bytes or a spill file moves or fails; see [Bounded capture](#bounded-capture)                                | Not applicable                                                      |
 | Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line or a sink fails to encode or has closed                                                                   | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
 | Line-stream lifecycle | `observe_line_stream(hook)`      | A `LineStreamEvent` as a `SafeCmd.lines()` stream spawns, saturates, tears down, or ends                                                            | `line_stream_metrics_hook` in `cuprum.adapters.line_stream_metrics` |
 | Stream operations     | `observe_stream_operation(hook)` | A `StreamOperationEvent` per completed drain or transfer; see [Aggregate Python stream-operation events](#aggregate-python-stream-operation-events) | `stream_operation_metrics_hook` in `cuprum.adapters.stream_metrics` |

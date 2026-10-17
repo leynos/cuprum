@@ -164,27 +164,35 @@ async def _run_spawned_pipeline(
             result_error,
         )
         raise
-    # Finalization owns the close, after the after-hooks have run: a failing
-    # after-hook is a terminal run error, so the outcome cannot be committed
-    # before the hooks have had their say.
-    await _finalize_pipeline_execution(
-        parts, observers, stage_results, config.sink_bracket
-    )
-    result = _build_pipeline_result(
-        stage_results,
-        failure_index=inputs.wait_result.failure_index,
-        capture_bytes=config.capture_bytes,
-    )
-    # Last, and after the results are assembled: the drains' payloads have been
-    # copied into the stage results by this point, while the records those
-    # results carry name a spill file that is now gone, which is the lifetime
-    # every other capture path settles on. The accumulators go second so a
-    # consumer cancelled mid-drain — one that never finalized, and so
-    # contributed no drain here — still has its file removed.
-    await _finalize_capture_handles(
-        (*inputs.stderr_by_stage, inputs.final_stdout),
-        spawn.captures.sinks,
-    )
+    try:
+        # Finalization owns the close, after the after-hooks have run: a
+        # failing after-hook is a terminal run error, so the outcome cannot be
+        # committed before the hooks have had their say.
+        await _finalize_pipeline_execution(
+            parts, observers, stage_results, config.sink_bracket
+        )
+        result = _build_pipeline_result(
+            stage_results,
+            failure_index=inputs.wait_result.failure_index,
+            capture_bytes=config.capture_bytes,
+        )
+    finally:
+        # Every exit owes the spill files, including a failing after-hook and a
+        # cancellation re-raised by the observer drain — neither of which
+        # reaches the return below. Last, and after the results are assembled:
+        # the drains' payloads have been copied into the stage results by this
+        # point, while the records those results carry name a spill file that is
+        # now gone, which is the lifetime every other capture path settles on.
+        # The accumulators go second so a consumer cancelled mid-drain — one
+        # that never finalized, and so contributed no drain here — still has its
+        # file removed. Shielded, because the unlink awaits and a cancellation
+        # landing inside it would abandon the remaining handles.
+        await _shielded_cleanup(
+            _finalize_capture_handles(
+                (*inputs.stderr_by_stage, inputs.final_stdout),
+                spawn.captures.sinks,
+            )
+        )
     return result
 
 

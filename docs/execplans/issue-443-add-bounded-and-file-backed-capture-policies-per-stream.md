@@ -53,7 +53,7 @@ The observable shape of the change, in a REPL with the package importable:
 ...     capture_stderr=FileBackedCapture(spill_threshold_bytes=1024),
 ... )
 >>> options.resolved_capture
-(BoundedCapture(max_bytes=8), FileBackedCapture(threshold=1024, directory=None, keep_file=False))
+(BoundedCapture(max_bytes=8), FileBackedCapture(spill_threshold_bytes=1024, directory=None, keep_file=False))
 ```
 
 and, for a run whose stdout exceeds the bound:
@@ -86,10 +86,12 @@ escalation, not a workaround.
 - **`stdout`/`stderr` stay `str | None`.** File-backed capture reports `None`
   there and puts the path in `captures`; the public type contract is not
   widened to a union with a handle type.
-- **Byte-exact mode is out of scope.** `run_bytes()` / `BytesCommandResult`
-  keep their current `bytes | None` fields and keep capturing in full. The new
-  policies apply to the text path only. This bounds the change and avoids
-  multiplying the accumulator's contract across two result families.
+- **Byte-exact mode reports no capture metadata.** `BytesCommandResult` has no
+  `captures` field, so a `run_bytes()` run cannot report a spill or a
+  truncation; the bytes are all it says. The policies still apply there, and a
+  spilled stream is read back so the caller receives the child's bytes in full,
+  but that read is O(stream size) and gives byte mode none of the
+  bounded-memory guarantee that text mode gets.
 - **No new runtime dependency.** The spill file uses the standard library's
   `tempfile`; nothing is added to `pyproject.toml`.
 - **No public API removal.** `RunOutputOptions.capture`, `.echo`,
@@ -297,6 +299,17 @@ Thresholds that trigger escalation when breached.
   line would have certified the wrong SHA. The headers were written
   inconsistently (`head=` first versus on the `# gate=` line), so both forms
   have to be read.
+- [x] (2026-10-17) Clear the eleven findings from the first post-rebase
+  CodeRabbit review, after the deterministic gates were green. Six needed code
+  or test changes and are recorded individually in `Surprises & discoveries`;
+  the other five were documentation, allowlist, or plan corrections.
+  Non-vacuity was measured for all three code fixes by reverting each in turn.
+- [x] (2026-10-17) Witness the pipeline after-hook cleanup directly.
+  `cuprum/unittests/test_pipeline_capture_cleanup.py` is new: it spills on a
+  completed pipeline and on one whose after-hook raises, and asserts the spill
+  directory is empty afterwards. Reverting `_pipeline_internals.py` to its
+  pre-fix shape fails the after-hook case with a leaked file, so the finding's
+  fix is now covered by a test rather than only by the review argument.
 
 ## Surprises & discoveries
 
@@ -649,6 +662,62 @@ Thresholds that trigger escalation when breached.
   where production resolves it, and splitting a module silently moves that
   contract. Date/Author: 2026-10-18, implementation agent.
 
+- Observation (review, bounded trim): the leading-edge trim was written for
+  UTF-8 and applied to every encoding. Its loop skips bytes in the
+  `0x80`-`0xBF` range, which is UTF-8's continuation range but is also an
+  ordinary value for a UTF-16 low or high byte, so a bounded capture decoded
+  from `utf-16-le` could lose real characters at its leading edge. Reproduced
+  with a `U+0080` payload before fixing: the character vanished. The repair
+  realigns a fixed-width encoding by *stream offset* — which is why
+  `_BoundedAccumulator` now tracks `_offset` beside its buffer — and drops a
+  leading low surrogate, because a cut that splits a surrogate pair leaves a
+  half that no decoder can use. Any other encoding gets no leading adjustment.
+  Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review, byte mode): a byte-exact capture is never decoded, so
+  the trim had no business touching it: a binary payload legitimately ending in
+  a continuation-shaped byte is not a broken character, and trimming it loses
+  data the caller asked for. The trim is now applied only when the run decodes.
+  A second case followed from the same reading: a stream that was never cut has
+  no damaged edge, so it is handed back untouched too. Date/Author: 2026-10-17,
+  implementation agent.
+
+- Observation (review, spill lifetime): `CapturedStream.read_text` and the
+  `path` attribute were documented as though the file outlived the run. It does
+  not: the run removes it before returning unless the policy was built with
+  `keep_file=True`, which is the same lifetime the cleanup tests assert. The
+  docstrings, the changelog, and the users guide now say so, and name the
+  byte-mode read-back as the one case where the file is read *before* it is
+  removed. Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review, pipeline cleanup): `_finalize_capture_handles` ran after
+  the result was assembled, not in a `finally`. Two exits therefore skipped it
+  — a failing after-hook and a cancellation re-raised by the observer drain —
+  and neither has another path that closes those handles. The cleanup now runs
+  in a `finally` under `_shielded_cleanup`, so every exit owes the files. The
+  new `test_pipeline_capture_cleanup.py` witnesses both exits; reverting the
+  module to its pre-fix shape fails the after-hook case with a leaked file.
+  Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review, spill retry): `_should_spill` asked only about the
+  threshold, so a stream whose *create* had failed re-offered the spill on
+  every later chunk. Each attempt cost a syscall and emitted a storage-failure
+  event, turning one broken directory into a metrics flood. `_spill`'s own
+  docstring already promised "one syscall rather than one per chunk", so the
+  test that pinned per-chunk re-offering was pinning the wrong behaviour; it
+  was renamed and its assertions inverted. The guard is safe because `_failed`
+  is set only by a failed *creation*: a failed append leaves the path set, so
+  `absorb` takes the append branch and never asks the question again.
+  Date/Author: 2026-10-17, implementation agent.
+
+- Observation (review, removal failures): `SpillHandle.close` suppressed a
+  failed `close` but not a failed `unlink`, so a filesystem that refused the
+  removal could replace the caller's own timeout or cancellation with a delete
+  error. Removal is housekeeping and is now absorbed like every other storage
+  call. `test_capture_cleanup.py` gains a `Path` subclass whose `unlink` always
+  refuses, so the case is witnessed rather than assumed. Date/Author:
+  2026-10-17, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -661,12 +730,17 @@ Thresholds that trigger escalation when breached.
   assertion is updated, the first is not. Date/Author: 2026-10-14,
   implementation agent.
 
-- Decision: bound capture applies to the text path only; `run_bytes()` keeps
-  full in-memory capture. Rationale: issue #443 is about the `str` result;
-  extending byte-exact mode would double the accumulator contract and the test
-  matrix for no stated requirement, and `BytesCommandResult` has no `captures`
-  field to report spill metadata through. Recorded as an explicit non-goal
-  rather than an oversight. Date/Author: 2026-10-14, implementation agent.
+- Decision: the policies also apply to `run_bytes()`; `BytesCommandResult`
+  keeps its `bytes | None` fields and gains no `captures` field. Rationale:
+  issue #443 is about the `str` result, and the first cut scoped the policies
+  to the text path. That left `run_bytes()` silently ignoring a policy the
+  caller had named, which the issue does not sanction. Applying them costs one
+  branch — a spilled stream is read back — and the result type stays unchanged
+  because there is no record to put a spill in. The `bytes | None` contract is
+  therefore honest but silent: byte mode cannot distinguish a complete capture
+  from a truncated one, and the read-back is O(stream size). Both limits are
+  documented in `docs/users-guide.md`. Date/Author: 2026-10-14, implementation
+  agent; rewritten after review.
 
 - Decision: reuse `_echo_truncation._encode_prefix`'s incremental
   decoder/encoder walk instead of adding a second UTF-8 boundary finder.
@@ -1259,13 +1333,14 @@ no longer claims capture is a joint switch. Conformance check:
 - No unapproved public interface or dependency change.
 - No unapproved trust-boundary or persisted-format change.
 - Trace links current.
-Recovery: documentation-only revert is safe. Remaining gaps: none within scope;
-byte-exact mode deliberately excluded. Compatibility decision: `<none>`.
+Recovery: documentation-only revert is safe. Remaining gaps:
+`BytesCommandResult` reports no capture metadata, so byte mode cannot flag a
+truncation or a spill. Compatibility decision: `<none>`.
 
 ## Concrete steps
 
-All commands run from the worktree root,
-`/home/leynos/.lody/repos/github---leynos---cuprum/worktrees/83d745e2-c310-4ba9-9a19-bd9e4e873ee5`.
+All commands run from the repository root — the working directory this plan is
+checked out in.
 
 Every `pytest` invocation goes through `uv run`, which is what the Makefile's
 own `PYTEST = $(UV_RUN_ENV) uv run pytest` does; the bare system interpreter
