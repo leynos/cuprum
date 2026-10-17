@@ -137,6 +137,49 @@ async def _reconcile_pipeline_run_failure(
     await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
+async def _finalize_timeout_cleanup(
+    observers: _PipelineObservers,
+    spawn: _PipelineSpawnResult,
+    timeout_error: BaseException,
+) -> None:
+    """Drain the observe tasks and release the timeout path's capture sinks.
+
+    One coroutine so the caller can shield both halves together. The expiry is
+    built from the drained outputs before this point, and the error it raises
+    carries text rather than handles: this run's result is never constructed,
+    so nothing downstream will close these files. A cancellation arriving
+    between two separately shielded steps would leave the sinks unclosed and
+    the spill files on disk.
+    """
+    await _drain_tasks_during_cleanup(
+        observers.pending_tasks,
+        timeout_error,
+        message=_PIPELINE_FINALIZATION_ERROR,
+    )
+    await _cleanup_capture_sinks(spawn.captures.sinks)
+
+
+async def _finalize_result_failure_cleanup(
+    observers: _PipelineObservers,
+    spawn: _PipelineSpawnResult,
+    result_error: BaseException,
+) -> None:
+    """Drain the observe tasks and release the failed assembly's sinks.
+
+    Composed for the same reason as the timeout path: the drains this run
+    gathered carried spill handles into an assembly that has just failed, and
+    no result will be built from them. The accumulators — which own the same
+    files, and close idempotently — are what removes them, so the drain and the
+    release have to survive a cancellation together.
+    """
+    await _drain_tasks_during_cleanup(
+        observers.pending_tasks,
+        result_error,
+        message=_PIPELINE_FINALIZATION_ERROR,
+    )
+    await _cleanup_capture_sinks(spawn.captures.sinks)
+
+
 async def _finalize_pipeline_run_failure(
     config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
@@ -182,17 +225,7 @@ async def _finalize_pipeline_timeout(
         processes=spawn.processes,
         started_at=spawn.stages.started_at,
     )
-    await _shielded_cleanup(
-        _drain_tasks_during_cleanup(
-            observers.pending_tasks,
-            timeout_error,
-            message=_PIPELINE_FINALIZATION_ERROR,
-        )
-    )
-    # The expiry is built from the drained outputs before this point, and the
-    # error it raises carries text rather than handles: this run's result is
-    # never constructed, so nothing downstream will close these files.
-    await _cleanup_capture_sinks(spawn.captures.sinks)
+    await _shielded_cleanup(_finalize_timeout_cleanup(observers, spawn, timeout_error))
 
 
 async def _finalize_pipeline_stage_result_failure(
@@ -213,16 +246,8 @@ async def _finalize_pipeline_stage_result_failure(
     # Result assembly runs after process cleanup but before pipeline
     # finalization, so this layer still owns the observe-hook tasks.
     await _shielded_cleanup(
-        _drain_tasks_during_cleanup(
-            observers.pending_tasks,
-            result_error,
-            message=_PIPELINE_FINALIZATION_ERROR,
-        )
+        _finalize_result_failure_cleanup(observers, spawn, result_error)
     )
-    # The drains this run gathered carried spill handles into the assembly that
-    # has just failed. No result is built from them now, so the accumulators —
-    # which own the same files, and close idempotently — are what removes them.
-    await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 __all__ = [

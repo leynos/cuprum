@@ -251,25 +251,25 @@ class RunOutputOptions:
         compare=False,
         kw_only=True,
     )
+    # Non-init, for the reason ``_synthesized_sink`` above is: a resolution
+    # stored over the declared fields would be re-passed by
+    # ``dataclasses.replace`` as an explicit per-stream declaration.
+    _resolved_capture: tuple[CapturePolicy | None, CapturePolicy | None] = dc.field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=(None, None),
+    )
 
     def __post_init__(self) -> None:
         """Resolve the echo and capture shorthands, then synthesize any sink."""
         object.__setattr__(
             self,
-            "capture_stdout",
-            _resolve_capture(
+            "_resolved_capture",
+            _resolved_capture(
                 shorthand=self.capture,
-                declared=self.capture_stdout,
-                field="capture_stdout",
-            ),
-        )
-        object.__setattr__(
-            self,
-            "capture_stderr",
-            _resolve_capture(
-                shorthand=self.capture,
-                declared=self.capture_stderr,
-                field="capture_stderr",
+                capture_stdout=self.capture_stdout,
+                capture_stderr=self.capture_stderr,
             ),
         )
         object.__setattr__(
@@ -331,11 +331,13 @@ class RunOutputOptions:
     def resolved_capture(self) -> tuple[CapturePolicy | None, CapturePolicy | None]:
         """The resolved ``(capture_stdout, capture_stderr)`` policies.
 
-        ``__post_init__`` turns each stream's field into a policy — inheriting
-        ``capture`` where the caller named none, mapping ``True`` to
-        :class:`~cuprum.capture_policy.FullCapture` and ``False`` to ``None``
-        — so the returned pair is always concrete and says exactly what the
-        run will do. ``None`` means that stream is not captured at all.
+        ``__post_init__`` turns each stream's field into a policy, so the
+        returned pair is always concrete and says exactly what the run will
+        do; ``None`` means that stream is not captured at all. The declared
+        fields keep the caller's own spelling, so
+        ``dataclasses.replace(options, capture=False)`` re-resolves the pair
+        rather than inheriting it: a replacement is a new value whose shorthand
+        still decides any stream left unset.
 
         Returns
         -------
@@ -351,11 +353,11 @@ class RunOutputOptions:
         (None, None)
         >>> RunOutputOptions(capture=False, capture_stderr=True).resolved_capture
         (None, FullCapture())
+        >>> import dataclasses as dc
+        >>> dc.replace(RunOutputOptions(), capture=False).resolved_capture
+        (None, None)
         """
-        return _resolved_capture(
-            capture_stdout=self.capture_stdout,
-            capture_stderr=self.capture_stderr,
-        )
+        return self._resolved_capture
 
     @property
     def captures_any_stream(self) -> bool:
@@ -381,7 +383,7 @@ class RunOutputOptions:
         >>> RunOutputOptions(capture=False, capture_stderr=True).captures_any_stream
         True
         """
-        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
+        return _captures_any_stream(*self._resolved_capture)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:

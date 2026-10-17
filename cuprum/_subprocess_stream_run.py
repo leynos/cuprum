@@ -327,10 +327,15 @@ async def _run_subprocess_with_streams(
     # reach this through ``_reconcile_run_tasks``, and the pipeline's result
     # path calls it beside its own assembly; a run that simply reaches EOF owns
     # a file too, and without this it would return a record reporting
-    # ``owned=True`` for a file nothing was ever going to remove.
-    await _finalize_capture_handles(
-        (stdout_drain, stderr_drain),
-        tasks.captures,
+    # ``owned=True`` for a file nothing was ever going to remove. Shielded for
+    # the same reason the teardown is: the drains and sinks are half-closed
+    # once this starts, and a cancellation that landed here would return a
+    # result naming files the run still means to remove.
+    await _shielded_cleanup(
+        _finalize_capture_handles(
+            (stdout_drain, stderr_drain),
+            tasks.captures,
+        )
     )
     return exit_code, exited_at, stdout_drain, stderr_drain, spawn.relay_diagnostics
 

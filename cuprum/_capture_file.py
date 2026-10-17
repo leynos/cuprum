@@ -100,6 +100,7 @@ class _FileAccumulator:
         "_buffer",
         "_failed",
         "_file",
+        "_flushed_bytes",
         "_handle",
         "_path",
         "_policy",
@@ -134,6 +135,11 @@ class _FileAccumulator:
         self._path: pathlib.Path | None = None
         self._total = 0
         self._spilled_bytes = 0
+        # What has reached the file, as opposed to what has been handed to the
+        # buffered writer. `_append` defers its flush, so the two diverge until
+        # `_flush_before_reading`; a failed flush there reports this count
+        # rather than the larger one the writes added up to.
+        self._flushed_bytes = 0
         # The *name* of the class behind a storage failure, never the
         # exception: it is reported through an event channel whose consumers
         # treat fields as low-cardinality labels.
@@ -203,6 +209,7 @@ class _FileAccumulator:
             self._discard_failed_spill(handle, exc)
             return
         self._spilled_bytes = len(buffered)
+        self._flushed_bytes = len(buffered)
         self._file = handle
         path = pathlib.Path(handle.name)
         self._path = path
@@ -258,7 +265,15 @@ class _FileAccumulator:
         )
 
     def _append(self, chunk: bytes) -> None:
-        """Append one chunk to the spill file, absorbing any failure."""
+        """Append one chunk to the spill file, absorbing a write failure.
+
+        The write is all this does; the flush is deferred. ``_append`` runs on
+        the run's event loop, once per chunk the drain reads, and a flush there
+        is one blocking syscall per read on the loop that also drives the other
+        stream, the deadline, and cancellation. Nothing reads the file before
+        finalization, and the handle's own ``close`` flushes whatever is left,
+        so flushing early would buy nothing and cost the loop.
+        """
         if self._failed is not None:
             return
         file = self._file
@@ -268,11 +283,6 @@ class _FileAccumulator:
             file.write(chunk)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
-            return
-        try:
-            file.flush()
-        except OSError as exc:
-            self._fail_storage(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
             return
         self._spilled_bytes += len(chunk)
 
@@ -313,8 +323,32 @@ class _FileAccumulator:
             ),
         )
 
+    def _flush_before_reading(self) -> None:
+        """Flush once, so a read-back sees every byte that was written.
+
+        ``_append`` deliberately does not flush per chunk, so this is the one
+        flush of the run's appended bytes. A failure here is reported exactly
+        as a per-chunk flush failure was — under
+        :attr:`~cuprum.capture_events.CaptureEventCategory.STORAGE_FLUSH_FAILED`
+        — rather than becoming a failure of the command.
+        """
+        file = self._file
+        if file is None or self._failed is not None:
+            return
+        try:
+            file.flush()
+        except OSError as exc:
+            # The writes since the last flush are still in the file object's
+            # buffer, so they never reached the file. The event reports the
+            # count that did, not every byte handed to ``write``.
+            self._spilled_bytes = self._flushed_bytes
+            self._fail_storage(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
+            return
+        self._flushed_bytes = self._spilled_bytes
+
     def _finalize_spilled(self, path: pathlib.Path) -> CaptureFinal:
         """Report the spill file in place of text, or its bytes in byte mode."""
+        self._flush_before_reading()
         payload = self._read_back(path) if self._settings.capture_bytes else None
         handle = self._handle
         return CaptureFinal(

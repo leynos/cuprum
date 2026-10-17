@@ -38,7 +38,7 @@ from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,
 )
-from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import (
     _cwd_arg,
@@ -225,6 +225,21 @@ async def _cleanup_spawned_processes(
 
     for task in tasks:
         task.cancel()
+    await _shielded_cleanup(_cancel_stage_tasks_and_sinks(tasks, staged))
+
+
+async def _cancel_stage_tasks_and_sinks(
+    tasks: list[_StreamConsumerTask],
+    staged: _SpawnedPipelineStages,
+) -> None:
+    """Await the cancelled stage tasks, then release their capture sinks.
+
+    Cancel and cleanup belong to one shielded step. A cancellation arriving
+    between two separately shielded calls would leave the accumulators — and
+    the spill files they own — unclosed, on a path that is already dealing with
+    a failed spawn. The cleanup runs after the gather because a task the cancel
+    has not finished unwinding may still be appending to the file it holds.
+    """
     await asyncio.gather(*tasks, return_exceptions=True)
     await _cleanup_capture_sinks(staged.captures.sinks)
 

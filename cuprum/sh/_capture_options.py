@@ -1,4 +1,4 @@
-"""Resolve a ``RunOutputOptions`` capture field into a concrete policy.
+"""Resolve ``RunOutputOptions`` capture fields into concrete policies.
 
 One stream's capture field accepts three spellings — ``None`` to inherit the
 ``capture`` shorthand, a ``bool`` as that shorthand's two ends, or a policy
@@ -68,26 +68,42 @@ def _resolve_capture(
 
 def _resolved_capture(
     *,
+    shorthand: bool,
     capture_stdout: CapturePolicy | bool | None,
     capture_stderr: CapturePolicy | bool | None,
 ) -> tuple[CapturePolicy | None, CapturePolicy | None]:
-    """Read a run's resolved per-stream policies as the pair the run uses.
+    """Resolve both streams' capture fields against the ``capture`` shorthand.
 
-    The declared field types stay ``CapturePolicy | bool | None`` because a
-    caller may spell a stream as the shorthand bool; only the constructor's
-    resolution narrows them, which the declared types cannot express to a type
-    checker. Keeping the read beside the resolution is what makes that
-    widening local rather than something each importer rediscovers.
+    The pair is resolved together because the shorthand is one decision for the
+    run and the two streams are two answers to it. Resolving them apart is what
+    let a caller's ``capture=False`` be silently overridden by a pair stored
+    back over the declared fields: ``dataclasses.replace`` re-passes every init
+    field, so a resolution written there returns as an explicit per-stream
+    declaration. Resolving here, into a non-init field, leaves the declared
+    fields holding the caller's own spelling and lets a replacement re-resolve.
 
     Returns
     -------
     tuple[CapturePolicy | None, CapturePolicy | None]
         The stdout and stderr policies, in that order, each either a policy
         object or ``None`` for a stream that is not captured.
+
+    Raises
+    ------
+    ValueError
+        If either value is not ``None``, a ``bool``, or a capture policy.
     """
-    return (  # ty: ignore[invalid-return-type]
-        capture_stdout,
-        capture_stderr,
+    return (
+        _resolve_capture(
+            shorthand=shorthand,
+            declared=capture_stdout,
+            field="capture_stdout",
+        ),
+        _resolve_capture(
+            shorthand=shorthand,
+            declared=capture_stderr,
+            field="capture_stderr",
+        ),
     )
 
 
