@@ -76,6 +76,11 @@ flush before taking the next item, so stream order is the order in which the
 event loop enqueued chunks. This is the loop's observed order; it does not
 claim to reconstruct kernel-level timestamps between independent pipes.
 
+Command and pipeline setup use one private worker constructor for the common
+stdout/stderr mapping and queue capacity. Each caller resolves its own sinks,
+handles the disabled-delivery case, and retains cleanup ownership if later
+setup fails. The constructor does not resolve sinks or own their lifecycle.
+
 The queue's retained payload bytes never exceed ``max_queued_bytes``. The
 active write has already left the queue and is tracked separately, so at most
 one in-flight payload may exist in addition to the configured queued-byte

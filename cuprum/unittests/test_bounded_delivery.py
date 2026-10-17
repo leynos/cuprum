@@ -39,6 +39,34 @@ def _payload(value: str, source_bytes: int) -> _DeliveryPayload:
     return _DeliveryPayload(value=value, source_bytes=source_bytes)
 
 
+class _ControlledFailureSink(io.StringIO):
+    """Block the first write, then fail at the selected destination operation."""
+
+    def __init__(self, failure_site: str) -> None:
+        """Create the selected write or flush failure with test barriers."""
+        super().__init__()
+        self.failure_site = failure_site
+        self.ready = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, text: str, /) -> int:
+        """Wait until both stream items are queued, then optionally fail."""
+        self.ready.set()
+        if not self.release.wait(timeout=3):
+            msg = "test did not release the sink"
+            raise RuntimeError(msg)
+        if self.failure_site == "write":
+            msg = "selected write failure"
+            raise RuntimeError(msg)
+        return super().write(text)
+
+    def flush(self) -> None:
+        """Fail only when the flush case is selected."""
+        if self.failure_site == "flush":
+            msg = "selected flush failure"
+            raise RuntimeError(msg)
+
+
 def test_worker_bounds_queued_source_bytes_and_keeps_one_shared_fifo() -> None:
     """Queue saturation drops incoming data without changing stream order."""
     sink = BlockedSink()
@@ -83,27 +111,7 @@ def test_worker_bounds_queued_source_bytes_and_keeps_one_shared_fifo() -> None:
 @pytest.mark.parametrize("failure_site", ["write", "flush"])
 def test_worker_disables_after_write_or_flush_failure(failure_site: str) -> None:
     """A sink exception stays categorical and pending bytes become undelivered."""
-    ready = threading.Event()
-    release = threading.Event()
-
-    class _FailingSink(io.StringIO):
-        """Raise during write or flush to exercise failure reporting."""
-
-        def write(self, text: str, /) -> int:
-            """Block, then raise when the test selects a write failure."""
-            ready.set()
-            if not release.wait(timeout=3):
-                raise RuntimeError
-            if failure_site == "write":
-                raise RuntimeError
-            return super().write(text)
-
-        def flush(self) -> None:
-            """Raise when the test selects a flush failure."""
-            if failure_site == "flush":
-                raise RuntimeError
-
-    sink = _FailingSink()
+    sink = _ControlledFailureSink(failure_site)
     worker = _delivery_worker(sink)
     stdout_diagnostics = _RelayDiagnostics()
     stderr_diagnostics = _RelayDiagnostics()
@@ -116,7 +124,7 @@ def test_worker_disables_after_write_or_flush_failure(failure_site: str) -> None
         )
         == 0
     )
-    assert ready.wait(timeout=1)
+    assert sink.ready.wait(timeout=1)
     assert (
         worker.enqueue(
             EchoStream.STDERR,
@@ -126,7 +134,7 @@ def test_worker_disables_after_write_or_flush_failure(failure_site: str) -> None
         )
         == 0
     )
-    release.set()
+    sink.release.set()
     result = worker.close(grace=1)
 
     assert tuple(failure.stream for failure in result.failures) == (EchoStream.STDOUT,)

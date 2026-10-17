@@ -11,6 +11,7 @@ import typing as typ
 
 import pytest
 
+import cuprum._bounded_delivery as bounded_delivery
 import cuprum._command_execution_config as command_execution_config
 import cuprum._pipeline_config as pipeline_config
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
@@ -96,6 +97,50 @@ async def _run_subject(
     )
 
 
+async def _exercise_blocked_delivery(
+    scenario: _BlockedDeliveryScenario,
+    ending: str,
+) -> None:
+    """Wait for the blocked write, then finish and release its run."""
+    task = asyncio.create_task(
+        _run_subject(
+            scenario.subject,
+            deadline_s=1.0 if ending == "timeout" else None,
+            sink=scenario.sink,
+        ),
+    )
+    try:
+        writer_started = await asyncio.wait_for(
+            asyncio.to_thread(scenario.sink.started.wait, 4.0),
+            timeout=5.0,
+        )
+        assert writer_started, "the delivery worker must enter sink.write"
+        assert scenario.sink.writer_thread_name == "cuprum-output-delivery", (
+            "sink.write must run on the dedicated delivery worker"
+        )
+        if ending == "timeout":
+            with pytest.raises(TimeoutExpired) as exc_info:
+                await task
+            scenario.timeout_error = exc_info.value
+        else:
+            assert task.cancel(), "the running command must accept cancellation"
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert not scenario.sink.finished.is_set(), (
+            "run finalization must not wait for the blocked writer"
+        )
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        scenario.sink.release.set()
+        writer_finished = await asyncio.wait_for(
+            asyncio.to_thread(scenario.sink.finished.wait, 2.0),
+            timeout=3.0,
+        )
+        assert writer_finished, "the test must release its blocked writer"
+
+
 @pytest.mark.parametrize("kind", ["command", "pipeline"])
 @pytest.mark.parametrize("ending", ["timeout", "cancellation"])
 def test_blocked_delivery_does_not_delay_timeout_or_cancellation(
@@ -105,52 +150,12 @@ def test_blocked_delivery_does_not_delay_timeout_or_cancellation(
     """The loop settles and reaps children while its presentation worker blocks."""
     scenario = _build_subject(kind)
 
-    async def exercise() -> None:
-        """Wait for the blocked writer, then expire or cancel the run."""
-        task = asyncio.create_task(
-            _run_subject(
-                scenario.subject,
-                deadline_s=1.0 if ending == "timeout" else None,
-                sink=scenario.sink,
-            ),
-        )
-        try:
-            writer_started = await asyncio.wait_for(
-                asyncio.to_thread(scenario.sink.started.wait, 4.0),
-                timeout=5.0,
-            )
-            assert writer_started, "the delivery worker must enter sink.write"
-            assert scenario.sink.writer_thread_name == "cuprum-output-delivery", (
-                "sink.write must run on the dedicated delivery worker"
-            )
-            if ending == "timeout":
-                with pytest.raises(TimeoutExpired) as exc_info:
-                    await task
-                scenario.timeout_error = exc_info.value
-            else:
-                assert task.cancel(), "the running command must accept cancellation"
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-            assert not scenario.sink.finished.is_set(), (
-                "run finalization must not wait for the blocked writer"
-            )
-        finally:
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            scenario.sink.release.set()
-            writer_finished = await asyncio.wait_for(
-                asyncio.to_thread(scenario.sink.finished.wait, 2.0),
-                timeout=3.0,
-            )
-            assert writer_finished, "the test must release its blocked writer"
-
     with (
         scoped(ScopeConfig(allowlist=frozenset([scenario.program]))),
         sh.observe(scenario.execution_events.append),
         observe_echo(scenario.echo_events.append),
     ):
-        asyncio.run(exercise())
+        asyncio.run(_exercise_blocked_delivery(scenario, ending))
 
     pids = started_pids(scenario.execution_events)
     assert len(pids) == scenario.expected_children, (
@@ -186,7 +191,7 @@ def test_failed_execution_bundle_build_closes_delivery_worker(
     """A preparation failure cannot strand the newly started daemon worker."""
     scenario = _build_subject("command")
     created_workers: list[_DeliveryWorker] = []
-    original_worker = command_execution_config._DeliveryWorker
+    original_worker = bounded_delivery._DeliveryWorker
     run_error = RuntimeError("idle monitor setup failed")
 
     def record_worker_creation(
@@ -203,7 +208,7 @@ def test_failed_execution_bundle_build_closes_delivery_worker(
         raise run_error
 
     monkeypatch.setattr(
-        command_execution_config,
+        bounded_delivery,
         "_DeliveryWorker",
         record_worker_creation,
     )
@@ -239,7 +244,7 @@ def test_failed_pipeline_config_build_closes_delivery_worker_and_sink(
     """A pipeline preparation failure releases its worker and sink session."""
     sink = RecordingSink()
     created_workers: list[_DeliveryWorker] = []
-    original_worker = pipeline_config._DeliveryWorker
+    original_worker = bounded_delivery._DeliveryWorker
     run_error = RuntimeError("idle monitor setup failed")
 
     def record_worker_creation(
@@ -255,7 +260,7 @@ def test_failed_pipeline_config_build_closes_delivery_worker_and_sink(
         """Fail after the sink and delivery worker have been acquired."""
         raise run_error
 
-    monkeypatch.setattr(pipeline_config, "_DeliveryWorker", record_worker_creation)
+    monkeypatch.setattr(bounded_delivery, "_DeliveryWorker", record_worker_creation)
     monkeypatch.setattr(pipeline_config, "_build_idle_monitor", fail_idle_monitor)
 
     with pytest.raises(RuntimeError) as exc_info:

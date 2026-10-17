@@ -136,7 +136,6 @@ async def _iter_line_events(
     execution: _SubprocessExecution = execution_factory()
 
     from cuprum._line_stream import _line_event_queue
-    from cuprum._pipeline_types import _EventDetails
 
     queue = _line_event_queue()
     result_future: asyncio.Future[CommandResult] = (
@@ -163,16 +162,7 @@ async def _iter_line_events(
             else:
                 break
         result = await result_future
-        _publish_completion(tracking, execution, result)
-        outcome = _outcome_for_result(result)
-        execution.observation.emit_terminal(
-            outcome.outcome,
-            _EventDetails(
-                pid=result.pid,
-                exit_code=result.exit_code,
-                duration_s=result.duration,
-            ),
-        )
+        _publish_line_completion(tracking, execution, result)
         yield result
     except BaseException as error:
         # Broader than ``Exception`` on purpose: the teardown classifies what
@@ -196,6 +186,25 @@ async def _iter_line_events(
                     drain_grace_s=execution.delivery_grace_s,
                 ),
             )
+
+
+def _publish_line_completion(
+    tracking: _ExecutionTracking,
+    execution: _SubprocessExecution,
+    result: CommandResult,
+) -> None:
+    """Run completion hooks and publish the terminal observation for a line run."""
+    for hook in tracking.execution_hooks.after_hooks:
+        hook(execution.cmd, result)
+    outcome = _outcome_for_result(result)
+    execution.observation.emit_terminal(
+        outcome.outcome,
+        _EventDetails(
+            pid=result.pid,
+            exit_code=result.exit_code,
+            duration_s=result.duration,
+        ),
+    )
 
 
 def _emit_line_stream_error(
@@ -257,16 +266,6 @@ async def _drive_line_stream(
     except BaseException as error:  # ruff: ignore[blind-except] - any failure reaches the iterator
         if not result_future.done():
             result_future.set_exception(error)
-
-
-def _publish_completion(
-    tracking: _ExecutionTracking,
-    execution: _SubprocessExecution,
-    result: CommandResult,
-) -> None:
-    """Run the caller's after-hooks for a run that completed."""
-    for hook in tracking.execution_hooks.after_hooks:
-        hook(execution.cmd, result)
 
 
 async def _reconcile_line_stream(

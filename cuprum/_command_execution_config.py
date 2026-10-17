@@ -6,18 +6,20 @@ import functools
 import sys
 import typing as typ
 
-from cuprum._bounded_delivery import _DeliveryWorker
+from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
 from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
 from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum._subprocess_execution import _SubprocessExecution
 from cuprum._stdio_plan import _resolve_stdio
-from cuprum.echo_events import EchoStream
 from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._command_internals import _ExecutionState
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._sink_lifecycle import _SinkBracket
     from cuprum.sh import SafeCmd
@@ -51,27 +53,14 @@ def _build_subprocess_execution(
     delivery_worker = (
         None
         if delivery is None
-        else _DeliveryWorker(
-            destinations={
-                EchoStream.STDOUT: stdout_destination,
-                EchoStream.STDERR: stderr_destination,
-            },
-            max_queued_bytes=delivery.max_queued_bytes,
+        else _new_delivery_worker(
+            delivery,
+            stdout_destination,
+            stderr_destination,
         )
     )
     try:
-        relay_diagnostics = (
-            None if delivery_worker is None else (_RelayDiagnostics(), _RelayDiagnostics())
-        )
-        idle_delivery = (
-            None
-            if delivery_worker is None or relay_diagnostics is None
-            else functools.partial(
-                _queue_idle_diagnostic,
-                delivery_worker,
-                relay_diagnostics[1],
-            )
-        )
+        relay_diagnostics, idle_delivery = _build_delivery_diagnostics(delivery_worker)
         return _SubprocessExecution(
             cmd=cmd,
             ctx=state.context,
@@ -87,14 +76,11 @@ def _build_subprocess_execution(
             on_line=state.output.on_line,
             capture_bytes=state.capture_bytes,
             process_group=state.context.resolved_process_group,
-            idle=_build_idle_monitor(
-                state.output.idle_after,
-                state.output.on_idle,
-                _idle_subject(str(cmd.program)),
-                _IdleSinkConfig(
-                    sink=stderr_destination,
-                    delivery=idle_delivery,
-                ),
+            idle=_build_command_idle_monitor(
+                cmd,
+                state,
+                stderr_destination,
+                idle_delivery,
             ),
             delivery_worker=delivery_worker,
             delivery_grace_s=None if delivery is None else delivery.drain_grace_s,
@@ -110,5 +96,39 @@ def _build_subprocess_execution(
                     f"({type(close_error).__name__})."
                 )
         raise
+
+
+def _build_delivery_diagnostics(
+    worker: _DeliveryWorker | None,
+) -> tuple[
+    tuple[_RelayDiagnostics, _RelayDiagnostics] | None,
+    cabc.Callable[[str], None] | None,
+]:
+    """Build stream diagnostics and the optional stderr heartbeat route."""
+    if worker is None:
+        return None, None
+    diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    idle_delivery = functools.partial(
+        _queue_idle_diagnostic,
+        worker,
+        diagnostics[1],
+    )
+    return diagnostics, idle_delivery
+
+
+def _build_command_idle_monitor(
+    cmd: SafeCmd,
+    state: _ExecutionState,
+    stderr_destination: typ.IO[str],
+    idle_delivery: cabc.Callable[[str], None] | None,
+) -> _IdleMonitor | None:
+    """Build the command heartbeat with its resolved stderr destination."""
+    return _build_idle_monitor(
+        state.output.idle_after,
+        state.output.on_idle,
+        _idle_subject(str(cmd.program)),
+        _IdleSinkConfig(sink=stderr_destination, delivery=idle_delivery),
+    )
+
 
 __all__ = ["_build_subprocess_execution"]

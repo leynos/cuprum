@@ -20,7 +20,7 @@ if typ.TYPE_CHECKING:
     from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum.echo_events import EchoEvent
     from cuprum.events import ExecEvent
-    from cuprum.sh import CommandResult
+    from cuprum.sh import CommandResult, SafeCmd
 
 
 def test_lines_defers_delivery_setup_until_iteration(
@@ -62,6 +62,43 @@ def test_lines_defers_delivery_setup_until_iteration(
     assert not sink.started.is_set()
 
 
+async def _consume_blocked_line_stream(
+    command: SafeCmd,
+    output: RunOutputOptions,
+    sink: BlockedSink,
+    *,
+    close_early: bool,
+) -> CommandResult | None:
+    """Block delivery, then complete or explicitly close the line iterator."""
+    stream = command.lines(
+        output=output,
+        context=ExecutionContext(stdout_sink=sink, cancel_grace=0.1),
+    )
+    try:
+        line = await anext(stream)
+        assert line.text == "ready"
+        writer_started = await asyncio.wait_for(
+            asyncio.to_thread(sink.started.wait, 3.0),
+            timeout=4.0,
+        )
+        assert writer_started
+        if close_early:
+            await stream.aclose()
+        else:
+            async for _line in stream:
+                pass
+        assert not sink.finished.is_set()
+        return stream.result
+    finally:
+        await stream.aclose()
+        sink.release.set()
+        writer_finished = await asyncio.wait_for(
+            asyncio.to_thread(sink.finished.wait, 2.0),
+            timeout=3.0,
+        )
+        assert writer_finished
+
+
 @pytest.mark.parametrize("close_early", [False, True])
 def test_lines_closes_blocked_delivery_worker(
     close_early: bool,
@@ -84,42 +121,19 @@ def test_lines_closes_blocked_delivery_worker(
         delivery=BoundedDelivery(max_queued_bytes=128, drain_grace_s=0.02),
     )
 
-    async def consume() -> CommandResult | None:
-        """Block the sink, then complete or explicitly close the iterator."""
-        stream = command.lines(
-            output=output,
-            context=ExecutionContext(stdout_sink=sink, cancel_grace=0.1),
-        )
-        try:
-            line = await anext(stream)
-            assert line.text == "ready"
-            writer_started = await asyncio.wait_for(
-                asyncio.to_thread(sink.started.wait, 3.0),
-                timeout=4.0,
-            )
-            assert writer_started
-            if close_early:
-                await stream.aclose()
-            else:
-                async for _line in stream:
-                    pass
-            assert not sink.finished.is_set()
-            return stream.result
-        finally:
-            await stream.aclose()
-            sink.release.set()
-            writer_finished = await asyncio.wait_for(
-                asyncio.to_thread(sink.finished.wait, 2.0),
-                timeout=3.0,
-            )
-            assert writer_finished
-
     with (
         scoped(ScopeConfig(allowlist=frozenset([runtime.program]))),
         sh.observe(execution_events.append),
         observe_echo(echo_events.append),
     ):
-        result = asyncio.run(consume())
+        result = asyncio.run(
+            _consume_blocked_line_stream(
+                command,
+                output,
+                sink,
+                close_early=close_early,
+            ),
+        )
 
     pids = started_pids(execution_events)
     assert len(pids) == 1

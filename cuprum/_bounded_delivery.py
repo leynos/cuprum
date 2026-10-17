@@ -14,9 +14,10 @@ import math
 import threading
 import typing as typ
 
+from cuprum.echo_events import EchoStream
+
 if typ.TYPE_CHECKING:
     from cuprum._stream_drain_state import _RelayDiagnostics
-    from cuprum.echo_events import EchoStream
 
 _DELIVERY_DRAIN_GRACE_S = 0.25
 
@@ -125,11 +126,19 @@ def _normalize_drain_grace(drain_grace_s: object) -> float | None:
     """Validate an optional finite drain grace and normalize it to float."""
     if drain_grace_s is None:
         return None
-    if isinstance(drain_grace_s, bool) or not isinstance(drain_grace_s, int | float):
+    if isinstance(drain_grace_s, bool):
+        msg = "BoundedDelivery drain_grace_s must be a finite number or None"
+        raise TypeError(msg)
+    return _finite_drain_grace(drain_grace_s)
+
+
+def _finite_drain_grace(value: object) -> float:
+    """Convert a numeric grace and reject values that cannot bound a wait."""
+    if not isinstance(value, int | float):
         msg = "BoundedDelivery drain_grace_s must be a finite number or None"
         raise TypeError(msg)
     try:
-        grace = float(drain_grace_s)
+        grace = float(value)
     except OverflowError as exc:
         msg = "BoundedDelivery drain_grace_s must be finite"
         raise ValueError(msg) from exc
@@ -347,3 +356,28 @@ class _DeliveryWorker:
     def _undelivered_snapshot(self) -> tuple[_UndeliveredBytes, ...]:
         """Return stable queue order for result and event emission."""
         return tuple(self._undelivered_by_target)
+
+
+def _new_delivery_worker(
+    delivery: BoundedDelivery,
+    stdout_destination: _DeliveryDestination,
+    stderr_destination: _DeliveryDestination,
+) -> _DeliveryWorker:
+    """Build the shared worker from enabled options and resolved sinks.
+
+    Command and pipeline setup own destination resolution, disabled-option
+    handling, and setup-failure cleanup. This helper centralizes only the
+    worker's common stream mapping and byte-capacity construction.
+
+    Returns
+    -------
+    _DeliveryWorker
+        The run-owned worker configured for the resolved stream destinations.
+    """
+    return _DeliveryWorker(
+        destinations={
+            EchoStream.STDOUT: stdout_destination,
+            EchoStream.STDERR: stderr_destination,
+        },
+        max_queued_bytes=delivery.max_queued_bytes,
+    )
