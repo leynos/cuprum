@@ -6,6 +6,7 @@ arguments, environment, or captured output used by an execution.
 
 from __future__ import annotations
 
+import bisect
 import dataclasses as dc
 import re
 import typing as typ
@@ -109,11 +110,13 @@ def _standalone_zero_width_spans(
     nonzero_spans: tuple[tuple[int, int], ...],
 ) -> tuple[tuple[int, int], ...]:
     """Retain zero-width matches outside non-empty match boundaries."""
-    return tuple(
-        (position, position)
-        for position in positions
-        if not any(start <= position <= end for start, end in nonzero_spans)
-    )
+    span_starts = tuple(start for start, _ in nonzero_spans)
+    standalone: list[tuple[int, int]] = []
+    for position in positions:
+        last_span_index = bisect.bisect_right(span_starts, position) - 1
+        if last_span_index == -1 or position > nonzero_spans[last_span_index][1]:
+            standalone.append((position, position))
+    return tuple(standalone)
 
 
 def _merge_overlapping_spans(

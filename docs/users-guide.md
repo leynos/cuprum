@@ -1602,11 +1602,10 @@ commands.
 Use `GitHubActionsSink` from `cuprum.sinks` for anything the flags do not
 cover: a custom `title`, another `destination`, `force=True` to reproduce the
 framing locally, `emit_group=False` / `emit_annotation=False` to switch off
-either half of the frame, or `redaction=policy` to redact explicit titles and
-argv-derived group titles. The convenience flags do not accept a redaction
-policy. Redaction runs before workflow-command escaping and only when the
-corresponding group or explicit-title annotation is emitted. The trusted
-fallback annotation label and echoed child output remain unchanged. An
+either half of the frame, or `redaction=policy` to redact every emitted group
+and annotation title, including the bounded fallback annotation label. The
+convenience flags do not accept a redaction policy. Redaction runs before
+workflow-command escaping. Mirrored child output remains unchanged. An
 annotation never uses argv.
 
 <!-- tested-example: github-actions-sink -->

@@ -309,10 +309,9 @@ class GitHubActionsSink:
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
     redaction:
-        Optional policy for caller-supplied and argv-derived titles, applied
-        before escaping when the corresponding group or annotation is emitted.
-        Defaults to ``None``. The trusted fallback label and echoed output are
-        unchanged.
+        Optional policy for every emitted group and annotation title, including
+        the bounded fallback label, applied before workflow-command escaping.
+        Defaults to ``None``. Mirrored child output is unchanged.
 
     Raises
     ------

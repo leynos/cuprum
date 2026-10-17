@@ -92,9 +92,9 @@ def test_failed_title_redaction_writes_nothing() -> None:
 
 @pytest.mark.parametrize(
     ("title", "expected_title"),
-    [(None, "trusted-label"), (_SENTINEL, "[REDACTED]")],
+    [(None, "[REDACTED]"), (_SENTINEL, "[REDACTED]")],
 )
-def test_trusted_fallback_and_explicit_titles_use_their_projection_policy(
+def test_fallback_and_explicit_titles_use_their_projection_policy(
     title: str | None,
     expected_title: str,
 ) -> None:
@@ -111,14 +111,12 @@ def test_trusted_fallback_and_explicit_titles_use_their_projection_policy(
         "emitted titles must use their configured projection policy"
     )
     assert f"::error title={expected_title}::" in rendered, (
-        "explicit annotation titles must be sanitized while fallback labels stay "
-        "bounded"
+        "emitted annotations must apply the policy to explicit and fallback titles"
     )
     if title is not None:
         assert _SENTINEL not in rendered, "explicit titles must not export the sentinel"
 
 
-@pytest.mark.usefixtures("failing_redaction_substitution")
 def test_annotation_only_does_not_redact_an_unused_argv_title() -> None:
     """An unused group title cannot make an annotation-only run fail."""
     buffer = io.StringIO()
@@ -126,7 +124,7 @@ def test_annotation_only_does_not_redact_an_unused_argv_title() -> None:
         buffer,
         force=True,
         emit_group=False,
-        redaction=RedactionPolicy(patterns=(re.compile(r"."),)),
+        redaction=_POLICY,
     )
 
     session = sink.open_session(
@@ -138,6 +136,23 @@ def test_annotation_only_does_not_redact_an_unused_argv_title() -> None:
     rendered = buffer.getvalue()
     assert "::group::" not in rendered, "annotation-only output must not open a group"
     assert "::error title=project%3A cat::exit_nonzero" in rendered, (
-        "the bounded annotation label must remain available without group projection"
+        "the unmatched bounded label must remain available without group projection"
     )
     assert _SENTINEL not in rendered, "the bounded annotation cannot contain argv"
+
+
+@pytest.mark.usefixtures("failing_redaction_substitution")
+def test_failed_fallback_annotation_redaction_writes_nothing() -> None:
+    """A failing rule cannot export an unredacted fallback annotation label."""
+    buffer = io.StringIO()
+    sink = GitHubActionsSink(
+        buffer,
+        force=True,
+        emit_group=False,
+        redaction=RedactionPolicy(patterns=(re.compile(r"."),)),
+    )
+
+    with pytest.raises(RedactionError):
+        sink.open_session(SessionStart(label=f"project: {_SENTINEL}", argv=()))
+
+    assert not buffer.getvalue(), "failed fallback redaction must not write output"
