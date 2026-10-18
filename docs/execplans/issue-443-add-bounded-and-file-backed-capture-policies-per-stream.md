@@ -625,6 +625,35 @@ Thresholds that trigger escalation when breached.
   claim in the `capture_policy` module docstring is about what a bound
   measures, not about what a partial run can count. Date/Author: 2026-10-18,
   implementation agent.
+- [x] (2026-10-18) Clear the four findings of review round 13. One was a
+  production defect: `_StreamConfig.capture_sink` is derived in
+  `__post_init__`, but it took part in equality, hashing, and the
+  representation. `dc.replace` rebuilds it, and the value comparison then
+  depended on the policy — `None` and two `_FullAccumulator` objects compare by
+  identity, `_BoundedAccumulator` compares by value — while a bounded
+  accumulator is unhashable, so `hash(config)` raised only under
+  `BoundedCapture`. The repr printed whatever the stream had retained. Verified
+  by running each symptom before the fix, not by reading the review:
+  full-config equality was `False`, bounded hashing raised `TypeError`, and the
+  repr contained `_prefix`. The field is now `repr=False, compare=False`, as
+  `_PipelineRunConfig.stream_config` already was, with its reasoning recorded
+  beside it. Three regression cases in `test_bounded_capture_seam.py` fail
+  under the mutation that removes those options and pass after it. The first
+  attempt at the equality case was itself vacuous — it compared two configs
+  whose accumulators happened to be equal by value — which the mutation run
+  exposed; the case now diverts `build_accumulator` so the sinks are provably
+  distinct, and it asserts that distinctness before asserting equality. The
+  other three findings were documentation claims that had drifted from the
+  tests: O6 described an interior producer's stdout as bounded when interior
+  stdout has no record at all (the real assertion is
+  `result.stdout == _ANNOUNCEMENT` plus `dropped_bytes == 0` on the reporter)
+  and cited a scenario name that does not exist; O8 required a readable spill
+  after a timeout without naming `keep_file=True`, which the test does use and
+  the default removes; and the design document said each interior stage's
+  stderr "is captured" without the qualifier that an uncaptured stream
+  contributes no record. All three were checked against the feature file, the
+  timeout test, and `_build_stage_result` before editing. Date/Author:
+  2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -1996,16 +2025,18 @@ registered through `_shielded_cleanup`. Non-vacuity: each case first asserts
 the file *existed* during the run (via the reported metadata path), so "not
 there afterwards" cannot be satisfied by never having written it.
 
-**O6 — A bound never reaches the relay.** Invariant: in a two-stage pipeline
-where stage 1's stdout is bounded, stage 2 observes stage 1's complete stream.
-Method: behavioural test running a producer stage under `BoundedCapture` with a
-consumer stage that echoes what it read; compare against the unbounded
-producer's output. Artefact: `tests/behaviour/test_bounded_capture.py`
-(scenario "Bounded capture does not bound the downstream stage") and
-`tests/features/bounded_capture.feature`. Evidence: the consumer's captured
-output is the full producer payload while the producer's own `stdout` is the
-bounded tail. Non-vacuity: the payload is strictly larger than the bound, so a
-leaking bound changes the consumer's output.
+**O6 — A bound never reaches the relay.** Invariant: in a pipeline where the
+final stage's stdout is bounded, the stage after the producer reads the
+producer's complete stream. Method: behavioural test running a producer stage
+under `BoundedCapture` with a reporter stage that announces how many bytes it
+read. Artefact: `tests/behaviour/test_bounded_capture.py` (scenario "A bound
+never reaches the relay") and `tests/features/bounded_capture.feature`.
+Evidence: `result.stdout == _ANNOUNCEMENT` — the reporter's own output, which
+is the length it read — together with `relayed.dropped_bytes == 0` on the
+reporter's record. The producer's stdout has no record of its own: interior
+stdout is relayed rather than captured, so only the bound's effect on what the
+consumer read is observable. Non-vacuity: the payload is strictly larger than
+the bound, so a leaking bound would shorten the reported count.
 
 **O7 — Per-stream independence.** *Discharged at M1.* Invariant:
 `resolved_capture` resolves each stream from its own field, inheriting
@@ -2030,13 +2061,14 @@ unrelated error.
 
 **O8 — Partial output survives failure.** Invariant: a bounded or spilled
 stream that is cut short by a timeout still reports the bytes received up to
-that moment (text for the bounded case, a readable spill file for the
-file-backed case). Method: parameterized test with a child that writes a known
-prefix then stalls past a short timeout, asserting the retained payload.
-Artefact: `cuprum/unittests/test_capture_timeout.py`. Evidence: the assertion
-fails if finalization only runs on the clean-EOF path. Non-vacuity: the child
-writes a non-empty prefix before stalling, and the test asserts that prefix
-specifically rather than mere non-emptiness.
+that moment — text for the bounded case, and for the file-backed case a
+readable spill file, which requires `keep_file=True` because the default
+removes the file on every outcome (O5). Method: parameterized test with a child
+that writes a known prefix then stalls past a short timeout, asserting the
+retained payload. Artefact: `cuprum/unittests/test_capture_timeout.py`.
+Evidence: the assertion fails if finalization only runs on the clean-EOF path.
+Non-vacuity: the child writes a non-empty prefix before stalling, and the test
+asserts that prefix specifically rather than mere non-emptiness.
 
 **O9 — The default is unchanged.** *Partly discharged at M1; the runtime half
 closes at M3.* Invariant: `RunOutputOptions()` resolves both streams to

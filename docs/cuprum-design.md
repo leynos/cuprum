@@ -630,12 +630,13 @@ Contract notes:
   `PipelineResult.stdout` is `None`.
 - `captures` reports the final stage's records: its stdout and its stderr.
   Interior stdout is relayed to the next stage rather than captured, so it has
-  no record anywhere; each interior stage's stderr is captured and reported on
-  that stage's own `stages[i].captures`, which is where a caller inspecting
-  every stage's stderr reads it. A caller reading only
-  `PipelineResult.captures` sees the final stage alone. The policy for a stream
-  therefore bounds what the *result* keeps and never what a stage hands
-  downstream.
+  no record anywhere; an interior stage's stderr, when that stage captures it,
+  is reported on the stage's own `stages[i].captures`, which is where a caller
+  inspecting every stage's stderr reads it. An uncaptured stream contributes no
+  record at all, so `stages[i].captures` is empty for a stage that captured
+  neither stream. A caller reading only `PipelineResult.captures` sees the
+  final stage alone. The policy for a stream therefore bounds what the *result*
+  keeps and never what a stage hands downstream.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
