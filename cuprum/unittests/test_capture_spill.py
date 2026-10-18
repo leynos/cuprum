@@ -26,6 +26,11 @@ from cuprum._capture_file import _FileAccumulator
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import CapturePolicyKind, FileBackedCapture
+from cuprum.unittests._blocking_spill_file import (
+    _STARTED_TIMEOUT_S,
+    _await_blocked_write,
+    _BlockingSpillFile,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -364,52 +369,9 @@ def test_a_spill_survives_a_chunk_partition_that_splits_characters(
     _cleanup(final)
 
 
-class _BlockingSpillFile:
-    """A spill file whose write waits until the test lets it finish.
-
-    Holds the spill's transition open between creating the file and the prefix
-    reaching it, which is the window a cancellation can land in.
-    """
-
-    def __init__(self, path: pathlib.Path) -> None:
-        """Create *path*, so the file exists before the write is entered."""
-        self.name = str(path)
-        self.started = False
-        self._released = threading.Event()
-        self._file = path.open("wb")
-
-    def write(self, data: bytes) -> int:
-        """Signal that the write is in flight, then wait to be released."""
-        self.started = True
-        self._released.wait(30)
-        return self._file.write(data)
-
-    def flush(self) -> None:
-        """Flush the underlying file."""
-        self._file.flush()
-
-    def close(self) -> None:
-        """Close the underlying file."""
-        self._file.close()
-
-    def release(self) -> None:
-        """Let the blocked write finish."""
-        self._released.set()
-
-
-async def _await_started_write(blocking: _BlockingSpillFile) -> None:
-    """Fail unless the spill begins writing its file before the deadline.
-
-    The signal is set by a worker thread, which no asyncio primitive can
-    observe, so polling is the coordination.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 10.0
-    while loop.time() < deadline:
-        if blocking.started:
-            return
-        await asyncio.sleep(0.01)
-    pytest.fail("the spill never began writing the file it created")
+# Long enough that reaching a deadlock is diagnosed as one, short enough that a
+# test suite interrupted mid-case still ends on its own.
+_BLOCKED_CREATE_TIMEOUT_S = 30.0
 
 
 class _BlockingCreate:
@@ -431,7 +393,8 @@ class _BlockingCreate:
     def __call__(self, **_: object) -> _BlockingSpillFile:
         """Signal the create is in flight, wait to be released, then create."""
         self.started = True
-        self._released.wait(30)
+        if not self._released.wait(_BLOCKED_CREATE_TIMEOUT_S):
+            pytest.fail("the blocked spill create was never released")
         self.file = _BlockingSpillFile(self.path)
         return self.file
 
@@ -441,9 +404,9 @@ class _BlockingCreate:
 
 
 async def _await_started_create(create: _BlockingCreate) -> None:
-    """Fail unless the worker enters the create before the deadline."""
+    """Fail the case unless the worker enters the create before the deadline."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + 10.0
+    deadline = loop.time() + _STARTED_TIMEOUT_S
     while loop.time() < deadline:
         if create.started:
             return
@@ -534,9 +497,9 @@ def test_a_cancelled_spill_leaves_cleanup_a_file_to_remove(
     async def spill_then_cancel() -> None:
         """Cancel the absorb while its first write is still in flight."""
         task = asyncio.create_task(accumulator.absorb(_PAYLOAD))
-        await _await_started_write(blocking)
+        await _await_blocked_write(blocking, 1)
         task.cancel()
-        blocking.release()
+        blocking.release(1)
         with pytest.raises(asyncio.CancelledError):
             await task
 
