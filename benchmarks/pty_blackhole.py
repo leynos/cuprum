@@ -32,7 +32,9 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     target and closes the slave only after the drainer acknowledges it. The
     drainer sets a completion event only after reaching the target or recording
     a failure. ``drained_bytes`` is available only after successful reader
-    acknowledgement and thread termination.
+    acknowledgement and thread termination. A shutdown timeout raises
+    ``PtyBlackholeDrainError`` and leaves the PTY open for late acknowledgement
+    and deferred cleanup.
     """
 
     def __init__(self, *, encoding: str, errors: str) -> None:
@@ -51,6 +53,8 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         self._drainer_wake_read_fd: int | None = None
         self._raw_writer: _CountingPtyWriter | None = None
         self._drainer_finished = threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._cleanup_deferred = False
 
     @property
     def drained_bytes(self) -> int | None:
@@ -91,6 +95,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         self._drainer_error = None
         self._counter_lock = threading.Lock()
         self._drainer_finished.clear()
+        self._cleanup_deferred = False
         resources = _pty_setup._open_pty_blackhole_resources(
             self._encoding,
             self._errors,
@@ -131,14 +136,21 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         exc: BaseException | None,
         traceback: types.TracebackType | None,
     ) -> None:
-        """Request exact-byte acknowledgement and close the sink safely."""
+        """Request exact-byte acknowledgement and close the sink safely.
+
+        Notes
+        -----
+        A reader failure or a timeout waiting for acknowledgement is reported
+        as ``PtyBlackholeDrainError`` when no body exception is active.
+        """
         flush_error = self._flush_slave()
         self._publish_drain_target()
         self._wake_drainer()
+        drainer_stopped = False
         try:
             drainer_stopped = self._wait_for_drainer()
         finally:
-            self._close_resources()
+            self._close_or_defer_resources(drainer_stopped=drainer_stopped)
         if exc_type is None:
             self._raise_if_drain_failed(
                 flush_error,
@@ -191,6 +203,18 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
                 with contextlib.suppress(OSError):
                     os.close(master_fd)
 
+    def _close_or_defer_resources(self, *, drainer_stopped: bool) -> None:
+        """Keep the slave open if the reader still needs to finish its drain."""
+        if drainer_stopped:
+            self._close_resources()
+            return
+        with self._lifecycle_lock:
+            should_close = self._drainer_finished.is_set()
+            if not should_close:
+                self._cleanup_deferred = True
+        if should_close:
+            self._close_resources()
+
     def _raise_if_drain_failed(
         self,
         flush_error: Exception | None,
@@ -200,8 +224,10 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         """Raise a flush or acknowledgement failure when no body error exists."""
         if flush_error is not None:
             raise flush_error
-        if drainer_stopped:
-            self._raise_if_drain_incomplete()
+        if not drainer_stopped:
+            msg = "timed out waiting for PTY drainer to acknowledge accepted output"
+            raise PtyBlackholeDrainError(msg)
+        self._raise_if_drain_incomplete()
 
     def _raise_if_drain_incomplete(self) -> None:
         """Raise when a stopped drainer failed to acknowledge its target."""
@@ -274,37 +300,48 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         from filling during benchmark writes. The wake pipe lets an empty sink
         and a drainer blocked in ``select`` observe the final target.
         """
-        drained_bytes = 0
         try:
             ready.set()
-            while True:
-                target = self._get_drain_target()
-                if self._target_reached(target, drained_bytes):
-                    return
-                readable, _, _ = select.select((master_fd, wake_read_fd), (), ())
-                target = self._target_after_wake(
-                    wake_read_fd,
-                    wake_is_readable=wake_read_fd in readable,
-                )
-                if self._target_reached(target, drained_bytes):
-                    return
-                if master_fd not in readable:
-                    continue
-                chunk = self._read_chunk(master_fd, target, drained_bytes)
-                if chunk is None:
-                    continue
-                drained_bytes += len(chunk)
-                if self._target_reached(target, drained_bytes):
-                    return
+            self._drain_until_target(master_fd, wake_read_fd)
         except (OSError, ValueError, PtyBlackholeDrainError) as error:
             self._drainer_error = error
         finally:
-            self._drained_bytes = drained_bytes
             with contextlib.suppress(OSError):
                 os.close(master_fd)
             with contextlib.suppress(OSError):
                 os.close(wake_read_fd)
-            self._drainer_finished.set()
+            with self._lifecycle_lock:
+                self._drainer_finished.set()
+                cleanup_deferred = self._cleanup_deferred
+                self._cleanup_deferred = False
+            if cleanup_deferred:
+                try:
+                    self._close_resources()
+                except (OSError, ValueError) as error:
+                    self._drainer_error = error
+
+    def _drain_until_target(self, master_fd: int, wake_read_fd: int) -> None:
+        """Read until the writer's published target has been acknowledged."""
+        while True:
+            target = self._get_drain_target()
+            if self._target_reached(target, self._drained_bytes):
+                return
+            self._drain_read_cycle(master_fd, wake_read_fd)
+
+    def _drain_read_cycle(self, master_fd: int, wake_read_fd: int) -> None:
+        """Wait for output or a target update, then consume one readable chunk."""
+        readable, _, _ = select.select((master_fd, wake_read_fd), (), ())
+        target = self._target_after_wake(
+            wake_read_fd,
+            wake_is_readable=wake_read_fd in readable,
+        )
+        if self._target_reached(target, self._drained_bytes):
+            return
+        if master_fd not in readable:
+            return
+        chunk = self._read_chunk(master_fd, target, self._drained_bytes)
+        if chunk is not None:
+            self._drained_bytes += len(chunk)
 
     def _target_after_wake(
         self,

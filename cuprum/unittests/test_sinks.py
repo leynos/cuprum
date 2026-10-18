@@ -291,7 +291,8 @@ def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
     bh._drained_bytes = 42
     bh._drain_target = 42
 
-    bh.__exit__(None, None, None)
+    with pytest.raises(PtyBlackholeDrainError, match="timed out"):
+        bh.__exit__(None, None, None)
 
     still_running.join.assert_called_once_with(timeout=5.0)
     assert bh._thread is still_running, (
@@ -311,7 +312,8 @@ def test_pty_blackhole_publishes_count_after_a_late_drainer_exit() -> None:
     bh._drained_bytes = 42
     bh._drain_target = 42
 
-    bh.__exit__(None, None, None)
+    with pytest.raises(PtyBlackholeDrainError, match="timed out"):
+        bh.__exit__(None, None, None)
 
     bh._drainer_finished.set()
 
