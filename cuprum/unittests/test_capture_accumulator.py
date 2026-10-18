@@ -416,8 +416,9 @@ def test_a_mark_less_family_name_reads_the_tail_as_the_platform_does(
 @pytest.mark.parametrize(
     ("family", "native", "max_bytes"),
     [
-        # Two code units of four bytes each, so a bound of 5 keeps the second
-        # character and one byte of the first.
+        # Each emoji is a surrogate pair: two two-byte code units, four bytes
+        # in total. A bound of 5 keeps the second character and one byte of
+        # the first.
         pytest.param("utf-16", _NATIVE_UTF16, 5, id="utf-16"),
         # One code unit is four bytes, so a bound of 5 keeps the second
         # character and the first byte of the first.

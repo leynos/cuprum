@@ -94,9 +94,9 @@ def test_the_drain_retains_a_bounded_tail_not_the_whole_stream() -> None:
     nothing, so this is the assertion that connects the policy to the read
     loop.
 
-    The payload is written in one chunk five times the bound, so the drop
-    happens on the first read rather than depending on how the reader happens
-    to partition a single ``feed_data``.
+    The payload is written in one chunk twice the bound, so the drop happens
+    on the first read rather than depending on how the reader happens to
+    partition a single ``feed_data``.
     """
     payload = b"0123456789abcdef"
     result = _run_drain(payload, BoundedCapture(max_bytes=8))
