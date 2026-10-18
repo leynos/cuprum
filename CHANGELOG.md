@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0-beta2] - 2026-10-17
+## [0.2.0-beta2] - 2026-10-18
 
 _Applications upgrading from 0.1 should follow the
 [0.2.0 migration guide](docs/v0-2-0-migration-guide.md)._
@@ -67,6 +67,14 @@ _Applications upgrading from 0.1 should follow the
   capped settlement wait. It carries `owns_group`, a bounded `group_outcome`,
   and `settle_s`. Exhaustive hooks must handle the new phase
   ([#438](https://github.com/leynos/cuprum/issues/438)).
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `ExecPhase`
+  gains `stdio_error`, published beside the caller-visible exception when a
+  standard-stream step fails: the stdin producer, the encoder, opening a
+  redirect file, or flushing a borrowed file object. It carries a bounded
+  `error_category`, which also labels the new `cuprum_stdio_errors_total`
+  counter. `stdin_error` gains the `early_close` operation. Exhaustive hooks
+  must handle the new phase
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
 - **Windows native I/O accepts only synchronous-compatible handles:** A direct
   native-shim caller that supplies a raw Windows handle is now rejected
   deliberately, and the rejection is counted as
@@ -123,6 +131,19 @@ _Applications upgrading from 0.1 should follow the
 
 ### Added
 
+- **Streaming stdin:** `stdin=StdinStream(chunks=...)` feeds a child from an
+  async producer of `str` or `bytes` chunks, pulling each chunk only once the
+  child has accepted the previous one, so large input never has to be held in
+  memory. A producer failure terminates the child and raises `StdinSourceError`
+  with the original exception chained; a child that closes stdin early is not
+  an error ([#445](https://github.com/leynos/cuprum/issues/445)).
+- **Standard-stream redirection:** `RunOutputOptions.stdout` and `.stderr`
+  accept a `StdioTarget` that sends the stream to a pipe, the parent's own
+  stream, a file Cuprum opens and closes, or a descriptor the caller owns.
+  Contradictory combinations, such as capture with a redirected stream or one
+  path for both streams, raise `ValueError` before the spawn. File and
+  descriptor targets require POSIX
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
 - **Opt-in telemetry redaction:** `RedactionPolicy` applies caller-configured
   literal and regular-expression rules to selected text in structured logging,
   tracing, plain-text start records, explicit or argv-derived GitHub Actions
@@ -382,33 +403,6 @@ _Applications upgrading from 0.1 should follow the
   [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) now leads with an
   upgrade checklist covering every breaking change since 0.1
   ([#634](https://github.com/leynos/cuprum/pull/634)).
-- **Streaming stdin:** `StdinStream(chunks=...)` feeds an async producer's
-  chunks to the child one at a time, writing and draining each before pulling
-  the next, so input larger than the parent would buffer is delivered without
-  holding the whole payload. A `str` chunk is encoded with the context's
-  `encoding` and `errors`, a `bytes` chunk verbatim. A producer failure ends
-  the run as `StdinSourceError` with the producer's exception chained, and an
-  early child-side close is recorded as a `stdin_error` observation rather than
-  failing the run ([#445](https://github.com/leynos/cuprum/issues/445)).
-- **Explicit standard-stream redirection:** `RunOutputOptions.stdout` and
-  `.stderr` accept a `StdioTarget` — a library pipe, the inherited parent
-  stream, a file **cuprum owns** (opened before the spawn, closed in a
-  `finally` immediately after), or a **borrowed** descriptor or file object
-  cuprum never closes and flushes before the spawn. Contradictory combinations
-  are rejected at construction: capture or echo with a redirected stream, one
-  path for both streams, and a `stdin` that names a file or descriptor, since
-  only `pipe()` and `inherit()` are meaningful for an input stream
-  ([#445](https://github.com/leynos/cuprum/issues/445)).
-
-<!-- markdownlint-disable-next-line MD024 -->
-### Fixed
-
-- **Native-wheel CI suppresses Maturin's missing `build-backend` warning:**
-  `uv_build` remains the PEP 517 backend for the pure-Python wheel, while the
-  Linux, macOS, and Windows CI lanes invoke Maturin directly for native wheels.
-  Those invocations now suppress only the intentional backend mismatch warning,
-  leaving other Maturin diagnostics visible
-  ([#430](https://github.com/leynos/cuprum/issues/430)).
 
 ## [0.2.0-beta1] - 2026-09-24
 
