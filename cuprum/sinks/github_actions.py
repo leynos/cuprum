@@ -51,6 +51,14 @@ import secrets
 import sys
 import typing as typ
 
+from cuprum.sinks._github_actions_options import (
+    _GitHubActionsSinkOptionsKwargs,
+    _normalize_github_actions_sink_options,
+)
+from cuprum.sinks._github_actions_titles import (
+    _redacted_session_titles,
+    _session_titles,
+)
 from cuprum.sinks.base import (
     SessionOutcome,
     SessionStart,
@@ -128,13 +136,6 @@ class _Annotation:
 def _stderr() -> typ.IO[str]:
     """Return the parent's stderr as the default workflow-command stream."""
     return sys.stderr
-
-
-def _reject_non_bool(name: str, value: object) -> None:
-    """Reject a value that is not the documented ``bool`` for a toggle."""
-    if not isinstance(value, bool):
-        msg = f"{name} must be a bool, got {value!r}"
-        raise TypeError(msg)
 
 
 class GitHubActionsSession:
@@ -290,9 +291,9 @@ class GitHubActionsSink:
         output. Defaults to the parent's stderr, matching where GitHub
         Actions reads workflow commands from.
     title:
-        Optional display label overriding the derived
-        ``"<project>: <program>"`` label, used for both the group title and a
-        failure annotation's title.
+        Optional explicit label for both the group and failure annotation.
+        By default, argv titles the group and the bounded run label titles
+        the annotation.
     force:
         Activate the sink even when the parent process does not run on
         GitHub Actions. Intended for local reproduction of CI framing and
@@ -307,6 +308,10 @@ class GitHubActionsSink:
         Whether a failed outcome emits its ``::error::`` annotation. ``False``
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
+    redaction:
+        Optional policy for every emitted group and annotation title, including
+        the bounded fallback label, applied before workflow-command escaping.
+        Defaults to ``None``. Mirrored child output is unchanged.
 
     Raises
     ------
@@ -316,23 +321,19 @@ class GitHubActionsSink:
         strength of something the caller never documented as a flag.
     """
 
-    def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
+    def __init__(
         self,
         destination: typ.IO[str] | None = None,
-        *,
-        title: str | None = None,
-        force: bool = False,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
+        **options: typ.Unpack[_GitHubActionsSinkOptionsKwargs],
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
-        _reject_non_bool("emit_group", emit_group)
-        _reject_non_bool("emit_annotation", emit_annotation)
+        settings = _normalize_github_actions_sink_options(options)
         self.destination = destination
-        self.title = title
-        self.force = force
-        self.emit_group = emit_group
-        self.emit_annotation = emit_annotation
+        self.title = settings.title
+        self.force = settings.force
+        self.emit_group = settings.emit_group
+        self.emit_annotation = settings.emit_annotation
+        self.redaction = settings.redaction
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
@@ -356,41 +357,29 @@ class GitHubActionsSink:
         """
         if not self._is_active():
             return None
-        if self.title is not None:
-            label = self.title
-        elif start.argv:
-            label = " ".join(start.argv)
-        else:
-            label = start.label
+        titles = _redacted_session_titles(
+            _session_titles(start, self.title),
+            self.redaction,
+            emit_group=self.emit_group,
+            emit_annotation=self.emit_annotation,
+        )
         # The annotation keeps the bounded label even when the group is titled
         # with argv: an annotation is a workflow command property, so publishing
         # arguments there would leak them into the run summary.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
             log,
-            label,
+            titles.group,
             annotation_label=_Annotation(
-                label=self.title or start.label,
+                label=titles.annotation,
                 emit_group=self.emit_group,
                 emit_annotation=self.emit_annotation,
             ),
         )
 
     def _is_active(self) -> bool:
-        """Return whether this run's environment demands Actions framing.
-
-        The environment value is read per run, not cached at import or
-        construction time, so a run started after the variable is set (or
-        removed) sees the current environment. ``GITHUB_ACTIONS=true`` is the
-        runner's own signal; any other value — including ``1`` or ``TRUE`` —
-        keeps the sink inactive because only the documented runner value may
-        trigger framing.
-
-        Returns
-        -------
-        bool
-            ``True`` when the sink should open a framed session this run.
-        """
+        """Check activation against the current parent environment."""
+        # A reused sink must observe environment changes between runs.
         return self.force or (
             os.environ.get(_GITHUB_ACTIONS_ENV) == _GITHUB_ACTIONS_TRUE
         )

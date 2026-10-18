@@ -9,35 +9,46 @@ from __future__ import annotations
 
 import errno
 import os
+import termios
 import threading
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from benchmarks import PtyBlackholeStateError, sinks
+from benchmarks import (
+    PtyBlackholeDrainError,
+    PtyBlackholeStateError,
+    _pty_setup,
+    pty_blackhole,
+    sinks,
+)
 
 
 @pytest.mark.skipif(
     not hasattr(os, "openpty"),
     reason="os.openpty is unavailable on this platform",
 )
-def test_pty_blackhole_enter_cleans_up_when_fdopen_fails(
+def test_pty_blackhole_enter_cleans_up_when_text_stream_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PTY sink setup closes open file descriptors if fdopen fails."""
+    """PTY sink setup closes open descriptors if stream setup fails."""
     master_fd, slave_fd = os.openpty()
-    monkeypatch.setattr(sinks.pty, "openpty", lambda: (master_fd, slave_fd))
+    monkeypatch.setattr(
+        _pty_setup.pty,
+        "openpty",
+        lambda: (master_fd, slave_fd),
+    )
 
-    def fail_fdopen(*_args: object, **_kwargs: object) -> typ.NoReturn:
-        """Raise RuntimeError to simulate os.fdopen failing."""
-        msg = "fdopen failed"
+    def fail_text_wrapper(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        """Raise RuntimeError to simulate text stream setup failing."""
+        msg = "text wrapper failed"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(sinks.os, "fdopen", fail_fdopen)
+    monkeypatch.setattr(_pty_setup.io, "TextIOWrapper", fail_text_wrapper)
     blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
 
-    with pytest.raises(RuntimeError, match="fdopen failed"), blackhole:
+    with pytest.raises(RuntimeError, match="text wrapper failed"), blackhole:
         pass
 
     def fstat_error(fd: int) -> OSError:
@@ -96,6 +107,7 @@ def test_pty_blackhole_enter_returns_writable_stream() -> None:
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh as stream:
         assert stream.writable()
+        assert stream.isatty()
 
 
 @pytest.mark.skipif(
@@ -104,9 +116,7 @@ def test_pty_blackhole_enter_returns_writable_stream() -> None:
 )
 def test_pty_blackhole_drains_written_bytes() -> None:
     """Data written to the PtyBlackhole slave FD is consumed by the drainer."""
-    # Deliberately no newline: the PTY line discipline expands "\n" to "\r\n"
-    # on write, which would make the drained byte count platform-dependent.
-    payload = "héllo from tėst"
+    payload = "héllo from tėst" + "x" * (128 * 1024)
     bh = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
     with bh as stream:
         stream.write(payload)
@@ -115,6 +125,123 @@ def test_pty_blackhole_drains_written_bytes() -> None:
     assert bh.drained_bytes == len(payload.encode("utf-8")), (
         "the drainer must publish exactly the UTF-8 byte count after exit"
     )
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "openpty"),
+    reason="os.openpty is unavailable on this platform",
+)
+def test_pty_blackhole_drains_output_before_closing_slave(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the slave open until the reader acknowledges its accepted bytes."""
+    blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    master_fds: list[int] = []
+    original_openpty = _pty_setup.pty.openpty
+    original_read = os.read
+    original_join = pty_blackhole.threading.Thread.join
+    reader_entered = threading.Event()
+    release_reader = threading.Event()
+    join_entered = threading.Event()
+
+    def capture_openpty() -> tuple[int, int]:
+        """Capture the master descriptor for the deterministic read gate."""
+        master_fd, slave_fd = original_openpty()
+        master_fds.append(master_fd)
+        return master_fd, slave_fd
+
+    def gated_read(fd: int, count: int) -> bytes:
+        """Hold the master reader until context teardown reaches its join."""
+        if fd == master_fds[0]:
+            reader_entered.set()
+            if not release_reader.wait(timeout=5.0):
+                msg = "reader gate was not released"
+                raise TimeoutError(msg)
+        return original_read(fd, count)
+
+    def release_at_join(
+        thread: threading.Thread,
+        timeout: float | None = None,
+    ) -> None:
+        """Confirm teardown has not closed the slave before acknowledging."""
+        if thread is blackhole._thread:
+            os.fstat(slave_fd)
+            join_entered.set()
+            release_reader.set()
+        original_join(thread, timeout)
+
+    monkeypatch.setattr(_pty_setup.pty, "openpty", capture_openpty)
+    monkeypatch.setattr(sinks.os, "read", gated_read)
+    monkeypatch.setattr(pty_blackhole.threading.Thread, "join", release_at_join)
+    with blackhole as stream:
+        slave_fd = stream.fileno()
+        stream.write("first")
+        stream.flush()
+        assert reader_entered.wait(timeout=5.0), "drainer must reach its gated read"
+
+    assert join_entered.is_set(), "context exit must wait for reader acknowledgement"
+    assert blackhole.drained_bytes == len(b"first")
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "openpty"),
+    reason="os.openpty is unavailable on this platform",
+)
+def test_pty_blackhole_counts_translated_newlines() -> None:
+    """Count the PTY's configured newline expansion in the acknowledged bytes."""
+    if not getattr(termios, "ONLCR", 0):
+        pytest.skip("termios does not provide ONLCR")
+    payload = "héllo\nthere\n"
+    blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    with blackhole as stream:
+        stream.write(payload)
+    expected = payload.encode("utf-8").replace(b"\n", b"\r\n")
+    assert blackhole.drained_bytes == len(expected)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "openpty"),
+    reason="os.openpty is unavailable on this platform",
+)
+def test_pty_blackhole_does_not_publish_count_after_reader_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpected master read error cannot masquerade as a full drain."""
+    blackhole = sinks.PtyBlackhole(encoding="utf-8", errors="replace")
+    master_fds: list[int] = []
+    original_openpty = _pty_setup.pty.openpty
+    original_read = os.read
+    reader_entered = threading.Event()
+
+    def capture_openpty() -> tuple[int, int]:
+        """Capture the descriptor whose read failure is under test."""
+        master_fd, slave_fd = original_openpty()
+        master_fds.append(master_fd)
+        return master_fd, slave_fd
+
+    def fail_master_read(fd: int, count: int) -> bytes:
+        """Raise EIO only for the PTY master, preserving control-pipe reads."""
+        if fd == master_fds[0]:
+            reader_entered.set()
+            raise OSError(errno.EIO, "injected PTY reader failure")
+        return original_read(fd, count)
+
+    monkeypatch.setattr(_pty_setup.pty, "openpty", capture_openpty)
+    monkeypatch.setattr(sinks.os, "read", fail_master_read)
+
+    def fail_after_reader_read() -> None:
+        """Raise the sink's drain error after the injected reader failure."""
+        with blackhole as stream:
+            stream.write("failure")
+            stream.flush()
+            assert reader_entered.wait(timeout=5.0), (
+                "drainer must attempt the master read"
+            )
+
+    with pytest.raises(PtyBlackholeDrainError, match="failed before acknowledging"):
+        fail_after_reader_read()
+
+    assert blackhole.drained_bytes is None
 
 
 @pytest.mark.skipif(
@@ -162,8 +289,10 @@ def test_pty_blackhole_hides_drain_count_until_the_drainer_stops() -> None:
     still_running.is_alive.return_value = True
     bh._thread = still_running
     bh._drained_bytes = 42
+    bh._drain_target = 42
 
-    bh.__exit__(None, None, None)
+    with pytest.raises(PtyBlackholeDrainError, match="timed out"):
+        bh.__exit__(None, None, None)
 
     still_running.join.assert_called_once_with(timeout=5.0)
     assert bh._thread is still_running, (
@@ -181,8 +310,10 @@ def test_pty_blackhole_publishes_count_after_a_late_drainer_exit() -> None:
     eventually_stopped.is_alive.side_effect = (True, False, False)
     bh._thread = eventually_stopped
     bh._drained_bytes = 42
+    bh._drain_target = 42
 
-    bh.__exit__(None, None, None)
+    with pytest.raises(PtyBlackholeDrainError, match="timed out"):
+        bh.__exit__(None, None, None)
 
     bh._drainer_finished.set()
 

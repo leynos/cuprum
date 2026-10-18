@@ -92,3 +92,14 @@ def _run_command_with_hook(
     """Run a Python command with a hook extracted from a fixture."""
     hook = hook_fixture["hook"]
     _execute_python_command(behaviour_state, python_cmd_fixture, hook, script)
+
+
+_REDACTION_SCRIPT = "\n".join(
+    (
+        "import os",
+        "import sys",
+        "lines = (sys.argv[1], os.environ['CUPRUM_SENTINEL'], sys.argv[2])",
+        "sys.stdout.buffer.write(('\\n'.join(lines) + '\\n').encode())",
+        "sys.stderr.buffer.write((sys.argv[3] + '\\n').encode())",
+    ),
+)

@@ -18,6 +18,7 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
+from cuprum.redaction import RedactionPolicy
 from cuprum.sh import RunOutputOptions
 from cuprum.sinks import GitHubActionsSink
 from cuprum.sinks.github_actions import _escape_property
@@ -26,10 +27,14 @@ from tests.helpers.catalogue import python_catalogue
 _LEASE_PREFIX = "::stop-commands::"
 
 
-def _forced_sink() -> tuple[GitHubActionsSink, io.StringIO]:
+def _forced_sink(
+    *, redaction: RedactionPolicy | None = None
+) -> tuple[GitHubActionsSink, io.StringIO]:
     """Build a GitHub Actions sink over a buffer, activated regardless of CI."""
     buffer = io.StringIO()
-    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer), force=True)
+    sink = GitHubActionsSink(
+        typ.cast("typ.IO[str]", buffer), force=True, redaction=redaction
+    )
     return sink, buffer
 
 
@@ -39,7 +44,13 @@ def _stop_token(value: str) -> str:
     return lease.removeprefix(_LEASE_PREFIX)
 
 
-def _assert_framed(value: str, command: sh.SafeCmd) -> None:
+def _assert_framed(
+    value: str,
+    command: sh.SafeCmd,
+    *,
+    child_output: str = "inside the group",
+    expected_group_title: str | None = None,
+) -> None:
     """Assert the framing around one run's single mirrored output line.
 
     Parameters
@@ -48,10 +59,19 @@ def _assert_framed(value: str, command: sh.SafeCmd) -> None:
         The sink buffer's contents after the run.
     command : sh.SafeCmd
         The command the run executed; its argv titles the group.
+    child_output : str
+        The one line echoed between the start and end framing.
+    expected_group_title : str | None
+        The expected title when a presentation policy transforms argv.
     """
     group, lease, child, release, endgroup = value.splitlines()
     token = lease.removeprefix(_LEASE_PREFIX)
-    expected_group = f"::group::{' '.join(command.argv_with_program)}"
+    group_title = (
+        " ".join(command.argv_with_program)
+        if expected_group_title is None
+        else expected_group_title
+    )
+    expected_group = f"::group::{group_title}"
     assert group == expected_group, (
         f"the group must be titled with the command's argv; "
         f"got {group!r}, expected {expected_group!r}"
@@ -59,7 +79,7 @@ def _assert_framed(value: str, command: sh.SafeCmd) -> None:
     assert lease == f"{_LEASE_PREFIX}{token}", (
         f"the lease is opened with its token; got {lease!r}"
     )
-    assert child == "inside the group", (
+    assert child == child_output, (
         f"mirrored output lands inside the framing; got {child!r}"
     )
     assert release == f"::{token}::", (
@@ -83,6 +103,36 @@ def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
     assert result.ok is True, f"the framed run must still succeed; got {result!r}"
     assert result.stdout == "inside the group\n", "capture must be unchanged"
     _assert_framed(buffer.getvalue(), command)
+
+
+def test_forced_sink_redacts_argv_title_without_changing_run() -> None:
+    """The presentation title is sanitized while command execution stays raw."""
+    sentinel = "gha-e2e-secret-442"
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    command = python("-c", "import sys; print(sys.argv[-1])", sentinel)
+    sink, buffer = _forced_sink(redaction=RedactionPolicy(literals=(sentinel,)))
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
+
+    rendered = buffer.getvalue()
+    assert result.stdout == f"{sentinel}\n", "captured output must remain unchanged"
+    assert command.argv[-1] == sentinel, "execution arguments must remain unchanged"
+    expected_title = " ".join(command.argv_with_program).replace(sentinel, "[REDACTED]")
+    assert rendered.startswith(f"::group::{expected_title}\n"), (
+        "the emitted group title must redact its configured sentinel"
+    )
+    assert sentinel not in rendered.partition("\n")[0], (
+        "the title must exclude configured secrets"
+    )
+    assert sentinel in rendered, "mirrored child output must remain unchanged"
+    _assert_framed(
+        rendered,
+        command,
+        child_output=sentinel,
+        expected_group_title=expected_title,
+    )
 
 
 def test_child_workflow_commands_stay_inside_the_lease() -> None:

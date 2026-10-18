@@ -16,6 +16,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._result_types import _AnyCommandResult
+    from cuprum.redaction import RedactionPolicy
     from cuprum.sh import SafeCmd
 
 
@@ -48,6 +49,7 @@ def logging_hook(
     logger: logging.Logger | None = None,
     start_level: int = logging.INFO,
     exit_level: int = logging.INFO,
+    redaction: RedactionPolicy | None = None,
 ) -> LoggingHookRegistration:
     """Register paired hooks that log start and exit events.
 
@@ -60,6 +62,9 @@ def logging_hook(
         Logging level for the start event (default ``logging.INFO``).
     exit_level:
         Logging level for the exit event (default ``logging.INFO``).
+    redaction:
+        Optional policy applied to the logged argument vector. Defaults to
+        ``None``. Executed arguments and captured results remain unchanged.
 
     Returns
     -------
@@ -72,6 +77,7 @@ def logging_hook(
         logger=logger,
         start_level=start_level,
         exit_level=exit_level,
+        redaction=redaction,
     )
     start_registration = before(on_start)
     exit_registration = after(on_exit)
@@ -83,6 +89,7 @@ def _build_logging_hooks(
     logger: logging.Logger,
     start_level: int,
     exit_level: int,
+    redaction: RedactionPolicy | None = None,
 ) -> tuple[
     cabc.Callable[[SafeCmd], None],
     cabc.Callable[[SafeCmd, _AnyCommandResult], None],
@@ -97,11 +104,14 @@ def _build_logging_hooks(
         with lock:
             start_times[cmd] = started_at
         if logger.isEnabledFor(start_level):
+            argv = cmd.argv_with_program
+            if redaction is not None:
+                argv = tuple(redaction.apply_text(value) for value in argv)
             logger.log(
                 start_level,
                 "cuprum.start program=%s argv=%r",
                 cmd.program,
-                cmd.argv_with_program,
+                argv,
             )
 
     def on_exit(cmd: SafeCmd, result: _AnyCommandResult) -> None:

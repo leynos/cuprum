@@ -23,6 +23,7 @@ from benchmarks.ratchet_history import BaselineHistory, HistorySample
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
+    import re
 
 settings.register_profile(
     "crosshair",
@@ -218,3 +219,16 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "crosshair: property tests suitable for Hypothesis' CrossHair backend",
     )
+
+
+@pytest.fixture
+def failing_redaction_substitution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a rule failure that embeds its input in the original exception."""
+
+    def fail_match(
+        _pattern: re.Pattern[str], value: str
+    ) -> tuple[tuple[int, int], ...]:
+        """Model a rule whose exception embeds its input."""
+        raise ValueError(value)
+
+    monkeypatch.setattr("cuprum.redaction._pattern_match_spans", fail_match)

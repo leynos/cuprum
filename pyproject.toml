@@ -1059,6 +1059,10 @@ reason = "Two total functions that map an optional value through `str`, one `str
 members = ["cuprum/_rusage.py", "cuprum/sh/stdio_rules.py"]
 reason = "One two-line conjunction guard in each module: a resource delta refused when either snapshot is missing, a contested-stdin check refused when either stream is missing. The shared text is `if a is None or b is None`, the None-tolerance idiom recorded throughout this list, not a shared operation; the bodies that follow compute a child's CPU delta and compare two stdio targets, and neither can use the other's."
 
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_pipeline_stream_fds.py", "cuprum/redaction.py"]
+reason = "The detector reports this as an unnamed fragment, so the exception must use these two exact paths. Each span is the canonical object.__setattr__ field initialization of a frozen, slotted dataclass: RedactionPolicy stages flexible rule inputs for __post_init__ validation, while _ReaderPause derives transport hand-off state. Sharing a helper or base would couple unrelated models; a field loop would hide the named invariants."
+
 # uv_build builds the pure-Python wheel; CI builds native wheels through the
 # maturin CLI. The direct builds set MATURIN_NO_MISSING_BUILD_BACKEND_WARNING
 # because the declared PEP 517 backend is uv_build by design.

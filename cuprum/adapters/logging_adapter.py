@@ -25,12 +25,11 @@ Example::
 
 from __future__ import annotations
 
-import collections.abc as cabc
 import dataclasses
-import json
 import logging
 import typing as typ
 
+from cuprum.adapters._logging_formatter import JsonLoggingFormatter
 from cuprum.adapters._logging_projection import (
     # Re-exported under this module's name as well as imported for use here:
     # the adapter's recorded projection is part of what its tests and the
@@ -40,7 +39,10 @@ from cuprum.adapters._logging_projection import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecEvent, ExecHook
+    from cuprum.redaction import RedactionPolicy
 
 _DEFAULT_LOGGER_NAME = "cuprum.exec"
 
@@ -90,11 +92,18 @@ class LogLevels:
 class _StructuredLoggingHook:
     """Render execution events and pipeline-wait records through one logger."""
 
-    __slots__ = ("_level_by_phase", "_logger")
+    __slots__ = ("_level_by_phase", "_logger", "_redaction")
 
-    def __init__(self, logger: logging.Logger, levels: LogLevels) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger,
+        levels: LogLevels,
+        *,
+        redaction: RedactionPolicy | None = None,
+    ) -> None:
         """Initialize the adapter with its logger and level policy."""
         self._logger = logger
+        self._redaction = redaction
         self._level_by_phase = {
             "plan": levels.plan_level,
             "start": levels.start_level,
@@ -112,6 +121,8 @@ class _StructuredLoggingHook:
         level = self._level_for(event.phase)
         if not self._logger.isEnabledFor(level):
             return
+        if self._redaction is not None:
+            event = self._redaction.redact_event(event)
         self._logger.log(level, _format_message(event), extra=_build_extra(event))
 
     def report_pipeline_wait(
@@ -133,6 +144,7 @@ def structured_logging_hook(
     *,
     logger: logging.Logger | None = None,
     levels: LogLevels | None = None,
+    redaction: RedactionPolicy | None = None,
 ) -> ExecHook:
     """Create an observe hook that logs execution events with structured data.
 
@@ -144,6 +156,9 @@ def structured_logging_hook(
     levels:
         Log level configuration for different event phases. Defaults to
         ``LogLevels()`` with standard levels.
+    redaction:
+        Optional projection policy applied before rendering messages and extras.
+        Defaults to ``None``; execution inputs and raw events remain unchanged.
 
     Returns
     -------
@@ -186,66 +201,8 @@ def structured_logging_hook(
     return _StructuredLoggingHook(
         logger or logging.getLogger(_DEFAULT_LOGGER_NAME),
         levels or LogLevels(),
+        redaction=redaction,
     )
-
-
-class JsonLoggingFormatter(logging.Formatter):
-    """A JSON formatter for structured log output.
-
-    This formatter serializes log records as JSON objects, suitable for
-    log aggregation systems. It includes all ``cuprum_*`` extra fields.
-
-    Example::
-
-        import logging
-        from cuprum.adapters.logging_adapter import JsonLoggingFormatter
-
-        handler = logging.StreamHandler()
-        handler.setFormatter(JsonLoggingFormatter())
-        logger = logging.getLogger("cuprum.exec")
-        logger.addHandler(handler)
-
-    """
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Format the log record as a JSON string.
-
-        Parameters
-        ----------
-        record : logging.LogRecord
-            The log record to render as a JSON object.
-
-        Returns
-        -------
-        str
-            The record serialized as a JSON object, including
-            ``cuprum_*`` extra fields.
-        """
-        output: dict[str, object] = {
-            "timestamp": self.formatTime(record),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
-
-        for key, value in vars(record).items():
-            if key.startswith("cuprum_"):
-                output[key] = _json_serializable(value)
-
-        return json.dumps(output, default=str)
-
-
-def _json_serializable(value: object) -> object:
-    """Ensure a value is JSON-serializable."""
-    match value:
-        case cabc.Mapping():
-            return {str(k): _json_serializable(v) for k, v in value.items()}
-        case list() | tuple():
-            return [_json_serializable(v) for v in value]
-        case str() | int() | float() | bool() | None:
-            return value
-        case _:
-            return str(value)
 
 
 __all__ = [

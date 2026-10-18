@@ -1380,6 +1380,11 @@ in registration order and after hooks in reverse order, so an outer scope's
 setup runs first and its cleanup last. `logging_hook()` pairs the two to write
 start and exit records through the standard `logging` module.
 
+`logging_hook(redaction=policy)` applies the same opt-in text rules to the
+argument vector in its start record. It does not log captured output; its exit
+record contains output lengths only. With no policy, the argument vector keeps
+its existing verbatim representation.
+
 <!-- tested-example: before-and-after-hooks -->
 
 ```python
@@ -1446,10 +1451,85 @@ assert metrics.counters["cuprum_executions_total"] == 1
 assert [span.name for span in tracer.spans] and tracer.spans[0].ended
 ```
 
-The structured logging adapter records `argv` verbatim, so a secret passed as a
-command-line argument reaches the log. Pass secrets through the environment or
-a file instead. [Metrics adapter](#metrics-adapter) and
-[Tracing adapter](#tracing-adapter) list every metric and span attribute.
+Structured logging records `argv` verbatim by default. Tracing also projects
+the full argument vector, and event records can include environment values,
+output lines, diagnostic notes, and tag values. Use `RedactionPolicy` to remove
+configured text from these exports when required. Rules are opt-in and
+destination-specific; `redaction=None` and `RedactionPolicy()` leave existing
+output unchanged. The policy uses caller-supplied literal strings and compiled
+regular expressions. It finds every match in the original text, merges
+overlapping or adjacent match spans, then inserts the mask once; inserted mask
+text is not scanned again. Literal rules are normalized longest first, and
+pattern rules retain their configured order for error reporting. Choose a mask
+that does not contain secret material. The policy does not detect secrets that
+the caller has not configured.
+
+For example, one policy can be applied independently to structured logging and
+tracing, and wrapped around another observation consumer before registration:
+
+<!-- tested-example: telemetry-redaction -->
+
+```python
+import logging
+import re
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.adapters.logging_adapter import structured_logging_hook
+from cuprum.adapters.tracing_adapter import InMemoryTracer, tracing_hook
+from cuprum.redaction import RedactionPolicy, redacting_hook
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="redaction")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+policy = RedactionPolicy(
+    literals=("token-value",),
+    patterns=(re.compile(r"session-[0-9]+"),),
+)
+tracer = InMemoryTracer()
+exports = []
+logger = logging.getLogger("myapp.telemetry")
+with (
+    sh.observe(structured_logging_hook(logger=logger, redaction=policy)),
+    sh.observe(tracing_hook(tracer, redaction=policy)),
+    sh.observe(redacting_hook(exports.append, policy)),
+):
+    result = python(
+        "-c", "import sys; print(sys.argv[1])", "token-value session-314"
+    ).run_sync()
+
+assert result.stdout == "token-value session-314\n"
+assert exports and tracer.spans
+assert "token-value" not in repr(exports) + repr(tracer.spans)
+assert "session-314" not in repr(exports) + repr(tracer.spans)
+```
+
+Pass the same `redaction=policy` keyword to `logging_hook()` for its plain-text
+start record, or to `GitHubActionsSink` for each enabled group or annotation
+title. The sink applies the policy to explicit titles, argv-derived group
+titles, and bounded fallback annotation labels before workflow-command
+escaping. Disabled title outputs do not invoke redaction, and mirrored child
+output remains unchanged. The opt-in policy uses the same rules at each
+destination; it is never applied globally. Both `TracingHook` and the
+`tracing_hook()` factory accept the policy.
+
+The event projection redacts each `argv` item, environment value, output line,
+diagnostic note, and top-level string-valued tag. It leaves the program and
+project, tag keys, paths, typed numeric and enum fields, and nested or
+non-string tag values unchanged. It applies at each opted-in projection
+boundary: event adapters redact a copy, while plain logging and the GitHub
+Actions sink redact only their selected text. Executed arguments, the child
+environment, captured results, and raw events received by other observers
+remain unchanged. Configure every destination that exports values; one
+adapter's policy has no global effect.
+
+If a configured rule fails, `RedactionError` propagates and the exporter does
+not retry with raw text. The ordinary observe-hook failure behaviour still
+applies, so a failure can fail a command call before, during, or after child
+execution. Metric adapters do not accept this policy: their existing labels
+remain bounded to program, project, and closed categories, with no argv,
+environment, output, note, or caller tag values.
+[Metrics adapter](#metrics-adapter) and [Tracing adapter](#tracing-adapter)
+list every metric and span attribute.
 
 The structured log record carries the execution's effective environment policy
 as `cuprum_env_mode` (`inherit`, `overlay`, or `replace`), alongside the other
@@ -1605,8 +1685,12 @@ commands.
 
 Use `GitHubActionsSink` from `cuprum.sinks` for anything the flags do not
 cover: a custom `title`, another `destination`, `force=True` to reproduce the
-framing locally, or `emit_group=False` / `emit_annotation=False` to switch off
-either half of the frame.
+framing locally, `emit_group=False` / `emit_annotation=False` to switch off
+either half of the frame, or `redaction=policy` to redact every emitted group
+and annotation title, including the bounded fallback annotation label. The
+convenience flags do not accept a redaction policy. Redaction runs before
+workflow-command escaping. Mirrored child output remains unchanged. An
+annotation never uses argv.
 
 <!-- tested-example: github-actions-sink -->
 
@@ -2204,13 +2288,15 @@ tracing library can back it.
 The hook creates spans with these attributes:
 
 - `cuprum.program`: The program being executed
-- `cuprum.argv`: Full argument vector
+- `cuprum.argv`: Full argument vector; configured text is redacted when the
+  tracing hook receives a `RedactionPolicy`
 - `cuprum.pid`: Process ID
 - `cuprum.cwd`: Working directory (when set)
 - `cuprum.exit_code`: Actual child exit code, when an `exit` event occurred
 - `cuprum.duration_s`: Duration in seconds, when an `exit` event occurred
 - `cuprum.terminal_outcome`: Bounded terminal category set on `settled`
-- `cuprum.project`: Project name from tags
+- `cuprum.project`: Project name from tags; when a configured rule redacts the
+  `project` tag, tracing uses the trusted event project when available
 - `cuprum.resolved_path`: The bound executable that ran, when an
   [executable binding](#bind-a-catalogued-program-to-a-specific-executable)
   applied

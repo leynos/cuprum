@@ -1047,6 +1047,13 @@ ______________________________________________________________________
 
 ## 7. Observability and Logging
 
+[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines an opt-in redaction
+policy at export boundaries. Raw execution observations remain available to
+trusted consumers; configured logging, tracing, argv-derived presentation
+titles, and explicitly wrapped observers receive sanitized projections.
+Execution inputs and captured results remain unchanged, and metric labels
+retain their bounded vocabulary.
+
 Cuprum provides primitives to make command execution observable in a structured
 way.
 
