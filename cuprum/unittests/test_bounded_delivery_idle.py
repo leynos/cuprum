@@ -79,6 +79,31 @@ async def _run_target(
     return await _target_call(target, output, context)
 
 
+def _assert_successful_idle_drop(
+    result: CommandResult | PipelineResult,
+    expected_fallback: RelayFallback,
+) -> None:
+    """Check successful execution and its recorded idle-drop fallback."""
+    if isinstance(result, CommandResult):
+        assert result.exit_code == 0
+        assert expected_fallback in result.relay_fallbacks
+    else:
+        assert [stage.exit_code for stage in result.stages] == [0, 0]
+        assert expected_fallback in result.stages[-1].relay_fallbacks
+
+
+def _assert_dropped_stderr_events(events: list[EchoEvent]) -> None:
+    """Check that each observed idle diagnostic was dropped on stderr."""
+    assert events
+    assert all(
+        event.stream is EchoStream.STDERR
+        and event.error_category is EchoErrorCategory.DROPPED
+        and event.dropped_bytes is not None
+        and event.dropped_bytes > 0
+        for event in events
+    )
+
+
 def _echoing_idle_case(
     run_kind: str,
 ) -> tuple[
@@ -220,28 +245,14 @@ def test_saturated_idle_delivery_preserves_successful_run_output(
             _run_target(target, output, ExecutionContext(stderr_sink=sink)),
         )
 
-    if isinstance(result, CommandResult):
-        assert result.exit_code == 0
-    else:
-        assert [stage.exit_code for stage in result.stages] == [0, 0]
     assert result.stdout == "captured\n"
     assert not sink.getvalue()
-    assert events
-    assert all(
-        event.stream is EchoStream.STDERR
-        and event.error_category is EchoErrorCategory.DROPPED
-        and event.dropped_bytes is not None
-        and event.dropped_bytes > 0
-        for event in events
-    )
     expected_fallback = RelayFallback(
         stream=EchoStream.STDERR,
         error_category=EchoErrorCategory.DROPPED,
     )
-    if isinstance(result, CommandResult):
-        assert expected_fallback in result.relay_fallbacks
-    else:
-        assert expected_fallback in result.stages[-1].relay_fallbacks
+    _assert_successful_idle_drop(result, expected_fallback)
+    _assert_dropped_stderr_events(events)
 
 
 @pytest.mark.parametrize("run_kind", ["command", "pipeline"])
