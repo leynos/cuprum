@@ -171,21 +171,21 @@ def then_git_argv_matches(
     ref: str,
 ) -> None:
     """Verify the git command argv matches expectation."""
-    assert git_result.argv_with_program == (program, verb, ref), (
+    assert git_result.argv_with_program == (program, verb, ref), (  # ruff: ignore[assert] - step assertions replace return values
         "Expected git_result.argv_with_program == (program, verb, ref)"
     )
 
 
 def then_git_ref_error_raised(git_result: _CommandResult) -> None:
     """Verify git ref validation raised an error."""
-    assert isinstance(git_result.error, ValueError), (
+    assert isinstance(git_result.error, ValueError), (  # ruff: ignore[assert] - step assertions replace return values
         "Expected git_ref validation to raise ValueError"
     )
 
 
 def _assert_argv(result: _CommandResult, expected: tuple[str, ...]) -> None:
     """Assert a step result carries exactly the expected argv."""
-    assert result.argv_with_program == expected, (
+    assert result.argv_with_program == expected, (  # ruff: ignore[assert] - step assertions replace return values
         f"expected the builder argv {expected}, got {result.argv_with_program}"
     )
 
