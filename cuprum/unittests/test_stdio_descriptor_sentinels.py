@@ -55,7 +55,6 @@ class _LyingFile:
     """
 
     def __init__(self, descriptor: int) -> None:
-        """Remember the descriptor this wrapper should report."""
         self._descriptor = descriptor
 
     def fileno(self) -> int:

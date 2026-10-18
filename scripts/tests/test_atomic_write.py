@@ -239,7 +239,6 @@ class _RealTemporaryStream:
     """Stand in for ``NamedTemporaryFile``, owning a real file on disk."""
 
     def __init__(self, path: Path) -> None:
-        """Open a real temporary file while preserving its path."""
         self.name = str(path)
         self._file = path.open("wb")
 
@@ -344,7 +343,6 @@ def _swap_in_stream(
     real_temporary_file = atomic_write.tempfile.NamedTemporaryFile
 
     def swap(**kwargs: object) -> _RealTemporaryStream:
-        """Create and track the temporary file requested by atomic_write."""
         assert kwargs["delete"] is False, "The caller must keep the temporary."
         assert kwargs["prefix"] == f".{destination.name}.", (
             "The temporary must stay a hidden sibling of the destination."
@@ -383,9 +381,14 @@ def test_a_failed_fill_removes_the_temporary(
     stream_type: cabc.Callable[[Path], _RealTemporaryStream],
     diagnostic: str,
 ) -> None:
-    """Failures through stream closure must remove the temporary.
+    """Every failure inside the fill is cleaned up by the same owner.
 
-    A cleanup guard inside ``with`` misses errors reported by ``__exit__``.
+    The write, the flush, and the stream's own closure are all inside the fill
+    interval, so a failure in any of them must unlink the temporary before it
+    propagates. Without that, the outer guard would be the only cleanup and the
+    paths would drift. The closure is the one that reads as if it sits outside:
+    it records the failure after every write has already succeeded, so a guard
+    written inside the ``with`` ends before the failing step runs.
     """
     destination = tmp_path / "config.toml"
     created = _swap_in_stream(monkeypatch, destination, stream_type)
