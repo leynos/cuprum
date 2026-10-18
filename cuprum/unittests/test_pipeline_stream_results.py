@@ -273,9 +273,8 @@ async def _failing(error: BaseException) -> None:  # ruff: ignore[unused-async]
     raise error
 
 
-async def _succeeds() -> None:  # ruff: ignore[unused-async]
+async def _succeeds() -> None:
     """Complete as a pump does, standing in for one that relayed cleanly."""
-    return
 
 
 def test_collect_returns_exceptions_in_task_order() -> None:

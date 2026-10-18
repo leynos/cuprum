@@ -378,6 +378,28 @@ Thresholds that trigger escalation when breached.
   `typ.Any` casts replaced with `CaptureStreamName`, bare asserts given
   messages, and the generated-input classes published through
   `hypothesis.event` beside the deterministic corpus counts.
+- [x] (2026-10-18) Clear the round-8 findings from the local
+  `coderabbit review --agent` pass. Six needed code or test changes: a bare
+  `return` removed from a pump double (pylint's enabled `useless-return` would
+  have caught it at the next full `make lint`); `test_pipeline_config.py` now
+  asserts the per-stream policies the config actually carries instead of
+  merely that construction succeeded; the `_Retained` record in
+  `test_bounded_capture_drain.py` makes the suffix property measure the
+  accumulator's own payload rather than a slice of the input; the two
+  timeout-cleanup tests enter the capture observer before the deadline can
+  fire, so their witness covers the child's whole life; `cuprum.sh.output`
+  publishes `IOOptions` again through a lazy module `__getattr__`, after the
+  2026-10-14 move silently dropped the public path; and the stdio redirection
+  guard reads the resolved per-stream policy instead of the `capture`
+  shorthand. The `IOOptions` export re-took the 400-line ceiling and forced the
+  `_resolved_options.py` mixin split (see `Decision log` and the ADR-007
+  addendum). Two findings were reasoned skips: the release gate's `_drain`
+  really does return `(None, None)` on the discarding route, and the
+  `docs/developers-guide.md` line it cited describes that correctly. Verified
+  with `uv run ruff check` (clean), `uv run ruff format --check` (clean),
+  pinned `ty==0.0.74` (clean), pinned `pylint==4.0.9` (10.00/10 on both
+  modules), and `pytest` over the five affected test modules (`74 passed`).
+  Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -926,6 +948,48 @@ Thresholds that trigger escalation when breached.
   an independently computed expectation. Date/Author: 2026-10-18,
   implementation agent.
 
+- Observation (review round 8, restoring `IOOptions` cost a second ceiling
+  breach): `cuprum.sh.output.IOOptions` was importable on `main`, and the
+  2026-10-14 split that moved the class to `cuprum/sh/_deprecated.py` did not
+  leave the old path behind. Restoring it needs a module-level `__getattr__`,
+  because a real import is a cycle, and the adapter plus its docstring took
+  `output.py` from exactly 400 lines to 439 — `C0302` again. The four
+  resolved-value properties were extracted to
+  `cuprum/sh/_resolved_options.py` as a `__slots__ = ()` mixin, which returns
+  the module to 359 lines. Verified at run time under `python -I`: the
+  properties resolve through the base class, `IOOptions is
+  cuprum.sh._deprecated.IOOptions`, the deprecation warning still fires on
+  construction, an inherited `resolved_capture` works on the subclass, and the
+  instance still has no `__dict__`. The ADR-007 addendum records why this
+  reverses the earlier refusal to move `resolved_capture`: all four move
+  together, and the alternatives were a suppression or a broken public path.
+  Date/Author: 2026-10-18, implementation agent.
+
+- Observation (review round 8, a rule that read the shorthand): the
+  redirection guard in `cuprum/sh/stdio_rules.py` asked
+  `options.capture or echo_*`, so `RunOutputOptions(capture=False,
+  capture_stdout=FullCapture(), stdout=StdioTarget.path(...))` was accepted —
+  a redirect to a file with a policy told to capture the stream that has no
+  parent-side pipe left to read. The guard now reads
+  `options.resolved_capture[0 if name == "stdout" else 1] is not None`, which
+  is the same resolved view the drain uses. The two new parametrized cases fail
+  with the shorthand restored and pass with the fix; the message text is
+  unchanged, so the four existing rows that assert its `capture=False` and
+  `echo=False` substrings still hold. `_stdio_binding_guards.py` is untouched.
+  Date/Author: 2026-10-18, implementation agent.
+
+- Observation (review round 8, a property that asserted its own arithmetic):
+  the bounded-capture suffix property reconstructed the retained tail as
+  `raw[-max_bytes:]` and then asserted the accumulator's payload agreed with
+  that slice — which is true of *any* accumulator whose record happens to name
+  the same slice. Re-encoding the accumulator's own finalized payload recovers
+  the bytes it really kept, so the property is now about the accumulator rather
+  than about the record's arithmetic. The re-encoding is not the literal
+  "return the finalized payload": `dropped_bytes` can exceed the overflow when
+  the trim cuts a code point, so the record and the payload are deliberately
+  two different measurements and `_Retained` keeps both. Date/Author:
+  2026-10-18, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -1250,6 +1314,41 @@ Thresholds that trigger escalation when breached.
   and the decision itself is unchanged: both tolerance thresholds are still
   breached several times over. Date/Author: 2026-10-18, implementation agent;
   raised while preparing the final gate evidence.
+
+- Decision: restore `cuprum.sh.output.IOOptions` through a module-level
+  `__getattr__`, and pay for it by moving the four resolved-value properties
+  into a `__slots__ = ()` mixin in `cuprum/sh/_resolved_options.py`.
+  Rationale: `IOOptions` was importable from `cuprum.sh.output` on `main` and
+  the 2026-10-14 split moved the class without leaving the path behind, so a
+  caller importing it from the old location gets an `ImportError` — a break
+  this branch introduced, not a deprecation it documented. The lazy resolver
+  is the only cycle-free way to publish a name whose module imports this one.
+  It costs 39 lines against a 30-line headroom, so the ceiling failed again;
+  the mixin is the only option that is neither a suppression nor a broken
+  public path. The cut is a real one: the properties are the *query* half of
+  the options, deriving from fields that stay on the dataclass. Alternatives
+  rejected: a `too-many-lines` suppression (the standing contract);
+  re-exporting from `cuprum/sh/_deprecated.py` instead (that is the module
+  that imports us, and the finding is that the *old* path must work); and
+  moving `__post_init__`'s validation out instead, which is the command half
+  and would split one constructor's contract across two modules. This
+  reverses the 2026-10-14 refusal to move `resolved_capture` alone, on the
+  ground it had to mirror `resolved_echo`; moving all four keeps that
+  invariant. Recorded as a fifth split in the ADR-007 addendum.
+  Date/Author: 2026-10-18, implementation agent; raised by review round 8.
+
+- Decision: the stdio redirection guard reads `resolved_capture` rather than
+  the `capture` shorthand. Rationale: the rule exists because capture needs a
+  parent-side pipe, and since this branch the request for capture is per
+  stream. Reading the shorthand made a redirect plus a `capture_stdout` policy
+  legal at construction and left the run with no pipe to drain the stream it
+  had been told to retain. `__post_init__` fills `_resolved_capture` and both
+  resolved echo fields before `_validate_stdio_targets`, so the rule can read
+  the resolved views with no re-resolution and no new import. The message text
+  is deliberately unchanged: four existing parametrized rows assert its
+  `capture=False` and `echo=False` substrings, and widening the check does not
+  change what the caller has to do. Date/Author: 2026-10-18, implementation
+  agent; raised by review round 8.
 
 ## Outcomes & retrospective
 

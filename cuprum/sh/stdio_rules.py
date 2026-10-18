@@ -158,7 +158,13 @@ def _reject_captured_redirection(
     target = options.stdout if name == "stdout" else options.stderr
     if target is None or target.kind == "pipe":
         return
-    captures = options.capture or (
+    # The per-stream policy, not the ``capture`` shorthand: with
+    # ``capture=False, capture_stdout=FullCapture()`` it is stdout that needs
+    # the pipe, and the shorthand alone would let the redirection through and
+    # fail later at spawn. ``echo_stdout``/``echo_stderr`` are already resolved
+    # by ``__post_init__`` before this rule runs, so they need no lookup.
+    stream_index = 0 if name == "stdout" else 1
+    captures = options.resolved_capture[stream_index] is not None or (
         options.echo_stdout if name == "stdout" else options.echo_stderr
     )
     if not captures:

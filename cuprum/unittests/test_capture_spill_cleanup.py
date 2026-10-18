@@ -229,7 +229,10 @@ def test_a_timed_out_run_removes_the_spill_file_it_never_reported(
     """
     witness = _SpillWitness(tmp_path)
 
-    with pytest.raises(TimeoutExpired) as expired, observe_capture(witness):
+    # The observer is entered first so the window it watches covers the whole
+    # time the child runs, not merely the time after the deadline has already
+    # fired. The deadline's own exception is still what ends the block.
+    with observe_capture(witness), pytest.raises(TimeoutExpired) as expired:
         _builder()("-c", _SPILL_THEN_BLOCK).run_sync(
             timeout=_RUN_TIMEOUT_S,
             output=_options(tmp_path),
@@ -241,6 +244,25 @@ def test_a_timed_out_run_removes_the_spill_file_it_never_reported(
         "text mode reports a spilled capture as absent, not as text"
     )
     _directory_is_clean(tmp_path, outcome="a timed-out run")
+
+
+async def _await_witness(witness: _SpillWitness) -> None:
+    """Fail unless *witness* sees a spill before the give-up deadline.
+
+    The readiness signal is a file another process wrote, which no asyncio
+    primitive can observe, so polling is the coordination — and polling a
+    directory is the one thing this module cannot avoid.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _WITNESS_TIMEOUT_S
+    while loop.time() < deadline:
+        if witness.snapshots:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(
+        f"the child never spilled before {_WITNESS_TIMEOUT_S}s; "
+        f"events seen: {witness.categories}"
+    )
 
 
 def test_an_externally_cancelled_run_removes_the_spill_file(
@@ -272,25 +294,6 @@ def test_an_externally_cancelled_run_removes_the_spill_file(
     asyncio.run(cancelled_run())
 
     _directory_is_clean(tmp_path, outcome="a cancelled run")
-
-
-async def _await_witness(witness: _SpillWitness) -> None:
-    """Fail unless *witness* sees a spill before the give-up deadline.
-
-    The readiness signal is a file another process wrote, which no asyncio
-    primitive can observe, so polling is the coordination — and polling a
-    directory is the one thing this module cannot avoid.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _WITNESS_TIMEOUT_S
-    while loop.time() < deadline:
-        if witness.snapshots:
-            return
-        await asyncio.sleep(0.01)
-    pytest.fail(
-        f"the child never spilled before {_WITNESS_TIMEOUT_S}s; "
-        f"events seen: {witness.categories}"
-    )
 
 
 def test_a_stream_under_its_threshold_is_not_a_witnessed_spill(
@@ -362,7 +365,11 @@ def test_a_kept_spill_file_survives_a_timed_out_run_whole(
     """
     witness = _SpillWitness(tmp_path)
 
-    with pytest.raises(TimeoutExpired), observe_capture(witness):
+    # The observer is entered first, for the same reason as the removing route:
+    # its window must cover the child's whole life. The observer records one
+    # file per run, so asserting the count here makes the unpacking index below
+    # a statement about a clean witness rather than a guess.
+    with observe_capture(witness), pytest.raises(TimeoutExpired):
         _builder()("-c", _SPILL_THEN_BLOCK).run_sync(
             timeout=_RUN_TIMEOUT_S,
             output=_options(tmp_path, keep_file=True),
@@ -370,7 +377,11 @@ def test_a_kept_spill_file_survives_a_timed_out_run_whole(
 
     witnessed = witness.awaited()
     assert witnessed, "the spill must have been seen before the deadline fired"
-    (name,) = witnessed
+    assert len(witnessed) == 1, (
+        "one run must leave exactly one spill file to hand over; "
+        f"the witness saw {witnessed!r}"
+    )
+    name = witnessed[0]
     path = tmp_path / name
     assert path.exists(), "a kept spill file must survive the timeout's teardown"
     assert path.read_bytes() == b"z" * _PAYLOAD_BYTES, (

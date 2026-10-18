@@ -34,6 +34,7 @@ import typing as typ
 
 import pytest
 
+from cuprum.capture_policy import BoundedCapture
 from cuprum.sh import RunOutputOptions, StdioTarget
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -327,6 +328,47 @@ def test_capture_or_echo_rejects_a_redirected_stream(
     )
     assert "echo=False" in message, (
         f"the rejection must name the echo setting to relax; got {message!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "options_call",
+    [
+        pytest.param(
+            lambda out: RunOutputOptions(
+                capture=False,
+                capture_stdout=BoundedCapture(max_bytes=8),
+                stdout=out,
+            ),
+            id="stdout-policy",
+        ),
+        pytest.param(
+            lambda out: RunOutputOptions(
+                capture=False,
+                capture_stderr=BoundedCapture(max_bytes=8),
+                stderr=out,
+            ),
+            id="stderr-policy",
+        ),
+    ],
+)
+def test_a_per_stream_policy_rejects_redirection_the_shorthand_alone_would_allow(
+    options_call: cabc.Callable[[StdioTarget], RunOutputOptions],
+    tmp_path: Path,
+) -> None:
+    """A per-stream policy is a capture request, redirection notwithstanding.
+
+    ``capture=False`` disables only the shorthand, so a check reading the
+    shorthand alone would see no capture and let this through — and the run
+    would then have no parent-side pipe to drain the very stream the policy was
+    told to retain. The refusal has to follow the resolved per-stream policy.
+    """
+    out = StdioTarget.path(tmp_path / "redirected.log")
+
+    message = _rejects(lambda: options_call(out), "cannot be redirected")
+
+    assert "capture=False" in message, (
+        f"the rejection must name the capture setting to relax; got {message!r}"
     )
 
 

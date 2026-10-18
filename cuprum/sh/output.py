@@ -18,7 +18,6 @@ import typing as typ
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
-from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
 from cuprum.sh._capture_options import _resolved_capture as _resolved_capture
@@ -26,6 +25,7 @@ from cuprum.sh._convenience_sink import (
     _validate_convenience_flags,
     synthesize_sink,
 )
+from cuprum.sh._resolved_options import _ResolvedOptionsMixin
 from cuprum.sh.stdio import (
     StdioTarget as StdioTarget,
 )
@@ -50,14 +50,54 @@ if typ.TYPE_CHECKING:
     from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import LineHook
 
+    # Name-compatible rather than type-accurate: this module publishes
+    # ``IOOptions`` at run time only, through ``__getattr__`` below, because
+    # the alias lives in :mod:`cuprum.sh._deprecated` and that module imports
+    # this one. The block gives the export checker a name to resolve without
+    # making the import real.
+    from cuprum.sh._deprecated import IOOptions
+
 __all__ = [
+    "IOOptions",
     "RunOutputOptions",
     "StdioTarget",
 ]
 
 
+def __getattr__(name: str) -> object:
+    """Resolve the deprecated ``IOOptions`` alias on first use.
+
+    The alias lived in this module before :mod:`cuprum.sh._deprecated` took it
+    over, and callers still import it from here. A module-level import would
+    be a cycle — ``_deprecated`` imports ``RunOutputOptions`` from this module
+    — so the name is resolved when it is asked for instead, which is also why
+    it cannot be a plain re-export.
+
+    Parameters
+    ----------
+    name : str
+        The attribute being resolved.
+
+    Returns
+    -------
+    object
+        The compatibility name, when this module supplies one.
+
+    Raises
+    ------
+    AttributeError
+        If *name* is not a compatibility name this module supplies.
+    """
+    if name == "IOOptions":
+        from cuprum.sh._deprecated import IOOptions
+
+        return IOOptions
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
-class RunOutputOptions:
+class RunOutputOptions(_ResolvedOptionsMixin):
     """Configure captured and mirrored command output.
 
     Parameters
@@ -312,89 +352,8 @@ class RunOutputOptions:
             )
             raise ValueError(msg)
 
-    @property
-    def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
-        """The policy behind the declared ``BrokenPipePolicy | str`` field.
-
-        ``__post_init__`` normalizes the field, but the declared type stays
-        wide because a caller may spell the policy as a string. This is the
-        narrow view the execution layer reads, so it never has to parse.
-
-        Returns
-        -------
-        BrokenPipePolicy
-            The normalized policy member, never a string and never ``None``.
-        """
-        return _parse_broken_pipe_policy(self.broken_pipe_policy)
-
-    @property
-    def resolved_capture(self) -> tuple[CapturePolicy | None, CapturePolicy | None]:
-        """The resolved ``(capture_stdout, capture_stderr)`` policies.
-
-        ``__post_init__`` turns each stream's field into a policy, so the
-        returned pair is always concrete and says exactly what the run will
-        do; ``None`` means that stream is not captured at all. The declared
-        fields keep the caller's own spelling, so
-        ``dataclasses.replace(options, capture=False)`` re-resolves the pair
-        rather than inheriting it: a replacement is a new value whose shorthand
-        still decides any stream left unset.
-
-        Returns
-        -------
-        tuple[CapturePolicy | None, CapturePolicy | None]
-            The stdout and stderr policies, in that order, each either a
-            policy object or ``None`` for a stream that is not captured.
-
-        Examples
-        --------
-        >>> RunOutputOptions().resolved_capture
-        (FullCapture(), FullCapture())
-        >>> RunOutputOptions(capture=False).resolved_capture
-        (None, None)
-        >>> RunOutputOptions(capture=False, capture_stderr=True).resolved_capture
-        (None, FullCapture())
-        >>> import dataclasses as dc
-        >>> dc.replace(RunOutputOptions(), capture=False).resolved_capture
-        (None, None)
-        """
-        return self._resolved_capture
-
-    @property
-    def captures_any_stream(self) -> bool:
-        """Whether either stream is captured under the resolved policies.
-
-        The one-bool reading of ``resolved_capture``: the observation tags
-        report capture as a single flag, and this keeps that flag meaning what
-        it always did now that the policies differ per stream. A run that
-        captures anything at all is a capturing run.
-
-        Returns
-        -------
-        bool
-            ``True`` when either stream has a policy, ``False`` when neither
-            does.
-
-        Examples
-        --------
-        >>> RunOutputOptions().captures_any_stream
-        True
-        >>> RunOutputOptions(capture=False).captures_any_stream
-        False
-        >>> RunOutputOptions(capture=False, capture_stderr=True).captures_any_stream
-        True
-        """
-        return _captures_any_stream(*self._resolved_capture)
-
-    @property
-    def resolved_echo(self) -> tuple[bool, bool]:
-        """The resolved ``(echo_stdout, echo_stderr)`` gates.
-
-        ``__post_init__`` fills any ``None`` per-stream field from ``echo``,
-        so the returned pair is always concrete and reflects an explicit
-        per-stream override where one was supplied.
-        """
-        # The dataclass is frozen and ``__post_init__`` resolves both fields,
-        # but the declared field types stay ``bool | None``; the resolved pair
-        # is the constructor's contract, not something the declared types can
-        # express to the type checker.
-        return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
+    # The resolved views -- ``resolved_capture``, ``captures_any_stream``,
+    # ``resolved_echo``, and ``resolved_broken_pipe_policy`` -- are contributed
+    # by ``_ResolvedOptionsMixin``; the class docstring's examples above are
+    # still resolved through them, because the mixin's properties bind on the
+    # instance exactly as methods declared here would.

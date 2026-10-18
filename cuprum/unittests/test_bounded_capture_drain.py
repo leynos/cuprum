@@ -21,6 +21,7 @@ reachable through the same accumulator seam.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import io
 import typing as typ
 
@@ -114,31 +115,79 @@ def _sink(policy: CapturePolicy) -> CaptureSink:
     return sink
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _Retained:
+    """What one bounded accumulation actually kept.
+
+    The payload is the accumulator's own answer, not a slice reconstructed from
+    the record's arithmetic. Those two used to be the same expression in the
+    property below, which made the suffix and bound assertions statements about
+    the reconstruction rather than about the bytes the accumulator returned:
+    any accumulator at all would pass them so long as the record agreed with
+    the slice taken from the input.
+    """
+
+    payload: str | bytes | None
+    """The finalized payload, exactly as the accumulator reported it."""
+
+    record: CapturedStream
+    """The stream record finalized beside the payload."""
+
+    def text(self) -> str:
+        """Return the payload as text, refusing anything else.
+
+        Returns
+        -------
+        str
+            The accumulator's own decoded payload.
+        """
+        assert isinstance(self.payload, str), (
+            f"a bounded text capture must finalize to text; got {self.payload!r}"
+        )
+        return self.payload
+
+    def retained_bytes(self) -> bytes:
+        """Return the accumulator's own retained bytes, recovered by re-encoding.
+
+        A text accumulator retains bytes and decodes them, so re-encoding its
+        own payload recovers exactly what it kept. That is deliberately not a
+        slice of the input: taking the slice would make the assertions below
+        agree with any accumulator whose record happened to name that slice.
+
+        Returns
+        -------
+        bytes
+            The bytes behind the accumulator's own payload.
+        """
+        return self.text().encode("utf-8")
+
+
 def _retain(
     payload: bytes,
     max_bytes: int,
     stats: _Stats | None = None,
-) -> CapturedStream:
+) -> _Retained:
     """Retain *payload* under a bound, through the accumulator seam.
 
     Returns
     -------
-    CapturedStream
-        The record the accumulator finalized for this stream.
+    _Retained
+        The finalized payload and record, both taken from the accumulator.
     """
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
     sink.absorb(payload)
-    record = sink.finalize().capture
+    final = sink.finalize()
+    record = final.capture
     if stats is not None:
         stats.over_budget += len(payload) > max_bytes
         stats.under_budget += len(payload) < max_bytes
         stats.exactly_budget += len(payload) == max_bytes
         stats.multibyte += any(byte >= 0x80 for byte in payload)
         stats.trimmed += record.dropped_bytes > max(0, len(payload) - max_bytes)
-    return record
+    return _Retained(payload=final.payload, record=record)
 
 
-def _announce_retention(payload: bytes, record: CapturedStream, max_bytes: int) -> None:
+def _announce_retention(payload: bytes, retained: _Retained, max_bytes: int) -> None:
     """Publish this example's classes to the property run's statistics.
 
     Only the Hypothesis properties call this: ``event`` is invalid outside a
@@ -149,13 +198,8 @@ def _announce_retention(payload: bytes, record: CapturedStream, max_bytes: int) 
     event("multibyte" if any(byte >= 0x80 for byte in payload) else "ascii")
     # A trim that cost more than the overflow is the class the suffix property
     # exists for: the bound was met by cutting into a code point.
-    if record.dropped_bytes > max(0, len(payload) - max_bytes):
+    if retained.record.dropped_bytes > max(0, len(payload) - max_bytes):
         event("trimmed")
-
-
-def _retained_bytes(payload: bytes, record: CapturedStream) -> bytes:
-    """Slice off the prefix the record's drop count says was discarded."""
-    return payload[record.dropped_bytes :]
 
 
 @given(payload=_PAYLOADS, max_bytes=_BOUNDS)
@@ -183,22 +227,21 @@ def test_a_bounded_capture_retains_exactly_a_suffix_within_its_bound(
     off the record would agree with a payload taken from the wrong end.
     """
     raw = payload.encode("utf-8")
-    record = _retain(raw, max_bytes)
-    _announce_retention(raw, record, max_bytes)
+    retained = _retain(raw, max_bytes)
+    _announce_retention(raw, retained, max_bytes)
+    record = retained.record
 
     assert record.total_bytes == len(raw), (
         "the record must count the whole stream, not just the tail"
     )
-    retained = _retained_bytes(raw, record)
-    assert len(retained) <= max_bytes, (
-        f"retention must fit the bound; got {len(retained)} bytes "
-        f"for max_bytes={max_bytes}"
+    kept = retained.retained_bytes()
+    assert len(kept) <= max_bytes, (
+        f"retention must fit the bound; got {len(kept)} bytes for max_bytes={max_bytes}"
     )
-    assert raw.endswith(retained), (
-        "the retained bytes must be the stream's own tail; "
-        f"got {retained!r} from {raw!r}"
+    assert raw.endswith(kept), (
+        f"the retained bytes must be the stream's own tail; got {kept!r} from {raw!r}"
     )
-    assert record.dropped_bytes + len(retained) == record.total_bytes, (
+    assert record.dropped_bytes + len(kept) == record.total_bytes, (
         "the lemma dropped + retained == total must hold; "
         f"got {record.dropped_bytes} dropped of {record.total_bytes}"
     )
@@ -223,7 +266,11 @@ def test_no_bound_splits_a_code_point(payload: str, max_bytes: int) -> None:
 
     sink.absorb(raw)
     final = sink.finalize()
-    _announce_retention(raw, final.capture, max_bytes)
+    _announce_retention(
+        raw,
+        _Retained(payload=final.payload, record=final.capture),
+        max_bytes,
+    )
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert payload.endswith(final.payload), (
@@ -442,14 +489,15 @@ def test_the_bound_is_a_byte_count_not_a_character_count(max_bytes: int) -> None
 
     sink.absorb(raw)
     final = sink.finalize()
-    retained = _retained_bytes(raw, final.capture)
+    retained = _Retained(payload=final.payload, record=final.capture)
 
-    assert len(retained) <= max_bytes, (
-        f"a byte bound must not be exceeded; got {len(retained)} "
-        f"for max_bytes={max_bytes}"
+    assert len(retained.retained_bytes()) <= max_bytes, (
+        f"a byte bound must not be exceeded; got "
+        f"{len(retained.retained_bytes())} for max_bytes={max_bytes}"
     )
-    assert final.payload == retained.decode("utf-8"), (
-        "the retained text must be exactly the retained bytes decoded"
+    assert raw.endswith(retained.retained_bytes()), (
+        "the retained bytes must be the stream's own tail; "
+        f"got {retained.retained_bytes()!r} from {raw!r}"
     )
     assert final.capture.truncated is (len(raw) > max_bytes), (
         "a stream longer than its budget must report a truncation, and a "
