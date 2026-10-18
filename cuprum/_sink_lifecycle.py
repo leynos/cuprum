@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import threading
 import typing as typ
 
+from cuprum._bounded_delivery import _DELIVERY_DRAIN_GRACE_S
 from cuprum.events import TerminalOutcome
 from cuprum.sinks import base as sinks
 
@@ -73,12 +75,25 @@ class _SinkBracket:
     """
 
     session: sinks.OutputSession | None
+    bounded_delivery: bool = False
+    delivery_grace_s: float | None = None
+    writer_lock: threading.Lock = dc.field(
+        default_factory=threading.Lock,
+        repr=False,
+    )
+    _state_lock: threading.Lock = dc.field(
+        default_factory=threading.Lock,
+        repr=False,
+    )
 
     @classmethod
     def open(
         cls,
         sink: sinks.OutputSink | None,
         start: sinks.SessionStart,
+        *,
+        delivery_grace_s: float | None = None,
+        bounded_delivery: bool = False,
     ) -> _SinkBracket:
         """Open the run's session, if any, under a fresh bracket.
 
@@ -91,7 +106,11 @@ class _SinkBracket:
         _SinkBracket
             The bracket owning this run's session, which may be empty.
         """
-        return cls(_open_sink_session(sink, start))
+        return cls(
+            _open_sink_session(sink, start),
+            bounded_delivery=bounded_delivery,
+            delivery_grace_s=delivery_grace_s,
+        )
 
     def resolve_destination(self, fallback: typ.IO[str]) -> typ.IO[str]:
         """Return the active session's log destination, or *fallback*.
@@ -124,8 +143,65 @@ class _SinkBracket:
         outcome : sinks.SessionOutcome
             The terminal report for the run.
         """
-        session, self.session = self.session, None
+        with self._state_lock:
+            session, self.session = self.session, None
         _close_sink_session(session, outcome=outcome)
+
+    async def aclose(self, *, outcome: sinks.SessionOutcome) -> None:
+        """Close a bounded run's session off-loop after its worker settles."""
+        if not self.bounded_delivery or self.session is None:
+            self.close(outcome=outcome)
+            return
+        await asyncio.to_thread(
+            self.close_bounded,
+            outcome=outcome,
+        )
+
+    def close_bounded(
+        self,
+        *,
+        outcome: sinks.SessionOutcome,
+        grace: float | None = None,
+    ) -> None:
+        """Schedule one serialized daemon close and wait at most *grace*."""
+        with self._state_lock:
+            session, self.session = self.session, None
+        if session is None:
+            return
+
+        finished = threading.Event()
+        close_errors: list[BaseException] = []
+
+        def close_after_active_write() -> None:
+            """Keep terminal framing behind any worker write already in flight."""
+            try:
+                with self.writer_lock:
+                    session.close(outcome)
+            except BaseException as close_error:  # ruff: ignore[blind-except] - report every daemon close failure.
+                close_errors.append(close_error)
+            finally:
+                finished.set()
+
+        closer = threading.Thread(
+            target=close_after_active_write,
+            name="cuprum-output-session-close",
+            daemon=True,
+        )
+        try:
+            closer.start()
+        except BaseException:
+            with self._state_lock:
+                self.session = session
+            raise
+        wait_s = grace
+        if wait_s is None:
+            wait_s = (
+                _DELIVERY_DRAIN_GRACE_S
+                if self.delivery_grace_s is None
+                else self.delivery_grace_s
+            )
+        if finished.wait(wait_s) and close_errors:
+            raise close_errors[0]
 
 
 def _open_sink_session(

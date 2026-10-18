@@ -20,6 +20,10 @@ import dataclasses as dc
 import time
 import typing as typ
 
+from cuprum._command_execution_config import (
+    _build_subprocess_execution as _build_subprocess_execution,
+)
+
 # The finalization helpers moved to ``cuprum._command_finalization`` when this
 # module outgrew the line ceiling. They stay in this module's namespace because
 # the callers that reach for them — the owned-handle start, the prepared-command
@@ -37,9 +41,6 @@ from cuprum._command_finalization import (
 from cuprum._command_finalization import (
     _finalize_prepared_command_failure as _finalize_prepared_command_failure,
 )
-from cuprum._command_execution_config import (
-    _build_subprocess_execution as _build_subprocess_execution,
-)
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._observability import (
     _base_stage_tags,
@@ -52,9 +53,6 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._subprocess_context import _event_cwd, _execution_cwd
-from cuprum._subprocess_execution import (
-    _SubprocessExecution,
-)
 from cuprum.context import EnvMode
 from cuprum.events import CaptureMode
 

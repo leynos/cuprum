@@ -278,6 +278,7 @@ def test_failed_pipeline_config_build_closes_delivery_worker_and_sink(
     assert created_workers[0]._closing
     created_workers[0]._thread.join(timeout=1.0)
     assert not created_workers[0]._thread.is_alive()
+    assert sink.last_session.closed_event.wait(timeout=1.0)
     assert sink.last_session.closed == 1
     assert sink.recorded_outcome.outcome is TerminalOutcome.ERROR
 

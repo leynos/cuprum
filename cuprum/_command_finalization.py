@@ -116,7 +116,7 @@ async def _finalize_command_run_failure(
             drain_grace_s=execution.delivery_grace_s,
         ),
     )
-    tracking.sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(tracking.sink_bracket.aclose(outcome=outcome))
     _safe_emit_terminal(
         execution.observation,
         outcome.outcome,
@@ -164,7 +164,7 @@ async def _finalize_command_run_success(
             drain_grace_s=execution.delivery_grace_s,
         ),
     )
-    tracking.sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(tracking.sink_bracket.aclose(outcome=outcome))
     try:
         execution.observation.emit_terminal(
             outcome.outcome,
@@ -190,12 +190,21 @@ async def _finalize_prepared_command_failure(
     tracking: _ExecutionTracking,
     observation: _StageObservation | None,
     run_error: BaseException,
+    *,
+    execution: _SubprocessExecution | None = None,
 ) -> None:
     """Close, settle, and drain a command that failed before ownership passed on."""
     # Close before the drain: a hook failure is grouped with the run error, and
     # closing afterwards would record that aggregate instead of a timeout.
     outcome = _outcome_for_error(run_error)
-    tracking.sink_bracket.close(outcome=outcome)
+    if execution is not None:
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                execution.delivery_worker,
+                drain_grace_s=execution.delivery_grace_s,
+            ),
+        )
+    await _shielded_cleanup(tracking.sink_bracket.aclose(outcome=outcome))
     if observation is not None:
         _safe_emit_terminal(
             observation,

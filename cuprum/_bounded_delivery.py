@@ -157,6 +157,7 @@ class _DeliveryWorker:
     _queue: collections.deque[_DeliveryItem]
     _condition: threading.Condition
     _thread: threading.Thread
+    _operation_lock: threading.Lock
     _queued_bytes: int
     _active_item: _DeliveryItem | None
     _closing: bool
@@ -177,6 +178,7 @@ class _DeliveryWorker:
         self.max_queued_bytes = max_queued_bytes
         self._queue = collections.deque()
         self._condition = threading.Condition(threading.Lock())
+        self._operation_lock = threading.Lock()
         self._queued_bytes = 0
         self._active_item = None
         self._closing = False
@@ -313,14 +315,18 @@ class _DeliveryWorker:
     def _deliver(self, item: _DeliveryItem) -> None:
         """Perform one blocking destination write and its optional flush."""
         destination = self.destinations[item.stream]
-        if item.payload.value:
-            if isinstance(item.payload.value, bytes):
-                target = getattr(destination, "buffer", destination)
-                typ.cast("typ.BinaryIO", target).write(item.payload.value)
-            else:
-                typ.cast("typ.IO[str]", destination).write(item.payload.value)
-        if item.flush:
-            destination.flush()
+        with self._operation_lock:
+            with self._condition:
+                if self._abandoned:
+                    return
+            if item.payload.value:
+                if isinstance(item.payload.value, bytes):
+                    target = getattr(destination, "buffer", destination)
+                    typ.cast("typ.BinaryIO", target).write(item.payload.value)
+                else:
+                    typ.cast("typ.IO[str]", destination).write(item.payload.value)
+            if item.flush:
+                destination.flush()
 
     def _discard_queued(self) -> None:
         """Forget every pending item and account for its bytes as undelivered."""
@@ -362,6 +368,8 @@ def _new_delivery_worker(
     delivery: BoundedDelivery,
     stdout_destination: _DeliveryDestination,
     stderr_destination: _DeliveryDestination,
+    *,
+    operation_lock: threading.Lock | None = None,
 ) -> _DeliveryWorker:
     """Build the shared worker from enabled options and resolved sinks.
 
@@ -374,10 +382,15 @@ def _new_delivery_worker(
     _DeliveryWorker
         The run-owned worker configured for the resolved stream destinations.
     """
-    return _DeliveryWorker(
+    worker = _DeliveryWorker(
         destinations={
             EchoStream.STDOUT: stdout_destination,
             EchoStream.STDERR: stderr_destination,
         },
         max_queued_bytes=delivery.max_queued_bytes,
     )
+    if operation_lock is not None:
+        # The worker has no queued writes until setup returns, so the run's
+        # bracket can safely supply the lock shared with session finalization.
+        worker._operation_lock = operation_lock
+    return worker

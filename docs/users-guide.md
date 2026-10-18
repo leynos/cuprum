@@ -1886,6 +1886,12 @@ cannot forcibly stop a running worker thread, so it may remain alive until the
 destination returns. The run does not close caller-owned destinations; keep a
 destination valid if an abandoned write might later return.
 
+When a presentation sink is active, its closing frame is serialized behind the
+delivery worker's last active write and its close runs off the execution loop.
+The run waits only for the configured delivery grace. If a destination write
+never returns, the closing frame may remain unfinished rather than race that
+write; any background finalizer remains a daemon thread.
+
 ## Operational reference
 
 These contracts support diagnosis and integration after the first run. They

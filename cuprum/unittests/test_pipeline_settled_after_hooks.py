@@ -56,6 +56,7 @@ class _TerminalHookGate:
     """Hold terminal observers until the test delivers both cancellations."""
 
     def __init__(self, stage_count: int) -> None:
+        """Create a gate for the expected number of settled stages."""
         self.stage_count = stage_count
         self.release = asyncio.Event()
         self.all_started = asyncio.Event()

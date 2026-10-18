@@ -158,6 +158,7 @@ def test_worker_contains_base_exception_and_accounts_queued_output() -> None:
         """Block the active write before raising a BaseException subclass."""
 
         def write(self, text: str, /) -> int:
+            """Signal the active write and abort when the test releases it."""
             ready.set()
             if not release.wait(timeout=3):
                 raise RuntimeError

@@ -89,6 +89,7 @@ async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
             prepared.tracking,
             prepared.execution.observation,
             run_error,
+            execution=prepared.execution,
         )
         raise
 

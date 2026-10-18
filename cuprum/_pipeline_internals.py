@@ -266,7 +266,7 @@ async def _spawn_and_drive_pipeline(
                 drain_grace_s=config.delivery_grace_s,
             ),
         )
-        config.sink_bracket.close(outcome=outcome)
+        await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
         _emit_terminal_events(observations, outcome.outcome)
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(

@@ -697,8 +697,10 @@ members = [
     "cuprum/adapters/pump_metrics.py",
     "cuprum/context/_scope.py",
     "cuprum/events.py",
+    "cuprum/_command_finalization.py",
+    "cuprum/_command_internals.py",
 ]
-reason = "Thirty-one modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match every key of an entry to be silenced. Widened from twenty-eight to thirty as this branch's module splits added `_subprocess_stream_exit.py` and `_stdio_ownership.py` to the family `main` already reported. Bounded delivery adds `_command_execution_config.py` to the same module-local convention."
+reason = "Thirty-three modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. It was carried as two entries naming ten and six modules, which meant neither covered the family the detector reported for all of them; widening the surface made that visible, because a family must match every key of an entry to be silenced. Widened from twenty-eight to thirty as this branch's module splits added `_subprocess_stream_exit.py` and `_stdio_ownership.py` to the family `main` already reported. Bounded delivery adds `_command_execution_config.py` to the same module-local convention; the command-finalization split adds `_command_finalization.py` and `_command_internals.py`."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -1048,10 +1050,6 @@ members = ["cuprum/_pipeline_finalize.py", "cuprum/_command_finalization.py"]
 reason = "The same prologue in the pipeline and command finalization modules: an `_observability` import of the two shutdown helpers (`_drain_tasks_during_cleanup`, `_wait_for_exec_hook_tasks`) that every finalizer needs to stop hook tasks, before each declares its `TYPE_CHECKING` block. Two modules, two different result families, one dependency surface; import declarations cannot be shared, for the reason the import-family entries above record. The finalization ordering below the imports is where the two deliberately part company."
 
 [[tool.duplication_gate.allow]]
-members = ["cuprum/_command_internals.py", "cuprum/_subprocess_execution.py"]
-reason = "Two `if typ.TYPE_CHECKING:` prologues that open with the same `import asyncio` line and then import `_StageObservation` and `_AnyCommandResult` in the same order, before each continues with its own type-only collaborators. The matched text is the guard plus the first imports a run-machinery module needs; import declarations cannot be factored into a shared helper, for the reason the import-family entries above record. The pair surfaced with this branch's module splits; the idiom is the one already recorded for the wider TYPE_CHECKING family."
-
-[[tool.duplication_gate.allow]]
 members = ["cuprum/sh/bytes_entry_points.py", "cuprum/sh/pipeline.py", "cuprum/sh/safe_cmd.py"]
 reason = "Three synchronous entry points that end in an `asyncio.run(...)` over an async twin with the same four keywords. The matched text is the tail of the public method — the call and its forwarded arguments — not a shared implementation; a shared `_run_sync(awaitable)` would be a pure delegate that deletes the signatures the public API documents, the shape the `__or__` entry above records. The fragments carry no name, so this entry is keyed by whole module: `bytes_entry_points.py` is where this branch's split moved `run_bytes_sync`, and `pipeline.py ~ safe_cmd.py` is the pair `main` already reports at the same tail."
 
@@ -1079,6 +1077,9 @@ reason = "The detector reports this as an unnamed fragment, so the exception mus
 # maturin CLI. The direct builds set MATURIN_NO_MISSING_BUILD_BACKEND_WARNING
 # because the declared PEP 517 backend is uv_build by design.
 
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_command_finalization.py", "cuprum/_line_iteration.py"]
+reason = "The direct command finalizer and the async line-stream iterator each bind the same lifecycle, observer-drain, and sink-outcome imports. Imports must bind in each module namespace; a common re-export would add an indirect dependency without removing those bindings. Their runtime completion paths remain deliberately separate."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

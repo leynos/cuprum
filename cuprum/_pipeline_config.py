@@ -211,6 +211,10 @@ def _prepare_pipeline_config(
     sink_bracket = _SinkBracket.open(
         output.sink,
         sinks.SessionStart(label="pipeline", argv=()),
+        bounded_delivery=output.delivery is not None,
+        delivery_grace_s=(
+            None if output.delivery is None else output.delivery.drain_grace_s
+        ),
     )
     delivery_worker: _DeliveryWorker | None = None
     try:
@@ -260,7 +264,13 @@ def _prepare_pipeline_config(
                     close_error,
                 )
         try:
-            sink_bracket.close(outcome=_outcome_for_error(run_error))
+            if output.delivery is None:
+                sink_bracket.close(outcome=_outcome_for_error(run_error))
+            else:
+                sink_bracket.close_bounded(
+                    outcome=_outcome_for_error(run_error),
+                    grace=0.0,
+                )
         except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
             _note_setup_cleanup_failure(
                 run_error,
@@ -301,6 +311,7 @@ def _build_pipeline_delivery_worker(
         delivery,
         sink_bracket.resolve_destination(stdout_sink),
         sink_bracket.resolve_destination(stderr_sink),
+        operation_lock=sink_bracket.writer_lock,
     )
 
 

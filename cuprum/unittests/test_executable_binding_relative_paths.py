@@ -303,6 +303,7 @@ def test_line_iteration_anchors_a_relative_cwd_once(
     catalogue, (tool,) = _catalogue_for("relative-line-tool")
 
     async def collect() -> tuple[list[str], CommandResult | None]:
+        """Collect line events and the command's final result."""
         command = sh.make(tool, catalogue=catalogue)()
         async with command.lines(
             output=RunOutputOptions(capture=True, echo=False),

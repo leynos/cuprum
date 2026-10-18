@@ -60,6 +60,8 @@ class RecordingSession:
         How many times ``close`` was called, including idempotent repeats.
         A terminal path that closes twice is a defect the run owes the
         adapter, so callers assert this is exactly one.
+    closed_event:
+        Set by ``close`` so tests can await off-loop session finalization.
     """
 
     def __init__(self) -> None:
@@ -67,6 +69,7 @@ class RecordingSession:
         self.log_io = io.StringIO()
         self.closed_with: SessionOutcome | None = None
         self.closed = 0
+        self.closed_event = threading.Event()
 
     @property
     def log(self) -> typ.IO[str]:
@@ -83,6 +86,7 @@ class RecordingSession:
         self.closed += 1
         if self.closed_with is None:
             self.closed_with = outcome
+        self.closed_event.set()
 
 
 class RecordingSink:

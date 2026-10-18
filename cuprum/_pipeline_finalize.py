@@ -68,7 +68,7 @@ async def _finalize_pipeline_execution(
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
         outcome = _outcome_for_error(after_hook_error)
-        sink_bracket.close(outcome=outcome)
+        await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
         _emit_result_terminal_events(
             observations,
             stage_results,
@@ -81,7 +81,9 @@ async def _finalize_pipeline_execution(
             )
         )
         raise
-    sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
+    await _shielded_cleanup(
+        sink_bracket.aclose(outcome=_pipeline_result_outcome(stage_results))
+    )
     try:
         _emit_result_terminal_events(observations, stage_results)
     except BaseException as terminal_error:
@@ -126,7 +128,7 @@ async def _reconcile_pipeline_run_failure(
         config.delivery_worker,
         drain_grace_s=config.delivery_grace_s,
     )
-    config.sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
     _emit_terminal_events(
         observers.observations,
         outcome.outcome,
@@ -171,7 +173,9 @@ async def _finalize_pipeline_timeout(
             drain_grace_s=config.delivery_grace_s,
         ),
     )
-    config.sink_bracket.close(outcome=_outcome_for_error(timeout_error))
+    await _shielded_cleanup(
+        config.sink_bracket.aclose(outcome=_outcome_for_error(timeout_error))
+    )
     _report_pipeline_timeout_expiry(
         observations,
         spawn.processes,
@@ -201,7 +205,7 @@ async def _finalize_pipeline_stage_result_failure(
 ) -> None:
     """Settle stages and drain hooks after stage-result assembly fails."""
     outcome = _outcome_for_error(result_error)
-    sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
     _emit_terminal_events(
         observers.observations,
         outcome.outcome,

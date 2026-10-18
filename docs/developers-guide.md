@@ -1400,15 +1400,18 @@ close on every terminal path. The shared mechanics live in
   the original echo destinations while continuing to use `session.log` for its
   own workflow commands; the GitHub Actions adapter does this when only failure
   annotations are enabled.
-- Every terminal path finalizes through `_SinkBracket.close`, which releases the
+- Every terminal path finalizes through the sink bracket, which releases the
   session and delegates to `_close_sink_session` with a bounded
   `SessionOutcome`. The close is exactly-once — only the first reaches the
-  adapter — so a later guard cannot overwrite an early, precise outcome.
-  `_outcome_for_result` maps a completed run's exit code and
-  `_outcome_for_error` maps timeout, cancellation, and earlier failures. A
-  pipeline reports its first failing stage's exit code through
-  `_pipeline_result_outcome` (`cuprum/_pipeline_sink.py`). Only categorical
-  detail reaches the adapter; exception text and argv never do.
+  adapter — so a later guard cannot overwrite an early, precise outcome. With
+  bounded delivery, it runs on a daemon finalizer serialized with worker
+  writes; the run waits for the delivery grace and terminal framing may remain
+  open if an active destination write never returns. `_outcome_for_result` maps
+  a completed run's exit code and `_outcome_for_error` maps timeout,
+  cancellation, and earlier failures. A pipeline reports its first failing
+  stage's exit code through `_pipeline_result_outcome`
+  (`cuprum/_pipeline_sink.py`). Only categorical detail reaches the adapter;
+  exception text and argv never do.
 - The close runs before the shielded task drain, deliberately: the drain can
   aggregate a failing after-hook or observe task into a `BaseExceptionGroup`,
   so closing afterwards would record the aggregate in place of the precise

@@ -103,10 +103,14 @@ change.
 If a writer remains blocked after the grace, Cuprum abandons its daemon thread.
 The thread may remain alive until the destination returns. Python provides no
 supported way to forcibly stop a running thread, so Cuprum does not promise to
-kill it. The run does not register an ``atexit`` join and closes its
-presentation-sink session only after the delivery worker has drained or been
-abandoned. A caller-provided plain destination remains caller-owned and must
-stay valid for any abandoned write that later returns.
+kill it. A run with a presentation sink shares a per-run lock between delivery
+writes and session close. Bounded session finalization runs on a daemon thread
+and waits behind an active delivery write, so a closing frame cannot race that
+write or precede it. The run waits only for the configured grace. If the active
+write never returns, the session finalizer remains blocked and terminal framing
+may remain unfinished. The run does not register an ``atexit`` join. A
+caller-provided plain destination remains caller-owned and must stay valid for
+any abandoned write or session finalizer that later returns.
 
 The native pipeline-pump executor's unbounded hand-off rationale does not apply
 here. A native pump sits between two pipeline stages: a later hop must drain
@@ -143,6 +147,9 @@ forcibly stop a running thread. See the
 - A blocked destination can leave a daemon thread alive beyond the run's
   lifetime, and that thread may still use the caller's destination if the
   blocking operation later returns.
+- A bounded presentation session can remain open if its active destination
+  write never returns; its finalizer stays ordered behind that write rather
+  than racing it.
 - The bounded mode cannot preserve synchronous exception propagation from
   destination ``write`` and ``flush`` methods; it reports those failures
   categorically instead.

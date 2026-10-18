@@ -10,9 +10,9 @@ from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
 from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
+from cuprum._stdio_plan import _resolve_stdio
 from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum._subprocess_execution import _SubprocessExecution
-from cuprum._stdio_plan import _resolve_stdio
 from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
@@ -57,6 +57,7 @@ def _build_subprocess_execution(
             delivery,
             stdout_destination,
             stderr_destination,
+            operation_lock=sink_bracket.writer_lock,
         )
     )
     try:
