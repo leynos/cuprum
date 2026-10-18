@@ -178,8 +178,14 @@ class SpillHandle:
         """
         if not self.closed:
             self.closed = True
+            # Closing a buffered file flushes it, which is a disk write, so it
+            # runs on a worker beside the unlink rather than on the run's loop.
+            # The await also orders the two, so the unlink cannot overtake a
+            # close it depends on. The flag is set *before* the await because a
+            # caller can only interleave at a suspension point, and a second
+            # caller must see the close already claimed rather than queue one.
             with contextlib.suppress(OSError):
-                self.file.close()
+                await asyncio.to_thread(self.file.close)
         if remove and not self.keep:
             with contextlib.suppress(OSError):
                 await asyncio.to_thread(self.path.unlink, missing_ok=True)
