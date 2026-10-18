@@ -21,6 +21,8 @@ import sys
 import time
 import typing as typ
 
+from cuprum._bounded_encoding import _reject_unsupported_bounded_encoding
+
 # The finalization helpers moved to ``cuprum._command_finalization`` when this
 # module outgrew the line ceiling. They stay in this module's namespace because
 # the callers that reach for them — the owned-handle start, the prepared-command
@@ -195,6 +197,14 @@ def _build_subprocess_execution(
     once is cheap; discovering it from a caller who watched their explicit
     ``inherit()`` lose to a payload is not.
 
+    The capture policies are checked against the run's encoding for the same
+    reason. A bounded capture trimmed under an encoding the trim cannot repair
+    would decode an orphaned trail byte as a character of its own, and the
+    caller would read text the child never wrote. Both facts — the policy and
+    the encoding — are in hand here and nowhere earlier: the policy lives on
+    the options and the encoding on the context, and the two are only brought
+    together for the first time at this seam.
+
     Returns
     -------
     _SubprocessExecution
@@ -205,14 +215,22 @@ def _build_subprocess_execution(
     ValueError
         If the run's output options name an inherited stdin while its
         ``stdin=`` argument supplies a source, so the two disagree about where
-        the child's input comes from.
-    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the stdio checker.
+        the child's input comes from; or if a bounded text capture names an
+        encoding whose code-point boundaries a truncated tail cannot repair.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the stdio and encoding checkers.
     _reject_contested_stdin(state.output.stdin, has_source=state.stdin_data is not None)
+    capture_stdout, capture_stderr = state.output.resolved_capture
+    for capture in (capture_stdout, capture_stderr):
+        _reject_unsupported_bounded_encoding(
+            capture,
+            encoding=state.context.encoding,
+            capture_bytes=state.capture_bytes,
+        )
     return _SubprocessExecution(
         cmd=cmd,
         ctx=state.context,
-        capture_stdout=state.output.resolved_capture[0],
-        capture_stderr=state.output.resolved_capture[1],
+        capture_stdout=capture_stdout,
+        capture_stderr=capture_stderr,
         echo_stdout=state.output.resolved_echo[0],
         echo_stderr=state.output.resolved_echo[1],
         max_echo_line_bytes=state.output.max_echo_line_bytes,

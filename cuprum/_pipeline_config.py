@@ -20,6 +20,7 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._bounded_encoding import _reject_unsupported_bounded_encoding
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._sink_lifecycle import _SinkBracket
@@ -255,6 +256,16 @@ def _prepare_pipeline_config(
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
     capture_stdout, capture_stderr = output.resolved_capture
+    # Rejected here, before any stage is spawned. The encoding is the run's,
+    # shared by every stage, so one refusal covers the whole pipeline; a
+    # bounded text capture that reached the drain under an unrepairable codec
+    # would decode an orphaned trail byte as a character the child never wrote.
+    for capture in (capture_stdout, capture_stderr):
+        _reject_unsupported_bounded_encoding(
+            capture,
+            encoding=ctx.encoding,
+            capture_bytes=capture_bytes,
+        )
     sink_bracket = _SinkBracket.open(
         output.sink,
         sinks.SessionStart(label="pipeline", argv=()),
