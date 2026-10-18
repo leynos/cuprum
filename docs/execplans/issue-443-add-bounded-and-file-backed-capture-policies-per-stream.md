@@ -234,7 +234,8 @@ Thresholds that trigger escalation when breached.
   documentation updates. Tests landed and green: `test_capture_cleanup.py`,
   `test_capture_accumulator.py`, `test_capture_spill.py`,
   `test_capture_spill_failure.py`, `test_capture_timeout.py`,
-  `test_bounded_capture_drain.py`, `tests/behaviour/test_bounded_capture.py`
+  `test_bounded_capture_properties.py`, `test_bounded_capture_seam.py`,
+  `test_bounded_capture_edges.py`, `tests/behaviour/test_bounded_capture.py`
   with `tests/features/bounded_capture.feature`, and the runtime half of O9 in
   `test_public_api.py`. Non-vacuity measured for each (see
   `Surprises & discoveries`). Documentation landed in `docs/users-guide.md`,
@@ -392,8 +393,8 @@ Thresholds that trigger escalation when breached.
   `return` removed from a pump double (pylint's enabled `useless-return` would
   have caught it at the next full `make lint`); `test_pipeline_config.py` now
   asserts the per-stream policies the config actually carries instead of merely
-  that construction succeeded; the `_Retained` record in
-  `test_bounded_capture_drain.py` makes the suffix property measure the
+  that construction succeeded; the `_Retained` record (since moved to
+  `_bounded_capture_support.py`) makes the suffix property measure the
   accumulator's own payload rather than a slice of the input; the two
   timeout-cleanup tests enter the capture observer before the deadline can
   fire, so their witness covers the child's whole life; `cuprum.sh.output`
@@ -539,7 +540,7 @@ Thresholds that trigger escalation when breached.
   *adopt* runs before the cancellation is re-raised; the new `_BlockingCreate`
   regression blocks the worker inside the create and fails with the file still
   on disk if the adopt is moved after the raise. The second defect was that the
-  two byte-mode bound cases in `test_bounded_capture_drain.py` never crossed
+  two byte-mode bound cases in `test_bounded_capture_edges.py` never crossed
   their bounds, so their truncation assertions could not have failed. Their
   payloads are now chosen to exceed the bound. The two drain call sites were
   deduplicated onto `_drain_context`, the five capture-policy timeout cases
@@ -553,6 +554,21 @@ Thresholds that trigger escalation when breached.
   addendum's wording that said the round-8 review *made* the calls blocking
   rather than identified them as such. Date/Author: 2026-10-18, implementation
   agent.
+- [x] (2026-10-18) Split `cuprum/unittests/test_bounded_capture_drain.py` — 789
+  lines when the round-10 review measured it, 754 at the split point once the
+  shared drain drivers had moved to `_capture_sink_support.py` — at the seam
+  the review named, into four modules: `_bounded_capture_support.py` (the shared
+  `_config`, `_sink`, and `_Retained` fixtures),
+  `test_bounded_capture_properties.py` (the two Hypothesis properties and the
+  two corpus tests that keep their classes reachable),
+  `test_bounded_capture_seam.py` (the config-ownership cases and the four cases
+  that read a payload through `_drain` itself), and
+  `test_bounded_capture_edges.py` (each bound boundary and the byte-mode
+  cases). The `_feed`/`_absorb`/`_finalize` helpers had already moved to
+  `_capture_sink_support.py`, so the split added no duplicated fixture. The
+  test-function-name set is identical to the deleted module's and the same 28
+  cases pass, so the split is behaviour-preserving rather than merely
+  count-preserving. Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -1715,6 +1731,20 @@ Thresholds that trigger escalation when breached.
   caller have a correct next step. Date/Author: 2026-10-18, implementation
   agent; raised by review round 10 follow-up.
 
+- Decision: split the bounded-capture suite by *question asked*, not by test
+  kind, and share the fixtures through a support module. Rationale: the
+  789-line module held — and still held 754 lines at the split point, after the
+  drain drivers moved out — three suites that answer different questions: does
+  the drain reach the accumulator, does retention hold for any stream, and what
+  happens at each boundary. Two of the three would pass unchanged if the drain
+  never consulted the config's sink. Naming that in each module's docstring is
+  what keeps a future edit from merging them back into a list of cases whose
+  relationship is implicit. The shared `_config`/`_sink`/`_Retained` fixtures
+  went to `_bounded_capture_support.py` rather than being copied, because three
+  inline copies of a config would drift into testing three different
+  configurations. Date/Author: 2026-10-18, implementation agent; raised by
+  review round 10.
+
 ## Outcomes & retrospective
 
 Delivered: capture is a per-stream policy. `RunOutputOptions` gained
@@ -1820,7 +1850,8 @@ ISSUE-443-AC-per-stream           -> EP-T1 -> cuprum/unittests/test_capture_poli
 ISSUE-443-AC-relay-untouched      -> EP-T2 -> EP-T3 -> tests/behaviour/test_bounded_capture.py::downstream stream complete
 ISSUE-443-AC-partial-on-failure   -> EP-T3 -> cuprum/unittests/test_capture_timeout.py
 ISSUE-443-AC-storage-failure      -> EP-T3 -> cuprum/unittests/test_capture_spill_failure.py
-ISSUE-443-AC-unicode-boundary     -> EP-T2 -> cuprum/unittests/test_bounded_capture_drain.py
+ISSUE-443-AC-unicode-boundary     -> EP-T2 -> cuprum/unittests/test_bounded_capture_properties.py
+                                             -> cuprum/unittests/test_bounded_capture_edges.py
 ISSUE-443-AC-deterministic-cleanup-> EP-T3 -> cuprum/unittests/test_capture_spill_cleanup.py
 ISSUE-443-AC-default-preserved    -> EP-T1 -> cuprum/unittests/test_public_api.py
 ```
@@ -1838,13 +1869,15 @@ decodable suffix (they start on a code-point boundary). Lemma:
 Hypothesis over generated byte strings and bounds, plus parameterized cases for
 the boundaries `n = 1`, `n` exactly equal to the stream length,
 `n = len(S) - 1`, and `n > len(S)`. Artefact:
-`cuprum/unittests/test_bounded_capture_drain.py`. Evidence: hypothesis reports
-`Falsifying example` before the accumulator handles multi-byte input; all cases
-pass after. Non-vacuity: generators must reach multi-byte UTF-8 (assert a
-classification counter that at least one generated case contains a code point
-of >1 byte) and must exercise both the "under budget" and "over budget"
-classes; the negative control is a deliberately off-by-one bound
-(`max_bytes = n + 1`) which the `dropped_bytes` lemma rejects.
+`cuprum/unittests/test_bounded_capture_properties.py` (the properties) and
+`cuprum/unittests/test_bounded_capture_edges.py` (the named boundaries).
+Evidence: hypothesis reports `Falsifying example` before the accumulator
+handles multi-byte input; all cases pass after. Non-vacuity: generators must
+reach multi-byte UTF-8 (assert a classification counter that at least one
+generated case contains a code point of >1 byte) and must exercise both the
+"under budget" and "over budget" classes; the negative control is a
+deliberately off-by-one bound (`max_bytes = n + 1`) which the `dropped_bytes`
+lemma rejects.
 
 **O2 — Full capture is byte-for-byte unchanged.** Invariant: with
 `FullCapture()`, the value returned is exactly today's
@@ -2060,7 +2093,8 @@ decision: `<none>` — pre-1.0 package, additive-only change.
 `ISSUE-443-AC-bounded-capture`, `ISSUE-443-AC-unicode-boundary`. End state: the
 drain honours a policy when one is supplied; bounded and spilled capture work
 end to end at the drain level; the event channel emits. Acceptance evidence:
-`cuprum/unittests/test_bounded_capture_drain.py` and
+`cuprum/unittests/test_bounded_capture_properties.py`,
+`test_bounded_capture_seam.py`, `test_bounded_capture_edges.py`, and
 `test_capture_accumulator.py` pass; `make lint` and `make test` pass.
 Conformance check:
 
