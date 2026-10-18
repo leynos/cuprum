@@ -1674,13 +1674,20 @@ Registrations are context-local, like the policy registrations in
 | --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | Execution lifecycle   | `sh.observe(hook)`               | An `ExecEvent` per phase; see [Structured execution events](#structured-execution-events)                                                           | `MetricsHook` in `cuprum.adapters.metrics_adapter`                  |
 | Control operations    | `observe_control(hook)`          | A `ControlEvent` per `signal()`, `terminate()`, or `kill()` on a `RunningCommand`                                                                   | `control_metrics_hook` in `cuprum.adapters.control_metrics`         |
-| Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line or a sink fails to encode or has closed                                                                   | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
+| Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line, a sink fails, or bounded delivery drops or abandons output                                               | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
 | Line-stream lifecycle | `observe_line_stream(hook)`      | A `LineStreamEvent` as a `SafeCmd.lines()` stream spawns, saturates, tears down, or ends                                                            | `line_stream_metrics_hook` in `cuprum.adapters.line_stream_metrics` |
 | Stream operations     | `observe_stream_operation(hook)` | A `StreamOperationEvent` per completed drain or transfer; see [Aggregate Python stream-operation events](#aggregate-python-stream-operation-events) | `stream_operation_metrics_hook` in `cuprum.adapters.stream_metrics` |
 | Rust-pump routing     | `observe_pump(hook)`             | A `PumpEvent` per routing decision; see [Counting pump routing decisions](#counting-pump-routing-decisions)                                         | `PumpMetricsHook` in `cuprum.adapters.pump_metrics`                 |
 | Rust-pump hop spans   | `observe_pump_span(tracer)`      | A span per native hop; see [Rust-pump executor-hop spans](#rust-pump-executor-hop-spans)                                                            | Not applicable                                                      |
 
 _Table 5: Observation channels and their metrics adapters._
+
+`EchoMetricsHook` counts bounded-delivery drops, sink write or flush failures,
+and undelivered groups in `cuprum_echo_delivery_events_total`, labelled only by
+the output stream and closed event category. It also adds dropped and
+undelivered source bytes to `cuprum_echo_delivery_bytes_total` with the same
+labels. The adapter never uses sink metadata or output content as a metric
+label.
 
 The `observe_*` functions are importable from `cuprum`, except
 `observe_stream_operation`, which lives in `cuprum.stream_observation`. For

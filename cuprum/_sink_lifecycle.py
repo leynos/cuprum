@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import functools
 import threading
 import typing as typ
 
 from cuprum._bounded_delivery import _DELIVERY_DRAIN_GRACE_S
+from cuprum._daemon_thread import _await_daemon_thread
 from cuprum.events import TerminalOutcome
 from cuprum.sinks import base as sinks
 
@@ -157,9 +159,8 @@ class _SinkBracket:
         if not self.bounded_delivery or self.session is None:
             self.close(outcome=outcome)
             return
-        await asyncio.to_thread(
-            self.close_bounded,
-            outcome=outcome,
+        await _await_daemon_thread(
+            functools.partial(self.close_bounded, outcome=outcome),
         )
 
     def close_bounded(

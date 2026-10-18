@@ -7,7 +7,7 @@ import typing as typ
 
 import pytest
 
-import cuprum._command_execution_config as command_execution_config
+import cuprum._bounded_delivery as bounded_delivery
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.echo_events import EchoErrorCategory, EchoStream
 from cuprum.echo_observation import observe_echo
@@ -31,7 +31,7 @@ def test_lines_defers_delivery_setup_until_iteration(
     command = runtime.builder("-c", "print('line')")
     sink = BlockedSink()
     created_workers: list[bool] = []
-    original_worker = command_execution_config._DeliveryWorker
+    original_worker = bounded_delivery._DeliveryWorker
 
     def record_worker_creation(
         destinations: dict[EchoStream, typ.IO[str] | typ.BinaryIO],
@@ -42,7 +42,7 @@ def test_lines_defers_delivery_setup_until_iteration(
         return original_worker(destinations, max_queued_bytes)
 
     monkeypatch.setattr(
-        command_execution_config,
+        bounded_delivery,
         "_DeliveryWorker",
         record_worker_creation,
     )
@@ -60,6 +60,23 @@ def test_lines_defers_delivery_setup_until_iteration(
 
     assert not created_workers
     assert not sink.started.is_set()
+
+    async def consume_started_stream() -> None:
+        """Create a worker by consuming a second bounded line stream."""
+        async with command.lines(
+            output=RunOutputOptions(
+                echo_stdout=False,
+                echo_stderr=False,
+                delivery=BoundedDelivery(max_queued_bytes=128),
+            ),
+        ) as started:
+            async for _line in started:
+                pass
+
+    with scoped(ScopeConfig(allowlist=frozenset([runtime.program]))):
+        asyncio.run(consume_started_stream())
+
+    assert created_workers == [True]
 
 
 async def _consume_blocked_line_stream(

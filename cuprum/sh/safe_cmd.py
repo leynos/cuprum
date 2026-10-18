@@ -58,6 +58,7 @@ from cuprum.sh.line_options import (
 )
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import CapturedResult, CommandResult
+from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 __all__ = [
     "SafeCmd",
@@ -248,6 +249,10 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         _enforce_allowlist(self)
         _reject_redirected_lines_stdout(out)
         stdin_source = _resolve_stdin_source(stdin, ctx)
+        _reject_contested_stdin(
+            out.stdin,
+            has_source=stdin_source is not None,
+        )
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _line_iteration_tracking()
         state = _ExecutionState(

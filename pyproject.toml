@@ -1080,6 +1080,9 @@ reason = "The detector reports this as an unnamed fragment, so the exception mus
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_command_finalization.py", "cuprum/_line_iteration.py"]
 reason = "The direct command finalizer and the async line-stream iterator each bind the same lifecycle, observer-drain, and sink-outcome imports. Imports must bind in each module namespace; a common re-export would add an indirect dependency without removing those bindings. Their runtime completion paths remain deliberately separate."
+[[tool.duplication_gate.allow]]
+unit = "cuprum/adapters/echo_metrics.py"
+reason = "The adjacent metric calls intentionally keep the public broken-pipe and truncation counters separate because each describes a different fault and uses a different label contract; the detector reports both fragments anonymously, so this path is the narrowest available key."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

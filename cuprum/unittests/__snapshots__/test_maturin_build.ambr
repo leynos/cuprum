@@ -20,6 +20,7 @@
       'cuprum/_concurrent_config.py',
       'cuprum/_constants.py',
       'cuprum/_context_policy.py',
+      'cuprum/_daemon_thread.py',
       'cuprum/_delivery_lifecycle.py',
       'cuprum/_echo_truncation.py',
       'cuprum/_enum_parse.py',

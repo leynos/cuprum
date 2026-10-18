@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import functools
 import typing as typ
 
 from cuprum._bounded_delivery import (
@@ -10,6 +10,7 @@ from cuprum._bounded_delivery import (
     _DeliveryPayload,
     _DeliveryWorker,
 )
+from cuprum._daemon_thread import _await_daemon_thread
 from cuprum.echo_events import (
     EchoErrorCategory,
     EchoEvent,
@@ -31,7 +32,7 @@ async def _close_delivery_worker(
     if worker is None:
         return ()
     grace = _DELIVERY_DRAIN_GRACE_S if drain_grace_s is None else drain_grace_s
-    await asyncio.to_thread(worker.close, grace)
+    await _await_daemon_thread(functools.partial(worker.close, grace))
     result = worker.take_close_result()
     if result is None:
         return ()

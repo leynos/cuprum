@@ -91,14 +91,15 @@ observation continue. Cuprum adds one ``RelayFallback`` and emits one
 ``EchoEvent`` with category ``DROPPED`` and the source-byte count for each
 rejected chunk.
 
-At teardown the run signals the worker to drain and joins it for at most the
-configured grace. A write or flush exception disables that worker's later
-delivery and becomes a loop-side ``DELIVERY_ERROR`` record for the affected
-stream. Any queued output skipped after that failure, or still queued or in
-flight when the drain grace expires, is reported as ``UNDELIVERED`` with the
-unconfirmed byte count grouped by stream. These diagnostics use the existing
-``RelayFallback`` and ``EchoEvent`` shapes; capture and process outcomes do not
-change.
+At teardown a run-owned daemon thread calls the worker's close operation, so a
+saturated event-loop default executor cannot postpone the start of its drain
+grace. The worker drains and joins for at most the configured grace. A write or
+flush exception disables that worker's later delivery and becomes a loop-side
+``DELIVERY_ERROR`` record for the affected stream. Any queued output skipped
+after that failure, or still queued or in flight when the drain grace expires,
+is reported as ``UNDELIVERED`` with the unconfirmed byte count grouped by
+stream. These diagnostics use the existing ``RelayFallback`` and ``EchoEvent``
+shapes; capture and process outcomes do not change.
 
 If a writer remains blocked after the grace, Cuprum abandons its daemon thread.
 The thread may remain alive until the destination returns. Python provides no

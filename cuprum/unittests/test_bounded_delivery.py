@@ -9,6 +9,8 @@ import time
 import typing as typ
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import cuprum
 from cuprum._bounded_delivery import (
@@ -106,6 +108,50 @@ def test_worker_bounds_queued_source_bytes_and_keeps_one_shared_fifo() -> None:
     assert result.failures == ()
     assert result.undelivered_bytes == ()
     assert sink.getvalue() == "firstéé"
+
+
+@given(
+    capacity=st.integers(min_value=1, max_value=32),
+    chunks=st.lists(
+        st.tuples(st.sampled_from(tuple(EchoStream)), st.integers(1, 16)),
+        min_size=1,
+        max_size=30,
+    ),
+)
+@settings(max_examples=40, deadline=None)
+def test_generated_enqueue_sequences_preserve_the_queue_byte_bound(
+    capacity: int,
+    chunks: list[tuple[EchoStream, int]],
+) -> None:
+    """Generated stream chunks never exceed capacity or corrupt FIFO order."""
+    sink = BlockedSink(wait_timeout_s=3.0)
+    worker = _delivery_worker(sink, max_queued_bytes=capacity)
+    accepted: list[str] = []
+    accepted_bytes = 0
+    try:
+        assert worker.enqueue(EchoStream.STDOUT, _payload("active", 1), flush=True) == 0
+        assert sink.started.wait(timeout=1)
+        for index, (stream, source_bytes) in enumerate(chunks):
+            value = chr(ord("a") + index % 26) * source_bytes
+            dropped_bytes = worker.enqueue(
+                stream,
+                _payload(value, source_bytes),
+                flush=True,
+            )
+            if dropped_bytes == 0:
+                accepted.append(value)
+                accepted_bytes += source_bytes
+            else:
+                assert dropped_bytes == source_bytes
+            assert worker.queued_bytes == accepted_bytes
+            assert worker.queued_bytes <= capacity
+    finally:
+        sink.release.set()
+        result = worker.close(grace=1.0)
+
+    assert result.failures == ()
+    assert result.undelivered_bytes == ()
+    assert sink.getvalue() == "active" + "".join(accepted)
 
 
 @pytest.mark.parametrize("failure_site", ["write", "flush"])
