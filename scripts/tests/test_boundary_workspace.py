@@ -183,10 +183,11 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
 # the saved helper once for exactly one real `cargo check`. It calls Cargo
 # metadata twice; each call has a 120 s bound that allows for a package-cache
 # lock wait, and `_compile` bounds the check at 3600 s. Their combined 3840 s
-# budget leaves 60 s for test setup and assertions inside this marker. Cargo
-# parallelism belongs to the caller. The cold `CARGO_BUILD_JOBS=1` build
-# measured 181 s, and the fixed subprocess budgets do not depend on the caller's
-# `-j` value. The global `timeout = 30` remains unchanged for every other test.
+# budget leaves 60 s for test setup and assertions. The outer marker catches a
+# wedged test process. Cargo parallelism belongs to the caller. The cold
+# `CARGO_BUILD_JOBS=1` build measured 181 s, and the fixed subprocess budgets do
+# not depend on the caller's `-j` value. The global `timeout = 30` remains
+# unchanged for every other test.
 @pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
