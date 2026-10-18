@@ -147,14 +147,12 @@ def _child(index: int) -> st.SearchStrategy[_ChildStallSnapshot]:
 
 
 def _unexited_child(index: int) -> st.SearchStrategy[_ChildStallSnapshot]:
-    """Generate a non-exited child without evidence for a separate hand-off.
+    """Generate a child whose record does not report it as exited.
 
     Both branches are genuinely not-exited: one is a live process with a
     scheduler state, the other an unobservable record. ``_child`` generates a
     third branch — an exited record — which is why it cannot stand in for
     "live" in a test whose whole subject is the exited/not-exited distinction.
-    Parent-held stdin writers stay absent so a generated live child cannot
-    independently satisfy the missed-hand-off rule.
 
     Returns
     -------
@@ -182,7 +180,10 @@ def _unexited_child(index: int) -> st.SearchStrategy[_ChildStallSnapshot]:
             ),
         ),
         pipes=_pipes(),
-        stdin_parent_writers=st.just(()),
+        stdin_parent_writers=st.one_of(
+            st.just(()),
+            st.tuples(st.integers(min_value=0, max_value=64)),
+        ),
         stage_index=st.one_of(st.none(), _STAGE),
         stdout_parent=_stdout_parent(),
     )

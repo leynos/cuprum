@@ -81,5 +81,5 @@ def test_sink_session_close_bypasses_a_saturated_default_executor() -> None:
         _with_saturated_default_executor(bracket.aclose(outcome=outcome)),
     )
 
-    assert sink.last_session.closed_event.is_set()
+    assert sink.last_session.closed_event.wait(timeout=1.0)
     assert sink.last_session.closed == 1

@@ -383,11 +383,9 @@ def test_a_failed_fill_removes_the_temporary(
     stream_type: cabc.Callable[[Path], _RealTemporaryStream],
     diagnostic: str,
 ) -> None:
-    """Every failure inside the fill is cleaned up by the same owner.
+    """Failures through stream closure must remove the temporary.
 
-    The fill includes writing, flushing, and stream closure, so any failure
-    must unlink the temporary before propagating. A guard inside the ``with``
-    is too early for a closure failure: it is recorded after all writes succeed.
+    A cleanup guard inside ``with`` misses errors reported by ``__exit__``.
     """
     destination = tmp_path / "config.toml"
     created = _swap_in_stream(monkeypatch, destination, stream_type)

@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import typing as typ
 
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, scoped
+from cuprum.echo_events import (
+    EchoErrorCategory,
+    EchoEvent,
+    EchoStream,
+    RelayFallback,
+)
+from cuprum.echo_observation import observe_echo
 from cuprum.sh import (
     BoundedDelivery,
     CommandResult,
@@ -119,6 +127,47 @@ def test_idle_output_uses_fifo_and_stays_out_of_capture(run_kind: str) -> None:
             sink.release.set()
 
     _assert_echoing_idle_output(sink, result)
+
+
+def test_saturated_idle_delivery_reports_dropped_source_bytes() -> None:
+    """A dropped keepalive is observable while command capture stays intact."""
+    runtime = build_python_catalogue_env()
+    command = runtime.builder("-c", "import time; time.sleep(0.4)")
+    sink = io.StringIO()
+    events: list[EchoEvent] = []
+
+    with (
+        observe_echo(events.append),
+        scoped(
+            ScopeConfig(allowlist=frozenset([runtime.program])),
+        ),
+    ):
+        result = command.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo=False,
+                idle_after=_IDLE_INTERVAL_S,
+                delivery=BoundedDelivery(max_queued_bytes=1),
+            ),
+            context=ExecutionContext(stderr_sink=sink),
+        )
+
+    expected_fallback = RelayFallback(
+        stream=EchoStream.STDERR,
+        error_category=EchoErrorCategory.DROPPED,
+    )
+    assert not result.stdout
+    assert not result.stderr
+    assert not sink.getvalue()
+    assert expected_fallback in result.relay_fallbacks
+    assert events
+    assert all(
+        event.stream is EchoStream.STDERR
+        and event.error_category is EchoErrorCategory.DROPPED
+        and event.dropped_bytes is not None
+        and event.dropped_bytes > 0
+        for event in events
+    )
 
 
 @pytest.mark.parametrize("run_kind", ["command", "pipeline"])
