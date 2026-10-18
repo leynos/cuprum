@@ -550,9 +550,9 @@ diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
 [ADR-023](adr-023-captured-command-output-types.md).
 
-The planned `RunOutputOptions | None` overload accepts variables that may hold
-either explicit options or `None` and returns `CommandResult`. Its broader
-return type reflects that capture may be disabled by the options value.
+The `RunOutputOptions | None` overload accepts variables that may hold either
+explicit options or `None` and returns `CommandResult`. Its broader return type
+reflects that capture may be disabled by the options value.
 
 #### 6.1.3 `DynamicCmd[Out]`
 
