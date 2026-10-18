@@ -41,8 +41,10 @@ from tests.helpers.timeouts import (
     _BLOCK_SECONDS,
     CHILD_STDERR,
     CHILD_STDOUT,
+    MARKER_STARTUP_GRACE_S,
     child_argv,
     python_interpreter,
+    wait_for_marker,
 )
 
 if typ.TYPE_CHECKING:
@@ -61,13 +63,6 @@ async def _never_reaches_eof_bytes() -> _CapturedDrain:
     await asyncio.Event().wait()
     return _CapturedDrain()
 
-
-# The child is a bare interpreter importing only stdlib modules, which was
-# measured at 17 ms (19 ms worst of five) on this host. Two seconds is over a
-# hundred times that, so the cap only bites if start-up has gone pathological,
-# and it is a cap rather than a wait: the marker lands in milliseconds and the
-# run deadline below is what the test actually spends its time on.
-_MARKER_STARTUP_GRACE_S = 2.0
 
 # Longer than the marker grace, so a slow start-up can never be mistaken for the
 # timeout under test, and short enough to stay well inside pytest's 30-second
@@ -98,22 +93,6 @@ async def _reaches_eof_late(text: str, turns: int) -> _CapturedDrain:
     for _ in range(turns):
         await asyncio.sleep(0)
     return captured(text)
-
-
-async def _wait_for_marker(marker: Path, *, deadline: float) -> None:
-    """Fail unless the child writes its readiness marker before ``deadline``."""
-    loop = asyncio.get_running_loop()
-    try:
-        async with asyncio.timeout_at(deadline):
-            while loop.time() < deadline:
-                # ASYNC240: a child process writes this file, so no asyncio
-                # primitive can observe it directly.
-                if marker.exists():  # ruff: ignore[blocking-path-method-in-async-function]
-                    return
-                await asyncio.sleep(0.01)
-    except TimeoutError:
-        pass
-    pytest.fail(f"the child did not write {marker} before its deadline")
 
 
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
@@ -390,12 +369,12 @@ def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -
             catalogue=python_catalogue()[0],
         )(*child_argv(marker))
         run_timeout = _RUN_TIMEOUT_S
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run(timeout=run_timeout, output=RunOutputOptions(capture=True)),
         )
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -481,14 +460,14 @@ def test_bytes_timeout_keeps_flushed_output_after_the_child_is_ready(
         # The run deadline has to allow for start-up *and* still fire while the
         # child blocks, so that what the test reads came from the timeout path.
         run_timeout = _RUN_TIMEOUT_S
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run_bytes(
                 timeout=run_timeout, output=RunOutputOptions(capture=True)
             ),
         )
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -521,12 +500,12 @@ def test_bytes_timeout_keeps_an_invalid_utf8_prefix(tmp_path: Path) -> None:
 
     async def run_case() -> TimeoutExpired:
         """Wait for readiness, then let the deadline take the child."""
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         # Long enough that the payload is flushed before the deadline, short
         # enough that the deadline still takes the child while it sleeps.
         run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -549,12 +528,12 @@ def test_bytes_run_cancelled_externally_reraises_cancellation(tmp_path: Path) ->
 
     async def run_case() -> None:
         """Cancel the run from outside, before its deadline could fire."""
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         # Unreachable in this test: the cancellation is issued long before it,
         # and the child is terminated rather than waited out.
         run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
         run.cancel()
 
         with pytest.raises(asyncio.CancelledError):

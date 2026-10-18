@@ -15,6 +15,7 @@ the directory the policy named.
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import pytest
@@ -25,6 +26,7 @@ from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import BoundedCapture, FileBackedCapture
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import build_python_catalogue_env
+from tests.helpers.timeouts import MARKER_STARTUP_GRACE_S, wait_for_marker
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -49,14 +51,18 @@ _STALL_SECONDS = 300
 _TIMEOUT_S = 5.0
 
 # Written as one source string per stream so a case can say which pipe carries
-# the prefix, rather than every case sharing a child that fills both.
+# the prefix, rather than every case sharing a child that fills both. The
+# marker is written only after the flush, so a caller that waits for the file
+# knows the prefix is already in the pipe rather than hoping a sleep covered it.
 _STDOUT_STALL = (
-    f"import sys, time; sys.stdout.write({_PREFIX!r}); "
-    f"sys.stdout.flush(); time.sleep({_STALL_SECONDS})"
+    f"import sys, pathlib, time; sys.stdout.write({_PREFIX!r}); "
+    "sys.stdout.flush(); pathlib.Path(sys.argv[1]).write_text('ready'); "
+    f"time.sleep({_STALL_SECONDS})"
 )
 _STDERR_STALL = (
-    f"import sys, time; sys.stderr.write({_PREFIX!r}); "
-    f"sys.stderr.flush(); time.sleep({_STALL_SECONDS})"
+    f"import sys, pathlib, time; sys.stderr.write({_PREFIX!r}); "
+    "sys.stderr.flush(); pathlib.Path(sys.argv[1]).write_text('ready'); "
+    f"time.sleep({_STALL_SECONDS})"
 )
 
 
@@ -75,21 +81,34 @@ def _builder() -> cabc.Callable[..., SafeCmd]:
     return build_python_catalogue_env().builder
 
 
-def _run_and_capture_failure(source: str, options: RunOutputOptions) -> TimeoutExpired:
+async def _await_timed_out(
+    source: str,
+    options: RunOutputOptions,
+    marker: pathlib.Path,
+) -> TimeoutExpired:
     """Run *source* under *options*, asserting it times out and returning it.
 
-    A run that completed would take the returning route instead of the raising
-    one, so ``pytest.raises`` failing here is the case refusing to test the
-    wrong path — and the child's stall is longer than any deadline this module
-    sets, so reaching it means the deadline did not fire at all.
+    The deadline is five seconds and the child blocks for minutes, so the only
+    thing a case must establish before it fires is that the child started and
+    flushed its prefix. *marker* is how: waiting on it rather than on a fixed
+    period means the assertions below cannot compare against output the child
+    had not yet written. A run that completed would take the returning route
+    instead of the raising one, so ``pytest.raises`` failing here is the case
+    refusing to test the wrong path.
 
     Returns
     -------
     TimeoutExpired
         The failure, carrying whatever the policies retained before the stall.
     """
+    command = _builder()("-c", source, str(marker))
+    deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
+    run = asyncio.create_task(command.run(timeout=_TIMEOUT_S, output=options))
+
+    await wait_for_marker(marker, deadline=deadline)
+
     with pytest.raises(TimeoutExpired) as expired:
-        _builder()("-c", source).run_sync(timeout=_TIMEOUT_S, output=options)
+        await run
     return expired.value
 
 
@@ -122,24 +141,35 @@ def test_a_spilled_capture_survives_a_timeout_as_a_readable_file(
     A caller who keeps the file keeps it on the raising route too, so this is
     the case that says the retention outlives the failure. Nothing about the
     bytes is inferred from the file's existence: the whole prefix is compared.
+
+    The marker lives outside the spill directory, because the assertion below
+    requires that directory to hold the spill and nothing else.
     """
-    failure = _run_and_capture_failure(
-        _STDOUT_STALL,
-        RunOutputOptions(
-            capture_stdout=FileBackedCapture(
-                spill_threshold_bytes=_TAIL_BOUND,
-                directory=tmp_path,
-                keep_file=True,
+    spill_dir = tmp_path / "spill"
+    spill_dir.mkdir()
+
+    async def run_case() -> TimeoutExpired:
+        """Wait for the child's readiness marker before its deadline fires."""
+        return await _await_timed_out(
+            _STDOUT_STALL,
+            RunOutputOptions(
+                capture_stdout=FileBackedCapture(
+                    spill_threshold_bytes=_TAIL_BOUND,
+                    directory=spill_dir,
+                    keep_file=True,
+                ),
+                capture_stderr=False,
             ),
-            capture_stderr=False,
-        ),
-    )
+            tmp_path / "ready",
+        )
+
+    failure = asyncio.run(run_case())
 
     assert failure.output is None, (
         "a file-backed capture reports no text on the result, so the payload "
         "must be absent rather than a reading of the file"
     )
-    path = _sole_spill_file(tmp_path)
+    path = _sole_spill_file(spill_dir)
     assert path.read_bytes() == _PREFIX.encode(), (
         "the kept file must hold the child's flushed prefix in full; "
         f"got {path.read_bytes()!r} rather than {_PREFIX!r}"
@@ -156,6 +186,7 @@ def test_a_spilled_capture_survives_a_timeout_as_a_readable_file(
 def test_a_bounded_capture_reports_what_arrived_before_the_stall(
     max_bytes: int,
     expected: str,
+    tmp_path: pathlib.Path,
 ) -> None:
     """A bounded stream is finalized on the raising route, not only at EOF.
 
@@ -165,12 +196,15 @@ def test_a_bounded_capture_reports_what_arrived_before_the_stall(
     policy promises. A finalizer that ran only on the clean-EOF path would
     return ``None`` for both rows.
     """
-    failure = _run_and_capture_failure(
-        _STDOUT_STALL,
-        RunOutputOptions(
-            capture_stdout=BoundedCapture(max_bytes=max_bytes),
-            capture_stderr=False,
-        ),
+    failure = asyncio.run(
+        _await_timed_out(
+            _STDOUT_STALL,
+            RunOutputOptions(
+                capture_stdout=BoundedCapture(max_bytes=max_bytes),
+                capture_stderr=False,
+            ),
+            tmp_path / "ready",
+        )
     )
 
     assert failure.output == expected, (
@@ -179,22 +213,30 @@ def test_a_bounded_capture_reports_what_arrived_before_the_stall(
     )
 
 
-def test_a_bounded_capture_reports_the_bytes_it_dropped_at_the_stall() -> None:
+def test_a_bounded_capture_reports_the_bytes_it_dropped_at_the_stall(
+    tmp_path: pathlib.Path,
+) -> None:
     """The drop count is exact on the raising route, not merely non-zero.
 
     The count is what tells a caller how much of the child's output the result
     does not show, and a run that lost its bookkeeping to the timeout would
     report a tail with no way to know what preceded it.
     """
+
+    async def run_case(events: list[CaptureEvent]) -> TimeoutExpired:
+        """Observe the run's events while the child stalls past its deadline."""
+        with observe_capture(events.append):
+            return await _await_timed_out(
+                _STDOUT_STALL,
+                RunOutputOptions(
+                    capture_stdout=BoundedCapture(max_bytes=_TAIL_BOUND),
+                    capture_stderr=False,
+                ),
+                tmp_path / "ready",
+            )
+
     events: list[CaptureEvent] = []
-    with observe_capture(events.append):
-        failure = _run_and_capture_failure(
-            _STDOUT_STALL,
-            RunOutputOptions(
-                capture_stdout=BoundedCapture(max_bytes=_TAIL_BOUND),
-                capture_stderr=False,
-            ),
-        )
+    failure = asyncio.run(run_case(events))
 
     assert failure.output == _TAIL, "the retained tail must reach the failure"
     (truncation,) = [
@@ -210,7 +252,9 @@ def test_a_bounded_capture_reports_the_bytes_it_dropped_at_the_stall() -> None:
     )
 
 
-def test_stderr_recovers_its_own_prefix_when_the_child_stalls() -> None:
+def test_stderr_recovers_its_own_prefix_when_the_child_stalls(
+    tmp_path: pathlib.Path,
+) -> None:
     """The two streams fail together but are retained apart.
 
     Only stderr carries the prefix here, so a run that reported stdout's
@@ -218,12 +262,15 @@ def test_stderr_recovers_its_own_prefix_when_the_child_stalls() -> None:
     that resolved the two streams from a single policy. This is the timeout's
     half of the per-stream independence requirement.
     """
-    failure = _run_and_capture_failure(
-        _STDERR_STALL,
-        RunOutputOptions(
-            capture_stdout=BoundedCapture(max_bytes=64),
-            capture_stderr=BoundedCapture(max_bytes=64),
-        ),
+    failure = asyncio.run(
+        _await_timed_out(
+            _STDERR_STALL,
+            RunOutputOptions(
+                capture_stdout=BoundedCapture(max_bytes=64),
+                capture_stderr=BoundedCapture(max_bytes=64),
+            ),
+            tmp_path / "ready",
+        )
     )
 
     assert failure.stderr == _PREFIX, (
