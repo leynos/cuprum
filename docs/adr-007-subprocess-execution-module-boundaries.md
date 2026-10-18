@@ -1403,11 +1403,12 @@ lines to 439, back over the ceiling.
 `resolved_echo` — as `_ResolvedOptionsMixin`, which `RunOutputOptions`
 inherits. The cut is a genuine one: these are the _query_ half of the options,
 what the caller's spelling resolved to, while the fields they read stay
-declared on the dataclass. It is a deliberate reversal of the ground on which
-the 2026-10-14 convenience-sink addendum declined to move `resolved_capture`
-("the plan requires it mirroring `resolved_echo`"): all four now move together,
-so they still mirror each other, and the alternatives had narrowed to a
-`too-many-lines` suppression or leaving the public import path broken.
+declared on the dataclass. That the four move together is the point: they are
+one query surface, so a split that took only the newly added `resolved_capture`
+would leave the options class reading some of its resolved values through a
+base and the rest through its own body. Moving all four keeps them mirroring
+each other, and the alternatives had narrowed to a `too-many-lines` suppression
+or leaving the public import path broken.
 
 The mixin declares `__slots__ = ()` for the reason `_BytesEntryPoints` and
 `_OwnedStart` do: an un-slotted mixin donates a `__dict__` to the frozen,
@@ -1451,9 +1452,11 @@ imports exactly one thing from the tree, `_shielded_cleanup` from
 cycle: `_process_lifecycle` does not know about capture, and the leaf composes
 the lifecycle module's existing cancellation answer rather than adding a second
 one. `tempfile` also moved here, because the create call is the leaf's
-business; the failure tests patch
-`cuprum._capture_spill_io.tempfile.NamedTemporaryFile` and so reach the real
-create through the seam they already exercised.
+business, and the leaf binds `NamedTemporaryFile` by name rather than reaching
+through the module: the failure tests patch
+`cuprum._capture_spill_io.NamedTemporaryFile`, which substitutes this module's
+dependency instead of rewriting `tempfile`'s own attribute for every importer
+in the process.
 
 The seam it feeds is `CaptureSink`, in `cuprum/_capture_types.py`, whose three
 methods are now coroutines. That is a deliberate protocol change and not a
