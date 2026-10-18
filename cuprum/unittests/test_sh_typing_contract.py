@@ -1,11 +1,11 @@
 """Static-check contract tests for the ``sh.make`` builder signature.
 
-The positive half of the contract is a checked-in fixture,
-``cuprum/unittests/typing_fixtures/sh_make_valid.py``, which the
-repository-wide ``make typecheck`` run checks as ordinary source. This module
-covers the negative half: calls the checker must reject. They cannot live in
-the repository, because a file that fails the checker fails the gate, so each
-one is written to ``tmp_path`` and handed to ty in a subprocess.
+The positive half of the contract lives in
+``cuprum/unittests/typing_fixtures/`` and is checked as ordinary source by the
+repository-wide ``make typecheck`` run. This module covers the negative half:
+calls and stream uses the checker must reject. They cannot live in the
+repository, because a file that fails the checker fails the gate, so each one
+is written to ``tmp_path`` and handed to ty in a subprocess.
 
 The subprocess runs ty at the interpreter that is executing the tests
 (``sys.prefix``), so it resolves ``cuprum`` from the same environment the rest
@@ -25,26 +25,43 @@ import pytest
 #: The repository root, two levels above this module (``cuprum/unittests``).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: The positive fixture checked into the repository.
+#: The positive fixtures checked into the repository.
 _VALID_FIXTURE = _REPO_ROOT / "cuprum" / "unittests" / "typing_fixtures"
 
-#: Calls the published ``SafeCmdBuilder`` contract must reject, as the body that
-#: follows the shared header. Most entries are a single call; one declares the
-#: class it passes, so the body is free text rather than an expression.
-_INVALID_CALLS: typ.Final[dict[str, str]] = {
-    "object-positional": "b(object())",
-    "object-keyword": "b(flag=object())",
-    "none-positional": "b(None)",
-    "none-keyword": "b(flag=None)",
-    "bytes-positional": "b(b'raw')",
-    "list-positional": "b(['a', 'b'])",
+#: Invalid snippets and the ty diagnostic codes each one must produce. Most
+#: entries reject builder arguments; the captured-output cases pin the stream
+#: types exposed by ``SafeCmd.run`` and ``run_sync``.
+_INVALID_CALLS: typ.Final[dict[str, tuple[str, tuple[str, ...]]]] = {
+    "object-positional": ("b(object())", ("invalid-argument-type",)),
+    "object-keyword": ("b(flag=object())", ("invalid-argument-type",)),
+    "none-positional": ("b(None)", ("invalid-argument-type",)),
+    "none-keyword": ("b(flag=None)", ("invalid-argument-type",)),
+    "bytes-positional": ("b(b'raw')", ("invalid-argument-type",)),
+    "list-positional": ("b(['a', 'b'])", ("invalid-argument-type",)),
     "bytes-path-like": (
-        "class BytesPath:\n"
-        "    def __fspath__(self) -> bytes:\n"
-        "        return b'raw'\n"
-        "\n"
-        "\n"
-        "b(BytesPath())"
+        (
+            "class BytesPath:\n"
+            "    def __fspath__(self) -> bytes:\n"
+            "        return b'raw'\n"
+            "\n"
+            "\n"
+            "b(BytesPath())"
+        ),
+        ("invalid-argument-type",),
+    ),
+    "optional-output-assigned-to-str": (
+        (
+            "from cuprum.sh import RunOutputOptions\n"
+            "result: str = b().run_sync(output=RunOutputOptions()).stdout"
+        ),
+        ("invalid-assignment",),
+    ),
+    "optional-output-string-method": (
+        (
+            "from cuprum.sh import RunOutputOptions\n"
+            "b().run_sync(output=RunOutputOptions()).stdout.strip()"
+        ),
+        ("unresolved-attribute",),
     ),
 }
 
@@ -82,9 +99,9 @@ def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture
 def fixture_copy(tmp_path: Path) -> Path:
-    """Copy the positive fixture into ``tmp_path`` for isolated checking."""
-    target = tmp_path / "sh_make_valid.py"
-    shutil.copy(_VALID_FIXTURE / "sh_make_valid.py", target)
+    """Copy every positive typing fixture into an isolated directory."""
+    target = tmp_path / "typing_fixtures"
+    shutil.copytree(_VALID_FIXTURE, target)
     return target
 
 
@@ -103,9 +120,9 @@ def test_ty_is_available_to_the_suite() -> None:
     )
 
 
-def test_positive_fixture_type_checks_clean(fixture_copy: Path) -> None:
-    """Every valid call in the checked-in fixture is accepted."""
-    result = _run_ty(fixture_copy.parent)
+def test_positive_fixtures_type_check_cleanly(fixture_copy: Path) -> None:
+    """Every valid call and return type in the fixtures is accepted."""
+    result = _run_ty(fixture_copy)
 
     assert result.returncode == 0, (
         f"the positive fixture must type-check cleanly:\n{result.stdout}"
@@ -117,10 +134,11 @@ def test_positive_fixture_type_checks_clean(fixture_copy: Path) -> None:
 
 @pytest.mark.parametrize("name", sorted(_INVALID_CALLS), ids=sorted(_INVALID_CALLS))
 def test_invalid_calls_are_rejected(name: str, tmp_path: Path) -> None:
-    """An unsupported argument is rejected at the call site, not at runtime."""
+    """Each invalid call or stream use reports its declared diagnostic."""
+    snippet_body, expected_codes = _INVALID_CALLS[name]
     snippet = tmp_path / f"{name}.py"
     snippet.write_text(
-        f"{_SNIPPET_HEADER}{_INVALID_CALLS[name]}\n",
+        f"{_SNIPPET_HEADER}{snippet_body}\n",
         encoding="utf-8",
     )
 
@@ -130,9 +148,8 @@ def test_invalid_calls_are_rejected(name: str, tmp_path: Path) -> None:
     assert result.returncode != 0, (
         f"ty must reject the {name} call, but it exited 0:\n{output}"
     )
-    assert "invalid-argument-type" in output, (
-        f"ty must report invalid-argument-type for {name}, got:\n{output}"
-    )
+    for code in expected_codes:
+        assert code in output, f"ty must report {code} for {name}, got:\n{output}"
     assert f"{name}.py" in output, (
         f"the diagnostic must name the offending file, got:\n{output}"
     )

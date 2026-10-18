@@ -327,21 +327,22 @@ capture, echo, do both, or do neither. When capture is off, `stdout` and
 
 A captured single-command text run returns `CapturedResult`, whose `stdout` and
 `stderr` are always strings; an empty stream is `""`. Calling `run()` or
-`run_sync()` without `output` is typed as returning `CapturedResult`. Passing
-explicit `RunOutputOptions` is typed as returning `CommandResult`, because those
-options may disable capture, even when a particular instance sets
-`capture=True`. That captured call still returns `CapturedResult` at runtime.
-A variable typed `RunOutputOptions | None` also has a `CommandResult` return
-type for the same reason.
-Use `result.require_captured()` to narrow an explicit-options result. It returns
-the same object if already narrowed, copies a result whose two streams are
-strings, or raises `ValueError` with the missing stream names when capture was
-off. The error points to `RunOutputOptions(capture=True)`.
+`run_sync()` without `output` or with `output=None` is typed as returning
+`CapturedResult`. Passing explicit `RunOutputOptions` is typed as returning
+`CommandResult`, because those options may disable capture, even when a
+particular instance sets `capture=True`. That captured call still returns
+`CapturedResult` at runtime. A variable typed `RunOutputOptions | None` also
+has a `CommandResult` return type for the same reason.
 
-Use checked narrowing instead of coalescing optional streams with `or ""`.
-That fallback turns a forgotten capture request into an apparently empty
-diagnostic. `require_captured()` keeps an empty captured stream distinct from a
-stream that was never captured.
+Use `result.require_captured()` to narrow an explicit-options result. It
+returns the same object if already narrowed, copies a result whose two streams
+are strings, or raises `ValueError` with the missing stream names when capture
+was off. The error points to `RunOutputOptions(capture=True)`.
+
+Use checked narrowing instead of coalescing optional streams with `or ""`. That
+fallback turns a forgotten capture request into an apparently empty diagnostic.
+`require_captured()` keeps an empty captured stream distinct from a stream that
+was never captured.
 
 <!-- tested-example: capture-and-echo -->
 
@@ -715,8 +716,8 @@ assert [stage.exit_code for stage in result.stages] == [0, 0]
 
 With capture enabled, the final stage's `stdout` and every stage's `stderr` are
 strings, including `""` for empty streams. The final stage can be narrowed with
-`result.final.require_captured()`; an interior stage raises `ValueError` because
-its `stdout` was passed to the next process. Pipeline results keep their
+`result.final.require_captured()`; an interior stage raises `ValueError`
+because its `stdout` was passed to the next process. Pipeline results keep their
 `PipelineResult` type and optional stream annotations.
 
 When a non-final stage fails while peers remain active, Cuprum terminates those

@@ -444,10 +444,13 @@ Represents a prepared command instance that, when run, yields a value (e.g.
 - carries execution options (cwd, env overrides, timeout, echo options);
 - exposes both async and sync run methods.
 
-Example (type sketch, not final signature):
+For implementation cohesion, `SafeCmd` inherits its byte-mode entry points from
+the private `_BytesEntryPoints` mixin in `cuprum/sh/bytes_entry_points.py`.
+That mixin groups `run_bytes` and `run_bytes_sync` with their byte-specific
+execution helpers; it is not a general command base or an extension point for
+other command classes.
 
-The capture-sensitive overloads in this sketch are proposed and are not yet
-implemented.
+Typing sketch (run implementations omitted):
 
 ```python
 class SafeCmd:
@@ -464,7 +467,7 @@ class SafeCmd:
         output: None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CapturedResult: ...
     @overload
     async def run(
@@ -473,7 +476,7 @@ class SafeCmd:
         output: RunOutputOptions,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     @overload
     async def run(
@@ -482,7 +485,7 @@ class SafeCmd:
         output: RunOutputOptions | None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     async def run(
         self,
@@ -490,7 +493,7 @@ class SafeCmd:
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     @overload
     def run_sync(
@@ -499,7 +502,7 @@ class SafeCmd:
         output: None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CapturedResult: ...
     @overload
     def run_sync(
@@ -508,7 +511,7 @@ class SafeCmd:
         output: RunOutputOptions,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     @overload
     def run_sync(
@@ -517,7 +520,7 @@ class SafeCmd:
         output: RunOutputOptions | None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     def run_sync(
         self,
@@ -525,19 +528,21 @@ class SafeCmd:
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
 
     def __or__(self, other: "SafeCmd") -> "Pipeline": ...
 ```
 
-The overloads above are the planned public typing surface; `SafeCmd.run` and
-`run_sync` currently expose only their implementation annotation,
-`CommandResult`. At runtime, a direct single-command run with default text
-capture constructs `CapturedResult`, whose streams are `str` and use `""` for
-empty output. An explicit `RunOutputOptions` call also constructs
-`CapturedResult` when that instance enables capture, but its current static
-type remains `CommandResult` because the options type can disable capture. Call
+The overloads above describe the public typing surface; the implementations
+remain annotated as returning `CommandResult`. Calls with omitted `output` or
+`output=None` are typed as returning `CapturedResult`. An explicit
+`RunOutputOptions` value, or a variable typed `RunOutputOptions | None`, returns
+`CommandResult` statically because those values can disable capture. At
+runtime, a direct single-command run with default text capture constructs
+`CapturedResult`, whose streams are `str` and use `""` for empty output. An
+explicit `RunOutputOptions(capture=True)` call also constructs
+`CapturedResult`, though its static type remains `CommandResult`. Call
 `CommandResult.require_captured()` to check and narrow it: an already narrowed
 result is returned unchanged, two present text streams produce a captured copy,
 and an unavailable stream raises `ValueError`. This also prevents an uncaptured

@@ -99,6 +99,30 @@ def _identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     return pipeline, frozenset([ECHO, python_program])
 
 
+def test_captured_pipeline_final_stage_can_be_narrowed(
+    pipeline_execution_strategy: tuple[str, PipelineExecuteFn],
+) -> None:
+    """Only the captured final stage has both text streams available."""
+    _, execute = pipeline_execution_strategy
+    pipeline, allowed_programs = _identity_pipeline()
+
+    with scoped(ScopeConfig(allowlist=allowed_programs)):
+        result = execute(pipeline, {"output": RunOutputOptions(capture=True)})
+
+    captured_final = result.final.require_captured()
+    assert isinstance(captured_final, sh.CapturedResult), (
+        "the final stage should narrow to CapturedResult"
+    )
+    assert captured_final.stdout == "echoed", (
+        "the final-stage capture must preserve pipeline output"
+    )
+    assert result.stages[0].stdout is None, (
+        "an interior stage's stdout is consumed by the next stage"
+    )
+    with pytest.raises(ValueError, match="stdout"):
+        result.stages[0].require_captured()
+
+
 def _run_per_stream_echo_pipeline(
     env: PythonCatalogue,
     *,

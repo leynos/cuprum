@@ -89,19 +89,19 @@ def test_bytes_result_type_hints_carry_bytes_not_text() -> None:
     )
 
 
-async def _assert_text_results_are_text(
+async def _assert_default_text_results_are_captured(
     command: sh.SafeCmd,
     pipeline: sh.Pipeline,
 ) -> None:
-    """Pin what the text-mode entry points hand a static checker.
+    """Pin the default command and pipeline types exposed to static checkers.
 
     Never awaited: the body exists to be type-checked, which is what makes
     the assertion meaningful. ``assert_type`` fails a ``ty check`` run rather
     than a test run, and it fires on the *value* each entry point produces —
     the distinction a caller actually relies on when it reads ``.stdout``.
     """
-    typ.assert_type(await command.run(), sh.CommandResult)
-    typ.assert_type(command.run_sync(), sh.CommandResult)
+    typ.assert_type(await command.run(), sh.CapturedResult)
+    typ.assert_type(command.run_sync(), sh.CapturedResult)
     typ.assert_type(await pipeline.run(), sh.PipelineResult)
     typ.assert_type(pipeline.run_sync(), sh.PipelineResult)
 
@@ -131,9 +131,9 @@ def test_bytes_entry_points_are_statically_typed_apart_from_text() -> None:
     same as the right ones until a checker actually compares the names.
     """
     expected_pairs = {
-        _assert_text_results_are_text: {
-            ("await command.run()", "sh.CommandResult"),
-            ("command.run_sync()", "sh.CommandResult"),
+        _assert_default_text_results_are_captured: {
+            ("await command.run()", "sh.CapturedResult"),
+            ("command.run_sync()", "sh.CapturedResult"),
             ("await pipeline.run()", "sh.PipelineResult"),
             ("pipeline.run_sync()", "sh.PipelineResult"),
         },

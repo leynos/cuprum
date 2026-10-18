@@ -9,6 +9,9 @@ the whole gate suite is blind to the defect on exactly the names it would
 matter for. Verified against Ruff 0.16.4 and Pylint 4.0.9; upstream Pyflakes
 does report it, so this is a deviation in the two linters actually installed.
 
+Complete ``typing.overload`` groups are the one intentional exception: several
+signature declarations must share a name with their single implementation.
+
 The unit of the check is one statement list, not one module. Two definitions
 are compared only when they are siblings in the same body, which is precisely
 when the earlier one becomes unreachable. That leaves the branch idiom alone
@@ -121,6 +124,27 @@ def _definition_kind(node: ast.stmt) -> str:
     return "def"
 
 
+def _has_overload_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return whether *node* is decorated with an overload marker."""
+    return any(
+        (isinstance(decorator, ast.Name) and decorator.id == "overload")
+        or (isinstance(decorator, ast.Attribute) and decorator.attr == "overload")
+        for decorator in node.decorator_list
+    )
+
+
+def _is_complete_overload_group(nodes: list[ast.stmt]) -> bool:
+    """Recognize overload declarations followed by one implementation."""
+    if len(nodes) < 2 or not all(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in nodes
+    ):
+        return False
+    functions = typ.cast("list[ast.FunctionDef | ast.AsyncFunctionDef]", nodes)
+    return all(_has_overload_decorator(node) for node in functions[:-1]) and not (
+        _has_overload_decorator(functions[-1])
+    )
+
+
 def _statement_lists(node: ast.AST) -> cabc.Iterator[list[ast.stmt]]:
     """Yield every statement list *node* directly owns.
 
@@ -163,15 +187,18 @@ def _shadowed_in(body: list[ast.stmt]) -> list[tuple[str, tuple[_DefinitionSite,
         The shadowed names, each with every sibling site defining it.
 
     """
-    grouped: dict[str, list[_DefinitionSite]] = {}
+    grouped: dict[str, list[ast.stmt]] = {}
     for node in body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            grouped.setdefault(node.name, []).append((
-                node.name,
-                node.lineno,
-                _definition_kind(node),
-            ))
-    return [(name, tuple(sites)) for name, sites in grouped.items() if len(sites) > 1]
+            grouped.setdefault(node.name, []).append(node)
+    return [
+        (
+            name,
+            tuple((name, node.lineno, _definition_kind(node)) for node in nodes),
+        )
+        for name, nodes in grouped.items()
+        if len(nodes) > 1 and not _is_complete_overload_group(nodes)
+    ]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -370,6 +397,45 @@ def test_guard_allows_a_definition_in_each_branch_arm() -> None:
     assert not _find_shadowing(source, filename="probe.py"), (
         "one definition per branch arm is two scopes, not a shadowed sibling"
     )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        (
+            "from typing import overload\n\n"
+            "@overload\ndef _run(value: str) -> str: ...\n\n"
+            "@overload\ndef _run(value: bytes) -> bytes: ...\n\n"
+            "def _run(value: str | bytes) -> str | bytes:\n"
+            "    return value\n"
+        ),
+        (
+            "import typing\n\n"
+            "@typing.overload\nasync def _run(value: str) -> str: ...\n\n"
+            "async def _run(value: str | bytes) -> str | bytes:\n"
+            "    return value\n"
+        ),
+    ],
+    ids=["imported-overload", "qualified-async-overload"],
+)
+def test_guard_allows_complete_overload_groups(source: str) -> None:
+    """Overload declarations are valid when one implementation follows."""
+    assert not _find_shadowing(source, filename="probe.py")
+
+
+def test_guard_reports_overloads_without_an_implementation() -> None:
+    """An overload group still needs its runtime implementation."""
+    source = (
+        "from typing import overload\n\n"
+        "@overload\ndef _run(value: str) -> str: ...\n\n"
+        "@overload\ndef _run(value: bytes) -> bytes: ...\n"
+    )
+
+    found = _find_shadowing(source, filename="probe.py")
+
+    assert len(found) == 1, f"expected one incomplete overload report, got {found}"
+    assert found[0].name == "_run"
+    assert [site[1] for site in found[0].sites] == [4, 7]
 
 
 def test_guard_allows_a_nested_definition_shadowing_its_outer_name() -> None:
