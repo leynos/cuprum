@@ -50,12 +50,9 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
+    _drain_context,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
-)
-from cuprum._subprocess_wait_types import (
-    _DrainContext,
-    _DrainPair,
 )
 from cuprum.line_stream_events import LineStreamPhase
 
@@ -65,7 +62,7 @@ if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum._subprocess_wait_types import _DrainPair, _StreamPayload
     from cuprum.capture_policy import CapturedStream
     from cuprum.sh import CommandResult
 
@@ -200,17 +197,7 @@ async def _cleanup_failed_line_stream_run(
         run,
         _reconcile_run_tasks(
             run.tasks,
-            _DrainContext(
-                captures=(
-                    (execution.capture_stdout, execution.capture_stderr)
-                    if preserve
-                    else (None, None)
-                ),
-                capture_bytes=execution.capture_bytes,
-                pid=pid,
-                observation=execution.observation,
-                discard_on_cancel=run.tasks.discard_on_cancel,
-            ),
+            _drain_context(execution, run.tasks, pid, preserve=preserve),
         ),
     )
 
@@ -241,13 +228,7 @@ async def _discard_drain(
         try:
             return await _drain_stream_consumers(
                 run.tasks.consumers,
-                _DrainContext(
-                    captures=(None, None),
-                    capture_bytes=execution.capture_bytes,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=run.tasks.discard_on_cancel,
-                ),
+                _drain_context(execution, run.tasks, pid, preserve=False),
             )
         finally:
             await _cleanup_capture_sinks(run.tasks.captures)

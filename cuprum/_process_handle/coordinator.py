@@ -50,7 +50,7 @@ from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
 from cuprum._subprocess_wait import (
-    _DrainContext,
+    _drain_context,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
@@ -148,15 +148,11 @@ async def _finalize_settled_run(
         await _settle_owned_group_before_draining(run)
         return await _reconcile_run_tasks(
             run.ownership,
-            _DrainContext(
-                captures=(
-                    (execution.capture_stdout, execution.capture_stderr)
-                    if preserve
-                    else (None, None)
-                ),
-                pid=run.process.pid,
-                observation=execution.observation,
-                discard_on_cancel=run.ownership.discard_on_cancel,
+            _drain_context(
+                execution,
+                run.ownership,
+                run.process.pid,
+                preserve=preserve,
             ),
         )
 
