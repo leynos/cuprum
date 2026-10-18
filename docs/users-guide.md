@@ -1186,9 +1186,20 @@ else:
 ```
 
 `safe_path()` rejects empty paths, NUL characters, and `..` segments, and
-requires an absolute path unless `allow_relative=True` is passed. `git_ref()`
-rejects whitespace, a leading `-`, `..`, `@{`, and other constructs that Git
-would interpret as options or revision syntax.
+requires an absolute path unless `allow_relative=True` is passed. It accepts
+names that begin with `-`; separating those names from options is the builder's
+job, not the validator's. `git_ref()` rejects whitespace, a leading `-`, `..`,
+`@{`, and other constructs that Git would interpret as options or revision
+syntax.
+
+The tar and rsync builders emit `--` before their positional path operands.
+`tar_create()` places it after the archive value, so a source named
+`--checkpoint=1` is archived as a file rather than parsed as an option, and
+`rsync_sync()` places it after the generated flags, so source and destination
+names beginning with `-` are copied rather than read as rsync options.
+`tar_extract()` needs no separator: its archive and destination are the values
+of `-f` and `-C`, and an option's value is never re-read as an option, so
+leading dashes there are already literal.
 
 ### Stream lines as they arrive
 

@@ -185,6 +185,10 @@ extend-ignore = [
 "cuprum/unittests/*_test_helpers.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "cuprum/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
+# pytest-bdd resolves a step definition per module, so the assertions for the
+# shared builder steps live in this support module rather than in the
+# behaviour test module that rebinds them.
+"tests/behaviour/_builder_library_steps.py" = ["assert"]
 
 [tool.ruff.lint.flake8-import-conventions]
 # Declare the banned `from` imports.

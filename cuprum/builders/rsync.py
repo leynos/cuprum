@@ -43,13 +43,25 @@ def _rsync_argv(
     destination: str | Path,
     options: RsyncOptions,
 ) -> tuple[str, ...]:
-    """Build the immutable argv for ``rsync_sync`` without a catalogue."""
+    """Build the immutable argv for ``rsync_sync`` without a catalogue.
+
+    ``--`` follows the generated flags and precedes the source and
+    destination, so a path beginning with ``-`` (or ``--``) cannot be parsed
+    as an rsync option. rsync still interprets a remote specification such as
+    ``host:path`` in the operand position; that is rsync's own path syntax,
+    not option parsing, and is unchanged by the separator.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The complete rsync argument vector.
+    """
     flags = tuple(flag for attr, flag in _FLAG_ORDER if getattr(options, attr))
     paths = (
         str(safe_path(source, allow_relative=options.allow_relative)),
         str(safe_path(destination, allow_relative=options.allow_relative)),
     )
-    return flags + paths
+    return (*flags, "--", *paths)
 
 
 def rsync_sync(
@@ -63,9 +75,10 @@ def rsync_sync(
     Parameters
     ----------
     source
-        Source path to synchronize from.
+        Source path to synchronize from. It follows a ``--`` separator, so a
+        leading dash cannot turn it into an option.
     destination
-        Destination path to synchronize to.
+        Destination path to synchronize to, likewise separated by ``--``.
     options
         Optional rsync settings. When omitted, the command uses
         ``RsyncOptions()``.

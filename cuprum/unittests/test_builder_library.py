@@ -152,6 +152,7 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         "--dry-run",
         "--verbose",
         "--compress",
+        "--",
         source.as_posix(),
         destination.as_posix(),
     ), "rsync_sync argv mismatch"
@@ -171,6 +172,7 @@ def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
         "-z",
         "-f",
         archive.as_posix(),
+        "--",
         sources[0].as_posix(),
         sources[1].as_posix(),
     ), "tar_create argv mismatch"
@@ -201,8 +203,70 @@ def test_tar_create_maps_each_compression(
     expected = ["-c"]
     if expected_flag is not None:
         expected.append(expected_flag)
-    expected.extend(["-f", archive.as_posix(), source.as_posix()])
+    expected.extend(["-f", archive.as_posix(), "--", source.as_posix()])
     assert cmd.argv == tuple(expected), "tar_create compression flag mismatch"
+
+
+_OPTION_SHAPED_SOURCES = (
+    "-name",
+    "--verbose",
+    "--checkpoint=1",
+    "--checkpoint-action=exec=touch pwned",
+)
+
+
+@pytest.mark.parametrize("source_name", _OPTION_SHAPED_SOURCES)
+def test_tar_create_separates_option_shaped_relative_source(
+    tmp_path: Path,
+    source_name: str,
+) -> None:
+    """A leading-dash source stays a file operand after ``--``."""
+    archive = "archive.tar"
+    cmd = tar_create(
+        archive,
+        [source_name],
+        options=TarCreateOptions(allow_relative=True),
+    )
+    assert cmd.argv == ("-c", "-f", archive, "--", source_name), (
+        "option-shaped relative sources must follow the end-of-options separator"
+    )
+
+
+def test_tar_create_separator_precedes_every_source_verbatim() -> None:
+    """Mixed ordinary and option-shaped sources keep their order after ``--``."""
+    archive = "/srv/archive.tar"
+    sources = ["-leading", "/srv/plain", "--checkpoint=1", "relative"]
+    cmd = tar_create(archive, sources, options=TarCreateOptions(allow_relative=True))
+    separator = cmd.argv.index("--")
+    assert cmd.argv == ("-c", "-f", archive, "--", *sources), (
+        "the sources must follow the separator verbatim and in order"
+    )
+    assert separator == 3, "the separator must directly follow the archive value"
+
+
+def test_rsync_separates_option_shaped_operands() -> None:
+    """Rsync source and destination names beginning with ``--`` follow ``--``."""
+    cmd = rsync_sync(
+        "--source-file",
+        "--dest-file",
+        options=RsyncOptions(archive=True, allow_relative=True),
+    )
+    assert cmd.argv == (
+        "--archive",
+        "--",
+        "--source-file",
+        "--dest-file",
+    ), "rsync operands must follow the end-of-options separator"
+
+
+def test_tar_extract_keeps_option_values_after_their_flags(tmp_path: Path) -> None:
+    """Leading-dash archive and destination stay ``-f`` and ``-C`` values."""
+    archive = "-archive.tar"
+    destination = "-out"
+    cmd = tar_extract(archive, destination=destination, allow_relative=True)
+    assert cmd.argv == ("-x", "-f", archive, "-C", destination), (
+        "extract paths are option values, so no separator may precede them"
+    )
 
 
 _ALL_COMPRESSION_FLAGS = frozenset({"-z", "-j", "-J"})
