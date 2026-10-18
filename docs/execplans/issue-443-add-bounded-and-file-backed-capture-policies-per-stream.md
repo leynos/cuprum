@@ -493,6 +493,32 @@ Thresholds that trigger escalation when breached.
   `gate-duplication-…-scrutineer3-…T130817Z.out`, and
   `gate-test-…-scrutineer3-…T130823Z.out`, all under `/tmp`. Date/Author:
   2026-10-18, implementation agent.
+- [x] (2026-10-18) Clear the eight findings of review round 9, in seven
+  commits (`03320f8d2`, `c9766933d`, `559f2b582`, `73e35f22b`, `8e0fad76f`,
+  `83b94672b`, `aca0825d3`) on top of `cd3a35866`. The one production defect
+  was a real orphan window: `_FileAccumulator._spill` published the
+  `SpillHandle` only after the prefix was written and flushed, so a
+  cancellation between the `delete=False` create and that point left a file no
+  result named and no sink could reach. The handle is now published
+  immediately, carrying `keep=False` until the prefix lands, and then promoted
+  to the caller's keep policy; the regression test blocks the first write,
+  cancels the absorb, and asserts teardown removes the file — deleting the
+  publication lines makes it fail with the file still present. The rest were
+  witness and accuracy repairs: `SpillHandle.close` now closes its file on a
+  worker rather than the unwinding loop; the spill leaf binds
+  `NamedTemporaryFile` by name so the failure tests substitute this module's
+  dependency instead of rewriting `tempfile`'s global attribute for every
+  importer; the bounded-encoding guard gained the `run` and `lines` seams its
+  docstring already claimed; the byte pipeline case now pins both final-stage
+  records with their exact policies and drop counts rather than "some record
+  dropped bytes"; `cuprum/sh/output.py` names `pipeline_output`, not
+  `_deprecated`, as the home of the flat keyword handling; and the ADR-007
+  addendum's unsupported quotation and stale patch target are corrected in
+  place (branch-added text, absent from the base, so nothing published is
+  rewritten). Locally verified before the gates: `ruff check` and
+  `ruff format --check` clean on all eight touched Python files, and 66, 17,
+  45, 55, and 227 cases green across the five affected modules. Date/Author:
+  2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -1511,6 +1537,30 @@ Thresholds that trigger escalation when breached.
   runs at each pre-spawn seam, which is bounded by 256 decoder constructions
   and is small beside the spawn it precedes. Date/Author: 2026-10-18,
   implementation agent; raised by review round 8.
+
+- Decision: publish the spill handle before the prefix is written, and clear
+  its keep policy until the write succeeds. Rationale: the handle is what
+  teardown reconciles, and the natural ordering — publish once the spill
+  "worked" — leaves a `delete=False` file that only the accumulator knows about
+  across two awaits. A cancelling drain never settles, so no `CaptureFinal` is
+  built for the result-construction site and nothing carries the path; the
+  registry can only reach the *sink*, which is why the sink must hold the
+  handle from the instant the file exists. `keep=False` on the provisional
+  handle is the deliberate part: `keep_file=True` promises the caller a file
+  the run finished writing, and a file a cancelled spill never wrote has not
+  earned that exemption. Promotion sets `keep` from the policy once the flush
+  returns, so the successful path reports the same ownership it always did.
+  Date/Author: 2026-10-18, implementation agent; raised by review round 9.
+
+- Decision: import `NamedTemporaryFile` by name in `_capture_spill_io`
+  rather than reaching through `tempfile`. Rationale: patching
+  `cuprum._capture_spill_io.tempfile.NamedTemporaryFile` mutates the standard
+  library's module object, so the substitution reaches every importer for as
+  long as the patch lives and never exercises this module's own binding at all.
+  Binding the name at import makes the module the seam, which is the seam the
+  failure tests assert on. The cost is that the leaf names its one dependency
+  rather than the namespace, which reads better in the create function anyway.
+  Date/Author: 2026-10-18, implementation agent; raised by review round 9.
 
 ## Outcomes & retrospective
 
