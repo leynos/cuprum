@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 023: Type captured command output
+# Architectural decision record (ADR) 024: Type captured command output
 
 ## Status
 

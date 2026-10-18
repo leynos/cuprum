@@ -548,7 +548,7 @@ result is returned unchanged, two present text streams produce a captured copy,
 and an unavailable stream raises `ValueError`. This also prevents an uncaptured
 diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
-[ADR-023](adr-023-captured-command-output-types.md).
+[ADR-024](adr-024-captured-command-output-types.md).
 
 The `RunOutputOptions | None` overload accepts variables that may hold either
 explicit options or `None` and returns `CommandResult`. Its broader return type
