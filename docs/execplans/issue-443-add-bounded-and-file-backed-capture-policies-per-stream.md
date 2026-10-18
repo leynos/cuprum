@@ -1225,6 +1225,32 @@ Thresholds that trigger escalation when breached.
   400-line cap are entries of their own in this log and in ADR-007's addenda.
   Date/Author: 2026-10-18, implementation agent; raised by review.
 
+- Decision: delete the duplication allow entry for
+  `cuprum/_process_handle/coordinator.py ~ cuprum/_subprocess_stream_post_exit.py`
+  rather than widening it or reasoning it back into place. Rationale: the
+  entry was written when the post-exit module still imported the
+  `_subprocess_wait` run machinery and `_shielded_cleanup`. The rebase rebuilt
+  that module around `_settle_owned_group_before_draining` and
+  `_await_stdin_writer`, and it now imports only `_terminate_all_shielded`,
+  `_settle_stdin_writer`, and `_TeardownPolicy`, while `coordinator.py` still
+  imports `_shielded_cleanup`, `_terminate_process`, and the `_subprocess_wait`
+  trio. No key of the entry matched any family the scan reported, so the
+  overlap it reasoned about no longer existed in any form. The deletion was
+  made only after confirming that against the source, including the file as it
+  stood before the commit that introduced the entry, because an unmatched entry
+  is not by itself proof that the duplication is gone. Date/Author: 2026-10-18,
+  implementation agent; raised by the duplication gate's stale-entry advisory.
+
+- Decision: re-derive the scope figures for the rebase rather than increment
+  the pre-rebase ones. Rationale: the scope-tolerance entry above measured 109
+  files and 10826 net lines from the merge base `304779c25`, which the rebase
+  removed from this branch's history. Against the new base `d93df9563` the same
+  branch is 112 files and 11121 net lines (12265 added, 1144 deleted). Both
+  measurements are retained, each labelled with the base it was taken against,
+  and the decision itself is unchanged: both tolerance thresholds are still
+  breached several times over. Date/Author: 2026-10-18, implementation agent;
+  raised while preparing the final gate evidence.
+
 ## Outcomes & retrospective
 
 Delivered: capture is a per-stream policy. `RunOutputOptions` gained
