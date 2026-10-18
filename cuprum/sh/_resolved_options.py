@@ -142,9 +142,8 @@ class _ResolvedOptionsMixin:
         tuple[bool, bool]
             The stdout and stderr echo gates, in that order.
         """
-        # The dataclass is frozen and ``__post_init__`` resolves both fields,
-        # but the declared field types stay ``bool | None``; the resolved pair
-        # is the constructor's contract, not something the declared types can
-        # express to the type checker.
         options = typ.cast("RunOutputOptions", self)
+        # The frozen dataclass's ``__post_init__`` resolves both fields, but
+        # their declared types stay ``bool | None``; the cast states the
+        # constructor's contract, which the declared types cannot express.
         return (options.echo_stdout, options.echo_stderr)  # ty: ignore[invalid-return-type]

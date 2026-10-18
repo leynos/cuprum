@@ -7324,7 +7324,9 @@ itself, because the routes disagree about what the drained text is for — the
 exit-wait deadline hands it to the caller's `TimeoutExpired`, while the route
 re-raising some other failure settles promptly and keeps `preserve=False` so
 the capture grace is not spent on text nobody will read. Preserving applies the
-run's per-stream capture policies; discarding reports `(None, None)`.
+run's per-stream capture policies; discarding reports the policy pair
+`(None, None)`, and every stream the drain then settles comes back as an empty
+`_CapturedDrain` rather than as captured text.
 
 `cuprum/_command_finalization.py` owns the post-spawn finalization cluster that
 was split out of `cuprum/_command_internals.py` when the stdio-resolution work
