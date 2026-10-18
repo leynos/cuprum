@@ -1118,7 +1118,7 @@ rsync_sync:  [flags] -- SOURCE DESTINATION
 ```
 
 `tar_extract` is deliberately unchanged. Its paths are the values of `-f` and
-`-C`, and an option's value is never re-parsed as an option. A bare `-` remains
+`-C`, and an option's value is never reparsed as an option. A bare `-` remains
 special: `tar_extract()` reads the archive from standard input, and
 `tar_create()` writes it to standard output when its archive value is `-`.
 Inserting `--` before a value would instead make tar read that value as a file
