@@ -30,9 +30,13 @@ from cuprum._capture_file import _FileAccumulator
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import CaptureStreamName, FileBackedCapture
+from cuprum.unittests._capture_sink_support import (
+    _absorb,
+    _drain_sink,
+    _finalize,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import io
 
     import pytest
@@ -191,45 +195,6 @@ def _cleanup(accumulator: _FileAccumulator) -> None:
     asyncio.run(accumulator.cleanup())
 
 
-async def _feed(accumulator: _FileAccumulator, chunks: cabc.Iterable[bytes]) -> None:
-    """Await one absorb per chunk, in the order the drain would read them."""
-    for chunk in chunks:
-        await accumulator.absorb(chunk)
-
-
-def _absorb(accumulator: _FileAccumulator, chunks: cabc.Iterable[bytes]) -> None:
-    """Feed every chunk to *accumulator* in order, on a loop of its own."""
-    asyncio.run(_feed(accumulator, chunks))
-
-
-def _finalize(accumulator: _FileAccumulator) -> CaptureFinal:
-    """Read *accumulator*'s result, as a drain that reached the stream's end does."""
-    return asyncio.run(accumulator.finalize())
-
-
-def _spilled(
-    accumulator: _FileAccumulator,
-    chunks: cabc.Iterable[bytes],
-) -> CaptureFinal:
-    """Absorb *chunks* into *accumulator*, then finalize it.
-
-    One loop for both phases, because that is how the drain reaches the sink:
-    the same task awaits every chunk and then the result.
-
-    Returns
-    -------
-    CaptureFinal
-        The payload and record the accumulator reported once the stream ended.
-    """
-
-    async def spill() -> CaptureFinal:
-        """Absorb the stream, then finalize it."""
-        await _feed(accumulator, chunks)
-        return await accumulator.finalize()
-
-    return asyncio.run(spill())
-
-
 def test_a_failed_create_keeps_the_stream_in_memory(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -245,7 +210,7 @@ def test_a_failed_create_keeps_the_stream_in_memory(
     create.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    final = _spilled(accumulator, [_PAYLOAD])
+    final = _drain_sink(accumulator, [_PAYLOAD])
 
     assert final.payload == _PAYLOAD.decode(), (
         "a failed spill must not lose the stream; the caller still reads it"
@@ -315,7 +280,7 @@ def test_a_failed_create_is_reported_once_however_the_stream_grows(
 
     with observe_capture(recorder.append):
         accumulator = _accumulator(directory=tmp_path)
-        final = _spilled(accumulator, [b"chunk"] * 10)
+        final = _drain_sink(accumulator, [b"chunk"] * 10)
 
     assert create.attempts == 1, (
         f"a refused create must not be retried per chunk; got {create.attempts}"
@@ -348,7 +313,7 @@ def test_a_failed_first_write_removes_the_half_made_file(
     files.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    final = _spilled(accumulator, [_PAYLOAD])
+    final = _drain_sink(accumulator, [_PAYLOAD])
 
     assert files.only.closed is True, "the abandoned file's descriptor must close"
     assert not files.only.path.exists(), (
@@ -515,7 +480,7 @@ def test_a_failed_flush_during_the_spill_abandons_the_file(
     files.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    final = _spilled(accumulator, [_PAYLOAD])
+    final = _drain_sink(accumulator, [_PAYLOAD])
 
     assert final.capture.storage == "memory", (
         "an abandoned spill leaves the capture on the heap"

@@ -32,11 +32,14 @@ from hypothesis import strategies as st
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.capture_policy import BoundedCapture, FullCapture
 from cuprum.echo_events import EchoStream
+from cuprum.unittests._capture_sink_support import (
+    _absorb,
+    _drain_sink,
+    _finalize,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum._capture_types import CaptureFinal, CaptureSink
+    from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum.capture_policy import CapturedStream, CapturePolicy
 
@@ -117,44 +120,6 @@ def _sink(policy: CapturePolicy) -> CaptureSink:
     return sink
 
 
-async def _feed(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
-    """Await one absorb per chunk, in the order the drain would read them."""
-    for chunk in chunks:
-        await sink.absorb(chunk)
-
-
-def _absorb(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
-    """Feed every chunk to *sink* in order, on a loop of its own."""
-    asyncio.run(_feed(sink, chunks))
-
-
-def _finalize(sink: CaptureSink) -> CaptureFinal:
-    """Read *sink*'s result, as a drain that reached the stream's end does."""
-    return asyncio.run(sink.finalize())
-
-
-def _retained(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> CaptureFinal:
-    """Feed *chunks* to *sink*, then read its result, as one drain would.
-
-    One loop for both phases on purpose: the drain awaits ``absorb`` and
-    ``finalize`` on the same running loop, and a helper that split them across
-    two ``asyncio.run`` calls would let a sink pass here that cannot finish a
-    stream in a real run.
-
-    Returns
-    -------
-    CaptureFinal
-        The payload and record the sink reported once the stream ended.
-    """
-
-    async def retain() -> CaptureFinal:
-        """Absorb the stream, then finalize it."""
-        await _feed(sink, chunks)
-        return await sink.finalize()
-
-    return asyncio.run(retain())
-
-
 @dc.dataclass(frozen=True, slots=True)
 class _Retained:
     """What one bounded accumulation actually kept.
@@ -215,7 +180,7 @@ def _retain(
         The finalized payload and record, both taken from the accumulator.
     """
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
     record = final.capture
     if stats is not None:
         stats.over_budget += len(payload) > max_bytes
@@ -303,7 +268,7 @@ def test_no_bound_splits_a_code_point(payload: str, max_bytes: int) -> None:
     raw = payload.encode("utf-8")
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
-    final = _retained(sink, [raw])
+    final = _drain_sink(sink, [raw])
     _announce_retention(
         raw,
         _Retained(payload=final.payload, record=final.capture),
@@ -525,7 +490,7 @@ def test_the_bound_is_a_byte_count_not_a_character_count(max_bytes: int) -> None
     raw = payload.encode("utf-8")
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
-    final = _retained(sink, [raw])
+    final = _drain_sink(sink, [raw])
     retained = _Retained(payload=final.payload, record=final.capture)
 
     assert len(retained.retained_bytes()) <= max_bytes, (
@@ -583,7 +548,7 @@ def test_a_bound_of_one_retains_nothing_from_a_multibyte_stream() -> None:
     payload = "中".encode()
     sink = _sink(BoundedCapture(max_bytes=1))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     # A bound that retains nothing reports empty text, not an absent payload:
     # the accumulator decoded the stream and found no usable suffix, which is
@@ -606,7 +571,7 @@ def test_a_bound_exactly_the_stream_length_drops_nothing() -> None:
     payload = "中a".encode()
     sink = _sink(BoundedCapture(max_bytes=len(payload)))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     assert final.capture.dropped_bytes == 0, (
         f"an inclusive bound drops nothing; got {final.capture.dropped_bytes}"
@@ -624,7 +589,7 @@ def test_a_bound_one_byte_short_of_the_stream_drops_exactly_one_byte() -> None:
     payload = b"abcdefghij"
     sink = _sink(BoundedCapture(max_bytes=len(payload) - 1))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     assert final.capture.dropped_bytes == 1, (
         f"exactly one byte is over the bound; got {final.capture.dropped_bytes}"
@@ -643,7 +608,7 @@ def test_a_bound_larger_than_the_stream_retains_everything() -> None:
     payload = b"short"
     sink = _sink(BoundedCapture(max_bytes=4096))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     assert final.payload == payload.decode(), (
         f"a stream under the bound must survive whole; got {final.payload!r}"
@@ -670,7 +635,7 @@ def test_the_accumulator_counts_bytes_across_arbitrary_chunk_partitions() -> Non
     payload = bytes(range(0x61, 0x7B)) * 4
     sink = _sink(BoundedCapture(max_bytes=8))
 
-    final = _retained(
+    final = _drain_sink(
         sink,
         (payload[start : start + 3] for start in range(0, len(payload), 3)),
     )
@@ -721,7 +686,7 @@ def test_a_byte_mode_bound_hands_back_the_child_bytes_untouched() -> None:
     payload = b"\x00\x01\x02\x03\xc3"
     sink = _byte_sink(BoundedCapture(max_bytes=4))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     assert final.payload == payload[-4:], (
         "a byte-exact capture must return the child's own bytes, cut only by "
@@ -746,7 +711,7 @@ def test_a_byte_mode_bound_keeps_a_continuation_shaped_leading_byte() -> None:
     payload = "中".encode() + b"\x80\x81\x82"
     sink = _byte_sink(BoundedCapture(max_bytes=3))
 
-    final = _retained(sink, [payload])
+    final = _drain_sink(sink, [payload])
 
     assert final.payload == b"\x80\x81\x82", (
         "a binary prefix must not be mistaken for continuation bytes, so the "
@@ -780,7 +745,7 @@ def test_a_fixed_width_encoding_realigns_the_retained_tail(encoding: str) -> Non
     sink = config.capture_sink
     assert sink is not None, "a named policy must build an accumulator"
 
-    final = _retained(sink, (bytes([byte]) for byte in payload))
+    final = _drain_sink(sink, (bytes([byte]) for byte in payload))
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert text.endswith(final.payload), (

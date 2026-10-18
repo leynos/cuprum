@@ -15,7 +15,6 @@ byte for byte, so a caller who configured nothing cannot see a difference.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import typing as typ
 
@@ -33,11 +32,10 @@ from cuprum.capture_policy import (
     FileBackedCapture,
     FullCapture,
 )
+from cuprum.unittests._capture_sink_support import _absorb, _finalize
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum._capture_types import CaptureFinal, CaptureSink
+    from cuprum._capture_types import CaptureSink
     from cuprum.capture_policy import CaptureStreamName
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
@@ -76,29 +74,6 @@ def _sink(
     sink = build_accumulator(policy, stream=stream, settings=settings)
     assert sink is not None, "a named policy must build an accumulator"
     return sink
-
-
-async def _feed(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
-    """Await one absorb per chunk, in the order the drain would read them."""
-    for chunk in chunks:
-        await sink.absorb(chunk)
-
-
-def _absorb(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
-    """Feed each chunk to *sink*, in order, on a loop of its own.
-
-    The drain awaits the sink on a running loop, so a test that called the
-    coroutine without one would test nothing. Driving it here keeps the cases
-    below synchronous, and each call builds a fresh loop — the accumulator is
-    built outside one and has to work across that boundary, which is how a
-    config reused by a second run reaches it.
-    """
-    asyncio.run(_feed(sink, chunks))
-
-
-def _finalize(sink: CaptureSink) -> CaptureFinal:
-    """Read *sink*'s result, as a drain that reached the stream's end does."""
-    return asyncio.run(sink.finalize())
 
 
 @pytest.mark.parametrize("payload", _CORPUS)
