@@ -519,6 +519,31 @@ Thresholds that trigger escalation when breached.
   `ruff format --check` clean on all eight touched Python files, and 66, 17,
   45, 55, and 227 cases green across the five affected modules. Date/Author:
   2026-10-18, implementation agent.
+- [x] (2026-10-18) Clear the round-10 findings, in five commits
+  (`ae6f4ac32`, `94184c222`, `e15c01572`, `5d5e1b417`, `4da16c9fc`). Two were
+  production defects. The create-then-publish window was still open: round 9
+  published the handle before the prefix *write*, but a cancellation arriving
+  during the create itself left a `delete=False` file nobody held, because the
+  publish was a separate `await` that the cancellation reached first. The
+  create and the publish are now one shielded step — `_create_published_spill`,
+  built on `_run_shielded_step` so the file value survives a cancellation — and
+  *adopt* runs before the cancellation is re-raised; the new `_BlockingCreate`
+  regression blocks the worker inside the create and fails with the file still
+  on disk if the adopt is moved after the raise. The second defect was that the
+  two byte-mode bound cases in `test_bounded_capture_drain.py` never crossed
+  their bounds, so their truncation assertions could not have failed. Their
+  payloads are now chosen to exceed the bound. The two drain call sites were
+  deduplicated onto `_drain_context`, the five capture-policy timeout cases
+  moved to the readiness-marker pattern the other timeout suite already used
+  (the helper is now in `tests/helpers/timeouts.py` so both share one
+  implementation), and five documentation claims were corrected against the
+  code: the execplan's `(0, n]` interval for the retained suffix, the
+  users'-guide and roadmap promise that a bound never splits a code point (true
+  for text, false for byte-exact), the developers'-guide claim that one owner
+  awaits `absorb`, `finalize`, and `cleanup` in order, and the ADR-007
+  addendum's wording that said the round-8 review *made* the calls blocking
+  rather than identified them as such. Date/Author: 2026-10-18, implementation
+  agent.
 
 ## Surprises & discoveries
 
@@ -1561,6 +1586,41 @@ Thresholds that trigger escalation when breached.
   failure tests assert on. The cost is that the leaf names its one dependency
   rather than the namespace, which reads better in the create function anyway.
   Date/Author: 2026-10-18, implementation agent; raised by review round 9.
+
+- Decision: create the spill file and adopt its handle inside one shielded
+  step, rather than publishing between two awaits. Rationale: round 9 moved the
+  publish ahead of the write, which closed one window and left the earlier one
+  open. The create itself is an `await` on a worker, and a cancellation that
+  arrives while it runs is re-raised only once the worker finishes — by which
+  time the `delete=False` file exists. A publish bound after that await is
+  therefore never reached on the cancelled path, and the file is orphaned
+  exactly as before. `_run_shielded_step` reports the value even when it
+  reports a cancellation, so adopting before either is raised makes "the file
+  exists" and "teardown can reach it" the same fact. The order at the end of
+  the step is deliberate: a value is adopted first, then a failure is raised,
+  then a cancellation. A create that failed leaves no file, so there is nothing
+  to adopt and either exception is equally safe; a create that succeeded and
+  was cancelled must adopt before it raises. Date/Author: 2026-10-18,
+  implementation agent; raised by review round 10.
+
+- Decision: keep the five-second run deadline in `test_capture_timeout.py` and
+  synchronize on the child's readiness marker instead of shortening it.
+  Rationale: the deadline is not the thing under test — the capture the policy
+  retains is — and lowering it would trade one scheduling race for another. The
+  marker says the child has flushed its prefix; waiting for it makes the
+  assertions below it observable facts rather than bets on interpreter
+  start-up. The helper lives in `tests/helpers/timeouts.py` because a second
+  copy in the capture suite would be the third implementation of the same poll.
+  Date/Author: 2026-10-18, implementation agent; raised by review round 10.
+
+- Decision: correct the users'-guide and roadmap claims to scope the
+  code-point guarantee to text capture, rather than changing the byte path to
+  trim. Rationale: `run_bytes()` asks for the child's own bytes. Trimming a
+  tail to a code-point boundary would discard bytes the caller explicitly
+  requested, and the whole point of the byte-exact entry point is that no
+  decoding decision is imposed on it. The documented guarantee was wrong, not
+  the code. Date/Author: 2026-10-18, implementation agent; raised by review
+  round 10.
 
 ## Outcomes & retrospective
 
