@@ -60,6 +60,7 @@ def _stderr_config(config: _PipelineRunConfig) -> _StreamConfig:
     ],
 )
 def test_stream_config_uses_requested_stream_settings(
+    *,
     stream: typ.Literal["stdout", "stderr"],
     expected_echo: bool,
     sink_name: typ.Literal["stdout", "stderr"],
