@@ -1212,6 +1212,25 @@ Thresholds that trigger escalation when breached.
   run instead and all passed; the Rust leaves stay unobserved until admission
   recovers. Date/Author: 2026-10-18, implementation agent.
 
+- Observation (review round 10 follow-up, a refused probe is cached): the
+  `test_pinned_doctest_route_rejects_a_warning` failure that survived three
+  `make test` runs was not the supervisor's current health. Cargo caches each
+  `rustc -vV` probe in `$CARGO_TARGET_DIR/.rustc_info.json`, and that file in
+  `rust/target/doctest-warning-contract` had recorded `"success": false`,
+  `"status": "exit status: 1"`, with the refusal text as the output, from a
+  window when admission really was refusing. Cargo replays a *cached failure*
+  without re-probing, so the test kept failing with
+  `the supervisor refused: unhealthy` while `build-limits-status` reported
+  healthy and the same command against a fresh or cleared target directory
+  exited 0. The tell is the file itself: a poisoned cache names the failure it
+  will replay. Removing `.rustc_info.json` fixed it; `CARGO_CACHE_RUSTC_INFO=0`
+  also does, without touching the directory. The harness is identical on the
+  base `d93df9563`, so the fixture is inherited and no branch change is owed.
+  This also means a `build-limits:` refusal can outlive the condition that
+  produced it, so a repeatedly-refused compiler probe should be checked against
+  `build-limits-status` before it is attributed to the branch. Date/Author:
+  2026-10-18, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
