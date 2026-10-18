@@ -2509,11 +2509,12 @@ captured results, or values delivered to other observers. Event adapters apply
 the policy immediately before projection: structured logging before message and
 record construction, and tracing before attribute and span-event construction.
 `logging_hook()` applies it to the argv-derived start message.
-`GitHubActionsSink` applies it to emitted explicit titles and argv-derived
-group titles; the trusted fallback annotation label and mirrored child output
-are outside that projection. Disabled title outputs do not invoke redaction.
-Custom observation consumers opt in by wrapping the hook with
-`redacting_hook(consumer, policy)` before registering it with `observe()`.
+`GitHubActionsSink` applies it to every enabled emitted group or annotation
+title, including explicit titles, argv-derived group titles, and bounded
+fallback annotation labels. Disabled title outputs do not invoke redaction;
+mirrored child output remains unchanged. Custom observation consumers opt in by
+wrapping the hook with `redacting_hook(consumer, policy)` before registering it
+with `observe()`.
 
 A failure in a configured rule raises `RedactionError`; export code propagates
 it and never retries with raw text. This follows the existing observer error

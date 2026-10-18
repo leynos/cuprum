@@ -836,10 +836,11 @@ construct a policy such as
 `policy = RedactionPolicy(literals=("token-value",))`, then pass it as
 `redaction=policy` to `structured_logging_hook()`, `tracing_hook()`, or
 `logging_hook()`. Pass it to `GitHubActionsSink(redaction=policy)` to redact an
-explicit title or argv-derived group title. Explicit annotation titles use the
-policy too; trusted fallback labels and child output remain unchanged. Wrap a
-custom observer with `redacting_hook(consumer, policy)` before registering it
-through `observe()`.
+explicit title or argv-derived group title. The policy applies to every enabled
+emitted group or annotation title, including bounded fallback annotation
+labels; disabled title outputs do not invoke redaction, and mirrored child
+output remains unchanged. Wrap a custom observer with
+`redacting_hook(consumer, policy)` before registering it through `observe()`.
 
 Each destination applies the policy only at its own export boundary. The raw
 execution event remains available to unwrapped observers, and redaction never

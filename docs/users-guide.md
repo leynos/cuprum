@@ -1504,10 +1504,12 @@ assert "session-314" not in repr(exports) + repr(tracer.spans)
 ```
 
 Pass the same `redaction=policy` keyword to `logging_hook()` for its plain-text
-start record, or to `GitHubActionsSink` for an emitted explicit title or
-argv-derived group title. An explicit annotation title uses the policy too; its
-bounded fallback label remains unchanged. The opt-in policy uses the same rules
-at each destination; it is never applied globally. Both `TracingHook` and the
+start record, or to `GitHubActionsSink` for each enabled group or annotation
+title. The sink applies the policy to explicit titles, argv-derived group
+titles, and bounded fallback annotation labels before workflow-command
+escaping. Disabled title outputs do not invoke redaction, and mirrored child
+output remains unchanged. The opt-in policy uses the same rules at each
+destination; it is never applied globally. Both `TracingHook` and the
 `tracing_hook()` factory accept the policy.
 
 The event projection redacts each `argv` item, environment value, output line,

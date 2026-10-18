@@ -98,7 +98,7 @@ def test_fallback_and_explicit_titles_use_their_projection_policy(
     title: str | None,
     expected_title: str,
 ) -> None:
-    """Trusted fallback labels persist while explicit titles are sanitized."""
+    """Explicit and fallback titles use the configured redaction policy."""
     buffer = io.StringIO()
     policy = RedactionPolicy(literals=(_SENTINEL, "trusted-label"))
     sink = GitHubActionsSink(buffer, force=True, title=title, redaction=policy)
