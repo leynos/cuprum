@@ -169,11 +169,16 @@ def _reject_captured_redirection(
     )
     if not captures:
         return
+    # The rule reads the resolved per-stream policy, so the advice names that
+    # policy too. ``capture=False`` alone does not clear the refusal when a
+    # policy field overrides the shorthand: it disables the default for a
+    # stream left at ``None``, and the field is what still asks for the pipe.
     msg = (
         f"RunOutputOptions {name} cannot be redirected to "
         f"{target.kind!r} while capture or echo is enabled: there is no "
-        f"parent-side pipe to read. Set capture=False (and echo=False) "
-        f"or leave {name} unset."
+        f"parent-side pipe to read. Set capture_{name}=False (or "
+        f"capture=False with capture_{name} unset) and echo_{name}=False "
+        f"(or echo=False with echo_{name} unset), or leave {name} unset."
     )
     raise ValueError(msg)
 
