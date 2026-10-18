@@ -125,10 +125,12 @@ their particular value enables it.
 
 Replace `result.stdout or ""` and `result.stderr or ""` with
 `result.require_captured().stdout` and `.stderr`. Checked narrowing raises
-`ValueError` when capture was omitted, preserving the missing diagnostic
-instead of turning it into an empty string. `CapturedResult` is a distinct
-dataclass, so exact type checks and cross-class equality checks may also need
-updating; use `isinstance(result, CommandResult)` for base-result checks.
+`ValueError` when either text stream is unavailable, such as when capture was
+disabled or when checking an interior pipeline stage. This preserves the
+missing diagnostic instead of turning it into an empty string. `CapturedResult`
+is a distinct dataclass, so exact type checks and cross-class equality checks
+may also need updating; use `isinstance(result, CommandResult)` for base-result
+checks.
 
 ### Scopes take a `ScopeConfig`
 

@@ -66,20 +66,26 @@ async def explicit_async_options_keep_optional_streams() -> None:
     typ.assert_type(result.stderr, str | None)
 
 
-def optional_sync_options_keep_the_broader_return_type() -> None:
+def optional_sync_options_keep_the_broader_return_type(
+    output: RunOutputOptions | None,
+) -> None:
     """Preserve the broader type when options may disable capture."""
     command = sh.make(ECHO)()
-    output: RunOutputOptions | None = RunOutputOptions(capture=True)
     result = command.run_sync(output=output)
     typ.assert_type(result, CommandResult)
+    typ.assert_type(result.stdout, str | None)
+    typ.assert_type(result.stderr, str | None)
 
 
-async def optional_async_options_keep_the_broader_return_type() -> None:
+async def optional_async_options_keep_the_broader_return_type(
+    output: RunOutputOptions | None,
+) -> None:
     """Accept optional-options variables in the async overload."""
     command = sh.make(ECHO)()
-    output: RunOutputOptions | None = RunOutputOptions(capture=True)
     result = await command.run(output=output)
     typ.assert_type(result, CommandResult)
+    typ.assert_type(result.stdout, str | None)
+    typ.assert_type(result.stderr, str | None)
 
 
 def require_captured_narrows_explicit_options() -> None:

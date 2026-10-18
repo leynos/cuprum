@@ -107,23 +107,6 @@ def test_captures_output_and_exit_code(
         assert result.system_cpu_seconds is None, "Windows must not report child CPU"
 
 
-def test_empty_captured_streams_are_empty_strings(
-    python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: tuple[str, ExecuteFn],
-) -> None:
-    """Captured streams with no child output are empty text values."""
-    _, execute = execution_strategy
-    result = execute(python_builder("-c", "pass"), {})
-
-    assert isinstance(result, sh.CapturedResult), (
-        f"default capture must return CapturedResult, got {type(result).__name__}"
-    )
-    assert (result.stdout, result.stderr) == ("", ""), (
-        "captured empty stdout and stderr must be empty strings, got "
-        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
-    )
-
-
 @_wait4_only
 def test_records_direct_child_resource_usage(
     python_builder: cabc.Callable[..., SafeCmd],

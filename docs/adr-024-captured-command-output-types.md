@@ -68,7 +68,7 @@ annotations remain `CommandResult`.
 
 `CommandResult.require_captured()` returns an existing `CapturedResult`
 unchanged. If both streams are strings on an ordinary `CommandResult`, it
-copies all fields into a `CapturedResult`. Otherwise it raises `ValueError`,
+copies all fields into a `CapturedResult`. Otherwise, it raises `ValueError`,
 names each stream that is unavailable as text, and points to
 `RunOutputOptions(capture=True)`. No new exception type is introduced.
 

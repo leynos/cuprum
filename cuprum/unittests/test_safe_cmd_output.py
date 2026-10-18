@@ -130,41 +130,34 @@ def test_captures_and_echoes_stderr(
     assert captured.err.strip() == "err"
 
 
-def test_explicit_capture_returns_captured_result(
+@pytest.mark.parametrize(
+    "run_kwargs",
+    [
+        pytest.param({}, id="omitted-output"),
+        pytest.param({"output": None}, id="output-none"),
+        pytest.param(
+            {"output": RunOutputOptions(capture=True)},
+            id="explicit-capture",
+        ),
+    ],
+)
+def test_captured_runs_return_captured_result(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
+    run_kwargs: _RunKwargs,
 ) -> None:
-    """Explicit capture produces the narrowed result for both run methods."""
+    """Capturing calls return narrowed results for both run methods."""
     _, execute = execution_strategy
     command = python_builder("-c", "pass")
 
-    result = execute(command, {"output": RunOutputOptions(capture=True)})
+    result = execute(command, run_kwargs)
 
     assert isinstance(result, sh.CapturedResult), (
-        f"explicit capture must return CapturedResult, got {type(result).__name__}"
+        "capturing calls must return CapturedResult, "
+        f"got {type(result).__name__} for {run_kwargs!r}"
     )
     assert (result.stdout, result.stderr) == ("", ""), (
-        "captured empty stdout and stderr must be empty strings, got "
-        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
-    )
-
-
-def test_explicit_none_uses_default_capture_result(
-    python_builder: cabc.Callable[..., SafeCmd],
-    execution_strategy: tuple[str, ExecuteFn],
-) -> None:
-    """An explicit ``output=None`` captures both streams for both run methods."""
-    _, execute = execution_strategy
-    command = python_builder("-c", "pass")
-
-    result = execute(command, {"output": None})
-
-    assert isinstance(result, sh.CapturedResult), (
-        "explicit output=None must preserve default capture, got "
-        f"{type(result).__name__}"
-    )
-    assert (result.stdout, result.stderr) == ("", ""), (
-        "empty captured streams must remain strings, got "
+        "captured empty streams must remain strings, got "
         f"stdout={result.stdout!r}, stderr={result.stderr!r}"
     )
 
