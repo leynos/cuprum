@@ -30,7 +30,7 @@ if typ.TYPE_CHECKING:
     from cuprum.stream_observation import _StreamOperationMeasurement
 
 
-def _finish_drain(
+async def _finish_drain(
     state: _DrainState,
     measurement: _StreamOperationMeasurement | None,
     *,
@@ -42,6 +42,10 @@ def _finish_drain(
     still the child's output, so the partial prefix is finalized under the same
     rule as a completed drain. Only the two conditions below — no capture
     accumulator, or a caller-requested discard — turn it into a cancellation.
+
+    Finalizing is awaited because a file-backed capture's last act is to flush
+    its spill file and, in byte mode, read it back — both on a worker. See
+    :class:`~cuprum._capture_types.CaptureSink`.
 
     Returns
     -------
@@ -62,9 +66,9 @@ def _finish_drain(
         if state.capture is None or _discard_on_cancel(state.config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
-        return _finalize(state)
+        return await _finalize(state)
     _flush_echo_decoder(state)
-    captured = _finalize(state) if state.capture is not None else _CapturedDrain()
+    captured = await _finalize(state) if state.capture is not None else _CapturedDrain()
     _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
     return captured
 
@@ -117,7 +121,7 @@ type _DrainParts = tuple[
 ]
 
 
-def _finalize(state: _DrainState) -> _CapturedDrain:
+async def _finalize(state: _DrainState) -> _CapturedDrain:
     """Finalize the drain's accumulator, if it had one.
 
     Returns
@@ -129,7 +133,7 @@ def _finalize(state: _DrainState) -> _CapturedDrain:
     sink = state.capture
     if sink is None:
         return _CapturedDrain()
-    final = sink.finalize()
+    final = await sink.finalize()
     return _CapturedDrain(
         payload=final.payload,
         capture=final.capture,

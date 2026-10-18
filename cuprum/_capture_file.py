@@ -23,16 +23,29 @@ prefer keeping their data:
   still removed by cleanup, so even a failed run leaves nothing in the
   temporary directory; ``storage_failed`` on the record is what tells the
   caller the retained capture is incomplete rather than merely short.
+
+Every filesystem call is made on a worker thread through
+:mod:`cuprum._capture_spill_io`, and the calls for one accumulator are
+serialized, so the file's contents are the order the child wrote rather than
+the order the executor happened to run them in.
 """
 
 from __future__ import annotations
 
 import contextlib
 import pathlib
-import tempfile
 import typing as typ
 
 from cuprum._capture_decode import _DecodeSettings, _render
+from cuprum._capture_spill_io import (
+    _close_spill,
+    _create_spill,
+    _flush_spill,
+    _read_spill,
+    _remove_spill,
+    _SpillIo,
+    _write_to_spill,
+)
 from cuprum._capture_types import CaptureFinal, SpillHandle
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import _emit_capture_event
@@ -44,44 +57,6 @@ if typ.TYPE_CHECKING:
 __all__ = [
     "_FileAccumulator",
 ]
-
-
-def _open_spill_file(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
-    """Create the spill file a capture keeps appending to.
-
-    ``delete=False`` is the point, not an oversight: the file must outlive this
-    call and every later append, so a ``with`` block would close the descriptor
-    the accumulator means to keep writing through. The file is removed by
-    :meth:`SpillHandle.close` when the stream is neither kept nor already
-    unlinked.
-
-    Returning the handle rather than assigning it at the call site is what
-    makes that intent legible to a reader and to the linter: the resource is
-    this function's *result*, not a temporary bound to a name in the middle of
-    a longer method, and the obligation to release it passed to the caller
-    along with it.
-
-    Parameters
-    ----------
-    directory : pathlib.Path | str | None
-        Directory to create the file in, or ``None`` for the process's
-        temporary directory. The ``str`` arm is admitted to match the declared
-        type of :attr:`~cuprum.capture_policy.FileBackedCapture.directory`,
-        which is ``Path | str | None`` so a caller may pass either. Its
-        ``__post_init__`` normalizes to :class:`~pathlib.Path` before this is
-        ever reached, but that normalization is invisible in the field's
-        annotation, so narrowing here would only force a cast at the call site
-        that asserted the very thing the annotation cannot promise.
-
-    Returns
-    -------
-    typ.IO[bytes]
-        The open spill file, positioned at the start.
-    """
-    return tempfile.NamedTemporaryFile(
-        delete=False,
-        dir=directory,
-    )
 
 
 class _FileAccumulator:
@@ -102,6 +77,7 @@ class _FileAccumulator:
         "_file",
         "_flushed_bytes",
         "_handle",
+        "_io",
         "_path",
         "_policy",
         "_settings",
@@ -121,11 +97,15 @@ class _FileAccumulator:
         self._policy = policy
         self._stream = stream
         self._settings = settings
+        # The ordering seam and its worker calls. One per accumulator, so two
+        # streams spilling at once do not wait for each other, and one per
+        # *file*, so this capture's own calls cannot be reordered.
+        self._io = _SpillIo()
         self._buffer: bytearray | None = bytearray()
-        # Whichever type :func:`_open_spill_file` hands back, which is the
-        # temporary-file wrapper rather than the buffered file it forwards to;
-        # the two annotations must agree or every assignment between them
-        # fails the typechecker.
+        # Whichever type `_create_spill` hands back, which is the temporary-file
+        # wrapper rather than the buffered file it forwards to; the two
+        # annotations must agree or every assignment between them fails the
+        # typechecker.
         self._file: typ.IO[bytes] | None = None
         # One handle for the life of the capture, not one per query: the
         # normal path closes it from the finalized result while teardown may
@@ -145,24 +125,28 @@ class _FileAccumulator:
         # treat fields as low-cardinality labels.
         self._failed: str | None = None
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Buffer the chunk, spill it, or append it, by where the capture is."""
         self._total += len(chunk)
         if self._path is not None:
-            self._append(chunk)
+            await self._append(chunk)
             return
         buffered = self._buffer
         if buffered is None:
             return
         buffered.extend(chunk)
         if self._should_spill(len(buffered)):
-            self._spill()
+            await self._spill()
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Render spilled or in-memory bytes, with the record describing them."""
+        # Everything this capture handed to a worker has landed by the time
+        # each `await` above returned, so both branches read state no worker
+        # can still be changing. `absorb` and `finalize` are awaited by the
+        # same drain task in order, never concurrently.
         path = self._path
         if path is not None:
-            return self._finalize_spilled(path)
+            return await self._finalize_spilled(path)
         return self._finalize_buffered()
 
     async def cleanup(self) -> None:
@@ -185,7 +169,7 @@ class _FileAccumulator:
         threshold = self._policy.spill_threshold_bytes
         return threshold is None or buffered > threshold
 
-    def _spill(self) -> None:
+    async def _spill(self) -> None:
         """Move the buffered prefix into a new file and append there after.
 
         A failure here leaves the stream on the heap: nothing was written
@@ -198,15 +182,15 @@ class _FileAccumulator:
         if buffered is None:
             return
         try:
-            handle = _open_spill_file(self._policy.directory)
+            handle = await self._io.run(_create_spill, self._policy.directory)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
         try:
-            handle.write(buffered)
-            handle.flush()
+            await self._io.run(_write_to_spill, handle, buffered)
+            await self._io.run(_flush_spill, handle)
         except OSError as exc:
-            self._discard_failed_spill(handle, exc)
+            await self._discard_failed_spill(handle, exc)
             return
         self._spilled_bytes = len(buffered)
         self._flushed_bytes = len(buffered)
@@ -223,16 +207,21 @@ class _FileAccumulator:
             )
         )
 
-    def _discard_failed_spill(
+    async def _discard_failed_spill(
         self,
         handle: typ.IO[bytes],
         exc: OSError,
     ) -> None:
         """Remove a spill file that never took the prefix, and stop retrying."""
+        # Both calls are housekeeping on the way out of a failed transition,
+        # so each tolerates its own failure: the capture has already lost the
+        # storage, and a close or unlink that also fails leaves nothing more
+        # to lose. They still go through `run`, because closing on the loop is
+        # the same blocking call that took the spill off it.
         with contextlib.suppress(OSError):
-            handle.close()
+            await self._io.run(_close_spill, handle)
         with contextlib.suppress(OSError):
-            pathlib.Path(handle.name).unlink(missing_ok=True)
+            await self._io.run(_remove_spill, pathlib.Path(handle.name))
         self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
 
     def _fail_storage(
@@ -264,15 +253,17 @@ class _FileAccumulator:
             )
         )
 
-    def _append(self, chunk: bytes) -> None:
+    async def _append(self, chunk: bytes) -> None:
         """Append one chunk to the spill file, absorbing a write failure.
 
-        The write is all this does; the flush is deferred. ``_append`` runs on
-        the run's event loop, once per chunk the drain reads, and a flush there
-        is one blocking syscall per read on the loop that also drives the other
-        stream, the deadline, and cancellation. Nothing reads the file before
-        finalization, and the handle's own ``close`` flushes whatever is left,
-        so flushing early would buy nothing and cost the loop.
+        The write is all this does; the flush is deferred to
+        :meth:`_flush_before_reading`. Nothing reads the file before
+        finalization and the handle's own close flushes whatever is left, so a
+        flush per chunk would buy nothing and cost a worker round trip per
+        read. Running the write off the loop is the whole point of
+        :class:`~cuprum._capture_spill_io._SpillIo`: the drain waits for it,
+        but the loop stays free to read the child's other stream, honour the
+        deadline, and deliver a cancellation.
         """
         if self._failed is not None:
             return
@@ -280,13 +271,13 @@ class _FileAccumulator:
         if file is None:
             return
         try:
-            file.write(chunk)
+            await self._io.run(_write_to_spill, file, chunk)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
         self._spilled_bytes += len(chunk)
 
-    def _read_back(self, path: pathlib.Path) -> bytes | None:
+    async def _read_back(self, path: pathlib.Path) -> bytes | None:
         """Return the spill file's bytes, or ``None`` when they cannot be read.
 
         A byte-exact run asked for the child's own bytes, and a spilled capture
@@ -304,7 +295,7 @@ class _FileAccumulator:
             The file's contents, or ``None`` when the read failed.
         """
         try:
-            return path.read_bytes()
+            return await self._io.run(_read_spill, path)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_READ_FAILED)
             return None
@@ -323,12 +314,13 @@ class _FileAccumulator:
             ),
         )
 
-    def _flush_before_reading(self) -> None:
+    async def _flush_before_reading(self) -> None:
         """Flush once, so a read-back sees every byte that was written.
 
         ``_append`` deliberately does not flush per chunk, so this is the one
-        flush of the run's appended bytes. A failure here is reported exactly
-        as a per-chunk flush failure was — under
+        flush of the run's appended bytes, and it is ordered before the
+        read-back by the lock both calls take. A failure here is reported
+        exactly as a per-chunk flush failure was — under
         :attr:`~cuprum.capture_events.CaptureEventCategory.STORAGE_FLUSH_FAILED`
         — rather than becoming a failure of the command.
         """
@@ -336,7 +328,7 @@ class _FileAccumulator:
         if file is None or self._failed is not None:
             return
         try:
-            file.flush()
+            await self._io.run(_flush_spill, file)
         except OSError as exc:
             # The writes since the last flush are still in the file object's
             # buffer, so they never reached the file. The event reports the
@@ -346,10 +338,10 @@ class _FileAccumulator:
             return
         self._flushed_bytes = self._spilled_bytes
 
-    def _finalize_spilled(self, path: pathlib.Path) -> CaptureFinal:
+    async def _finalize_spilled(self, path: pathlib.Path) -> CaptureFinal:
         """Report the spill file in place of text, or its bytes in byte mode."""
-        self._flush_before_reading()
-        payload = self._read_back(path) if self._settings.capture_bytes else None
+        await self._flush_before_reading()
+        payload = await self._read_back(path) if self._settings.capture_bytes else None
         handle = self._handle
         return CaptureFinal(
             payload=payload,

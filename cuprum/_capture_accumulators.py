@@ -112,14 +112,14 @@ class _FullAccumulator:
         self._settings = settings
         self._buffer = bytearray()
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Append one raw chunk to the retained stream."""
         # ``+=`` rather than ``.extend``: both append in place, but a lone
         # ``self._buffer.extend(chunk)`` is a one-statement attribute forward,
         # which the df12 wrapper rule reads as adding no behaviour.
         self._buffer += chunk
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Render the retained stream and report its metadata."""
         retained = bytes(self._buffer)
         return CaptureFinal(
@@ -179,7 +179,7 @@ class _BoundedAccumulator:
     # once rather than once per read.
     _truncation_emitted: bool = dc.field(init=False, default=False)
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Append one raw chunk and discard whatever no longer fits."""
         if len(self._prefix) < _BOM_MAX_BYTES:
             self._prefix += chunk[: _BOM_MAX_BYTES - len(self._prefix)]
@@ -191,7 +191,7 @@ class _BoundedAccumulator:
             self._offset += overflow
             self._dropped = self._total - len(self._buffer)
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Render the retained tail and report the bytes it dropped.
 
         The reported count is computed, not stored: two calls over the same

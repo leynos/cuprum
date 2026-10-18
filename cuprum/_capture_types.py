@@ -33,13 +33,24 @@ class CaptureSink(typ.Protocol):
     A structural type rather than a base class, so each accumulator stays a
     small standalone object with its own slots and the drain names the
     capability it uses rather than three concrete classes.
+
+    ``absorb`` and ``finalize`` are asynchronous even though two of the three
+    accumulators answer without suspending. Retention is the child's output, and
+    a file-backed capture cannot retain a chunk without writing to disk; making
+    the seam synchronous would force that write onto the run's event loop,
+    where it delays the other stream, the deadline, and cancellation. One
+    protocol keeps the drain free of policy tests: awaiting a sink that had
+    nothing to do costs a coroutine step, while a second synchronous protocol
+    would put the file-backed case outside the type the drain is written
+    against. See :class:`~cuprum._capture_file._FileAccumulator` for how the
+    file-backed implementation keeps its ordering.
     """
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Take one raw chunk of the child's output."""
         ...
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Return the retained payload and the record describing it."""
         ...
 

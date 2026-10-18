@@ -181,7 +181,7 @@ async def _drain(
             measurement=measurement,
         )
         if reached_eof:
-            return _finish_drain(state, measurement, reached_eof=True)
+            return await _finish_drain(state, measurement, reached_eof=True)
     except asyncio.CancelledError:
         # A cancellation landing inside an awaited ``on_chunk`` cannot be
         # absorbed by the read loop the way a cancelled read is, so it
@@ -192,7 +192,7 @@ async def _drain(
     except BaseException:
         _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
         raise
-    return _finish_drain(state, measurement, reached_eof=False)
+    return await _finish_drain(state, measurement, reached_eof=False)
 
 
 def _build_drain_state(
@@ -258,7 +258,11 @@ async def _deliver_chunk(state: _DrainState, chunk: bytes) -> None:
         activity()
     capture = state.capture
     if capture is not None:
-        capture.absorb(chunk)
+        # Awaited even when the accumulator keeps its bytes on the heap: a
+        # file-backed capture writes to disk here, and the one protocol is
+        # what keeps this loop free of policy tests. See
+        # :class:`~cuprum._capture_types.CaptureSink`.
+        await capture.absorb(chunk)
     if state.config.echo_output:
         _echo_chunk(state, chunk)
     if state.on_chunk is not None:
