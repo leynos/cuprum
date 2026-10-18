@@ -5493,13 +5493,19 @@ nonignored untracked regular Markdown files while excluding ignored files and
 symbolic links. Run `make test-markdown-format` after changing this Makefile
 contract.
 
-The gate installs the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
-`.github/workflows/ci.yml` through the
-`leynos/shared-actions/.github/actions/install-mdtablefix` action. The action
-requires `mdtablefix` 0.6.0 or later, installs only a matching prebuilt
-release, and fails closed when the runner has no supported archive; it never
-builds the formatter from source. Cuprum's project toolchain remains Rust
-1.85.0.
+The gate installs the `mdtablefix` version named by `MDTABLEFIX_VERSION`
+through the `leynos/shared-actions/.github/actions/install-mdtablefix` action,
+which CI selects as 0.6.1 in both `.github/workflows/ci.yml` and
+`.github/workflows/coverage-main.yml`. The shared action accepts `mdtablefix`
+0.5.1 or later with no upper bound, installs only a matching prebuilt release,
+and fails closed when the runner has no supported archive; it never builds the
+formatter from source, and it refuses a binary whose reported version is not
+exactly the requested one.
+
+The 0.5.1 floor belongs to the action rather than to Cuprum. The recipes above
+need `mdtablefix` 0.6.0 or later, so a lower pin is outside what `make fmt` and
+`make check-fmt` support here, and 0.6.1 is the version CI actually installs.
+Cuprum's project toolchain remains Rust 1.85.0.
 
 Install the pinned prebuilt version locally with `cargo-binstall` so formatter
 output matches CI:
