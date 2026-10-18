@@ -285,6 +285,7 @@ def test_an_async_run_refuses_bounded_shift_jis_before_spawning(
     command = python_builder("-c", "print('hi')")
 
     async def _run() -> None:
+        """Await ``run`` so the refusal is raised from the coroutine itself."""
         await command.run(
             output=RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=4)),
             context=ExecutionContext(encoding="shift_jis"),
