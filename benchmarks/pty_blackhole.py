@@ -200,8 +200,11 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         """Raise a flush or acknowledgement failure when no body error exists."""
         if flush_error is not None:
             raise flush_error
-        if not drainer_stopped:
-            return
+        if drainer_stopped:
+            self._raise_if_drain_incomplete()
+
+    def _raise_if_drain_incomplete(self) -> None:
+        """Raise when a stopped drainer failed to acknowledge its target."""
         if self._drainer_error is not None:
             msg = "PTY drainer failed before acknowledging accepted output"
             raise PtyBlackholeDrainError(msg) from self._drainer_error

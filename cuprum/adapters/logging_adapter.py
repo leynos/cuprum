@@ -25,7 +25,6 @@ Example::
 
 from __future__ import annotations
 
-import collections.abc as cabc
 import dataclasses
 import logging
 import typing as typ
@@ -40,6 +39,8 @@ from cuprum.adapters._logging_projection import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecEvent, ExecHook
     from cuprum.redaction import RedactionPolicy
 
