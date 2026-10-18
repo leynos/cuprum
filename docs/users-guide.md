@@ -700,8 +700,10 @@ together with `storage`, because the pair distinguishes the cases:
   failure. That is what tells the difference between a short capture and an
   incomplete one.
 - Byte-mode read-back failed. `storage` is `"file"` but no text or bytes are
-  reported, because the bytes could not be recovered. The file is left in
-  place, so the caller can still try to read it.
+  reported, because the bytes could not be recovered. The file follows the
+  policy rather than the failure: it is left in place only under
+  `keep_file=True`, so retrying the read at `record.path` requires that
+  setting. Under the default, cleanup removes the file before the run returns.
 
 A failed removal sets nothing: it is housekeeping, and cleanup runs on the way
 out of every run, including one already carrying the caller's own timeout or

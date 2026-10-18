@@ -1179,8 +1179,9 @@ the run: it is reported on the record as `storage_failed=True` and through a
 command that produced it. If the file could not be created the stream stays in
 memory and is still reported complete; if an append failed the record holds
 what reached the file before the failure; if a byte-mode read-back failed the
-file is left in place for the caller to read. A failure to remove the file at
-the end of the run is absorbed silently, so that cleanup cannot replace the
+file remains in place only when the policy sets `keep_file=True`, since the
+default cleanup removes it before the run returns. A failure to remove the file
+at the end of the run is absorbed silently, so that cleanup cannot replace the
 caller's own timeout or cancellation.
 
 `BoundedCapture`, `FileBackedCapture`, `FullCapture`, `CapturedStream`, and
