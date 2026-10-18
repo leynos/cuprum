@@ -34,6 +34,9 @@ Or jump straight to a task:
 - **Make a script dependable:** [handle failure](#handle-failure),
   [control output](#control-output), and
   [supply input and a deadline](#supply-input-environment-and-a-deadline).
+- **Write output to a file, or feed in large input:**
+  [send a stream to a file](#send-a-stream-to-a-file-or-the-parent) or
+  [stream input from a producer](#stream-input-from-a-producer).
 - **Run several commands:** [connect a pipeline](#connect-a-pipeline) or
   [run commands concurrently](#run-commands-concurrently).
 - **Limit what may run:** [apply a policy](#apply-a-policy).
@@ -465,51 +468,28 @@ Keep the callback and sink writes prompt: they run on the command's event loop.
 A heartbeat reports silence, not a deadlock, and does not alter the deadline or
 exit status.
 
-`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget` naming where the
-child's stream is bound. Four variants exist and they differ in _ownership_,
-which is the whole contract:
+### Send a stream to a file or the parent
 
-- `StdioTarget.pipe()` — a library-owned pipe. This is the default for a stream
-  that capture, echo, idle reporting, or line observation needs; without one of
-  those the default is `/dev/null`.
-- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
-  This is the default for stdin. For stdout and stderr it is the explicit way
-  to let an unobserved stream through to the parent, since the default there
-  discards it.
-- `StdioTarget.path(p)` — a file **cuprum owns**. Cuprum opens it immediately
-  before the spawn and closes its copy in a `finally` right after, so the
-  descriptor never outlives the run; the child keeps writing after that close.
-  The caller names a path and never manages a descriptor.
-- `StdioTarget.fd(f)` — a **borrowed** descriptor or open file object. The
-  caller owns it: cuprum never closes it, and a borrowed file object is flushed
-  before the spawn so buffered caller-side bytes reach the child.
+Capture keeps output in memory for the caller to read. When output should land
+somewhere else, such as a log file or the parent's own terminal, redirect the
+stream instead. `RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget`,
+and the four kinds differ in who owns the destination (Table 2).
 
-Redirecting two streams to one path is rejected: each open starts at offset 0,
-so the two streams would interleave unpredictably. Use distinct paths, or one
-borrowed descriptor the caller manages — sharing a descriptor across two runs
-shares a single file offset, and the second run writes wherever the first left
-off.
+| Target                  | The child's stream goes to                                                | Owned by |
+| ----------------------- | ------------------------------------------------------------------------- | -------- |
+| `StdioTarget.pipe()`    | A pipe Cuprum reads, for capture, echo, line observation, or a heartbeat. | Cuprum   |
+| `StdioTarget.inherit()` | The parent's own stream, passed straight through.                         | Parent   |
+| `StdioTarget.path(p)`   | The file at `p`, opened just before the spawn and closed just after.      | Cuprum   |
+| `StdioTarget.fd(f)`     | A descriptor or open file object; flushed before the spawn, never closed. | Caller   |
 
-Capture and echo read from a parent-side pipe, so they cannot be combined with
-a redirected stream; `RunOutputOptions` rejects the combination at construction
-rather than silently choosing one. `on_line` and idle observation are not
-rejected that way, because a pipe is not what they require: neither is an error
-when the stream is redirected, but neither sees anything either. `on_line`
-simply receives no lines from a redirected stream, and idle reporting has no
-data to report from it — only piped streams are observed. Request a redirect
-when the child's output should land somewhere other than the parent, and line
-observation when it should be inspected in the parent; the two are alternatives.
-`stdin` is the exception in the other direction: it accepts only `pipe()` and
-`inherit()`, because the input itself arrives on `SafeCmd.run`'s `stdin=`
-argument, which is where the encoding is applied and a producer is pulled.
-`SafeCmd.lines()` requires stdout to be a pipe for the same reason — there is
-no parent-side stream to iterate when stdout goes to a file — and rejects a
-redirected stdout; use `SafeCmd.run` for that case. `SafeCmd.start()` forces
-capture on, because a handle exists so its caller can inspect the child after
-the fact, and a stream bound to a file or the parent has no parent-side pipe to
-read. It therefore rejects a redirected stdout or stderr as well; use `run()` or
-`run_sync()` when the child's output should land somewhere other than the
-parent.
+_Table 2: Standard-stream targets._
+
+When a stream is left unset, Cuprum uses a pipe if something needs to read it
+and discards the output otherwise. `inherit()` is therefore the way to let an
+unobserved stream reach the parent's terminal.
+
+Any target other than `pipe()` counts as a redirect. Capture is on by default,
+so pass `capture=False` when redirecting stdout:
 
 <!-- tested-example: redirect-stdout-to-a-file -->
 
@@ -529,6 +509,31 @@ result = python("-c", "print('redirected')").run_sync(
 assert result.stdout is None, "a redirected stream is not captured"
 assert log.read_text(encoding="utf-8") == "redirected\n"
 ```
+
+A few combinations are contradictory, and Cuprum rejects them with `ValueError`
+before the child starts, rather than silently choosing one side:
+
+- **Capture or echo with a redirected stream, including `inherit()`.** Both
+  read from a pipe, and a redirected stream has none. Line observation and the
+  heartbeat are not rejected, but they see nothing from a redirected stream.
+- **One path for both stdout and stderr.** Each open starts at offset 0, so
+  the two streams would overwrite each other. Use two paths, or one `fd()`
+  target the caller manages.
+- **A redirected stdout with `lines()`, or either stream with `start()`.** Both
+  read the child's output in the parent. Use `run()` or `run_sync()` instead.
+- **An inherited stdin alongside a stdin source.**
+  `RunOutputOptions(stdin=StdioTarget.inherit())` with `stdin=StdinInput(...)`
+  or `stdin=StdinStream(...)` gives two answers to where the input comes from.
+  This is checked when the run starts. A `pipe()` stdin target with a source is
+  accepted, because the source is written through that pipe.
+- **Targets on a `Pipeline`.** Redirect a single command instead.
+- **`path()` or `fd()` on Windows.** File and descriptor redirection needs
+  POSIX descriptors; `pipe()` and `inherit()` work everywhere.
+
+Reusing one `fd()` target across several runs shares its file offset, so each
+run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
+only `pipe()` and `inherit()`: the input itself is passed to the run call's
+`stdin=` argument, as the next section describes.
 
 ### Binary output
 
@@ -614,7 +619,9 @@ Everything about _how_ a command runs, as opposed to _what_ it runs, is passed
 to `run_sync()` or `run()` rather than to the builder:
 
 - **Input:** `stdin=StdinInput(text=...)` sends text, encoded with the
-  context's encoding; `StdinInput(data=...)` sends bytes. Specify only one.
+  context's encoding; `StdinInput(data=...)` sends bytes. Specify only one. For
+  input too large to hold in memory, stream it instead; see
+  [Stream input from a producer](#stream-input-from-a-producer).
 - **Environment and directory:** `context=ExecutionContext(...)` carries `env`,
   `cwd`, and the other per-run settings. `env` is layered over the live parent
   environment under the default `EnvMode.OVERLAY`, so an empty mapping still
@@ -655,22 +662,56 @@ the caller needs to decide later when a child stops, `start()` hands back an
 owned handle to stop by hand instead; see
 [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
 
-For input too large to hold in memory, `StdinStream(chunks=...)` takes an async
-iterable and is pulled one chunk at a time: each chunk is written and `drain()`
-awaited before the next is requested, so a slow reader applies backpressure to
-the producer rather than letting it run to completion. That backpressure limits
-how far _ahead_ the producer is pulled; it does not limit the size of the chunk
-being written. Retention, likewise, is not bounded by the pipe: the chunk just
-pulled and its encoded payload stay in memory until `drain()` returns,
-alongside the transport's write buffer and the OS pipe. A caller who cares
-about peak memory should therefore yield bounded-size chunks. A chunk may be
-`str` (encoded with the context's `encoding` and `errors`) or `bytes` (written
-verbatim). If the producer raises, the child is terminated and the failure
-surfaces as `StdinSourceError` with the producer's exception chained, even when
-the child would otherwise have run to its deadline. A child that closes stdin
-early is normal, not an error: the partial write is recorded as a `stdin_error`
-observation with `operation="early_close"` and the run continues to the child's
-exit code.
+### Stream input from a producer
+
+`StdinInput` holds the whole payload in memory. For input that is large, or
+that is produced as the run goes, pass `stdin=StdinStream(chunks=...)` with an
+async iterable instead:
+
+<!-- tested-example: streaming-stdin -->
+
+```python
+import sys
+from collections.abc import AsyncIterator
+
+from cuprum import Program, ProgramCatalogue, StdinStream, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="stream-input")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+
+
+async def rows() -> AsyncIterator[str]:
+    for number in range(1, 1001):
+        yield f"row {number}\n"
+
+
+count_lines = python("-c", "import sys; print(sum(1 for _ in sys.stdin))")
+result = count_lines.run_sync(stdin=StdinStream(chunks=rows()))
+assert result.stdout == "1000\n"
+```
+
+Cuprum pulls one chunk, writes it, and waits for the write to drain before
+pulling the next, so a slow reader slows the producer down rather than letting
+input pile up in memory. A drained write is not proof that the child has read
+the chunk: some bytes can still sit in the transport buffer or the OS pipe.
+Each chunk is held in full while it is written, so yield chunks of a bounded
+size when peak memory matters.
+
+- **Chunk types:** a `str` chunk is encoded with the context's `encoding` and
+  `errors`, and a character split across two chunks is still encoded correctly.
+  A `bytes` chunk is written as it is.
+- **Producer failure:** if the producer raises, or yields something that is
+  neither `str` nor `bytes`, Cuprum terminates the child and raises
+  `StdinSourceError`, with the original exception as `__cause__`. Cancellation
+  propagates unchanged.
+- **A child that stops reading:** closing stdin early, as `head` does, is not
+  an error. The run continues to the child's exit code, and the cut-short write
+  is reported as a `stdin_error` event.
+- **Clean-up:** on every exit path, Cuprum closes the child's stdin and then
+  calls the producer's `aclose()`, when it has one. Both waits are bounded: a
+  producer whose `aclose()` takes longer is cancelled, and one that ignores the
+  cancellation may still be cleaning up after the run returns. A generator
+  needs no closing by the caller.
 
 ## Connect a pipeline
 
@@ -857,6 +898,8 @@ question. Choose by the question:
 - **What ran, for how long, and how did it end?** Register lifecycle hooks or
   the ready-made logging, metrics, and tracing adapters; see
   [Log, measure, and trace runs](#log-measure-and-trace-runs).
+- **Could a secret reach the logs?** Give the exporting adapters a redaction
+  policy; see [Keep secrets out of telemetry](#keep-secrets-out-of-telemetry).
 - **How is the job presented in CI?** On GitHub Actions,
   `RunOutputOptions(group=True, annotate_failure=True)` frames echoed output
   and failures; see
@@ -907,7 +950,7 @@ assert result.stdout == before.stdout == f"{Path(workdir).name}\n"
 Path(workdir).rmdir()
 ```
 
-Table 2 maps the other common `subprocess` arguments.
+Table 3 maps the other common `subprocess` arguments.
 
 | `subprocess`                             | Cuprum                                                                                            |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -922,7 +965,7 @@ Table 2 maps the other common `subprocess` arguments.
 | `stdout=None` (inherit the terminal)     | `output=RunOutputOptions(capture=False, echo=True)`                                               |
 | `subprocess.Popen` and `.terminate()`    | `await cmd.start()`; see [Hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) |
 
-_Table 2: Where each `subprocess` argument goes in Cuprum._
+_Table 3: Where each `subprocess` argument goes in Cuprum._
 
 Note the environment row: `subprocess` replaces the child's environment with
 `env=`, whereas Cuprum layers `ExecutionContext.env` over the parent's unless
@@ -943,6 +986,9 @@ upgrading from Cuprum 0.1 should also read the
 | `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                      |
 | `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                   |
 | `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                              |
+| `ValueError` naming a redirected stream                    | See the rejected combinations in [Send a stream to a file](#send-a-stream-to-a-file-or-the-parent).   |
+| `StdinSourceError`                                         | The stdin producer failed; its own exception is chained as `__cause__`.                               |
+| `RedactionError`                                           | A redaction rule failed; nothing was exported unredacted. Check the rule it names.                    |
 | `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                     |
 | `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                  |
 | Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                             |
@@ -951,7 +997,7 @@ upgrading from Cuprum 0.1 should also read the
 | Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.     |
 | No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                           |
 
-_Table 3: First checks for common execution outcomes._
+_Table 4: First checks for common execution outcomes._
 
 For the optional native extension, see
 [Choosing a stream backend](#choosing-a-stream-backend) and
@@ -1380,11 +1426,6 @@ in registration order and after hooks in reverse order, so an outer scope's
 setup runs first and its cleanup last. `logging_hook()` pairs the two to write
 start and exit records through the standard `logging` module.
 
-`logging_hook(redaction=policy)` applies the same opt-in text rules to the
-argument vector in its start record. It does not log captured output; its exit
-record contains output lengths only. With no policy, the argument vector keeps
-its existing verbatim representation.
-
 <!-- tested-example: before-and-after-hooks -->
 
 ```python
@@ -1413,7 +1454,10 @@ assert seen == [("before", "pass"), ("after", 0)]
 ```
 
 An exception from a before or after hook propagates to the caller, so keep
-hooks that must never affect a run defensive.
+hooks that must never affect a run defensive. The start record that
+`logging_hook()` writes includes the argument vector; its exit record holds
+output lengths, never the output itself. To keep a secret out of that start
+record, see [Keep secrets out of telemetry](#keep-secrets-out-of-telemetry).
 
 ### Log, measure, and trace runs
 
@@ -1451,21 +1495,30 @@ assert metrics.counters["cuprum_executions_total"] == 1
 assert [span.name for span in tracer.spans] and tracer.spans[0].ended
 ```
 
-Structured logging records `argv` verbatim by default. Tracing also projects
-the full argument vector, and event records can include environment values,
-output lines, diagnostic notes, and tag values. Use `RedactionPolicy` to remove
-configured text from these exports when required. Rules are opt-in and
-destination-specific; `redaction=None` and `RedactionPolicy()` leave existing
-output unchanged. The policy uses caller-supplied literal strings and compiled
-regular expressions. It finds every match in the original text, merges
-overlapping or adjacent match spans, then inserts the mask once; inserted mask
-text is not scanned again. Literal rules are normalized longest first, and
-pattern rules retain their configured order for error reporting. Choose a mask
-that does not contain secret material. The policy does not detect secrets that
-the caller has not configured.
+The structured log record carries the execution's effective environment policy
+as `cuprum_env_mode` (`inherit`, `overlay`, or `replace`), alongside the other
+correlation fields. The value is projected from the typed `ExecEvent.env_mode`
+field, which only Cuprum sets, so no caller input can forge it. The tag of the
+same name is reserved for the same reason: a caller-supplied `env_mode` tag is
+stripped when the observation tags are built, and a replacement run's trusted
+value is grafted in its place.
 
-For example, one policy can be applied independently to structured logging and
-tracing, and wrapped around another observation consumer before registration:
+It also carries the run's capture mode as `cuprum_capture_mode` (`text` or
+`bytes`), projected from the typed `ExecEvent.capture_mode` field under the
+same trust rule. The mode names how the run reports its captures, never their
+contents, so the extra holds no output, argument vector, or other unbounded
+value. Without it a byte-exact run and a text run of the same command are
+identical in every record and counter, and a timeout or teardown failure cannot
+be attributed to the mode that hit it.
+
+#### Keep secrets out of telemetry
+
+The adapters export what a run looked like, and that can include secrets:
+structured logging and tracing record the full argument vector, and events can
+carry environment values, output lines, notes, and tag values. Passing a secret
+in a file, rather than as an argument or environment value, keeps it out of
+these records. Where that is not possible, a `RedactionPolicy` from
+`cuprum.redaction` masks the text it is told about before it is exported:
 
 <!-- tested-example: telemetry-redaction -->
 
@@ -1503,49 +1556,29 @@ assert "token-value" not in repr(exports) + repr(tracer.spans)
 assert "session-314" not in repr(exports) + repr(tracer.spans)
 ```
 
-Pass the same `redaction=policy` keyword to `logging_hook()` for its plain-text
-start record, or to `GitHubActionsSink` for each enabled group or annotation
-title. The sink applies the policy to explicit titles, argv-derived group
-titles, and bounded fallback annotation labels before workflow-command
-escaping. Disabled title outputs do not invoke redaction, and mirrored child
-output remains unchanged. The opt-in policy uses the same rules at each
-destination; it is never applied globally. Both `TracingHook` and the
-`tracing_hook()` factory accept the policy.
+How a policy behaves:
 
-The event projection redacts each `argv` item, environment value, output line,
-diagnostic note, and top-level string-valued tag. It leaves the program and
-project, tag keys, paths, typed numeric and enum fields, and nested or
-non-string tag values unchanged. It applies at each opted-in projection
-boundary: event adapters redact a copy, while plain logging and the GitHub
-Actions sink redact only their selected text. Executed arguments, the child
-environment, captured results, and raw events received by other observers
-remain unchanged. Configure every destination that exports values; one
-adapter's policy has no global effect.
+- **It masks only what it is given.** Rules are literal strings
+  (`literals=`) and compiled regular expressions (`patterns=`); the policy does
+  not guess at secrets. Each match becomes the mask, `[REDACTED]` by default,
+  or the `mask=` text. Overlapping matches become a single mask.
+- **It is opt-in at each destination.** Pass `redaction=policy` to
+  `structured_logging_hook()`, `tracing_hook()` or `TracingHook`,
+  `logging_hook()`, and `GitHubActionsSink`, and wrap any other observer as
+  `redacting_hook(observer, policy)`. A destination without a policy exports
+  text unchanged, so configure every destination that leaves the process.
+- **It changes exports, not the run.** The command's arguments and
+  environment, the captured result, and events seen by other observers are
+  untouched.
+- **It covers free text.** Argument items, environment values, output lines,
+  notes, and top-level string tag values are redacted. The program name,
+  project, paths, tag keys, and numeric and enum fields are not.
+- **It fails closed.** If a rule fails, `RedactionError` is raised and nothing
+  is exported in raw form. Like any observe-hook failure, it fails the run.
 
-If a configured rule fails, `RedactionError` propagates and the exporter does
-not retry with raw text. The ordinary observe-hook failure behaviour still
-applies, so a failure can fail a command call before, during, or after child
-execution. Metric adapters do not accept this policy: their existing labels
-remain bounded to program, project, and closed categories, with no argv,
-environment, output, note, or caller tag values.
-[Metrics adapter](#metrics-adapter) and [Tracing adapter](#tracing-adapter)
-list every metric and span attribute.
-
-The structured log record carries the execution's effective environment policy
-as `cuprum_env_mode` (`inherit`, `overlay`, or `replace`), alongside the other
-correlation fields. The value is projected from the typed `ExecEvent.env_mode`
-field, which only Cuprum sets, so no caller input can forge it. The tag of the
-same name is reserved for the same reason: a caller-supplied `env_mode` tag is
-stripped when the observation tags are built, and a replacement run's trusted
-value is grafted in its place.
-
-It also carries the run's capture mode as `cuprum_capture_mode` (`text` or
-`bytes`), projected from the typed `ExecEvent.capture_mode` field under the
-same trust rule. The mode names how the run reports its captures, never their
-contents, so the extra holds no output, argument vector, or other unbounded
-value. Without it a byte-exact run and a text run of the same command are
-identical in every record and counter, and a timeout or teardown failure cannot
-be attributed to the mode that hit it.
+Metrics need no policy: their labels never carry arguments, environment values,
+output, or tags. [Metrics adapter](#metrics-adapter) and
+[Tracing adapter](#tracing-adapter) list every metric and span attribute.
 
 ### Other observation channels
 
@@ -1567,7 +1600,7 @@ Registrations are context-local, like the policy registrations in
 | Rust-pump routing     | `observe_pump(hook)`             | A `PumpEvent` per routing decision; see [Counting pump routing decisions](#counting-pump-routing-decisions)                                         | `PumpMetricsHook` in `cuprum.adapters.pump_metrics`                 |
 | Rust-pump hop spans   | `observe_pump_span(tracer)`      | A span per native hop; see [Rust-pump executor-hop spans](#rust-pump-executor-hop-spans)                                                            | Not applicable                                                      |
 
-_Table 4: Observation channels and their metrics adapters._
+_Table 5: Observation channels and their metrics adapters._
 
 The `observe_*` functions are importable from `cuprum`, except
 `observe_stream_operation`, which lives in `cuprum.stream_observation`. For
@@ -1686,11 +1719,10 @@ commands.
 Use `GitHubActionsSink` from `cuprum.sinks` for anything the flags do not
 cover: a custom `title`, another `destination`, `force=True` to reproduce the
 framing locally, `emit_group=False` / `emit_annotation=False` to switch off
-either half of the frame, or `redaction=policy` to redact every emitted group
-and annotation title, including the bounded fallback annotation label. The
-convenience flags do not accept a redaction policy. Redaction runs before
-workflow-command escaping. Mirrored child output remains unchanged. An
-annotation never uses argv.
+either half of the frame, or `redaction=policy` to mask group and annotation
+titles (see [Keep secrets out of telemetry](#keep-secrets-out-of-telemetry)).
+The flags have no redaction setting, and redaction never alters the mirrored
+child output.
 
 <!-- tested-example: github-actions-sink -->
 
@@ -1973,29 +2005,23 @@ hooks receive `ExecEvent` values describing:
   and cancellation therefore settle without an invented exit code.
 
 - `stdin` — bytes were written to the child's stdin; `byte_count` records how
-  many. `StdinInput` emits one as its payload is written. `StdinStream` emits
-  one per chunk that produced bytes, and possibly one more for whatever the
-  incremental encoder was still holding when the producer was exhausted. A
-  chunk stored only inside the encoder — a lone leading surrogate, say —
-  produces no bytes and so emits nothing.
+  many. `StdinInput` emits one for its payload. `StdinStream` emits one per
+  chunk that produced bytes, and possibly a final one for text the encoder was
+  still holding when the producer finished.
 
 - `stdin_error` — writing or closing the child's stdin failed, typically
   because the child stopped reading early, as `head` does. `operation` names
   the failing step (`write`, `close`, or `early_close`), and execution
   continues.
 
-- `stdio_error` — a standard-stream boundary _outside_ the stdin writer's own
-  pipe operations failed: the caller's producer, an invalid chunk, the encoder,
-  opening a cuprum-owned target file, or flushing a caller's borrowed file
-  object. `operation` names the failing step (`produce`, `write`, `open`, or
-  `flush`), `error_type` the exception class, and `error_category` the boundary
-  that failed. Unlike `stdin_error`, this is never a substitute for the
-  caller-visible exception: a producer failure still raises `StdinSourceError`,
-  and a failed owned-path open still raises `OSError`. Emission is best-effort,
-  so a failing observe hook or logging handler cannot replace the exception the
-  caller receives; no `exit` event follows these boundaries, but `settled`
-  still does, because these failures occur while another exception or a
-  cancellation is already unwinding.
+- `stdio_error` — a standard-stream step failed: the stdin producer, an
+  invalid chunk, the encoder, opening a `StdioTarget.path()` file, or flushing
+  a borrowed file object. `operation` names the step (`produce`, `write`,
+  `open`, or `flush`), `error_type` the exception class, and `error_category`
+  which boundary failed. The event accompanies the exception the caller
+  receives, such as `StdinSourceError` or `OSError`; it never replaces it, and
+  a failing observe hook cannot mask it. No `exit` event follows, but `settled`
+  does.
 
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
@@ -2231,19 +2257,12 @@ unbounded cardinality, and both are applied only to those two metrics: the
 per-line stream counters omit them, because a line's environment and capture
 mode say nothing that its execution's mode does not already carry.
 
-`cuprum_stdio_errors_total` additionally carries an `error_category` label
-naming which standard-stream boundary failed — `producer`, `invalid_chunk`,
-`encoder`, `pipe`, `owned_path_open`, or `borrowed_flush`. It is the label and
-not the metric name that separates these boundaries, because several of them
-raise the same exception class: a failed producer advance and a failed pipe
-write both surface as `OSError`, and an invalid chunk and a mistyped encoder
-both surface as `TypeError`. Counting them together would leave an operator
-unable to tell a failure in the caller's own producer from a failure in
-cuprum's write path, which call for opposite responses. Like `env_mode` it is a
-bounded label by construction — `StdioFailureCategory` is a closed enum
-resolved by Cuprum, never by caller input — so it cannot give the series
-unbounded cardinality. The counter carries no path, payload, argv, or error
-message; those are caller data and stay with the caller.
+`cuprum_stdio_errors_total` also carries an `error_category` label naming the
+boundary that failed: `producer`, `invalid_chunk`, `encoder`, `pipe`,
+`owned_path_open`, or `borrowed_flush`. Use it to tell a failure in the
+application's own producer from a pipe fault, since both raise `OSError`. The
+values form a closed set, so the label cannot grow without bound, and the
+counter carries no path, payload, argument, or error message.
 
 A spawn failure has no `start` or `exit` event, because no child ran, but it
 does emit one `settled` event with `terminal_outcome="error"`. The metrics hook
@@ -2331,11 +2350,9 @@ Ancillary events carry whichever of the `line`, `operation`, `error_type`,
 An event without a matching open span is dropped. The grace-expiry event
 carries no captured stdout or stderr payload.
 
-`error_category` is the one field whose value is an enum member rather than a
-plain string, so a backend receives its value — `producer`, say — and not the
-member's `repr`. It is carried by `stdio_error` for the same reason it labels
-the metrics counter: without it a producer failure and a pipe fault record
-identically on the span, because both raise `OSError`.
+On a `stdio_error` event, `error_category` reaches the tracing backend as its
+plain value, such as `producer`, and tells a producer failure apart from a pipe
+fault, as it does on the metrics counter.
 
 #### Correlating events with spans
 
@@ -2479,7 +2496,7 @@ aggregate fields, and nothing else:
 | `operation_count`  | `int`   | Completed operations in the group.                               |
 | `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, for the group. |
 
-_Table 5: Aggregate fields of each `stream_telemetry` group._
+_Table 6: Aggregate fields of each `stream_telemetry` group._
 
 The telemetry observes only the pure-Python drain and pipeline-transfer paths. A
 `pipeline_transfer` group may therefore be absent when the Rust backend
@@ -2538,7 +2555,7 @@ values:
 | `duplicate_fds_unavailable` | a transport descriptor closed before the worker's copy of it could be made                     |
 | `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use      |
 
-_Table 6: Reasons an inter-stage hop declines the Rust pump._
+_Table 7: Reasons an inter-stage hop declines the Rust pump._
 
 These records sit at `DEBUG` rather than `WARNING` because a fall-back is a
 routing decision, not a fault; on platforms where the fast path does not apply,
@@ -2719,7 +2736,7 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
 
-_Table 7: Metrics emitted by `PumpMetricsHook`._
+_Table 8: Metrics emitted by `PumpMetricsHook`._
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -2740,8 +2757,8 @@ raw-handle rejection exposed by the Python shim. `outcome` is the only label on
 this counter. Descriptor numbers, Windows handle values, errno values,
 exception types, exception messages, and tracebacks never become metric labels.
 
-The `reason` label takes exactly the values in Table 6, plus `unknown`, and
-nothing else. Table 6's values are published as the `RustPumpDeclineReason`
+The `reason` label takes exactly the values in Table 7, plus `unknown`, and
+nothing else. Table 7's values are published as the `RustPumpDeclineReason`
 enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
 a dashboard can enumerate the series it will see:
 
@@ -2879,6 +2896,9 @@ to read the full benchmark output.
 - **Program:** a `Program`, the typed name of an executable. It is both the
   catalogue's identity for the program and, unless bound, the name the
   operating system runs.
+- **Redaction policy:** a `RedactionPolicy`, the literal strings and patterns
+  an exporting adapter masks before telemetry leaves the process. Opt-in at
+  each destination; it never changes the run itself.
 - **Resident set size (RSS):** the memory a process holds in RAM; Cuprum
   reports the child's peak where the platform measures it.
 - **Running-command handle:** the `RunningCommand` that `SafeCmd.start()`
@@ -2890,3 +2910,8 @@ to read the full benchmark output.
   hooks, a timeout, or environment overlays for the code inside it. A
   `scoped(catalogue=...)` scope also activates that catalogue for `sh.make()`
   inside the block.
+- **Standard-stream target:** a `StdioTarget`, naming where a child's stdout
+  or stderr goes: a pipe Cuprum reads, the parent's stream, a file, or a
+  descriptor the caller owns.
+- **Stdin stream:** a `StdinStream`, which feeds a child's stdin from an async
+  producer one chunk at a time.
