@@ -1526,12 +1526,18 @@ Resolving the codec is part of the same repair, because a bound can discard the
 mark that selected it. A `utf-8-sig` stream whose head is gone is plain UTF-8,
 and the surviving tail must be trimmed under that name rather than one that
 strips a mark; a `utf-16` or `utf-32` family name accepts no bytes at all
-without a mark, so a headless tail is resolved to the platform's native byte
-order, which is the rule the family decoder would itself have applied. Only a
-truncated capture resolves this way: while the mark survives it stays part of
-the retained bytes and the family codec strips it, so the caller is never
-handed a leading U+FEFF that a full capture does not report. The bytes the
-repair costs are counted as dropped, so the reported drop count stays exact.
+without a mark, so the tail is resolved the way the family decoder would itself
+resolve it. The stream's own opening bytes settle that whenever the mark was
+really there: the accumulator keeps the first few bytes of the stream beside the
+retained tail, so a mark a bound has since discarded still selects the byte
+order it announced. Only a stream that carried no mark at all — one written
+under a concrete `utf-16-le`/`utf-32-be` codec, or cut before any mark arrived —
+falls back to the platform's native order, which is the rule the family decoder
+would have applied to that stream too. Only a truncated capture resolves this
+way: while the mark survives it stays part of the retained bytes and the family
+codec strips it, so the caller is never handed a leading U+FEFF that a full
+capture does not report. The bytes the repair costs are counted as dropped, so
+the reported drop count stays exact.
 
 The repair covers exactly two families, so a bounded *text* capture is accepted
 only where one of them applies. UTF-8 announces its own continuation bytes and
@@ -1567,12 +1573,15 @@ single command the records are on `CommandResult.captures`. For a pipeline,
 `PipelineResult.captures` carries the final stage's records, and each interior
 stage's stderr records are on that stage's own `stages[i].captures`; interior
 stdout is relayed rather than captured, so it has no record. The record carries
-`total_bytes` (what the child wrote) beside `dropped_bytes` (what the bound
+`total_bytes` (what the drain received) beside `dropped_bytes` (what the bound
 discarded) and a `truncated` property derived from the two, so a caller can
 always tell a short stream from a shortened one and the two counts cannot
-disagree. `storage` distinguishes memory from file, `path` names the spill,
-`owned` says whether the run still must remove it, and `storage_failed` says
-the file is incomplete rather than merely short.
+disagree. A run whose reader stopped early — a timeout, say — has no way to
+count bytes the child wrote after the parent stopped reading, so the record
+describes the bytes the drain received rather than the bytes the child wrote.
+`storage` distinguishes memory from file, `path` names the spill, `owned` says
+whether the run still must remove it, and `storage_failed` says the file is
+incomplete rather than merely short.
 
 The sink seam is asynchronous, `absorb` and `finalize` included, because
 retention is the child's output and a file-backed capture cannot retain a chunk

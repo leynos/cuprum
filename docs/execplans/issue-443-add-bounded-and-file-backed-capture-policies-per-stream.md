@@ -276,9 +276,10 @@ Thresholds that trigger escalation when breached.
   every commit and resolved six conflicts: `weave` auto-resolved the run
   machinery against `main`'s unified `_prepare_stream_spawn`; the
   `_wait_for_streamed_process_exit` conflict was settled by keeping `main`'s
-  deletion and moving our `_reconcile_shielded` helper beside the split
-  post-exit module, so no duplicate definition survives; the migration guide's
-  capture section was appended to the 0.2.0 feature list rather than dropped by
+  deletion and moving the branch's `_reconcile_shielded` helper beside the
+  split post-exit module, so no duplicate definition survives; the migration
+  guide's capture section was appended to the 0.2.0 feature list rather than
+  dropped by
   the section renumbering; and the `pyproject.toml` dead-code entry points
   merged entry-by-entry. Backup branch `backup/issue443-pre-rebase-20261017`
   retains the pre-rebase tip.
@@ -596,6 +597,34 @@ Thresholds that trigger escalation when breached.
   before the gates: 184 cases across the seven capture-related modules, and
   `ruff check` / `ruff format --check` clean on every touched Python file.
   Date/Author: 2026-10-18, implementation agent.
+- [x] (2026-10-18) Clear the four findings of review round 12 in one commit.
+  Two were one claim stated in four places: `total_bytes` was described as what
+  the child wrote, but a run whose reader stopped early — a timeout, say — has
+  no way to count bytes the child wrote after the parent stopped reading. The
+  users' guide table cell, the design document's metadata paragraph, the
+  `CapturedStream.total_bytes` docstring, and `sh/results.py`'s `captures`
+  docstring now say "what the drain received", and the design document adds
+  the partial-run caveat that explains the distinction. The third was a real
+  design-document error about byte order: it said a headless UTF-16/UTF-32 tail
+  falls back to the platform's native order, but the accumulator retains the
+  stream's first `_BOM_MAX_BYTES` bytes in `_prefix` and `_bounded_settings`
+  passes them to `_mark_selected_codec` before `_native_codec` is consulted, so
+  a mark the bound discarded still selects the order it announced. Confirmed by
+  running the path: with `utf-16` configured and a big-endian mark in the
+  prefix, the tail decodes as big-endian. Native order now applies only to a
+  stream that carried no mark at all. The fourth was a vacuous assertion in
+  `test_a_fixed_width_encoding_realigns_the_retained_tail`: `text.endswith("")`
+  is true, so an accumulator that trimmed the whole tail away passed. It now
+  pins `final.payload == "b文c"`, which the arithmetic supports — the payload
+  is 10 bytes in both encodings, the bound leaves 7, the realignment drops one
+  byte and keeps six. Verified non-vacuous by mutation: changing the expected
+  value to `"文c"` failed both parametrizations with the real `"b文c"`; and the
+  old form was separately confirmed to pass 16/16 while `"a中b文c".endswith("")`
+  is `True`. The fourth finding's sibling sweep over "what the child wrote"
+  found no further false claims: the remaining hits describe synthetic drains
+  that did receive every byte, and the byte-unit claim in the
+  `capture_policy` module docstring is about what a bound measures, not about
+  what a partial run can count. Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -1638,11 +1667,12 @@ Thresholds that trigger escalation when breached.
   The cut is a real one: the properties are the *query* half of the options,
   deriving from fields that stay on the dataclass. Alternatives rejected: a
   `too-many-lines` suppression (the standing contract); re-exporting from
-  `cuprum/sh/_deprecated.py` instead (that is the module that imports us, and
-  the finding is that the *old* path must work); and moving `__post_init__`'s
-  validation out instead, which is the command half and would split one
-  constructor's contract across two modules. This reverses the 2026-10-14
-  refusal to move `resolved_capture` alone, on the ground it had to mirror
+  `cuprum/sh/_deprecated.py` instead (that is the module that imports this
+  one, and the finding is that the *old* path must work); and moving
+  `__post_init__`'s validation out instead, which is the command half and
+  would split one constructor's contract across two modules. This reverses the
+  2026-10-14 refusal to move `resolved_capture` alone, on the ground it had to
+  mirror
   `resolved_echo`; moving all four keeps that invariant. Recorded as a fifth
   split in the ADR-007 addendum. Date/Author: 2026-10-18, implementation agent;
   raised by review round 8.

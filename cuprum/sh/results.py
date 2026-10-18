@@ -95,10 +95,10 @@ class CommandResult:
         change ``exit_code`` or ``ok``.
     captures:
         One record per captured stream, in stdout-then-stderr order, saying
-        which policy the run applied, how many bytes the child wrote, how many
-        the policy discarded, and where the retained bytes are. Empty when the
-        run captured nothing. A file-backed record reports ``storage`` of
-        ``"file"``: its text is at ``path`` rather than on
+        which policy the run applied, how many bytes the drain received, how
+        many the policy discarded, and where the retained bytes are. Empty
+        when the run captured nothing. A file-backed record reports
+        ``storage`` of ``"file"``: its text is at ``path`` rather than on
         ``stdout``/``stderr``, which are ``None`` for that stream. The run
         removes the file before returning it unless the policy was built with
         ``keep_file=True``, so ``path`` is a locator for a kept spill and a

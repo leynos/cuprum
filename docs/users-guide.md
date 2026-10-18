@@ -722,7 +722,7 @@ stream, or that the payload is a file rather than text:
 | ---------------- | --------------------------------------------- |
 | `stream`         | `"stdout"` or `"stderr"`.                     |
 | `policy`         | `"full"`, `"bounded"`, or `"file_backed"`.    |
-| `total_bytes`    | What the child wrote, not what was kept.      |
+| `total_bytes`    | What the drain received, not what was kept.   |
 | `dropped_bytes`  | What the bound discarded. `0` for the others. |
 | `storage`        | `"memory"` or `"file"`.                       |
 | `path`           | The spill file, when the storage is a file.   |

@@ -235,9 +235,12 @@ class CapturedStream:
     policy:
         Which policy the run applied to ``stream``.
     total_bytes:
-        Bytes the child wrote to this stream, as read by the drain. For a
-        bounded capture this counts the dropped bytes too, so it is the size
-        of the stream rather than the size of what was retained.
+        Bytes the drain received from this stream. For a bounded capture this
+        counts the dropped bytes too, so it is the size of the stream rather
+        than the size of what was retained. A run that stopped reading early —
+        a timeout, say — cannot count bytes the child wrote afterwards, so
+        the field describes what reached the parent rather than every byte the
+        child wrote.
     dropped_bytes:
         Bytes discarded by the policy, and therefore the count absent from
         the retained text. Zero for a complete capture, and for a spilled one,
