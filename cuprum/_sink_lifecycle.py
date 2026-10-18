@@ -143,9 +143,14 @@ class _SinkBracket:
         outcome : sinks.SessionOutcome
             The terminal report for the run.
         """
+        session = self._take_session()
+        _close_sink_session(session, outcome=outcome)
+
+    def _take_session(self) -> sinks.OutputSession | None:
+        """Transfer the session out of the bracket exactly once."""
         with self._state_lock:
             session, self.session = self.session, None
-        _close_sink_session(session, outcome=outcome)
+        return session
 
     async def aclose(self, *, outcome: sinks.SessionOutcome) -> None:
         """Close a bounded run's session off-loop after its worker settles."""
@@ -164,44 +169,49 @@ class _SinkBracket:
         grace: float | None = None,
     ) -> None:
         """Schedule one serialized daemon close and wait at most *grace*."""
-        with self._state_lock:
-            session, self.session = self.session, None
+        session = self._take_session()
         if session is None:
             return
 
         finished = threading.Event()
         close_errors: list[BaseException] = []
-
-        def close_after_active_write() -> None:
-            """Keep terminal framing behind any worker write already in flight."""
-            try:
-                with self.writer_lock:
-                    session.close(outcome)
-            except BaseException as close_error:  # ruff: ignore[blind-except] - report every daemon close failure.
-                close_errors.append(close_error)
-            finally:
-                finished.set()
-
-        closer = threading.Thread(
-            target=close_after_active_write,
-            name="cuprum-output-session-close",
-            daemon=True,
-        )
         try:
+            closer = threading.Thread(
+                target=self._close_after_active_write,
+                args=(session, outcome, finished, close_errors),
+                name="cuprum-output-session-close",
+                daemon=True,
+            )
             closer.start()
         except BaseException:
             with self._state_lock:
                 self.session = session
             raise
-        wait_s = grace
-        if wait_s is None:
-            wait_s = (
-                _DELIVERY_DRAIN_GRACE_S
-                if self.delivery_grace_s is None
-                else self.delivery_grace_s
-            )
+        wait_s = self._close_grace(grace)
         if finished.wait(wait_s) and close_errors:
             raise close_errors[0]
+
+    def _close_grace(self, grace: float | None) -> float:
+        """Resolve the one bounded wait allowed for a session finalizer."""
+        if grace is None:
+            grace = self.delivery_grace_s
+        return _DELIVERY_DRAIN_GRACE_S if grace is None else grace
+
+    def _close_after_active_write(
+        self,
+        session: sinks.OutputSession,
+        outcome: sinks.SessionOutcome,
+        finished: threading.Event,
+        close_errors: list[BaseException],
+    ) -> None:
+        """Serialize session close after writes and report any close failure."""
+        try:
+            with self.writer_lock:
+                session.close(outcome)
+        except BaseException as close_error:  # ruff: ignore[blind-except] - report every daemon close failure.
+            close_errors.append(close_error)
+        finally:
+            finished.set()
 
 
 def _open_sink_session(

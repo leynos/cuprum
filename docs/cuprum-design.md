@@ -1472,6 +1472,11 @@ as undelivered if it must be abandoned. See
 [ADR-023](adr-023-bounded-output-delivery.md) for the delivery, ownership, and
 failure contract.
 
+Command and pipeline configuration keep their destination resolution and
+partial-setup cleanup local to their execution modules because each path owns
+different context and failure inputs. Shared session ownership and serialized
+close ordering remain in `_sink_lifecycle`.
+
 Users should be able to choose:
 
 - `echo=True, capture=True` – tee behaviour;

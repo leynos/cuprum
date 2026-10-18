@@ -25,14 +25,11 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 
-def _build_subprocess_execution(
-    cmd: SafeCmd,
+def _resolve_command_destinations(
     state: _ExecutionState,
-    *,
-    observation: _StageObservation,
     sink_bracket: _SinkBracket,
-) -> _SubprocessExecution:
-    """Bundle everything one command's execution needs, before it spawns."""
+) -> tuple[typ.IO[str], typ.IO[str]]:
+    """Resolve the command's stdout and stderr sinks through its bracket."""
     stdout_fallback = (
         state.context.stdout_sink
         if state.context.stdout_sink is not None
@@ -43,8 +40,24 @@ def _build_subprocess_execution(
         if state.context.stderr_sink is not None
         else sys.stderr
     )
-    stdout_destination = sink_bracket.resolve_destination(stdout_fallback)
-    stderr_destination = sink_bracket.resolve_destination(stderr_fallback)
+    return (
+        sink_bracket.resolve_destination(stdout_fallback),
+        sink_bracket.resolve_destination(stderr_fallback),
+    )
+
+
+def _build_subprocess_execution(
+    cmd: SafeCmd,
+    state: _ExecutionState,
+    *,
+    observation: _StageObservation,
+    sink_bracket: _SinkBracket,
+) -> _SubprocessExecution:
+    """Bundle everything one command's execution needs, before it spawns."""
+    stdout_destination, stderr_destination = _resolve_command_destinations(
+        state,
+        sink_bracket,
+    )
     _reject_contested_stdin(
         state.output.stdin,
         has_source=state.stdin_data is not None,

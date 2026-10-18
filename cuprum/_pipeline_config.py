@@ -254,30 +254,45 @@ def _prepare_pipeline_config(
             idle=idle,
         )
     except BaseException as run_error:
-        if delivery_worker is not None:
-            try:
-                delivery_worker.close(grace=0.0)
-            except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
-                _note_setup_cleanup_failure(
-                    run_error,
-                    "Output delivery worker cleanup",
-                    close_error,
-                )
+        _cleanup_failed_pipeline_setup(
+            output,
+            delivery_worker,
+            sink_bracket,
+            run_error,
+        )
+        raise
+
+
+def _cleanup_failed_pipeline_setup(
+    output: RunOutputOptions,
+    delivery_worker: _DeliveryWorker | None,
+    sink_bracket: _SinkBracket,
+    run_error: BaseException,
+) -> None:
+    """Release the delivery worker and sink acquired before setup failed."""
+    if delivery_worker is not None:
         try:
-            if output.delivery is None:
-                sink_bracket.close(outcome=_outcome_for_error(run_error))
-            else:
-                sink_bracket.close_bounded(
-                    outcome=_outcome_for_error(run_error),
-                    grace=0.0,
-                )
+            delivery_worker.close(grace=0.0)
         except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
             _note_setup_cleanup_failure(
                 run_error,
-                "Presentation sink cleanup",
+                "Output delivery worker cleanup",
                 close_error,
             )
-        raise
+    try:
+        if output.delivery is None:
+            sink_bracket.close(outcome=_outcome_for_error(run_error))
+        else:
+            sink_bracket.close_bounded(
+                outcome=_outcome_for_error(run_error),
+                grace=0.0,
+            )
+    except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
+        _note_setup_cleanup_failure(
+            run_error,
+            "Presentation sink cleanup",
+            close_error,
+        )
 
 
 def _resolve_pipeline_context(
