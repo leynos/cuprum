@@ -412,6 +412,98 @@ async def _await_started_write(blocking: _BlockingSpillFile) -> None:
     pytest.fail("the spill never began writing the file it created")
 
 
+class _BlockingCreate:
+    """A ``NamedTemporaryFile`` whose construction waits to be released.
+
+    The free function that makes a spill file runs on a worker, so the only way
+    to hold it is to block the thread. This factory signals from the worker that
+    the create is in flight, then waits, which puts a cancellation in the window
+    *before* the file exists rather than after.
+    """
+
+    def __init__(self, path: pathlib.Path) -> None:
+        """Bind the path the file will have and start holding the create."""
+        self.path = path
+        self.started = False
+        self._released = threading.Event()
+        self.file: _BlockingSpillFile | None = None
+
+    def __call__(self, **_: object) -> _BlockingSpillFile:
+        """Signal the create is in flight, wait to be released, then create."""
+        self.started = True
+        self._released.wait(30)
+        self.file = _BlockingSpillFile(self.path)
+        return self.file
+
+    def release(self) -> None:
+        """Let the blocked create make the file."""
+        self._released.set()
+
+
+async def _await_started_create(create: _BlockingCreate) -> None:
+    """Fail unless the worker enters the create before the deadline."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10.0
+    while loop.time() < deadline:
+        if create.started:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("the spill never began creating its file")
+
+
+def test_a_cancelled_create_still_leaves_cleanup_a_file_to_remove(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation while the file is being created must not orphan it.
+
+    The create is the first thing a spill does, and ``delete=False`` makes the
+    file ownerless the instant it exists. A cancellation that lands while the
+    worker is still inside the create is therefore the narrowest orphan window
+    there is: the file is made after the caller has already asked to stop, so
+    no result can ever name it. Publishing the handle in a separate step after
+    the create would leave it unreachable to teardown; publishing it inside the
+    same shielded step is what closes the window.
+
+    ``keep_file=True`` is deliberate, exactly as in the write-window case: the
+    caller's exemption is for a file the run completed and handed over, not one
+    a cancelled create left behind.
+    """
+    create = _BlockingCreate(tmp_path / "cancelled-create")
+    monkeypatch.setattr(
+        "cuprum._capture_spill_io.NamedTemporaryFile",
+        create,
+    )
+    accumulator = _FileAccumulator(
+        policy=_spilling_to(tmp_path, threshold=1, keep_file=True),
+        stream="stdout",
+        settings=_TEXT,
+    )
+
+    async def cancel_the_create() -> None:
+        """Cancel the absorb while the worker is still inside the create."""
+        task = asyncio.create_task(accumulator.absorb(_PAYLOAD))
+        await _await_started_create(create)
+        task.cancel()
+        create.release()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_the_create())
+
+    assert create.file is not None, (
+        "the case is vacuous unless the released create actually made a file"
+    )
+    assert list(tmp_path.iterdir()), (
+        "this case needs the created file to still be on disk before cleanup"
+    )
+    asyncio.run(accumulator.cleanup())
+    assert not list(tmp_path.iterdir()), (
+        "teardown must remove a file whose create was cancelled; found "
+        f"{list(tmp_path.iterdir())}"
+    )
+
+
 def test_a_cancelled_spill_leaves_cleanup_a_file_to_remove(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

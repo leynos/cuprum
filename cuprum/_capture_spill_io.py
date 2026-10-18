@@ -57,13 +57,14 @@ import typing as typ
 from tempfile import NamedTemporaryFile
 
 from cuprum._capture_types import SpillHandle
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _run_shielded_step, _shielded_cleanup
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = [
     "_SpillIo",
+    "_create_published_spill",
     "_create_spill",
     "_publish_spill",
 ]
@@ -79,11 +80,11 @@ async def _run_off_loop[**P, T](
     Returns
     -------
     T
-        Whatever *call* returned. A failure the call raised propagates
-        unchanged, because each caller has its own recovery and they differ.
-        A cancellation arriving while the worker runs is re-raised only once
-        the call has finished, and any failure alongside it is dropped: the
-        capture is being torn down, and a cancellation always wins.
+        Whatever *call* returned, including ``None`` for the calls — a flush,
+        a close, an unlink — that produce nothing. A failure the call raised
+        propagates unchanged, because each caller has its own recovery and they
+        differ. A cancellation arriving while the worker runs is re-raised only
+        once the call has finished, so no write is left in flight behind it.
     """
     return await _shielded_cleanup(asyncio.to_thread(call, *args, **kwargs))
 
@@ -228,3 +229,58 @@ def _publish_spill(file: typ.IO[bytes]) -> SpillHandle:
         A provisional handle for *file*, owned by the run.
     """
     return SpillHandle(path=pathlib.Path(file.name), file=file, keep=False)
+
+
+async def _create_published_spill(
+    io: _SpillIo,
+    directory: pathlib.Path | str | None,
+    adopt: cabc.Callable[[typ.IO[bytes]], None],
+) -> typ.IO[bytes]:
+    """Create a spill file and hand it to *adopt* before any cancellation escapes.
+
+    Creating and publishing are one step, not two, because the window between
+    them is not observable by the caller that would have to close it. A
+    cancellation arriving while the create runs is re-raised only after the
+    worker has finished, so by then the ``delete=False`` file exists; if the
+    publish were a separate ``await``, the cancellation would have been raised
+    first and the file would belong to nobody. Publishing inside this same
+    shielded unit means *adopt* has always run by the time this coroutine
+    returns, fails, or is cancelled.
+
+    Parameters
+    ----------
+    io : _SpillIo
+        The capture's ordered off-loop seam, which runs the create.
+    directory : pathlib.Path | str | None
+        Where to create the file.
+    adopt : cabc.Callable[[typ.IO[bytes]], None]
+        Called with the new file before this step can end in any way. It must
+        not raise: it is the last thing standing between a cancellation and an
+        unreachable file.
+
+    Returns
+    -------
+    typ.IO[bytes]
+        The open spill file the create produced, positioned at the start.
+
+    The two ways this step can end without returning re-raise what the step
+    reported: an ``OSError`` from the create, which found nothing to hand on,
+    or the caller's cancellation, raised once *adopt* has the file. A
+    cancellation that arrived alongside a create failure wins over it, as it
+    does through the rest of the spill seam; the failed create left no file,
+    so there is nothing for teardown to remove either way.
+    """
+    step = await _run_shielded_step(io.run(_create_spill, directory))
+    # Adopt first, whatever else happened: a cancellation is reported only
+    # after the worker finished, so a file that exists here is one teardown
+    # must be able to reach even though this coroutine is about to raise.
+    if step.value is not None:
+        adopt(step.value)
+    if step.failure is not None:
+        raise step.failure
+    if step.cancellation is not None:
+        raise step.cancellation
+    # Unreachable: the primitive reports an absent value only when the step
+    # failed or was cancelled, and both have just raised. The cast states that
+    # for the type checker rather than adding a branch no input can reach.
+    return typ.cast("typ.IO[bytes]", step.value)

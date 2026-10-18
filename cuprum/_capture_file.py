@@ -37,7 +37,11 @@ import pathlib
 import typing as typ
 
 from cuprum._capture_decode import _DecodeSettings, _render
-from cuprum._capture_spill_io import _create_spill, _publish_spill, _SpillIo
+from cuprum._capture_spill_io import (
+    _create_published_spill,
+    _publish_spill,
+    _SpillIo,
+)
 from cuprum._capture_types import CaptureFinal, SpillHandle
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import _emit_capture_event
@@ -95,20 +99,18 @@ class _FileAccumulator:
         # *file*, so this capture's own calls cannot be reordered.
         self._io = _SpillIo()
         self._buffer: bytearray | None = bytearray()
-        # Whichever type `_create_spill` hands back, which is the temporary-file
-        # wrapper rather than the buffered file it forwards to; the two
-        # annotations must agree or every assignment between them fails the
-        # typechecker.
+        # Whichever type `_create_spill` hands back — the temporary-file wrapper,
+        # not the buffered file it forwards to; the two annotations must agree
+        # or every assignment between them fails the typechecker.
         self._file: typ.IO[bytes] | None = None
-        # One handle for the life of the capture, not one per query: the
-        # normal path closes it from the finalized result while teardown may
-        # also close it from the sink, and a fresh object each time would give
-        # those two paths independent ``closed`` flags.
+        # One handle for the capture's life, not one per query: the finalized
+        # result closes it while teardown may also close it from the sink, and
+        # a fresh object each time would give those paths independent flags.
         self._handle: SpillHandle | None = None
-        # The handle while it is still provisional: published so teardown can
-        # remove a half-made file, and not yet carrying the caller's keep
+        # The same handle while it is still provisional: published so teardown
+        # can remove a half-made file, and not yet carrying the caller's keep
         # policy. Cleared by `_promote_provisional_spill` once the prefix has
-        # really reached the file.
+        # landed.
         self._provisional: SpillHandle | None = None
         self._path: pathlib.Path | None = None
         self._total = 0
@@ -179,11 +181,9 @@ class _FileAccumulator:
         retrying, so a full or read-only directory costs one syscall rather
         than one per chunk.
 
-        The handle is published to :attr:`_handle` before the prefix is
-        written, so a cancellation during those awaits still leaves teardown a
-        way to remove what was created. See
-        :func:`~cuprum._capture_spill_io._publish_spill` for why the provisional
-        handle is not deferrable. The caller's keep policy is applied by
+        The handle is published before the prefix is written, so a cancellation
+        during those awaits still leaves teardown a way to remove what was
+        created. The caller's keep policy is applied by
         :meth:`_promote_provisional_spill` once the spill has succeeded, since
         only a file that took the prefix has earned it.
         """
@@ -191,7 +191,9 @@ class _FileAccumulator:
         if buffered is None:
             return
         try:
-            file = await self._publish_provisional_spill(self._policy.directory)
+            file = await _create_published_spill(
+                self._io, self._policy.directory, self._adopt_spill
+            )
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
@@ -219,15 +221,16 @@ class _FileAccumulator:
             )
         )
 
-    async def _publish_provisional_spill(
-        self,
-        directory: pathlib.Path | str | None,
-    ) -> typ.IO[bytes]:
-        """Create the spill file and publish a handle cleanup can always reach."""
-        file = await self._io.run(_create_spill, directory)
-        self._provisional = _publish_spill(file)
-        self._handle = self._provisional
-        return file
+    def _adopt_spill(self, file: typ.IO[bytes]) -> None:
+        """Publish *file*'s handle to both slots teardown reads.
+
+        Called from inside the shielded create, before a cancellation can be
+        raised; that is why it exists as one callable rather than two
+        assignments at the call site.
+        """
+        handle = _publish_spill(file)
+        self._handle = handle
+        self._provisional = handle
 
     def _promote_provisional_spill(self) -> None:
         """Give the published handle the keep policy the spill has now earned."""
