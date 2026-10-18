@@ -187,7 +187,10 @@ class _FileAccumulator:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
         try:
-            await self._io.run(_write_to_spill, handle, buffered)
+            # ``bytes`` rather than the live buffer: the worker must see the
+            # prefix as it stood when the spill was decided, not whatever a
+            # later read appends before the worker is scheduled.
+            await self._io.run(_write_to_spill, handle, bytes(buffered))
             await self._io.run(_flush_spill, handle)
         except OSError as exc:
             await self._discard_failed_spill(handle, exc)
