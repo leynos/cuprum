@@ -569,6 +569,33 @@ Thresholds that trigger escalation when breached.
   test-function-name set is identical to the deleted module's and the same 28
   cases pass, so the split is behaviour-preserving rather than merely
   count-preserving. Date/Author: 2026-10-18, implementation agent.
+- [x] (2026-10-18) Clear the six findings of review round 11, in five commits
+  (`a9d355339`, `c99c4fad5`, `008c46b15`, `697af96bb`, `3eba9cb01`). One was a
+  production defect: a cancellation landing inside `capture.absorb` now ends
+  the drain like a cancelled read does, because a file-backed absorb awaits a
+  shielded worker write and the old loop only caught cancellation around
+  `stream.read`; an escaped one skipped `_finish_drain`, and the consumer
+  result was replaced with an empty capture reporting `total_bytes=0` against a
+  spill file that held the bytes. The regression gates the append's worker
+  write, cancels inside it, and asserts the partial record; deleting the new
+  `except` makes it fail with `CancelledError`. The blocking spill file and the
+  drain suite now share one double through
+  `cuprum/unittests/_blocking_spill_file.py`, which gates named writes and
+  reports which one is held, so the case can wait for the append rather than
+  for "some write" — the first write is the spill transition, a later one is an
+  append, and they are different windows. The other findings were the read-back
+  recovery promise in the users' and migration guides (the file follows
+  `keep_file`, not the failure), two test comments that misstated their own
+  arithmetic (a UTF-16 surrogate pair is two two-byte units; the seam payload
+  is twice the bound, not five times), and the duplicate spill witness, now
+  extended with an optional directory so the cleanup suite can use the shared
+  one. Finding 1 also asked for the execution plan's timeout obligation to be
+  corrected; O5 already states that a `keep_file=False` run leaves no file at
+  the reported path on every outcome, and finding 15 independently said to
+  leave the plan unchanged, so it was verified and not edited. Locally verified
+  before the gates: 184 cases across the seven capture-related modules, and
+  `ruff check` / `ruff format --check` clean on every touched Python file.
+  Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -1236,6 +1263,20 @@ Thresholds that trigger escalation when breached.
   `build-limits-recover`, which is the operator's job. The non-Rust gates were
   run instead and all passed; the Rust leaves stay unobserved until admission
   recovers. Date/Author: 2026-10-18, implementation agent.
+
+- Observation (review round 11, the mutation probe has to reach the window it
+  names): the first form of the new drain regression released the spill's own
+  write (write #1) and then waited for the next write, expecting the append to
+  be gated. The gate held nothing, and the case failed after ten seconds with
+  "the spill never held its write 1 open" — the double was created with
+  `block_on=(2,)`, so write #1 returned unblocked and write #2's event was the
+  only one ever waited on. The lesson is in the failure text: because the
+  double exposes *which* write it is holding rather than a bare "started" flag,
+  the case could say exactly which write it never saw. A second pitfall sits
+  beside it: the shielded write completes even when the awaiting coroutine is
+  cancelled, so the assertion that proves the fix is that the *returned* record
+  counts the chunk, not that the file contains it. Date/Author: 2026-10-18,
+  implementation agent.
 
 - Observation (review round 10 follow-up, a refused probe is cached): the
   `test_pinned_doctest_route_rejects_a_warning` failure that survived three
