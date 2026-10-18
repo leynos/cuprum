@@ -820,7 +820,8 @@ for, and for what it does with a failure, without a child process, a `PATH`
 stub, a handwritten port type, or a bypass of the catalogue check. This is
 capability work for adopters: it removes the last reason a test runner
 substitutes the process rather than the call. See
-[RFC 0001](rfcs/0001-execution-interception.md).
+[RFC 0001](rfcs/0001-execution-interception.md). The adopter-parity issue list
+for leynos/lading phase 5 is tracked separately in phase 12.
 
 ### 11.1. Make the spawn injectable without changing a default run
 
@@ -992,7 +993,94 @@ questions" and §"Recommendation".
   - Success: the users' guide and the changelog state the settled behaviour
     with its rationale, or the question is closed as a documented non-goal.
 
-## 12. Opt-in process-group ownership (issue `#438`)
+## 12. Adopter parity (leynos/lading phase 5)
+
+Idea: issues #434 through #445 define the acceptance list for
+[leynos/lading](https://github.com/leynos/lading) phase 5. Assessment §6.7 maps
+each issue to the workaround Lading would otherwise carry. This step gives
+adopters one place to see release intent and current GitHub status. GitHub has
+deleted #439, so its original title and release cannot be verified; its row
+tracks recovery of that acceptance record. Related downstream work includes the
+capture issue [leynos/lading#251](https://github.com/leynos/lading/issues/251)
+and the stream-relay note
+[leynos/lading#253](https://github.com/leynos/lading/issues/253).
+
+### 12.1. Adopter parity
+
+This step tracks the issues, intended releases, and linked pull requests. It
+does not replace detailed execplans or the phase work that delivers each
+capability.
+
+- [x] 12.1.1. Add explicit environment replacement and unset policies
+  ([#434](https://github.com/leynos/cuprum/issues/434)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#466](https://github.com/leynos/cuprum/pull/466).
+  - See 1.2.3. The delivered 0.2.0-beta1 environment policies are the base for
+    Lading's remaining migration work.
+- [x] 12.1.2. Add an opt-in broken-pipe policy for echoed output
+  ([#435](https://github.com/leynos/cuprum/issues/435)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#503](https://github.com/leynos/cuprum/pull/503).
+  - See the Lading stream-relay note
+    [leynos/lading#253](https://github.com/leynos/lading/issues/253).
+- [x] 12.1.3. Support bounded output delivery off the execution loop
+  ([#436](https://github.com/leynos/cuprum/issues/436)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#622](https://github.com/leynos/cuprum/pull/622).
+- [x] 12.1.4. Expose an owned handle for running command control
+  ([#437](https://github.com/leynos/cuprum/issues/437)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#613](https://github.com/leynos/cuprum/pull/613).
+- [x] 12.1.5. Add opt-in process-group and descendant cleanup
+  ([#438](https://github.com/leynos/cuprum/issues/438)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#583](https://github.com/leynos/cuprum/pull/583); see phase 13 for the
+    detailed process-group work.
+- [ ] 12.1.6. Recover the deleted issue #439 acceptance record for adopters
+  ([#439](https://github.com/leynos/cuprum/issues/439)).
+  - Release: unavailable; GitHub returns HTTP 410 for the deleted issue.
+  - Status: deleted; no title, milestone, or linked pull request is available.
+- [x] 12.1.7. Bind catalogue identity to a validated executable path
+  ([#440](https://github.com/leynos/cuprum/issues/440)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#571](https://github.com/leynos/cuprum/pull/571).
+- [x] 12.1.8. Report terminal execution outcomes after spawn failure or
+  cancellation ([#441](https://github.com/leynos/cuprum/issues/441)).
+  - Release: not yet scheduled; no GitHub milestone is set. The settlement
+    contract is documented in the 0.2.0-beta2 [changelog](../CHANGELOG.md).
+  - Status: delivered by merged PR
+    [#575](https://github.com/leynos/cuprum/pull/575).
+- [x] 12.1.9. Add shared opt-in redaction for telemetry projections
+  ([#442](https://github.com/leynos/cuprum/issues/442)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#625](https://github.com/leynos/cuprum/pull/625).
+- [ ] 12.1.10. Add bounded and file-backed capture policies per stream
+  ([#443](https://github.com/leynos/cuprum/issues/443)).
+  - Release: not yet scheduled.
+  - Status: in progress — draft PR
+    [#635](https://github.com/leynos/cuprum/pull/635).
+- [x] 12.1.11. Provide a typed bytes-result mode for command output
+  ([#444](https://github.com/leynos/cuprum/issues/444)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#572](https://github.com/leynos/cuprum/pull/572).
+- [x] 12.1.12. Support streaming stdin and explicit file redirection
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
+  - Release: not yet scheduled.
+  - Status: delivered by merged PR
+    [#511](https://github.com/leynos/cuprum/pull/511).
+  - See the 0.2.0 direct stdin section and issue
+    [#30](https://github.com/leynos/cuprum/issues/30) for the delivered
+    stdin foundation.
+
+## 13. Opt-in process-group ownership (issue `#438`)
 
 Idea: a run that terminates its direct child can leave the child's descendants
 holding inherited pipes open, so a timed-out capture waits out its grace window
@@ -1003,14 +1091,14 @@ reach end-of-file, and the guarantee could be stated precisely: the group the
 run created is terminated, descendants that leave it are not, and no caller who
 does not opt in is affected. See [ADR-021](adr-021-process-group-ownership.md).
 
-### 12.1. Make group ownership a policy on the execution context
+### 13.1. Make group ownership a policy on the execution context
 
 This step answers whether the spawn argument can be carried by the existing
 per-call `ExecutionContext` without changing anything a caller does not ask
 for. Its outcome is the vocabulary every later task in this phase depends on: a
 policy with an unchanged default and one opt-in member.
 
-- [x] 12.1.1. Add the `ProcessGroupPolicy` enum with `INHERIT` and
+- [x] 13.1.1. Add the `ProcessGroupPolicy` enum with `INHERIT` and
   `OWN_GROUP`, and add
   `process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT` to
   `ExecutionContext`.
@@ -1018,67 +1106,67 @@ policy with an unchanged default and one opt-in member.
     builds the same spawn arguments as before, and existing contexts,
     pipelines, and `ExecutionContext` equality are unaffected by the new
     field.
-- [x] 12.1.2. Carry the policy from the context onto the per-spawn argument
+- [x] 13.1.2. Carry the policy from the context onto the per-spawn argument
   bundle used by single commands.
-  - Requires 12.1.1.
+  - Requires 13.1.1.
   - Success: a `SafeCmd` run and a `SafeCmd.lines()` run built with
     `OWN_GROUP` both reach the spawn with the policy, and neither reads the
     process-global environment nor the concurrent-run configuration for it.
 
-### 12.2. Spawn owned groups and signal them on teardown
+### 13.2. Spawn owned groups and signal them on teardown
 
 This step answers whether the existing teardown lifecycle can deliver the group
 signal without losing any of its cancellation guarantees. Its outcome is the
 behaviour the phase's acceptance criteria measure.
 
-- [x] 12.2.1. Derive the spawn keyword from the policy in one shared helper:
+- [x] 13.2.1. Derive the spawn keyword from the policy in one shared helper:
   no keyword for `INHERIT`, `start_new_session=True` for `OWN_GROUP` on POSIX,
   and a `ValueError` naming the option and the platform for `OWN_GROUP` on
   Windows.
-  - Requires 12.1.2.
+  - Requires 13.1.2.
   - Success: the helper is the only place either spawn site decides the
     keyword, a Windows `OWN_GROUP` run fails before any child is created, and
     `INHERIT` on every platform is byte-identical to the current spawn.
-- [x] 12.2.2. Apply the derived keyword at the direct-command spawn and at
+- [x] 13.2.2. Apply the derived keyword at the direct-command spawn and at
   every pipeline stage spawn, and record the ownership each spawn produced
   alongside the process it belongs to.
-  - Requires 12.2.1.
+  - Requires 13.2.1.
   - Success: a pipeline's stages are each their own group leader, a partial
     spawn failure tears down exactly the groups it started, and teardown reads
     the recorded ownership rather than re-deriving it.
-- [x] 12.2.3. Signal the owned group with `os.killpg` in the existing
+- [x] 13.2.3. Signal the owned group with `os.killpg` in the existing
   two-phase teardown, keeping the `is_done()` short-circuit, the grace period,
   the `SIGKILL` escalation, and the shielded cleanup unchanged.
-  - Requires 12.2.2.
+  - Requires 13.2.2.
   - Success: timeout, cancellation, fail-fast, and partial-spawn teardown all
     terminate an owned group; a repeated cancellation during the grace window
     still ends in the escalation; and an already-exited child produces no
     error on either policy.
 
-### 12.3. Prove the guarantee and its limits
+### 13.3. Prove the guarantee and its limits
 
 This step answers whether the phase's promise survives contact with a real
 grandchild, and whether the documentation states the limits as precisely as the
 implementation enforces them.
 
-- [x] 12.3.1. Cover a child that spawns a grandchild which ignores `SIGTERM`
+- [x] 13.3.1. Cover a child that spawns a grandchild which ignores `SIGTERM`
   and retains an inherited pipe, asserting the group is terminated, the pipe is
   released, and an unrelated process is untouched.
-  - Requires 12.2.3.
+  - Requires 13.2.3.
   - Success: the test observes process liveness by targeted identifier rather
     than by group, never signals a group the test process belongs to, and
     fails without the opt-in.
-- [x] 12.3.2. Cover the pipeline paths — a stage whose descendant holds a pipe,
+- [x] 13.3.2. Cover the pipeline paths — a stage whose descendant holds a pipe,
   a partial startup failure, and an already-exited stage — and repeat
   cancellation during the grace window.
-  - Requires 12.2.3.
+  - Requires 13.2.3.
   - Success: each path terminates the groups it started and leaves no task or
     descriptor behind, and the already-exited case is a no-op.
-- [x] 12.3.3. Document the policy in the migration guide, the changelog, and
+- [x] 13.3.3. Document the policy in the migration guide, the changelog, and
   the users' guide, stating the POSIX semantics (the child leads a new session
   and process group, `PGID == PID`), the Windows refusal and its reason, and
   the limitation that a descendant which calls `setsid()` escapes the group.
-  - Requires 12.3.1.
+  - Requires 13.3.1.
   - Success: every documented example is executable, the migration guide
     states that the feature is opt-in with an unchanged default, and the
     escape-the-group limitation is stated as a limitation rather than a
