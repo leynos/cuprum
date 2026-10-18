@@ -33,9 +33,12 @@ After this change a caller can do all of the following:
 2. Bound a stream to its most recent N bytes — a tail — and read back exactly
    how many bytes were dropped, on which stream, with the retained text never
    ending in a half-decoded multi-byte code point.
-3. Spill a stream to a temporary file once it exceeds a threshold, reading
-   after the run from a path the result reports, with the file owned and
-   deterministically removed by the library unless the caller asked to keep it.
+3. Spill a stream to a temporary file once it exceeds a threshold, with the
+   path reported on the record so the caller can see where the spill went. The
+   file is owned and deterministically removed by the library unless
+   `keep_file=True`, which is the only setting that leaves it in place for the
+   caller to read after the run; otherwise the reported path records where the
+   stream was spilled, and no longer resolves once the run has settled.
 4. Configure stdout and stderr independently, to different policies, in the
    same way `echo_stdout` and `echo_stderr` already override `echo`.
 5. Observe truncation and spill through an opt-in, payload-free event channel,
@@ -83,9 +86,15 @@ escalation, not a workaround.
   central acceptance criterion of issue #443 and is the reason the accumulator
   is driven from `_deliver_chunk`'s existing capture step rather than anywhere
   near the relay.
-- **`stdout`/`stderr` stay `str | None`.** File-backed capture reports `None`
-  there and puts the path in `captures`; the public type contract is not
-  widened to a union with a handle type.
+- **`stdout`/`stderr` stay `str | None`.** The public type contract is not
+  widened to a union with a handle type, and a file-backed stream puts its path
+  in `captures` rather than in `stdout`/`stderr`. `None` there means this
+  stream's payload did not survive as text: a file-backed stream reports `None`
+  only once it has actually spilled, since below the threshold it is still
+  buffered on the heap and returns its complete text. A spill whose file could
+  not be created is the other `None`-free case — it stays on the heap, so the
+  text is returned and the record reports `storage="memory"` beside
+  `storage_failed=True`.
 - **Byte-exact mode reports the same capture metadata, but reads a spill back.**
   `BytesCommandResult` carries the same keyword-only `captures` tuple as
   `CommandResult`, and `BytesPipelineResult.captures` reads the final stage, so
@@ -1683,6 +1692,29 @@ Thresholds that trigger escalation when breached.
   duplication is the intended prologue of a deliberate split. Date/Author:
   2026-10-18, implementation agent; raised by review round 10 follow-up.
 
+- Decision: correct four prose claims about spill readability, rather than
+  changing the removal behaviour to match the prose. Rationale: the file's
+  lifetime is owned by the policy, and `keep_file=True` is the documented way
+  to hand it over. Making every failed read-back keep its file would leave
+  debris in the temporary directory precisely when the run is least able to
+  account for it, and it would make `keep_file` mean two different things
+  depending on a failure the caller did not ask for. The claims were wrong, not
+  the cleanup: the design doc's "left where it is for the caller to read", the
+  ExecPlan's post-run path promise, its unqualified `None` claim for a
+  file-backed stream, and O9's conflation of the default with the
+  `capture=False` opt-out. Date/Author: 2026-10-18, implementation agent;
+  raised by review round 10 follow-up.
+
+- Decision: name `capture_stdout`/`capture_stderr` in the redirection refusal
+  rather than only the `capture` shorthand. Rationale: the rule reads the
+  *resolved* per-stream policy, so `capture=False` is not always a remedy. With
+  `capture_stdout=FullCapture()` it is already false and the field is what
+  still asks for the pipe, which made the old message an instruction that
+  changed nothing. The message keeps the shorthand as the alternative for a
+  stream whose field is unset, so both the shorthand-only and the field-only
+  caller have a correct next step. Date/Author: 2026-10-18, implementation
+  agent; raised by review round 10 follow-up.
+
 ## Outcomes & retrospective
 
 Delivered: capture is a per-stream policy. `RunOutputOptions` gained
@@ -1915,10 +1947,17 @@ satisfied by a field that takes a positional slot, and the type-hint assertion
 `hints["captures"] == tuple[CapturedStream, ...]` proves the annotation
 resolves at runtime rather than being a string. The resolution half is measured
 by `test_capture_resolution_matrix`'s `inherit-true` and `inherit-false` rows.
-Remaining at M3: that a run with no capture configured still produces empty
-`captures` and complete `stdout`/`stderr` text end to end. Non-vacuity: the
-test constructs a seven-positional `CommandResult` and reads the bound value
-back, so a shifted slot is detected rather than assumed.
+Remaining at M3: the end-to-end halves, which are two distinct cases and must
+not be stated as one. A run left at the defaults (`RunOutputOptions()`, no
+capture policy named) resolves both streams to `FullCapture()` and so ends with
+two `full`/`memory` records *and* complete `stdout`/`stderr` text; that is the
+default this change promised to preserve. A run with `capture=False` ends with
+`captures == ()` and `stdout`/`stderr` both `None`, because no stream was
+captured at all. The empty-tuple case is therefore the opt-out, not the default
+— conflating the two would make O9's "the default is unchanged" claim
+unfalsifiable. Non-vacuity: the test constructs a seven-positional
+`CommandResult` and reads the bound value back, so a shifted slot is detected
+rather than assumed.
 
 Axioms relied on (not verified here, treated as given): CPython's
 `tempfile.NamedTemporaryFile` creates a file at the returned `name` and

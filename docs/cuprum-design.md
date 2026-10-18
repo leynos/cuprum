@@ -1601,14 +1601,18 @@ a `CaptureEvent` and name the error's class rather than its message, because
 the event channel's consumers treat fields as low-cardinality labels.
 
 A failed *read-back*, which only byte mode performs, reports `storage_failed`
-too: the record's payload is absent, and the file is left where it is for the
-caller to read. A failed *removal* is the one route that sets no flag. Cleanup
-runs on the way out of every run, including ones already carrying the caller's
-own timeout or cancellation, and a failure to delete a temporary file must not
-replace either, so the unlinking call absorbs its own error. The three
-retention routes report `storage_write_failed`, `storage_flush_failed`, and
-`storage_read_failed`; the removal route is silent because its failure changes
-nothing the caller can observe but the presence of the file.
+too, and the record's payload is absent. The file follows the policy rather
+than the failure: it is left in place only under `keep_file=True`, which is the
+one setting that hands it to the caller, and is otherwise removed by the same
+cleanup every settled run performs — so the record's path records where the
+spill went, not a location the caller can still read. A failed *removal* is the
+one route that sets no flag. Cleanup runs on the way out of every run,
+including ones already carrying the caller's own timeout or cancellation, and a
+failure to delete a temporary file must not replace either, so the unlinking
+call absorbs its own error. The three retention routes report
+`storage_write_failed`, `storage_flush_failed`, and `storage_read_failed`; the
+removal route is silent because its failure changes nothing the caller can
+observe but the presence of the file.
 
 Spill cleanup is a pair of steps with one owner. The run's result-construction
 site closes the handle every settled drain reports, which removes the file
