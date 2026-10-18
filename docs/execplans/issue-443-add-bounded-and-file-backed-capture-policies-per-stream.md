@@ -1204,22 +1204,26 @@ Thresholds that trigger escalation when breached.
   implementation agent; raised by review.
 
 - Decision: continue past the scope tolerance rather than stopping at the
-  30-tracked-file / 2500-net-line trigger. Rationale: measured against
-  `origin/main` from the merge base `304779c25`, the branch changes 109 tracked
-  files and nets 10826 lines (11950 added, 1124 deleted), so both thresholds
-  are breached several times over. The tolerance exists to catch a task that
-  has quietly become a different task; here the extra scope is the feature
-  itself plus the tests and documentation that witness it. Every acceptance
-  criterion in issue #443 needs its own module, unit suite, behavioural
-  scenario, or design prose, and the source plan's four tasks already enumerate
-  work of this shape. Stopping would leave a half-delivered API — policies
-  declared but not threaded through the single-command, pipeline, `lines()`,
-  and byte-exact paths — which is a worse outcome than a large branch that
-  passes every gate. The plan defines no approver to escalate to, so the
-  decision is recorded here rather than referred elsewhere; the individual
-  splits that kept each file under the 400-line cap are entries of their own in
-  this log and in ADR-007's addenda. Date/Author: 2026-10-18, implementation
-  agent; raised by review.
+  30-tracked-file / 2500-net-line trigger. Rationale: measured against the
+  rebased base `origin/main` at `d93df9563`, the branch changes 112 tracked
+  files and nets 11121 lines (12265 added, 1144 deleted), so both thresholds
+  are breached several times over. That figure was re-derived for the rebase.
+  Against the pre-rebase merge base `304779c25` the same branch measured 109
+  files and 10826 net lines (11950 added, 1124 deleted); that measurement now
+  describes the history it was taken from rather than the branch as it stands,
+  and it is recorded here dated rather than carried forward. The tolerance
+  exists to catch a task that has quietly become a different task; here the
+  extra scope is the feature itself plus the tests and documentation that
+  witness it. Every acceptance criterion in issue #443 needs its own module,
+  unit suite, behavioural scenario, or design prose, and the source plan's four
+  tasks already enumerate work of this shape. Stopping would leave a
+  half-delivered API — policies declared but not threaded through the
+  single-command, pipeline, `lines()`, and byte-exact paths — which is a worse
+  outcome than a large branch that passes every gate. The plan defines no
+  approver to escalate to, so the decision is recorded here rather than
+  referred elsewhere; the individual splits that kept each file under the
+  400-line cap are entries of their own in this log and in ADR-007's addenda.
+  Date/Author: 2026-10-18, implementation agent; raised by review.
 
 ## Outcomes & retrospective
 
