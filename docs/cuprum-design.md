@@ -1574,6 +1574,24 @@ disagree. `storage` distinguishes memory from file, `path` names the spill,
 `owned` says whether the run still must remove it, and `storage_failed` says
 the file is incomplete rather than merely short.
 
+The sink seam is asynchronous, `absorb` and `finalize` included, because
+retention is the child's output and a file-backed capture cannot retain a chunk
+without writing to disk. A synchronous seam would force that write onto the
+run's event loop, where it delays the child's other stream, the deadline, and
+cancellation for as long as the filesystem takes. File-backed storage therefore
+runs every blocking call on a worker thread through `cuprum._capture_spill_io`,
+which serializes one accumulator's calls with a lock: `asyncio.to_thread` alone
+starts a separate worker per call, so the buffered prefix, the appends, the
+flush, and the byte-mode read-back could otherwise reach the file in
+executor-scheduling order rather than the order the child wrote. Each call is
+shielded, so a drain cancelled while a worker write is in flight waits for that
+write before teardown closes and unlinks the file underneath it. The two
+in-memory policies answer without suspending, which costs a coroutine step per
+chunk and keeps one protocol for the drain rather than a policy test between
+two. The leaf module and the protocol change it serves are recorded in the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-10-18.
+
 A storage failure is absorbed rather than raised: a failure to retain output is
 not a failure of the command that produced it, so the child is still reaped and
 the caller still receives a result. A failed *creation* leaves the stream on
@@ -1600,6 +1618,8 @@ which is the only path that reaches a drain cancelled mid-await: such a drain
 re-raises without finalizing, so no result is built and the accumulator is the
 last reference to the file. `SpillHandle.close` is idempotent and both callers
 run it under `_shielded_cleanup`, so the two paths agree rather than racing.
+The handle's own close and unlink are blocking filesystem calls, so they too
+run on a worker rather than on the loop that is unwinding the run.
 `keep_file=True` is the sole exception: the descriptor is closed and the file
 is left for the caller.
 

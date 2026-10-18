@@ -2242,7 +2242,7 @@ relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
 read/echo/buffer loop behind both consume variants. It reads in that configured
-size, extends the capture buffer with the **raw** chunk when capturing, echoes
+size, awaits `CaptureSink.absorb` with the **raw** chunk when capturing, echoes
 each chunk to the configured sink when echoing, and hands the chunk to the
 optional `on_chunk` callback for variant-specific processing:
 
@@ -2256,6 +2256,17 @@ dispatches between the two variants on whether an `on_line` callback was
 supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
+
+`CaptureSink` in `cuprum._capture_types` is asynchronous — `absorb`,
+`finalize`, and `cleanup` are all coroutines — and the drain awaits them in
+that order. The two heap-backed accumulators answer without suspending, so the
+await costs a coroutine step per chunk; the file-backed one spills through
+`cuprum._capture_spill_io`, whose `_SpillIo` serializes that accumulator's
+blocking calls onto a worker thread so the loop stays free and the file's
+contents stay in the order the child wrote. A new accumulator implements the
+same three coroutines rather than a second synchronous protocol, because a
+policy test in the drain would be one place where a file-backed sink could be
+driven on the loop by accident.
 
 The pipeline side uses the same keyword-only contract: `_pump_stream` and its
 `_relay_chunks`, `_drain_stream_reader`, and `_drain_stream_reader_bounded`

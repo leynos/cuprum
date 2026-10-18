@@ -430,6 +430,37 @@ Thresholds that trigger escalation when breached.
   is already exercised through the public `run_sync` on a real two-stage
   pipeline in the unit module, so a BDD row would restate the same run rather
   than add a distinction. Date/Author: 2026-10-18, implementation agent.
+- [x] (2026-10-18) Take the round-8 spill I/O off the event loop. The two
+  findings against `cuprum/_capture_file.py` are one change: create, append,
+  flush, and byte-mode read-back were synchronous calls on the loop that also
+  drives the child's other stream, the deadline, and cancellation. A new leaf
+  module, `cuprum/_capture_spill_io.py`, holds the six blocking calls as plain
+  synchronous functions and `_SpillIo`, which runs each on a worker thread
+  under a per-accumulator `asyncio.Lock` — `asyncio.to_thread` alone starts a
+  separate worker per call, so the file's contents would otherwise follow
+  executor-scheduling order rather than the order the child wrote. Every call
+  is shielded through the existing `_shielded_cleanup`, so a cancelled drain
+  waits for an in-flight write before teardown unlinks the file underneath it.
+  `CaptureSink.absorb` and `finalize` are now coroutines on all three
+  accumulators, so the drain awaits one protocol rather than testing which
+  policy it holds; the two heap-backed accumulators answer without suspending.
+  `SpillHandle.close` closes its descriptor on a worker for the same reason,
+  `keep_file=True` excepted as before. The leaf's scope, the import direction
+  that keeps it acyclic, and the protocol change are recorded in the ADR-007
+  addendum of 2026-10-18 and referenced from the design doc's capture section.
+  Five test modules moved to the async seam; the two that arm a simulated
+  filesystem failure between two awaits keep the phases inside one
+  `asyncio.run`, because splitting them would let a sink pass here that cannot
+  finish a stream in a real run. Evidence: 186 passed across the five converted
+  modules, 8 passed in `test_capture_spill_cleanup.py`, 11 passed in the two
+  modules whose stub sinks also grew the async seam, and 1159 passed, 68
+  skipped, 2730 deselected across
+  `cuprum/unittests/ -k "capture or spill or drain or stream or pipeline or
+  line_stream"`
+  (log: `/tmp/converted-capture-<branch>.out` and the broad sweep it followed).
+  `ruff check`, `ruff format --check`, and `make markdownlint` (with
+  `make spelling`) are clean; `make nixie` reports all diagrams valid.
+  Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 

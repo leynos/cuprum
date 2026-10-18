@@ -1416,3 +1416,60 @@ slotted dataclass inheriting it, which would silently defeat the slots.
 never separate names to re-export — the class's own attribute lookup finds them
 through the base, so every `options.resolved_capture` call site is unchanged
 and the class docstring's examples still hold.
+
+## Addendum (2026-10-18): the spill-I/O leaf and the asynchronous capture seam
+
+CodeRabbit's round-8 review of the per-stream capture work made the filesystem
+calls of a file-backed capture blocking work that ran on the run's event loop:
+create, write, flush, and byte-mode read-back all executed inline, so a slow or
+full disk held up the child's other stream, the deadline, and cancellation for
+as long as the write took. Moving them onto a worker is not a rewrite of one
+call site. `asyncio.to_thread` starts a separate worker per call, and the
+capture's contract is _order_: the buffered prefix must land before the chunks
+after it, and the flush before the read-back. Serializing one accumulator's
+calls needs state, and that state has to live somewhere.
+
+`cuprum/_capture_spill_io.py` is that somewhere. It holds the six blocking
+calls — create, write, flush, read, close, remove — as plain synchronous
+functions that raise `OSError` and decide nothing, plus `_SpillIo`, the object
+that runs each of them on a worker under a per-accumulator lock. The split is
+cut along a real boundary rather than by line count: `cuprum/_capture_file.py`
+keeps the _policy_ — when to spill, how a failure is absorbed, what the record
+says — and the new module owns _how a blocking call is made without blocking
+the run_. The accumulator's own logic never sees a thread, an executor, or a
+lock; it awaits `self._io.run(_write_to_spill, file, chunk)` and gets the
+result or the `OSError`.
+
+The direction of the import graph is what makes the split safe. The new module
+imports exactly one thing from the tree, `_shielded_cleanup` from
+`cuprum/_process_lifecycle.py`, and `_capture_file.py` imports the leaf. No
+cycle: `_process_lifecycle` does not know about capture, and the leaf composes
+the lifecycle module's existing cancellation answer rather than adding a second
+one. `tempfile` also moved here, because the create call is the leaf's
+business; the failure tests patch
+`cuprum._capture_spill_io.tempfile.NamedTemporaryFile` and so reach the real
+create through the seam they already exercised.
+
+The seam it feeds is `CaptureSink`, in `cuprum/_capture_types.py`, whose three
+methods are now coroutines. That is a deliberate protocol change and not a
+convenience: retention is the child's output, a file-backed policy cannot
+retain a chunk without a write, and a synchronous `absorb` would put that write
+on the loop by construction. Making the whole seam async — not just the
+file-backed implementation — keeps one protocol for the drain rather than a
+policy test between two, at the cost of a coroutine step per chunk for the two
+heap-backed accumulators, which answer without suspending. The drain awaits
+`absorb` in `cuprum/_streams.py` and `finalize` in
+`cuprum/_stream_drain_finish.py`, so both the single-command and the pipeline
+paths reach a spill through the same await.
+
+`SpillHandle.close` in the same module changed with it: its unlink already ran
+on a worker, and its descriptor close now does too, because closing is the same
+blocking call that took the rest of the spill off the loop. `keep_file=True`
+remains the sole exception — the descriptor is closed and the file is left for
+the caller.
+
+No public API change: the leaf is private, `CaptureSink` is a private protocol
+implemented by private accumulators, and the four `cuprum/_capture_*.py`
+modules that existed before keep their names and responsibilities.
+`max-module-lines = 400` still has no suppression: the largest capture module is
+`cuprum/_capture_file.py` at 361 lines.
