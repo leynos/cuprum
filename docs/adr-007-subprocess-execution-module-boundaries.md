@@ -1447,16 +1447,28 @@ the run_. The accumulator's own logic never sees a thread, an executor, or a
 lock.
 
 The direction of the import graph is what makes the split safe. The new module
-imports exactly one thing from the tree, `_shielded_cleanup` from
-`cuprum/_process_lifecycle.py`, and `_capture_file.py` imports the leaf. No
-cycle: `_process_lifecycle` does not know about capture, and the leaf composes
-the lifecycle module's existing cancellation answer rather than adding a second
-one. `tempfile` also moved here, because the create call is the leaf's
-business, and the leaf binds `NamedTemporaryFile` by name rather than reaching
-through the module: the failure tests patch
+imports exactly two things from the tree, `_shielded_cleanup` from
+`cuprum/_process_lifecycle.py` and `SpillHandle` from
+`cuprum/_capture_types.py`, and `_capture_file.py` imports the leaf. No cycle:
+`_process_lifecycle` does not know about capture, `_capture_types` is a leaf
+that imports nothing from the package, and the spill leaf composes the
+lifecycle module's existing cancellation answer rather than adding a second one.
+`tempfile` also moved here, because the create call is the leaf's business,
+and the leaf binds `NamedTemporaryFile` by name rather than reaching through
+the module: the failure tests patch
 `cuprum._capture_spill_io.NamedTemporaryFile`, which substitutes this module's
 dependency instead of rewriting `tempfile`'s own attribute for every importer
 in the process.
+
+`_publish_spill` lives in the same leaf, and for the same reason. A
+`NamedTemporaryFile` is made with `delete=False`, so it is a file only the
+accumulator knows about from the moment it exists; building the handle that
+teardown reconciles is part of what creation hands back, not a later decision
+the accumulator makes once the write has succeeded. Publishing it after the
+prefix and flush would leave a cancellation in that window with a file no
+result names and no sink can reach. The handle is therefore published with
+`keep=False` whatever the policy says, and the accumulator promotes it to the
+caller's keep policy only once the prefix has landed.
 
 The seam it feeds is `CaptureSink`, in `cuprum/_capture_types.py`, whose three
 methods are now coroutines. That is a deliberate protocol change and not a

@@ -41,23 +41,31 @@ one-instruction functions. ``_SpillIo.run(file.write, data)`` supplies the
 operation at the call site, so no name is added that only forwards an
 attribute access — which is the tree's own ``R9104`` rule — and the method that
 raises is the one the traceback names.
+
+:func:`_publish_spill` builds the handle a successfully created file must have
+before anything writes to it. It lives here rather than in the accumulator
+because the accumulator is the module the 400-line ceiling binds, and because
+the rule it enforces belongs to the create: a ``delete=False`` file that exists
+is already someone's to remove.
 """
 
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import typing as typ
 from tempfile import NamedTemporaryFile
 
+from cuprum._capture_types import SpillHandle
 from cuprum._process_lifecycle import _shielded_cleanup
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import pathlib
 
 __all__ = [
     "_SpillIo",
     "_create_spill",
+    "_publish_spill",
 ]
 
 
@@ -190,3 +198,33 @@ def _create_spill(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
         delete=False,
         dir=directory,
     )
+
+
+def _publish_spill(file: typ.IO[bytes]) -> SpillHandle:
+    """Wrap a just-created spill *file* in the handle teardown reaches.
+
+    A ``NamedTemporaryFile`` is made with ``delete=False``, so the moment it
+    exists it is a file only this accumulator knows about. Publishing the
+    handle *after* the write and the flush — the natural reading of "don't
+    publish until it worked" — would leave the file unreachable by teardown for
+    as long as those awaits take, and a cancellation landing there orphans it:
+    the drain never settles, so no result carries a path, and the sink has
+    nothing to remove.
+
+    The handle is therefore published first, marked with ``keep=False``
+    whatever the policy says. Until the spill has completed there is no
+    caller-owned file yet, so the exception the caller asked for does not
+    apply: teardown must be free to remove a file that never carried the
+    prefix. The accumulator promotes it once the prefix has really landed.
+
+    Parameters
+    ----------
+    file : typ.IO[bytes]
+        The file :func:`_create_spill` has just returned.
+
+    Returns
+    -------
+    SpillHandle
+        A provisional handle for *file*, owned by the run.
+    """
+    return SpillHandle(path=pathlib.Path(file.name), file=file, keep=False)

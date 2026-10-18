@@ -37,7 +37,7 @@ import pathlib
 import typing as typ
 
 from cuprum._capture_decode import _DecodeSettings, _render
-from cuprum._capture_spill_io import _create_spill, _SpillIo
+from cuprum._capture_spill_io import _create_spill, _publish_spill, _SpillIo
 from cuprum._capture_types import CaptureFinal, SpillHandle
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import _emit_capture_event
@@ -179,11 +179,13 @@ class _FileAccumulator:
         retrying, so a full or read-only directory costs one syscall rather
         than one per chunk.
 
-        The file is published to :attr:`_handle` before the prefix is written,
-        so a cancellation during those awaits still leaves teardown a way to
-        remove what was created. :meth:`_promote_provisional_spill` then
-        applies the caller's keep policy, which only makes sense once the
-        spill has succeeded.
+        The handle is published to :attr:`_handle` before the prefix is
+        written, so a cancellation during those awaits still leaves teardown a
+        way to remove what was created. See
+        :func:`~cuprum._capture_spill_io._publish_spill` for why the provisional
+        handle is not deferrable. The caller's keep policy is applied by
+        :meth:`_promote_provisional_spill` once the spill has succeeded, since
+        only a file that took the prefix has earned it.
         """
         buffered = self._buffer
         if buffered is None:
@@ -221,31 +223,9 @@ class _FileAccumulator:
         self,
         directory: pathlib.Path | str | None,
     ) -> typ.IO[bytes]:
-        """Create the spill file and publish a handle cleanup can always reach.
-
-        A ``NamedTemporaryFile`` is made with ``delete=False``, so the moment it
-        exists it is a file only this accumulator knows about. Publishing the
-        handle *after* the write and the flush — the natural reading of "don't
-        publish until it worked" — leaves the file unreachable by teardown for
-        as long as those awaits take, and a cancellation landing there would
-        orphan it: the drain never settles, so no result carries a path, and
-        the sink has nothing to remove.
-
-        So the handle is published first, marked with ``keep=False`` whatever
-        the policy says. Until the spill has completed there is no caller-owned
-        file yet, so the exception the caller asked for does not apply:
-        teardown must be free to remove a file that never carried the prefix.
-
-        Returns
-        -------
-        typ.IO[bytes]
-            The new file, for the caller to write the buffered prefix through.
-            A filesystem failure creating it propagates for :meth:`_spill` to
-            absorb as a failed create.
-        """
+        """Create the spill file and publish a handle cleanup can always reach."""
         file = await self._io.run(_create_spill, directory)
-        path = pathlib.Path(file.name)
-        self._provisional = SpillHandle(path=path, file=file, keep=False)
+        self._provisional = _publish_spill(file)
         self._handle = self._provisional
         return file
 
