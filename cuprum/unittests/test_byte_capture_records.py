@@ -10,8 +10,9 @@ file-backed policy "cannot be handed anything less" without being told.
 
 Every case therefore asserts on the record, not only on the payload, and each
 pairs with the payload assertion that shows the record is describing the same
-run. The child writes a payload shorter than the bound, so a bounded case that
-asserted only "some bytes came back" would pass with the whole stream retained.
+run. The child writes a payload longer than the bound, so an assertion that
+only "some bytes came back" would pass even if the policy retained the whole
+stream.
 """
 
 from __future__ import annotations
@@ -176,12 +177,23 @@ def test_a_byte_pipeline_reports_the_final_stage_captures() -> None:
         "the aggregate's records must be the final stage's, not a copy that "
         f"could drift; got {result.captures!r} vs {result.final.captures!r}"
     )
-    assert [record.stream for record in result.captures], (
-        "the final stage captured both streams, so it must report records"
+    assert [record.stream for record in result.captures] == ["stdout", "stderr"], (
+        "the final stage captured both streams, so it must report both records "
+        f"in stream order; got {[r.stream for r in result.captures]!r}"
     )
-    assert any(record.dropped_bytes for record in result.captures), (
-        "the bounded stdout policy must show in the final stage's records; got "
-        f"{result.captures!r}"
+    bounded, full = result.captures
+    assert bounded.policy == "bounded", (
+        f"stdout was bounded in the final stage; got {bounded.policy!r}"
+    )
+    assert bounded.dropped_bytes == len(_STDOUT_TEXT.encode()) - _BOUND, (
+        "the aggregate must carry the final stage's exact drop count; got "
+        f"{bounded.dropped_bytes}"
+    )
+    assert full.policy == "full", (
+        f"stderr was captured in full in the final stage; got {full.policy!r}"
+    )
+    assert full.dropped_bytes == 0, (
+        f"a full capture discards nothing; got {full.dropped_bytes}"
     )
 
 
