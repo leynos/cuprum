@@ -5473,8 +5473,12 @@ The short version is:
 - `interrogate` owns docstring coverage: it fails the gate when any
   documentable node — including nested closures, dunder methods, properties,
   test doubles, benchmark helpers, and stub classes — lacks a docstring that
-  Ruff's `D` rules do not require. No scope is excluded; the same rule applies
-  from the production package down to nested scenario fixtures.
+  Ruff's `D` rules do not require. Its
+  `[tool.interrogate].ignore_overloaded_functions = true` setting excludes
+  overload signatures because Ruff requires their shared docstring on the
+  implementation. The implementation still needs a docstring. This exception
+  applies only to signatures: no directory or scope is excluded, and the same
+  rule applies from the production package down to nested scenario fixtures.
 - Pylint owns selected checks that Ruff does not cover, especially logging
   interpolation, pattern matching, generator control flow, environment
   handling, subprocess safety, and selected readability checks.
@@ -5972,7 +5976,9 @@ Most gaps there are nested helpers whose docstring would merely restate the
 enclosing fixture; when that happens, give the helper a name and a one-line
 docstring that states its intent, and keep single-line docstrings on scenario
 dataclasses and adapters. Do not exclude a scope or a name pattern from the
-gate; an exclusion only hides the next undocumented helper.
+gate; a broader exclusion only hides the next undocumented helper. The
+overload-signature exception described above does not change which directories
+the gate checks.
 
 ### Lint Makefile variables
 
