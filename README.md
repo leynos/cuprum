@@ -124,7 +124,11 @@ ______________________________________________________________________
   property ([handle failure][guide-failure]).
 - **Output your way** – Capture, echo, per-line observation, byte-exact
   capture, and an optional heartbeat for quiet children can each be switched on
-  independently ([control output][guide-output]).
+  independently, or a stream can go straight to a file
+  ([control output][guide-output]).
+- **Input of any size** – Send a small payload in one go, or stream a large one
+  from an async producer, with backpressure
+  ([stream input][guide-stream-input]).
 - **Graceful cancellation** – Cancelled or timed-out runs terminate the child,
   wait for a configurable grace period, then force-kill it (`SIGKILL` on
   POSIX). Opt in to process-group ownership to reclaim the child's descendants
@@ -138,7 +142,8 @@ ______________________________________________________________________
   bindings, and hooks keep each part of your application to the commands it
   should use ([apply a policy][guide-policy]).
 - **Observability** – Lifecycle events, with adapters for structured logging,
-  metrics, and tracing, plus framed output on GitHub Actions
+  metrics, and tracing, plus framed output on GitHub Actions and opt-in
+  redaction of secrets from what they export
   ([log, measure, and trace runs][guide-telemetry]).
 - **Optional acceleration** – A Rust extension speeds up stream handling between
   pipeline stages; the pure Python installation has no runtime dependencies at
@@ -203,6 +208,7 @@ not resolve, so every link to a repository file is absolute. -->
 [guide-telemetry]: https://github.com/leynos/cuprum/blob/main/docs/users-guide.md#log-measure-and-trace-runs
 [guide-backend]: https://github.com/leynos/cuprum/blob/main/docs/users-guide.md#choosing-a-stream-backend
 [guide-migrate]: https://github.com/leynos/cuprum/blob/main/docs/users-guide.md#migrate-a-caller
+[guide-stream-input]: https://github.com/leynos/cuprum/blob/main/docs/users-guide.md#stream-input-from-a-producer
 [migration]: https://github.com/leynos/cuprum/blob/main/docs/v0-2-0-migration-guide.md
 [changelog]: https://github.com/leynos/cuprum/blob/main/CHANGELOG.md
 [roadmap]: https://github.com/leynos/cuprum/blob/main/docs/roadmap.md

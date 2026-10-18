@@ -55,7 +55,7 @@ first six can need an edit:
   `bytes` and other non-`ArgValue` values are rejected.
 - [`sh.make` resolves the scoped catalogue](#shmake-resolves-the-scoped-catalogue).
 - [Observe hooks see new event phases](#observe-hooks-see-new-event-phases):
-  `settled` and `group_teardown` are new since beta1.
+  `settled`, `group_teardown`, and `stdio_error` are new since beta1.
 - [Metrics count failures from the settled event](#metrics-count-failures-from-the-settled-event).
 - The reserved builder keywords include `env_mode` and `process_group`, which
   are new `ExecutionContext` fields.
@@ -69,7 +69,9 @@ The rest is additive:
 - [process-group ownership](#opt-in-process-group-ownership);
 - [the broken-pipe policy](#opt-in-broken-pipe-policy-for-echoed-output);
 - [control observation](#control-observation);
-- [the Windows raw-handle outcome](#windows-raw-handle-hand-off-outcome); and
+- [the Windows raw-handle outcome](#windows-raw-handle-hand-off-outcome);
+- [streaming stdin and standard-stream redirection](#streaming-stdin-and-standard-stream-redirection);
+- [redaction for telemetry](#opt-in-redaction-for-telemetry-projections); and
 - the `py.typed` marker.
 
 ## Breaking changes
@@ -288,7 +290,7 @@ puts the fourth into a different field. Name every argument instead:
 
 An observe hook registered with `sh.observe()` receives every `ExecEvent`. In
 0.1 the phases were `plan`, `start`, `stdout`, `stderr`, and `exit`. 0.2.0 adds
-`stdin`, `stdin_error`, `timeout`, `teardown_error`,
+`stdin`, `stdin_error`, `stdio_error`, `timeout`, `teardown_error`,
 `capture_eof_grace_expired`, `pipeline_fail_fast`, `group_teardown`, and
 `settled`. A hook that matches exhaustively on `ExecEvent.phase` and raises on
 an unknown value now fails the run, because Cuprum re-raises observe-hook
@@ -331,7 +333,9 @@ actual child status and resource data.
 
 `group_teardown` reports a teardown outcome Cuprum could not resolve, such as a
 signal the kernel refused; see
-[Cleanup diagnostics](users-guide.md#cleanup-diagnostics). See
+[Cleanup diagnostics](users-guide.md#cleanup-diagnostics). `stdio_error`
+reports a failed standard-stream step, such as a stdin producer that raised,
+alongside the exception the caller receives. See
 [structured execution events in the users' guide](users-guide.md#structured-execution-events)
 for every phase and field.
 
@@ -829,25 +833,19 @@ in the users' guide, which covers the
 
 ### Opt-in redaction for telemetry projections
 
-Redaction is opt-in and configured per export destination. The defaults
-`redaction=None` and `RedactionPolicy()` are inert, so existing logging,
-tracing, and presentation output is unchanged. To redact configured text,
-construct a policy such as
-`policy = RedactionPolicy(literals=("token-value",))`, then pass it as
-`redaction=policy` to `structured_logging_hook()`, `tracing_hook()`, or
-`logging_hook()`. Pass it to `GitHubActionsSink(redaction=policy)` to redact an
-explicit title or argv-derived group title. The policy applies to every enabled
-emitted group or annotation title, including bounded fallback annotation
-labels; disabled title outputs do not invoke redaction, and mirrored child
-output remains unchanged. Wrap a custom observer with
-`redacting_hook(consumer, policy)` before registering it through `observe()`.
+Structured logging and tracing export the argument vector, and events can carry
+environment values and output. To keep known secrets out of those exports,
+build a `RedactionPolicy` from `cuprum.redaction` with the literal strings and
+regular expressions to mask, and pass it as `redaction=policy` to each
+exporting adapter: `structured_logging_hook()`, `tracing_hook()`,
+`logging_hook()`, and `GitHubActionsSink`. Wrap any other observer with
+`redacting_hook(observer, policy)`.
 
-Each destination applies the policy only at its own export boundary. The raw
-execution event remains available to unwrapped observers, and redaction never
-changes executed arguments, the child environment, or captured results. A
-configured rule failure propagates instead of falling back to raw output. For
-the rule semantics, covered fields, and limits, see
-[opt-in redaction in the users' guide](users-guide.md#log-measure-and-trace-runs).
+Nothing changes for an application that does not opt in. Redaction alters only
+what is exported, never the command, its environment, or the captured result,
+and a failing rule raises `RedactionError` rather than exporting raw text. See
+[Keep secrets out of telemetry](users-guide.md#keep-secrets-out-of-telemetry)
+for an example and the full rules.
 
 ### Opt-in process-group ownership
 
@@ -968,95 +966,26 @@ include the new value.
 
 ### Streaming stdin and standard-stream redirection
 
-Cuprum 0.2.0 adds two opt-in surfaces: a typed streaming stdin source and
-explicit standard-stream targets for stdout and stderr. Both are additive. The
-existing small-payload `StdinInput` API and the inherited-stdin default are
-unchanged, so a caller that supplies no `StdinStream` and no `StdioTarget` sees
-exactly the behaviour it saw before.
+Two additions cover input and output that should not pass through memory. Both
+are opt-in: an application that uses neither sees no change, and `StdinInput`
+works as before.
 
-`StdinStream(chunks=...)` wraps an async iterable or async iterator of `str` and
-`bytes` chunks. Cuprum pulls one chunk, writes it to the child's stdin pipe,
-and waits for that write to drain before pulling the next, so a producer can
-feed a child more data than the caller would hold in one buffer. The bound is
-on how far _ahead_ the producer runs, not on the size of one chunk, so a caller
-who cares about peak memory should yield bounded-size chunks. A `str` chunk is
-encoded with the run's `ExecutionContext.encoding` and `errors`, incrementally,
-so a multi-byte character split across two chunks still encodes correctly; a
-`bytes` chunk is written verbatim. Cuprum owns the producer for the duration of
-the run: on every exit path it closes the child's pipe first, awaiting
-`wait_closed()` within a bounded grace, and only then calls the iterator's
-`aclose()` when the producer provides one, within the same bound. Both steps
-are bounded. That order is deliberate, because the child's EOF depends on the
-close reaching the pipe: releasing it first means a caller's cleanup, however
-slow, cannot hold the child's input open. A caller need not finalize their own
-generator.
+- **Streaming input:** `stdin=StdinStream(chunks=...)` feeds the child from an
+  async iterable of `str` or `bytes` chunks, pulling the next chunk only once
+  the child has accepted the last. A producer failure terminates the child and
+  raises `StdinSourceError`, with the original exception chained. See
+  [Stream input from a producer](users-guide.md#stream-input-from-a-producer).
+- **Redirection:** `RunOutputOptions(stdout=..., stderr=...)` takes a
+  `StdioTarget` to send a stream to a file (`path()`), a descriptor the caller
+  owns (`fd()`), or the parent's own stream (`inherit()`), instead of capturing
+  it. Contradictory combinations, such as capture with a redirected stream,
+  raise `ValueError`, and file or descriptor targets need a POSIX platform. See
+  [Send a stream to a file or the parent](users-guide.md#send-a-stream-to-a-file-or-the-parent).
 
-A producer failure raises `StdinSourceError`, which is exported from the
-package root. The original exception is chained as `__cause__`, so
-caller-visible exception detail is preserved. The child is terminated before
-this is raised, and the run's stdin writer and pipe are finalized, so catching
-this type is enough to know that no writer outlives the run. A failure raised
-while pulling the producer is wrapped, as is any failure on the write path
-other than the child closing its end: a chunk that is neither `str` nor
-`bytes`, an encoder that cannot represent a `str` chunk, or a genuine pipe
-fault. Cancellation is not: an `asyncio.CancelledError` propagates unchanged. A
-child that closes its stdin early is normal rather than an error: the run
-continues to the child's exit code.
-
-`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget`, which names
-where one of the child's standard streams is bound. Its four variants differ in
-_ownership_, which is the contract:
-
-- `StdioTarget.pipe()` — a library-owned pipe cuprum creates, consumes or
-  writes, and closes.
-- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
-- `StdioTarget.path(path)` — a file **cuprum owns**. Cuprum opens it
-  immediately before the spawn and closes its copy in a `finally` immediately
-  after, so the descriptor never outlives the run. The caller names a path and
-  never manages a descriptor.
-- `StdioTarget.fd(fd)` — a **borrowed** descriptor or open file object the
-  caller owns. Cuprum never closes it, and a borrowed file object is flushed
-  immediately before the spawn so buffered caller-side bytes reach the child.
-
-The lifetime contract follows from that split. Cuprum closes only what it
-opened: a `path` target's file is opened before the spawn and closed right
-after it, while a borrowed descriptor or file object is only flushed by cuprum.
-A caller who reuses one borrowed descriptor across two runs shares a single
-file offset, so the second run writes wherever the first left off.
-
-Contradictory combinations are rejected. `RunOutputOptions` refuses the
-combinations whose contradiction is visible once its three targets are
-assembled; the inherited-stdin rule is checked when the run is prepared,
-because whether a source was also supplied is not known when the options are
-built:
-
-- A stream that capture or echo must read cannot be redirected: there is no
-  parent-side pipe to read.
-- One path cannot be named for both stdout and stderr: each open starts at
-  offset 0, so the two streams would interleave unpredictably.
-- `RunOutputOptions.stdin` accepts only `StdioTarget.pipe()` and
-  `StdioTarget.inherit()`. A `path` or `fd` target is refused, because the
-  input itself arrives on the run call's `stdin=` argument.
-- An inherited stdin alongside a stdin source is refused: both answer where
-  the child's input comes from, and honouring one would silently discard the
-  other. An explicit stdin pipe alongside a source is accepted, because the
-  source is written through the pipe the target names.
-- `Pipeline` rejects explicit standard-stream targets on all three streams;
-  redirect a single `SafeCmd` instead.
-
-Redirection through a `path` or `fd` target needs POSIX descriptor semantics:
-on a platform without them, cuprum refuses the descriptor arms rather than
-opening a stream and failing to hand it over. Inheriting a stream and a
-library-owned pipe are not platform-limited, so a supported combination keeps
-working there.
-
-`StdioTarget`, `StdinStream`, `StdinSource`, and `StdinSourceError` are all
-exported from the package root, so an existing import line only needs the new
-name added to it. For the full contract, see
-[capture and echo](users-guide.md#capture-and-echo) for the target vocabulary
-and the rules policing it, and
-[supply input, environment, and a deadline](users-guide.md#supply-input-environment-and-a-deadline)
-for the streaming source.
+`StdinStream`, `StdinSource`, `StdinSourceError`, and `StdioTarget` are
+exported from the package root. Exhaustive observe hooks also see the new
+`stdio_error` phase; see
+[Observe hooks see new event phases](#observe-hooks-see-new-event-phases).
 
 ## For contributors: benchmark and profiling changes
 
