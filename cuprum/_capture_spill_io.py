@@ -35,6 +35,12 @@ worker write in flight while teardown closed and unlinked the file underneath
 it. :func:`~cuprum._process_lifecycle._shielded_cleanup` is the tree's existing
 answer to that, and reusing it keeps the capture's teardown subject to the same
 cancellation contract as every other run path's.
+
+The calls take their target as a bound method rather than being bare
+one-instruction functions. ``_SpillIo.run(file.write, data)`` supplies the
+operation at the call site, so no name is added that only forwards an
+attribute access — which is the tree's own ``R9104`` rule — and the method that
+raises is the one the traceback names.
 """
 
 from __future__ import annotations
@@ -51,12 +57,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = [
     "_SpillIo",
-    "_close_spill",
     "_create_spill",
-    "_flush_spill",
-    "_read_spill",
-    "_remove_spill",
-    "_write_to_spill",
 ]
 
 
@@ -183,53 +184,3 @@ def _create_spill(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
         delete=False,
         dir=directory,
     )
-
-
-def _write_to_spill(file: typ.IO[bytes], data: bytes) -> None:
-    """Write *data* to *file*, deliberately without flushing it.
-
-    A failed write raises, as the filesystem raised it; the accumulator turns
-    that into a storage-failure record rather than a failed command.
-    """
-    file.write(data)
-
-
-def _flush_spill(file: typ.IO[bytes]) -> None:
-    """Flush *file*, so its bytes have reached the file itself.
-
-    A failed flush raises, as the filesystem raised it; the accumulator
-    reports it under its own event category.
-    """
-    file.flush()
-
-
-def _read_spill(path: pathlib.Path) -> bytes:
-    """Read *path*.
-
-    Returns
-    -------
-    bytes
-        The file's whole contents. A file that cannot be read raises, which the
-        accumulator absorbs.
-    """
-    return path.read_bytes()
-
-
-def _close_spill(file: typ.IO[bytes]) -> None:
-    """Close *file*, flushing whatever its buffer still holds.
-
-    The close is the last chance for a buffered write to reach the file, which
-    is why it has to be ordered after every write and off the loop with them.
-    A failed close raises, and every caller treats it as housekeeping.
-    """
-    file.close()
-
-
-def _remove_spill(path: pathlib.Path) -> None:
-    """Unlink *path*, tolerating a file that is already gone.
-
-    ``missing_ok`` is what makes a teardown that races the normal path's own
-    removal harmless. Every other failure raises, and every caller treats it as
-    housekeeping.
-    """
-    path.unlink(missing_ok=True)

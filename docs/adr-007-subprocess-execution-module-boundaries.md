@@ -1429,16 +1429,21 @@ capture's contract is _order_: the buffered prefix must land before the chunks
 after it, and the flush before the read-back. Serializing one accumulator's
 calls needs state, and that state has to live somewhere.
 
-`cuprum/_capture_spill_io.py` is that somewhere. It holds the six blocking
-calls — create, write, flush, read, close, remove — as plain synchronous
-functions that raise `OSError` and decide nothing, plus `_SpillIo`, the object
-that runs each of them on a worker under a per-accumulator lock. The split is
-cut along a real boundary rather than by line count: `cuprum/_capture_file.py`
+`cuprum/_capture_spill_io.py` is that somewhere. It holds `_create_spill` —
+the one blocking call that has to exist as a named function, because it is the
+seam the failure tests patch — plus `_SpillIo`, the object that runs each
+blocking call on a worker under a per-accumulator lock. Every other call is a
+bound method supplied at the call site: the accumulator awaits
+`self._io.run(file.write, chunk)` and gets the result or the `OSError`. Naming
+each call as a one-line forwarding function was the first shape, and the tree's
+own `R9104` rule rejects that as a trivial attribute wrapper; supplying the
+bound method at the call site is the rule's documented remedy, and it also
+makes the traceback name the method that actually raised. The split is cut
+along a real boundary rather than by line count: `cuprum/_capture_file.py`
 keeps the _policy_ — when to spill, how a failure is absorbed, what the record
 says — and the new module owns _how a blocking call is made without blocking
 the run_. The accumulator's own logic never sees a thread, an executor, or a
-lock; it awaits `self._io.run(_write_to_spill, file, chunk)` and gets the
-result or the `OSError`.
+lock.
 
 The direction of the import graph is what makes the split safe. The new module
 imports exactly one thing from the tree, `_shielded_cleanup` from

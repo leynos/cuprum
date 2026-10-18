@@ -37,15 +37,7 @@ import pathlib
 import typing as typ
 
 from cuprum._capture_decode import _DecodeSettings, _render
-from cuprum._capture_spill_io import (
-    _close_spill,
-    _create_spill,
-    _flush_spill,
-    _read_spill,
-    _remove_spill,
-    _SpillIo,
-    _write_to_spill,
-)
+from cuprum._capture_spill_io import _create_spill, _SpillIo
 from cuprum._capture_types import CaptureFinal, SpillHandle
 from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import _emit_capture_event
@@ -190,8 +182,8 @@ class _FileAccumulator:
             # ``bytes`` rather than the live buffer: the worker must see the
             # prefix as it stood when the spill was decided, not whatever a
             # later read appends before the worker is scheduled.
-            await self._io.run(_write_to_spill, handle, bytes(buffered))
-            await self._io.run(_flush_spill, handle)
+            await self._io.run(handle.write, bytes(buffered))
+            await self._io.run(handle.flush)
         except OSError as exc:
             await self._discard_failed_spill(handle, exc)
             return
@@ -222,9 +214,9 @@ class _FileAccumulator:
         # to lose. They still go through `run`, because closing on the loop is
         # the same blocking call that took the spill off it.
         with contextlib.suppress(OSError):
-            await self._io.run(_close_spill, handle)
+            await self._io.run(handle.close)
         with contextlib.suppress(OSError):
-            await self._io.run(_remove_spill, pathlib.Path(handle.name))
+            await self._io.run(pathlib.Path(handle.name).unlink, missing_ok=True)
         self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
 
     def _fail_storage(
@@ -274,7 +266,7 @@ class _FileAccumulator:
         if file is None:
             return
         try:
-            await self._io.run(_write_to_spill, file, chunk)
+            await self._io.run(file.write, chunk)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
@@ -298,7 +290,7 @@ class _FileAccumulator:
             The file's contents, or ``None`` when the read failed.
         """
         try:
-            return await self._io.run(_read_spill, path)
+            return await self._io.run(path.read_bytes)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_READ_FAILED)
             return None
@@ -331,7 +323,7 @@ class _FileAccumulator:
         if file is None or self._failed is not None:
             return
         try:
-            await self._io.run(_flush_spill, file)
+            await self._io.run(file.flush)
         except OSError as exc:
             # The writes since the last flush are still in the file object's
             # buffer, so they never reached the file. The event reports the

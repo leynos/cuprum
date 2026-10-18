@@ -434,11 +434,15 @@ Thresholds that trigger escalation when breached.
   findings against `cuprum/_capture_file.py` are one change: create, append,
   flush, and byte-mode read-back were synchronous calls on the loop that also
   drives the child's other stream, the deadline, and cancellation. A new leaf
-  module, `cuprum/_capture_spill_io.py`, holds the six blocking calls as plain
-  synchronous functions and `_SpillIo`, which runs each on a worker thread
-  under a per-accumulator `asyncio.Lock` — `asyncio.to_thread` alone starts a
-  separate worker per call, so the file's contents would otherwise follow
-  executor-scheduling order rather than the order the child wrote. Every call
+  module, `cuprum/_capture_spill_io.py`, holds `_create_spill` — the one call
+  that must stay a named function, because the failure tests patch it — and
+  `_SpillIo`, which runs each blocking call on a worker thread under a
+  per-accumulator `asyncio.Lock`; every other call is a bound method supplied
+  at the call site, because the first shape's one-line forwarding functions
+  tripped the tree's `R9104` trivial-attribute-wrapper rule.
+  `asyncio.to_thread` alone starts a separate worker per call, so the file's
+  contents would otherwise follow executor-scheduling order rather than the
+  order the child wrote. Every call
   is shielded through the existing `_shielded_cleanup`, so a cancelled drain
   waits for an in-flight write before teardown unlinks the file underneath it.
   `CaptureSink.absorb` and `finalize` are now coroutines on all three
