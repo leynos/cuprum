@@ -199,7 +199,7 @@ class _StreamConfig:
 
 
 __all__ = [
+    "_StreamConfig",
     "_resolve_stream_configs",
     "_resolve_stream_sink",
-    "_StreamConfig",
 ]

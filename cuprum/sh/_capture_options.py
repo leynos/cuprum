@@ -88,10 +88,11 @@ def _resolved_capture(
         The stdout and stderr policies, in that order, each either a policy
         object or ``None`` for a stream that is not captured.
 
-    Raises
-    ------
-    ValueError
-        If either value is not ``None``, a ``bool``, or a capture policy.
+    Notes
+    -----
+    A value that is not ``None``, a ``bool``, or a capture policy raises from
+    the per-stream resolver this delegates to, so the error names the field
+    that was wrong rather than the pair.
     """
     return (
         _resolve_capture(

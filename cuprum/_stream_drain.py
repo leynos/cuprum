@@ -29,7 +29,6 @@ redirected stdout cannot shift stderr's payload into its position.
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
 import contextlib
 import logging
 import typing as typ
@@ -41,6 +40,8 @@ from cuprum._timeout_reporting import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._subprocess_wait_types import (
         _Consumer,
         _ConsumerPair,
