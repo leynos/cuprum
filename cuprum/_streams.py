@@ -234,7 +234,16 @@ async def _drain_chunks(
     *,
     measurement: _StreamOperationMeasurement | None,
 ) -> bool:
-    """Consume chunks until EOF, updating the caller-owned capture buffer."""
+    """Consume chunks until EOF, updating the caller-owned capture buffer.
+
+    Returns
+    -------
+    bool
+        ``True`` when the stream reached EOF, ``False`` when the loop stopped
+        short — because a read was cancelled, or because a chunk's absorb was.
+        Both stops finalize the prefix already captured; see
+        :func:`_deliver_chunk`.
+    """
     while True:
         try:
             chunk = await stream.read(state.config.read_size)
@@ -243,11 +252,31 @@ async def _drain_chunks(
         _record_stream_read(measurement, chunk)
         if not chunk:
             return True
-        await _deliver_chunk(state, chunk)
+        if not await _deliver_chunk(state, chunk):
+            return False
 
 
-async def _deliver_chunk(state: _DrainState, chunk: bytes) -> None:
-    """Fan one non-empty chunk out to capture, echo, and the chunk sink."""
+async def _deliver_chunk(state: _DrainState, chunk: bytes) -> bool:
+    """Fan one non-empty chunk out to capture, echo, and the chunk sink.
+
+    A file-backed capture makes ``absorb`` a real suspension point — it awaits
+    a worker write once the stream has spilled — so a cancellation can land
+    there, not only in the read. It is treated exactly as a cancelled read is:
+    the stop is reported to the loop, which finalizes the prefix under the same
+    rule. The write is shielded, so by the time the cancellation is re-raised
+    the chunk has landed in full; discarding the capture at that point would
+    lose bytes the file already holds.
+
+    Only ``absorb``'s cancellation is absorbed here. One raised from
+    ``on_chunk`` is a caller asking for the drain itself to stop, and it still
+    propagates.
+
+    Returns
+    -------
+    bool
+        ``True`` when the chunk was delivered, ``False`` when a cancellation
+        stopped the drain during capture.
+    """
     # Activity is reported here, on the raw read, so that every way a chunk
     # can go on to be dropped still counts: undecodable bytes, output with
     # no line ending yet, a disabled mirror, and text truncated past the
@@ -262,7 +291,10 @@ async def _deliver_chunk(state: _DrainState, chunk: bytes) -> None:
         # file-backed capture writes to disk here, and the one protocol is
         # what keeps this loop free of policy tests. See
         # :class:`~cuprum._capture_types.CaptureSink`.
-        await capture.absorb(chunk)
+        try:
+            await capture.absorb(chunk)
+        except asyncio.CancelledError:
+            return False
     if state.config.echo_output:
         _echo_chunk(state, chunk)
     if state.on_chunk is not None:
@@ -272,6 +304,7 @@ async def _deliver_chunk(state: _DrainState, chunk: bytes) -> None:
         outcome = state.on_chunk(chunk)
         if outcome is not None:
             await outcome
+    return True
 
 
 async def _consume_stream_without_lines(
