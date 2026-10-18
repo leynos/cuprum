@@ -279,10 +279,9 @@ Thresholds that trigger escalation when breached.
   deletion and moving the branch's `_reconcile_shielded` helper beside the
   split post-exit module, so no duplicate definition survives; the migration
   guide's capture section was appended to the 0.2.0 feature list rather than
-  dropped by
-  the section renumbering; and the `pyproject.toml` dead-code entry points
-  merged entry-by-entry. Backup branch `backup/issue443-pre-rebase-20261017`
-  retains the pre-rebase tip.
+  dropped by the section renumbering; and the `pyproject.toml` dead-code entry
+  points merged entry-by-entry. Backup branch
+  `backup/issue443-pre-rebase-20261017` retains the pre-rebase tip.
 - [x] (2026-10-17) Resolve the first post-rebase gate run's two findings, then
   repair the module-size regression the repair itself introduced. The run at
   `9de942193` passed `check-fmt` and `typecheck` and aborted `make lint` with
@@ -603,8 +602,8 @@ Thresholds that trigger escalation when breached.
   no way to count bytes the child wrote after the parent stopped reading. The
   users' guide table cell, the design document's metadata paragraph, the
   `CapturedStream.total_bytes` docstring, and `sh/results.py`'s `captures`
-  docstring now say "what the drain received", and the design document adds
-  the partial-run caveat that explains the distinction. The third was a real
+  docstring now say "what the drain received", and the design document adds the
+  partial-run caveat that explains the distinction. The third was a real
   design-document error about byte order: it said a headless UTF-16/UTF-32 tail
   falls back to the platform's native order, but the accumulator retains the
   stream's first `_BOM_MAX_BYTES` bytes in `_prefix` and `_bounded_settings`
@@ -619,12 +618,13 @@ Thresholds that trigger escalation when breached.
   is 10 bytes in both encodings, the bound leaves 7, the realignment drops one
   byte and keeps six. Verified non-vacuous by mutation: changing the expected
   value to `"文c"` failed both parametrizations with the real `"b文c"`; and the
-  old form was separately confirmed to pass 16/16 while `"a中b文c".endswith("")`
-  is `True`. The fourth finding's sibling sweep over "what the child wrote"
-  found no further false claims: the remaining hits describe synthetic drains
-  that did receive every byte, and the byte-unit claim in the
-  `capture_policy` module docstring is about what a bound measures, not about
-  what a partial run can count. Date/Author: 2026-10-18, implementation agent.
+  old form was separately confirmed to pass 16/16 while
+  `"a中b文c".endswith("")` is `True`. The fourth finding's sibling sweep over
+  "what the child wrote" found no further false claims: the remaining hits
+  describe synthetic drains that did receive every byte, and the byte-unit
+  claim in the `capture_policy` module docstring is about what a bound
+  measures, not about what a partial run can count. Date/Author: 2026-10-18,
+  implementation agent.
 
 ## Surprises & discoveries
 
@@ -1667,15 +1667,14 @@ Thresholds that trigger escalation when breached.
   The cut is a real one: the properties are the *query* half of the options,
   deriving from fields that stay on the dataclass. Alternatives rejected: a
   `too-many-lines` suppression (the standing contract); re-exporting from
-  `cuprum/sh/_deprecated.py` instead (that is the module that imports this
-  one, and the finding is that the *old* path must work); and moving
-  `__post_init__`'s validation out instead, which is the command half and
-  would split one constructor's contract across two modules. This reverses the
+  `cuprum/sh/_deprecated.py` instead (that is the module that imports this one,
+  and the finding is that the *old* path must work); and moving
+  `__post_init__`'s validation out instead, which is the command half and would
+  split one constructor's contract across two modules. This reverses the
   2026-10-14 refusal to move `resolved_capture` alone, on the ground it had to
-  mirror
-  `resolved_echo`; moving all four keeps that invariant. Recorded as a fifth
-  split in the ADR-007 addendum. Date/Author: 2026-10-18, implementation agent;
-  raised by review round 8.
+  mirror `resolved_echo`; moving all four keeps that invariant. Recorded as a
+  fifth split in the ADR-007 addendum. Date/Author: 2026-10-18, implementation
+  agent; raised by review round 8.
 
 - Decision: the stdio redirection guard reads `resolved_capture` rather than
   the `capture` shorthand. Rationale: the rule exists because capture needs a

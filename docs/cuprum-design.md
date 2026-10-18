@@ -1528,16 +1528,16 @@ and the surviving tail must be trimmed under that name rather than one that
 strips a mark; a `utf-16` or `utf-32` family name accepts no bytes at all
 without a mark, so the tail is resolved the way the family decoder would itself
 resolve it. The stream's own opening bytes settle that whenever the mark was
-really there: the accumulator keeps the first few bytes of the stream beside the
-retained tail, so a mark a bound has since discarded still selects the byte
+really there: the accumulator keeps the first few bytes of the stream beside
+the retained tail, so a mark a bound has since discarded still selects the byte
 order it announced. Only a stream that carried no mark at all — one written
-under a concrete `utf-16-le`/`utf-32-be` codec, or cut before any mark arrived —
-falls back to the platform's native order, which is the rule the family decoder
-would have applied to that stream too. Only a truncated capture resolves this
-way: while the mark survives it stays part of the retained bytes and the family
-codec strips it, so the caller is never handed a leading U+FEFF that a full
-capture does not report. The bytes the repair costs are counted as dropped, so
-the reported drop count stays exact.
+under a concrete `utf-16-le`/`utf-32-be` codec, or cut before any mark arrived
+— falls back to the platform's native order, which is the rule the family
+decoder would have applied to that stream too. Only a truncated capture
+resolves this way: while the mark survives it stays part of the retained bytes
+and the family codec strips it, so the caller is never handed a leading U+FEFF
+that a full capture does not report. The bytes the repair costs are counted as
+dropped, so the reported drop count stays exact.
 
 The repair covers exactly two families, so a bounded *text* capture is accepted
 only where one of them applies. UTF-8 announces its own continuation bytes and
