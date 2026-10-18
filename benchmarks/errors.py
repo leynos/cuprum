@@ -7,3 +7,7 @@ class BenchmarkError(Exception):
 
 class PtyBlackholeStateError(RuntimeError, BenchmarkError):
     """Raised when a ``PtyBlackhole`` lifecycle operation is unavailable."""
+
+
+class PtyBlackholeDrainError(RuntimeError, BenchmarkError):
+    """Raised when the PTY drainer cannot acknowledge all accepted output."""

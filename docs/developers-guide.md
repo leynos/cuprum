@@ -3844,15 +3844,16 @@ python -m benchmarks.deterministic_b64_fixture \
 
 <!-- markdownlint-enable MD013 -->
 
-`PtyBlackhole` transfers master-file-descriptor ownership to its daemon drainer
-before `__enter__` returns. The drainer counts raw bytes read from the master,
-while the caller writes text to the slave stream. On exit, the slave and master
-are closed and the drainer is given a bounded five-second join. `drained_bytes`
-exposes the count only after the drainer has terminated; it is `None` while a
-timed-out drainer is still running. Tests that verify the count should write a
-multibyte payload without a newline and compare it with the payload's UTF-8
-encoded byte length, since PTY line-ending translation would otherwise make the
-result platform-dependent.
+`PtyBlackhole` transfers master-file-descriptor and wake-pipe ownership to its
+daemon drainer before `__enter__` returns. It configures slave output
+processing as `OPOST` with `ONLCR` where available, and counts encoded bytes
+accepted by the slave after that newline expansion. On exit, it flushes the
+text stream, publishes the exact byte target through the wake pipe, and keeps
+the slave open until the drainer acknowledges that target. The drainer has a
+bounded five-second join; `drained_bytes` is available only after successful
+acknowledgement and thread termination. It is `None` while a timed-out reader
+is still active and remains unavailable after reader failure. Tests cover
+multibyte encoding and newline translation.
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
