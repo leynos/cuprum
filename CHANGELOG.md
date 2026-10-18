@@ -151,6 +151,11 @@ _Applications upgrading from 0.1 should follow the
   This replaces `stdout=result.stdout or ""` and `stderr=result.stderr or ""`;
   if capture was omitted, `require_captured()` raises `ValueError` and names
   the missing streams ([#515](https://github.com/leynos/cuprum/issues/515)).
+  `CapturedResult` is a distinct dataclass: it does not compare equal to a
+  `CommandResult` with the same fields, and `type(result) is CommandResult` no
+  longer matches captured runs. Consumers relying on those checks should use
+  `isinstance(result, CommandResult)` and compare fields individually.
+
 - **Scoped executable bindings:**
   `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
   catalogued program to the executable it should run inside the enclosing

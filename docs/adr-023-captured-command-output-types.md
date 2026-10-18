@@ -85,8 +85,12 @@ partial because termination can precede stream completion.
   without `or ""`, and the overloads expose that guarantee to static checkers.
 - Explicit-options callers use `require_captured()` to prove both streams are
   present. This preserves the useful failure when capture was forgotten.
-- Existing `CommandResult` consumers, pipeline construction, timeout
-  exceptions, and measurement-field compatibility remain unchanged.
+- Pipeline construction, timeout exceptions, and measurement-field
+  compatibility remain unchanged. Default single-command runs now return the
+  distinct `CapturedResult` dataclass. It does not compare equal to a
+  `CommandResult` with the same fields, and `type(result) is CommandResult` no
+  longer matches captured runs. Consumers relying on those checks should use
+  `isinstance(result, CommandResult)` and compare fields individually.
 - Runtime tests cover construction and `dataclasses.replace`; `ty` fixtures
   cover the overloads and optional fields on explicit-options results.
 

@@ -344,6 +344,12 @@ fallback turns a forgotten capture request into an apparently empty diagnostic.
 `require_captured()` keeps an empty captured stream distinct from a stream that
 was never captured.
 
+`CapturedResult` is a distinct dataclass, so it does not compare equal to a
+`CommandResult` with the same fields. Exact checks such as
+`type(result) is CommandResult` also fail for captured runs. Use
+`isinstance(result, CommandResult)` for base-result checks and compare fields
+individually when comparing results across these types.
+
 <!-- tested-example: capture-and-echo -->
 
 ```python
