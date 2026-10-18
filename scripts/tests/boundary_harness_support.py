@@ -11,10 +11,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo metadata argv.
+import typing as typ
 from pathlib import Path
 
 from scripts import check_boundary_contract
 from scripts.boundary_workspace import copy_source_tree
+
+if typ.TYPE_CHECKING:
+    import pytest
 
 # Cargo metadata may wait for the shared package-cache lock.
 CARGO_METADATA_TIMEOUT_SECONDS = 120
@@ -56,3 +60,19 @@ def cargo_target_roots(crate: Path) -> tuple[Path, ...]:
         if package["name"] == "cuprum-streams"
     )
     return tuple(sorted(Path(target["src_path"]) for target in package["targets"]))
+
+
+def record_cargo_metadata_calls(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Record metadata helper calls while preserving the real implementation."""
+    calls: list[Path] = []
+    read_metadata = cargo_target_roots
+
+    def record(crate_path: Path) -> tuple[Path, ...]:
+        """Count the call before delegating to Cargo metadata."""
+        calls.append(crate_path)
+        return read_metadata(crate_path)
+
+    monkeypatch.setattr(
+        "scripts.tests.boundary_harness_support.cargo_target_roots", record
+    )
+    return calls

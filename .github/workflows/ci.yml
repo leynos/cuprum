@@ -344,12 +344,6 @@ jobs:
           BINSTALL_SHA256: 'df2921254924066627685ee09f6c8b9acd7acef68a338668f879d2b033c09458'
         run: |
           set -euo pipefail
-          architecture="$(uname -m)"
-          if [ "${architecture}" != "x86_64" ]; then
-            printf 'cargo-binstall archive supports x86_64 only; runner architecture is %s\n' \
-              "${architecture}" >&2
-            exit 1
-          fi
           if [ "$(.tools/nose/nose --version 2>/dev/null)" = "nose ${NOSE_VERSION}" ]; then
             printf 'nose %s restored from cache\n' "${NOSE_VERSION}"
             exit 0

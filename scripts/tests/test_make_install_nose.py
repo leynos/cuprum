@@ -382,6 +382,6 @@ class TestMakeInstallNose:
             "An install that left the detector at the old version must fail the "
             f"target. stdout: {invocation.result.stdout!r}"
         )
-        assert f"expected 'nose {NOSE_VERSION}'" in invocation.result.stderr, (
+        assert "expected 'nose 0.20.0'" in invocation.result.stderr, (
             "The target must name the pin and the version it actually found."
         )

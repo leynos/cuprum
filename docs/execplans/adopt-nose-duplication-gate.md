@@ -985,12 +985,12 @@ The formal review at `e30aa6ba2` raised one finding against the ADR's Accepted
 trade-offs passage, which claimed the surface had been "Re-measured … and again
 after the re-adjudication recorded above: 63 families, all 63 allowed".
 
-The finding was correct on the substance and was verified by measurement rather
-than by reading the reviewer's diff. The sentence was written at `c02d1ba8cb`
-(10:48) when the surface was 63 families under 51 entries. The addendum that
-performed the re-adjudication landed at `d1150a59b` (14:33), five hours later,
-and performed one deferred extraction — the `settle.py` arbitration — which
-removed the entry describing it. Parsed with
+The finding was correct on the substance and I verified it by measurement
+rather than by reading the reviewer's diff. The sentence was written at
+`c02d1ba8cb` (10:48) when the surface was 63 families under 51 entries. The
+addendum that performed the re-adjudication landed at `d1150a59b` (14:33), five
+hours later, and performed one deferred extraction — the `settle.py`
+arbitration — which removed the entry describing it. Parsed with
 `scripts.duplication_allowlist.load_allowlist`, the allowlist delta across that
 commit is exactly one removal and no additions: 51 entries become 50. So the
 clause asserting the 63 figures cover the re-adjudication was false, and it
@@ -1004,7 +1004,7 @@ entries. The reviewer's suggested replacement text gave the same figures, but
 accepting a diff on authority is the failure mode this log exists to prevent,
 so each number was reproduced before the edit was written.
 
-Two notes on method, both of which changed the text:
+Two notes on method, both of which changed what I wrote:
 
 - A `grep -c 'reason = '` over `pyproject.toml` reports 64 entries where the
   manifest holds 50. The field is not a reliable count: entries take either a
