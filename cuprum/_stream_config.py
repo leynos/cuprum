@@ -169,7 +169,16 @@ class _StreamConfig:
     # makes that reachable: the stderr config is built by replacing the stdout
     # one, so it picks up an accumulator for its own policy without any caller
     # having to remember to build one.
-    capture_sink: CaptureSink | None = dc.field(init=False, default=None)
+    #
+    # Derived state, so it takes no part in equality or the representation, as
+    # ``_PipelineRunConfig``'s configs do. Equality would otherwise depend on
+    # which policy built the sink — two accumulators compare by identity, while
+    # ``None`` compares equal — and a bounded accumulator is unhashable, so
+    # hashing a config would raise only under that one policy. The repr would
+    # print whatever the stream had retained by then.
+    capture_sink: CaptureSink | None = dc.field(
+        init=False, default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Build the accumulator this config's capture policy retains into."""

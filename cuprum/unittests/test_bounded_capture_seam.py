@@ -17,12 +17,15 @@ leave the teardown path holding bytes the drain never wrote into.
 from __future__ import annotations
 
 import asyncio
+import io
 import typing as typ
 
 import pytest
 
+from cuprum._stream_config import _StreamConfig
 from cuprum._streams import _drain
 from cuprum.capture_policy import BoundedCapture, FullCapture
+from cuprum.echo_events import EchoStream
 from cuprum.unittests._bounded_capture_support import _config
 from cuprum.unittests._capture_sink_support import _absorb, _finalize
 
@@ -69,6 +72,89 @@ def test_a_config_without_a_policy_owns_no_accumulator() -> None:
     """No policy means no sink, which is how a discarded stream is configured."""
     assert _config(None).capture_sink is None, (
         "no policy must mean no accumulator, not an empty one"
+    )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [None, FullCapture(), BoundedCapture(max_bytes=64)],
+    ids=["none", "full", "bounded"],
+)
+def test_hashing_a_config_does_not_depend_on_its_capture_policy(
+    policy: CapturePolicy | None,
+) -> None:
+    """A config hashes consistently whatever policy built its sink.
+
+    The accumulator is derived state, so it has no place in the config's value.
+    Hashing is where its absence is load-bearing rather than tidy: a bounded
+    accumulator is unhashable, so a config carrying one in its hash raised
+    ``TypeError`` while the same config under ``FullCapture`` hashed cleanly.
+    The configuration was hashable or not depending on a retention decision.
+    """
+    config = _config(policy)
+
+    hash(config)
+
+
+# A config's ``sink``, ``discard_on_cancel``, and ``activity`` fields are
+# supplied objects that compare by identity, so two configs only describe the
+# same configuration when they are handed the same ones. The accumulator is the
+# field this case is about; the rest must be held equal.
+_SHARED_ECHO_SINK = io.StringIO()
+
+
+def _shared_sink_config() -> _StreamConfig:
+    """Build a config over one shared echo sink, so two of them can compare."""
+    return _StreamConfig(
+        capture=FullCapture(),
+        echo_output=False,
+        sink=_SHARED_ECHO_SINK,
+        encoding="utf-8",
+        errors="strict",
+        stream=EchoStream.STDOUT,
+    )
+
+
+def test_the_capture_sink_cannot_decide_config_equality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A derived sink cannot make two otherwise identical configs unequal.
+
+    The symptom is not "equality is always false", which would need no policy
+    to witness: ``None`` compares equal to ``None`` and two bounded
+    accumulators compare equal to each other, while two full accumulators —
+    plain objects — compare by identity. So equality flipped with the policy,
+    and only a pair whose accumulators are deliberately distinct can witness
+    the derived field doing the deciding. ``dc.replace`` cannot reach an
+    ``init=False`` field, so the accumulator is diverted where it is built.
+    """
+    monkeypatch.setattr(
+        "cuprum._stream_config.build_accumulator",
+        lambda *args, **kwargs: object(),
+    )
+
+    first, second = _shared_sink_config(), _shared_sink_config()
+
+    assert first.capture_sink is not second.capture_sink, (
+        "the fixture must actually produce distinct accumulators, or this case "
+        "witnesses nothing"
+    )
+    assert first == second, (
+        "the accumulator is derived state; it must not decide config equality"
+    )
+
+
+def test_the_repr_of_a_config_holding_output_omits_the_retained_bytes() -> None:
+    """Retained payload is the child's data, not something a repr should print."""
+    config = _config(BoundedCapture(max_bytes=64))
+    sink = config.capture_sink
+    assert sink is not None, "a bounded policy must build a sink"
+    _absorb(sink, [b"a payload the repr must not repeat"])
+
+    rendered = repr(config)
+
+    assert "a payload the repr must not repeat" not in rendered, (
+        f"the repr must not print the retained bytes; got {rendered}"
     )
 
 
