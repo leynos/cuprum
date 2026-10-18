@@ -194,8 +194,9 @@ def tar_extract(
     Parameters
     ----------
     archive
-        Archive path passed as the value of ``-f``. Leading dashes are safe
-        because an option's value is never re-read as an option.
+        Archive path passed as the value of ``-f``. Leading dashes are not
+        re-read as options. A bare ``-`` is still special: tar reads the
+        archive from standard input.
     destination
         Optional extraction directory passed as the value of ``-C``.
     allow_relative

@@ -1108,8 +1108,8 @@ explicitly opts in.
 ### End-of-options separators for positional operands
 
 `safe_path` accepts names beginning with `-`, so argv construction must stop
-those names from reaching the tool as options. Both builders emit `--` before
-their positional path operands:
+those names from reaching the tool as options. `tar_create` and `rsync_sync`
+emit `--` before their positional path operands:
 
 ```plaintext
 tar_create:  -c [compression] -f ARCHIVE -- SOURCE...
@@ -1118,8 +1118,11 @@ rsync_sync:  [flags] -- SOURCE DESTINATION
 ```
 
 `tar_extract` is deliberately unchanged. Its paths are the values of `-f` and
-`-C`, and an option's value is never re-parsed as an option; inserting `--`
-before a value would instead make tar read that value as a file operand.
+`-C`, and an option's value is never re-parsed as an option. A bare `-` remains
+special: `tar_extract()` reads the archive from standard input, and
+`tar_create()` writes it to standard output when its archive value is `-`.
+Inserting `--` before a value would instead make tar read that value as a file
+operand.
 
 The rule for future builders is therefore: every positional, user-supplied
 operand must follow `--`, or the builder must reject leading dashes at

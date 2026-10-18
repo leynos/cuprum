@@ -3,8 +3,9 @@
 The step implementations live in ``tests.behaviour._builder_library_steps`` so
 this module stays within the 400-line limit. pytest-bdd resolves a step against
 the fixtures visible to the module that declares the scenario, and a plain
-``import`` does not re-export the fixtures the decorators plant in the support
-module, so each step is re-bound here to the same implementation.
+``import`` does not re-export a fixture, so every step is bound here to the
+support module's plain implementation. The decorators live only in this module,
+so each step text and ``target_fixture`` name has a single source of truth.
 """
 
 from __future__ import annotations

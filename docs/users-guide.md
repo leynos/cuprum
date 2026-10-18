@@ -1199,7 +1199,9 @@ The tar and rsync builders emit `--` before their positional path operands.
 names beginning with `-` are copied rather than read as rsync options.
 `tar_extract()` needs no separator: its archive and destination are the values
 of `-f` and `-C`, and an option's value is never re-read as an option, so
-leading dashes there are already literal.
+leading dashes there are already literal. A bare `-` is still special:
+`tar_extract()` reads the archive from standard input, while `tar_create()`
+writes it to standard output when its archive value is `-`.
 
 ### Stream lines as they arrive
 

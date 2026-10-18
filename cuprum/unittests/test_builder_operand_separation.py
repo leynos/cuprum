@@ -50,6 +50,7 @@ def _tar_reports_gnu() -> bool:
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
     return "GNU tar" in completed.stdout
 
@@ -62,14 +63,22 @@ _GNU_TAR_SKIP_REASON = (
 _RSYNC_SKIP_REASON = "these tests exercise the rsync on PATH, which this host lacks"
 
 requires_tar = pytest.mark.skipif(not _TAR_AVAILABLE, reason=_TAR_SKIP_REASON)
-requires_gnu_tar = pytest.mark.skipif(
-    not _tar_reports_gnu(),
-    reason=_GNU_TAR_SKIP_REASON,
-)
 requires_rsync = pytest.mark.skipif(
     not _RSYNC_AVAILABLE,
     reason=_RSYNC_SKIP_REASON,
 )
+
+
+@pytest.fixture(scope="session")
+def gnu_tar() -> None:
+    """Skip unless the tar on PATH reports itself as GNU tar.
+
+    The probe runs here rather than at import time so collection never spawns
+    a process, and ``pytest-timeout`` can bound it once the test is running.
+    """
+    if not _tar_reports_gnu():
+        pytest.skip(_GNU_TAR_SKIP_REASON)
+
 
 _CHECKPOINT_SOURCE = "--checkpoint=1"
 _CHECKPOINT_ACTION = "--checkpoint-action=exec=touch pwned"
@@ -87,7 +96,7 @@ def _write(path: Path, content: str) -> None:
 
 
 @requires_tar
-@requires_gnu_tar
+@pytest.mark.usefixtures("gnu_tar")
 def test_gnu_tar_does_not_run_checkpoint_actions_from_source_names(
     tmp_path: Path,
 ) -> None:
