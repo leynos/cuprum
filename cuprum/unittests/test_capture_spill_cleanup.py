@@ -27,10 +27,10 @@ import typing as typ
 import pytest
 
 from cuprum import TimeoutExpired
-from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import CapturedStream, FileBackedCapture
 from cuprum.sh import RunOutputOptions
+from cuprum.unittests._capture_witness_support import _SpillWitness
 from tests.helpers.catalogue import build_python_catalogue_env
 
 if typ.TYPE_CHECKING:
@@ -65,38 +65,6 @@ _RUN_TIMEOUT_S = 5.0
 # exists so a child that dies without spilling fails the case rather than
 # hanging the session.
 _WITNESS_TIMEOUT_S = 10.0
-
-
-class _SpillWitness:
-    """A capture hook that records the directory at the moment of a spill.
-
-    Install it with :func:`cuprum.capture_observation.observe_capture` around a
-    run to prove the run really created a file, on routes that return no record
-    naming one. It holds the *names* present rather than the paths, so a case
-    can assert a file appeared without pinning the temporary name.
-    """
-
-    def __init__(self, directory: pathlib.Path) -> None:
-        """Watch *directory* for files appearing during the run."""
-        self.directory = directory
-        self.snapshots: list[tuple[str, ...]] = []
-        self.categories: list[CaptureEventCategory] = []
-
-    def __call__(self, event: CaptureEvent) -> None:
-        """Record a spill's directory listing, and every event's category."""
-        self.categories.append(event.category)
-        if event.category is CaptureEventCategory.SPILLED_TO_FILE:
-            self.snapshots.append(
-                tuple(entry.name for entry in self.directory.iterdir())
-            )
-
-    def awaited(self) -> tuple[str, ...]:
-        """Return the first snapshot, asserting a spill was actually seen."""
-        assert self.snapshots, (
-            "the run never spilled, so this case would pass because no file "
-            f"was ever made; events seen: {self.categories}"
-        )
-        return self.snapshots[0]
 
 
 def _builder() -> cabc.Callable[..., SafeCmd]:
