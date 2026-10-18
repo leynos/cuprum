@@ -40,10 +40,10 @@ class _SinkWitness:
         """Start uncleaned."""
         self.cleaned = False
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Accept output, which these tests never send."""
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Refuse to finalize; cleanup is the path under test."""
         raise NotImplementedError
 

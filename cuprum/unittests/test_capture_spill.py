@@ -86,9 +86,14 @@ def _spill(
         settings=settings,
     )
     size = -(-len(payload) // chunks)
-    for start in range(0, len(payload), size):
-        accumulator.absorb(payload[start : start + size])
-    return accumulator.finalize()
+
+    async def spill() -> CaptureFinal:
+        """Absorb the stream in order, then finalize it on the same loop."""
+        for start in range(0, len(payload), size):
+            await accumulator.absorb(payload[start : start + size])
+        return await accumulator.finalize()
+
+    return asyncio.run(spill())
 
 
 def _cleanup(final: CaptureFinal) -> None:

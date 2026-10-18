@@ -46,10 +46,10 @@ class _StubSink:
         """Start a sink that has not been cleaned up yet."""
         self.cleanups = 0
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Take one raw chunk, which this stub has no use for."""
 
-    def finalize(self) -> CaptureFinal:
+    async def finalize(self) -> CaptureFinal:
         """Fail: a case that finalizes this stub is testing the wrong object."""
         raise _StubMisuseError
 
@@ -83,7 +83,7 @@ def _spilled_accumulator(
         stream="stdout",
         settings=_TEXT,
     )
-    accumulator.absorb(_SPILLED)
+    asyncio.run(accumulator.absorb(_SPILLED))
     return accumulator
 
 
@@ -119,11 +119,16 @@ def _spill_at_a_path_that_refuses_removal(
         refusal-carrying subclass the cleanup step will be asked to remove.
     """
     accumulator = _spilled_accumulator(directory, keep_file=keep_file)
-    handle = accumulator.finalize().handle
+    handle = _finalize(accumulator).handle
     assert handle is not None, "the spill must have produced a handle"
     refusing = _RefusingClose(handle.path)
     handle.path = refusing
     return accumulator, refusing
+
+
+def _finalize(accumulator: _FileAccumulator) -> CaptureFinal:
+    """Read *accumulator*'s result, as a drain that reached the stream's end does."""
+    return asyncio.run(accumulator.finalize())
 
 
 def _drain(fin: CaptureFinal) -> _CapturedDrain:
@@ -171,7 +176,7 @@ def test_cleanup_removes_the_file_a_spilled_sink_owns(
     rather than on the handle's ``closed`` flag.
     """
     accumulator = _spilled_accumulator(tmp_path)
-    path = accumulator.finalize().capture.path
+    path = _finalize(accumulator).capture.path
     assert path is not None, "the spill must have produced a file to remove"
     assert path.exists(), (
         "this case needs a real file on disk; the accumulator reported one "
@@ -194,7 +199,7 @@ def test_cleanup_keeps_the_file_the_caller_asked_to_keep(
 ) -> None:
     """``keep_file`` outranks the sink path exactly as it does the other one."""
     accumulator = _spilled_accumulator(tmp_path, keep_file=True)
-    path = accumulator.finalize().capture.path
+    path = _finalize(accumulator).capture.path
     assert path is not None, "the spill must have produced a file to keep"
 
     asyncio.run(_cleanup_capture_sinks((accumulator,)))
@@ -215,7 +220,7 @@ def test_finalize_closes_the_result_handles_before_touching_the_sinks(
     would leave this case reading an existing file.
     """
     accumulator = _spilled_accumulator(tmp_path)
-    final = accumulator.finalize()
+    final = _finalize(accumulator)
     path = final.capture.path
     assert path is not None, "the spill must have produced a file to order against"
     observed: list[bool] = []
@@ -249,7 +254,7 @@ def test_a_sink_still_reaches_its_file_when_no_result_carried_the_handle(
     without it the file survives a cancelled run.
     """
     accumulator = _spilled_accumulator(tmp_path)
-    path = accumulator.finalize().capture.path
+    path = _finalize(accumulator).capture.path
     assert path is not None, "the spill must have produced a file to remove"
 
     # The empty drain tuple is the whole point: nothing settled, so nothing
@@ -275,7 +280,7 @@ def test_an_unlink_that_fails_is_absorbed_by_the_result_path(
     surviving file is the witness that the removal was really attempted.
     """
     accumulator, path = _spill_at_a_path_that_refuses_removal(tmp_path)
-    final = accumulator.finalize()
+    final = _finalize(accumulator)
 
     asyncio.run(_finalize_capture_handles((_drain(final),), ()))
 
@@ -294,7 +299,7 @@ def test_an_unlink_that_fails_is_absorbed_by_the_sink_path(
     whose primary error the caller most needs to see.
     """
     accumulator, path = _spill_at_a_path_that_refuses_removal(tmp_path)
-    accumulator.finalize()
+    _finalize(accumulator)
 
     asyncio.run(_finalize_capture_handles((), (accumulator,)))
 

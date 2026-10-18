@@ -32,9 +32,12 @@ from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import CaptureStreamName, FileBackedCapture
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import io
 
     import pytest
+
+    from cuprum._capture_types import CaptureFinal
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
 _PAYLOAD = b"the child's output, in full\n"
@@ -135,7 +138,7 @@ class _SpillFiles:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch the spill create to hand out files this factory configures."""
         monkeypatch.setattr(
-            "cuprum._capture_file.tempfile.NamedTemporaryFile",
+            "cuprum._capture_spill_io.tempfile.NamedTemporaryFile",
             typ.cast("typ.Any", self.factory),
         )
 
@@ -164,7 +167,7 @@ class _RefusingCreate:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch the spill create to refuse every attempt."""
         monkeypatch.setattr(
-            "cuprum._capture_file.tempfile.NamedTemporaryFile",
+            "cuprum._capture_spill_io.tempfile.NamedTemporaryFile",
             typ.cast("typ.Any", self),
         )
 
@@ -188,6 +191,45 @@ def _cleanup(accumulator: _FileAccumulator) -> None:
     asyncio.run(accumulator.cleanup())
 
 
+async def _feed(accumulator: _FileAccumulator, chunks: cabc.Iterable[bytes]) -> None:
+    """Await one absorb per chunk, in the order the drain would read them."""
+    for chunk in chunks:
+        await accumulator.absorb(chunk)
+
+
+def _absorb(accumulator: _FileAccumulator, chunks: cabc.Iterable[bytes]) -> None:
+    """Feed every chunk to *accumulator* in order, on a loop of its own."""
+    asyncio.run(_feed(accumulator, chunks))
+
+
+def _finalize(accumulator: _FileAccumulator) -> CaptureFinal:
+    """Read *accumulator*'s result, as a drain that reached the stream's end does."""
+    return asyncio.run(accumulator.finalize())
+
+
+def _spilled(
+    accumulator: _FileAccumulator,
+    chunks: cabc.Iterable[bytes],
+) -> CaptureFinal:
+    """Absorb *chunks* into *accumulator*, then finalize it.
+
+    One loop for both phases, because that is how the drain reaches the sink:
+    the same task awaits every chunk and then the result.
+
+    Returns
+    -------
+    CaptureFinal
+        The payload and record the accumulator reported once the stream ended.
+    """
+
+    async def spill() -> CaptureFinal:
+        """Absorb the stream, then finalize it."""
+        await _feed(accumulator, chunks)
+        return await accumulator.finalize()
+
+    return asyncio.run(spill())
+
+
 def test_a_failed_create_keeps_the_stream_in_memory(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -203,8 +245,7 @@ def test_a_failed_create_keeps_the_stream_in_memory(
     create.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    accumulator.absorb(_PAYLOAD)
-    final = accumulator.finalize()
+    final = _spilled(accumulator, [_PAYLOAD])
 
     assert final.payload == _PAYLOAD.decode(), (
         "a failed spill must not lose the stream; the caller still reads it"
@@ -232,7 +273,7 @@ def test_a_failed_create_reports_the_error_class_and_not_its_message(
     recorder: list[CaptureEvent] = []
 
     with observe_capture(recorder.append):
-        _accumulator(directory=tmp_path).absorb(_PAYLOAD)
+        _absorb(_accumulator(directory=tmp_path), [_PAYLOAD])
 
     assert [event.category for event in recorder] == [
         CaptureEventCategory.STORAGE_WRITE_FAILED
@@ -274,9 +315,7 @@ def test_a_failed_create_is_reported_once_however_the_stream_grows(
 
     with observe_capture(recorder.append):
         accumulator = _accumulator(directory=tmp_path)
-        for _ in range(10):
-            accumulator.absorb(b"chunk")
-        final = accumulator.finalize()
+        final = _spilled(accumulator, [b"chunk"] * 10)
 
     assert create.attempts == 1, (
         f"a refused create must not be retried per chunk; got {create.attempts}"
@@ -309,8 +348,7 @@ def test_a_failed_first_write_removes_the_half_made_file(
     files.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    accumulator.absorb(_PAYLOAD)
-    final = accumulator.finalize()
+    final = _spilled(accumulator, [_PAYLOAD])
 
     assert files.only.closed is True, "the abandoned file's descriptor must close"
     assert not files.only.path.exists(), (
@@ -344,10 +382,14 @@ def test_a_failed_append_keeps_the_prefix_that_reached_the_file(
     files.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    accumulator.absorb(_PREFIX)
-    files.only.fail_write = True
-    accumulator.absorb(_TAIL)
-    final = accumulator.finalize()
+    async def append_across_the_failure() -> CaptureFinal:
+        """Spill the prefix, arm the refusal, then append the tail."""
+        await accumulator.absorb(_PREFIX)
+        files.only.fail_write = True
+        await accumulator.absorb(_TAIL)
+        return await accumulator.finalize()
+
+    final = asyncio.run(append_across_the_failure())
 
     assert final.capture.storage == "file", "the spill succeeded, so the file stands"
     assert final.capture.storage_failed is True, (
@@ -378,10 +420,15 @@ def test_a_failed_append_stops_writing_rather_than_retrying_per_chunk(
 
     with observe_capture(recorder.append):
         accumulator = _accumulator(directory=tmp_path)
-        accumulator.absorb(_PREFIX)
-        files.only.fail_write = True
-        for _ in range(5):
-            accumulator.absorb(b"later chunk")
+
+        async def stop_after_the_refusal() -> None:
+            """Spill the prefix, arm the refusal, then offer five more chunks."""
+            await accumulator.absorb(_PREFIX)
+            files.only.fail_write = True
+            for _ in range(5):
+                await accumulator.absorb(b"later chunk")
+
+        asyncio.run(stop_after_the_refusal())
 
     # One write took the prefix, one was refused; the five chunks after that
     # refusal must not have reached the file at all.
@@ -416,10 +463,15 @@ def test_a_failed_append_flush_is_reported_as_a_flush_failure(
 
     with observe_capture(recorder.append):
         accumulator = _accumulator(directory=tmp_path)
-        accumulator.absorb(_PREFIX)
-        files.only.fail_flush = True
-        accumulator.absorb(_TAIL)
-        final = accumulator.finalize()
+
+        async def flush_across_the_failure() -> CaptureFinal:
+            """Spill the prefix, arm the refusal, then append and finalize."""
+            await accumulator.absorb(_PREFIX)
+            files.only.fail_flush = True
+            await accumulator.absorb(_TAIL)
+            return await accumulator.finalize()
+
+        final = asyncio.run(flush_across_the_failure())
 
     assert [event.category for event in recorder] == [
         CaptureEventCategory.SPILLED_TO_FILE,
@@ -463,8 +515,7 @@ def test_a_failed_flush_during_the_spill_abandons_the_file(
     files.install(monkeypatch)
     accumulator = _accumulator(directory=tmp_path)
 
-    accumulator.absorb(_PAYLOAD)
-    final = accumulator.finalize()
+    final = _spilled(accumulator, [_PAYLOAD])
 
     assert final.capture.storage == "memory", (
         "an abandoned spill leaves the capture on the heap"
@@ -496,7 +547,7 @@ def test_cleanup_after_a_failed_create_leaves_no_file_and_does_not_raise(
     )
     accumulator = _accumulator(directory=tmp_path)
 
-    accumulator.absorb(_PAYLOAD)
+    _absorb(accumulator, [_PAYLOAD])
     _cleanup(accumulator)
     _cleanup(accumulator)
 
@@ -527,13 +578,13 @@ def test_a_vanished_spill_file_is_absorbed_when_byte_mode_reads_it_back(
         settings=settings,
     )
     events: list[CaptureEvent] = []
-    accumulator.absorb(_PAYLOAD)
+    _absorb(accumulator, [_PAYLOAD])
     path = accumulator._path
     assert path is not None, "the capture had to spill before it could vanish"
     path.unlink()
 
     with observe_capture(events.append):
-        final = accumulator.finalize()
+        final = _finalize(accumulator)
 
     assert final.payload is None, (
         "a spill whose bytes cannot be read is not a payload the caller can use"
@@ -564,12 +615,12 @@ def test_a_vanished_spill_file_is_still_reported_as_text_in_text_mode(
     control for the byte-mode case beside it, which has a read to absorb.
     """
     accumulator = _accumulator(directory=tmp_path)
-    accumulator.absorb(_PAYLOAD)
+    _absorb(accumulator, [_PAYLOAD])
     path = accumulator._path
     assert path is not None, "the capture had to spill before it could vanish"
     path.unlink()
 
-    final = accumulator.finalize()
+    final = _finalize(accumulator)
 
     assert final.payload is None, (
         "text mode reports the spill as a path rather than reading its bytes"

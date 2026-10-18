@@ -367,10 +367,10 @@ class _ReleasedSink:
         """Start unreleased."""
         self.released = False
 
-    def absorb(self, chunk: bytes) -> None:
+    async def absorb(self, chunk: bytes) -> None:
         """Accept output, which this case never sends."""
 
-    def finalize(self) -> typ.NoReturn:
+    async def finalize(self) -> typ.NoReturn:
         """Refuse to finalize; the discard path builds no result."""
         raise NotImplementedError
 

@@ -15,6 +15,7 @@ byte for byte, so a caller who configured nothing cannot see a difference.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import typing as typ
 
@@ -36,7 +37,7 @@ from cuprum.capture_policy import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._capture_types import CaptureSink
+    from cuprum._capture_types import CaptureFinal, CaptureSink
     from cuprum.capture_policy import CaptureStreamName
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
@@ -77,10 +78,27 @@ def _sink(
     return sink
 
 
-def _absorb(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
-    """Feed each chunk to *sink*, in order."""
+async def _feed(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
+    """Await one absorb per chunk, in the order the drain would read them."""
     for chunk in chunks:
-        sink.absorb(chunk)
+        await sink.absorb(chunk)
+
+
+def _absorb(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> None:
+    """Feed each chunk to *sink*, in order, on a loop of its own.
+
+    The drain awaits the sink on a running loop, so a test that called the
+    coroutine without one would test nothing. Driving it here keeps the cases
+    below synchronous, and each call builds a fresh loop — the accumulator is
+    built outside one and has to work across that boundary, which is how a
+    config reused by a second run reaches it.
+    """
+    asyncio.run(_feed(sink, chunks))
+
+
+def _finalize(sink: CaptureSink) -> CaptureFinal:
+    """Read *sink*'s result, as a drain that reached the stream's end does."""
+    return asyncio.run(sink.finalize())
 
 
 @pytest.mark.parametrize("payload", _CORPUS)
@@ -105,7 +123,7 @@ def test_full_capture_reproduces_the_stream_it_replaced(
     sink = _sink(FullCapture())
 
     _absorb(sink, _chunks(payload, chunk_size))
-    final = sink.finalize()
+    final = _finalize(sink)
 
     assert final.payload == expected, (
         f"a full capture must return the decoded stream; got {final.payload!r}"
@@ -134,7 +152,7 @@ def test_full_capture_in_bytes_mode_returns_the_original_bytes(
 
     _absorb(sink, _chunks(payload, chunk_size))
 
-    final = sink.finalize()
+    final = _finalize(sink)
 
     assert final.payload == payload, (
         f"byte mode must return the stream untouched; got {final.payload!r}"
@@ -160,7 +178,7 @@ def test_bounded_capture_retains_a_suffix_within_its_bound(
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
     _absorb(sink, _chunks(payload, 1))
-    final = sink.finalize()
+    final = _finalize(sink)
     record = final.capture
     assert isinstance(final.payload, str), "text mode must decode to text"
     retained = len(final.payload.encode())
@@ -206,12 +224,15 @@ def test_bounded_capture_reports_a_truncation_only_when_it_dropped(
     _absorb(fits, [payload])
     _absorb(over, [payload])
 
-    assert fits.finalize().capture.truncated is False, (
+    within = _finalize(fits)
+    beyond = _finalize(over)
+
+    assert within.capture.truncated is False, (
         "a stream exactly as long as the bound drops nothing and is whole"
     )
-    assert over.finalize().capture.truncated is (max_bytes < len(payload)), (
+    assert beyond.capture.truncated is (max_bytes < len(payload)), (
         "truncation must follow the drop count; "
-        f"got {over.finalize().capture.dropped_bytes} dropped bytes "
+        f"got {beyond.capture.dropped_bytes} dropped bytes "
         f"for max_bytes={max_bytes}"
     )
 
@@ -233,7 +254,7 @@ def test_bounded_capture_never_splits_a_code_point(max_bytes: int) -> None:
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
     _absorb(sink, [payload])
-    final = sink.finalize()
+    final = _finalize(sink)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert "�" not in final.payload, (
@@ -258,7 +279,7 @@ def test_bounded_capture_in_bytes_mode_is_never_longer_than_the_bound(
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=_BYTES)
 
     _absorb(sink, [payload])
-    final = sink.finalize()
+    final = _finalize(sink)
 
     assert isinstance(final.payload, bytes), "byte mode must return bytes"
     assert len(final.payload) <= max_bytes, (
@@ -284,7 +305,7 @@ def test_bounded_capture_drops_from_the_front_not_the_back(
     sink = _sink(BoundedCapture(max_bytes=len(payload) - 1))
 
     _absorb(sink, _chunks(payload, chunk_size))
-    final = sink.finalize()
+    final = _finalize(sink)
 
     assert final.payload == payload[1:].decode(), (
         f"the tail must be kept and the head dropped; got {final.payload!r}"
@@ -308,8 +329,8 @@ def test_a_repeated_finalize_reports_the_same_drop_count(max_bytes: int) -> None
     sink = _sink(BoundedCapture(max_bytes=max_bytes))
 
     _absorb(sink, ["\U0001f600\U0001f601".encode()])
-    first = sink.finalize()
-    second = sink.finalize()
+    first = _finalize(sink)
+    second = _finalize(sink)
 
     assert second.capture.dropped_bytes == first.capture.dropped_bytes, (
         "a repeated read must not accumulate the trim cost; "
@@ -363,8 +384,8 @@ def test_a_bound_that_discards_the_mark_still_decodes(
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
     text = "ab中"
 
-    sink.absorb(text.encode(encoding))
-    final = sink.finalize()
+    _absorb(sink, [text.encode(encoding)])
+    final = _finalize(sink)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert final.payload == expected, (
@@ -407,8 +428,8 @@ def test_a_mark_less_family_name_reads_the_tail_as_the_platform_does(
     settings = _DecodeSettings(family, "strict", capture_bytes=False)
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
 
-    sink.absorb("ab中".encode(native))
-    final = sink.finalize()
+    _absorb(sink, ["ab中".encode(native)])
+    final = _finalize(sink)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert final.payload == "中", (
@@ -444,8 +465,8 @@ def test_a_mark_less_family_name_trims_the_leading_edge_to_its_units(
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
     payload = "\U0001f600\U0001f601".encode(native)
 
-    sink.absorb(payload)
-    final = sink.finalize()
+    _absorb(sink, [payload])
+    final = _finalize(sink)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert final.payload == "\U0001f601", (
@@ -481,8 +502,8 @@ def test_a_mark_less_utf_8_sig_tail_trims_as_utf_8(
     settings = _DecodeSettings("utf-8-sig", "strict", capture_bytes=False)
     sink = _sink(BoundedCapture(max_bytes=max_bytes), settings=settings)
 
-    sink.absorb("ab中".encode())
-    final = sink.finalize()
+    _absorb(sink, ["ab中".encode()])
+    final = _finalize(sink)
 
     assert isinstance(final.payload, str), "text mode must decode to text"
     assert final.payload == expected, (
@@ -509,10 +530,11 @@ def test_a_bound_the_stream_fits_reports_the_same_text_as_a_full_capture(
 
     _absorb(full, [payload])
     _absorb(bounded, [payload])
-    final = bounded.finalize()
+    final = _finalize(bounded)
+    whole = _finalize(full)
 
     assert final.capture.dropped_bytes == 0, "the stream fits, so nothing was cut"
-    assert final.payload == full.finalize().payload, (
+    assert final.payload == whole.payload, (
         f"a bound the stream fits must not change the decoded text for "
         f"{encoding}; got {final.payload!r}"
     )
@@ -538,9 +560,12 @@ def test_build_accumulator_selects_the_file_backed_sink() -> None:
     )
 
     assert sink is not None, "a file-backed policy must build an accumulator"
-    assert sink.finalize().capture.policy is CapturePolicyKind.FILE_BACKED, (
+    final = _finalize(sink)
+
+    assert final.capture.policy is CapturePolicyKind.FILE_BACKED, (
         "the file-backed policy must reach its own accumulator"
     )
+    assert final.handle is None, "a capture that never spilled owns no file"
 
 
 def test_build_accumulator_rejects_a_value_that_is_not_a_policy() -> None:
