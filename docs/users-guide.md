@@ -521,14 +521,19 @@ before the child starts, rather than silently choosing one side:
   target the caller manages.
 - **A redirected stdout with `lines()`, or either stream with `start()`.** Both
   read the child's output in the parent. Use `run()` or `run_sync()` instead.
+- **An inherited stdin alongside a stdin source.**
+  `RunOutputOptions(stdin=StdioTarget.inherit())` with `stdin=StdinInput(...)`
+  or `stdin=StdinStream(...)` gives two answers to where the input comes from.
+  This is checked when the run starts. A `pipe()` stdin target with a source is
+  accepted, because the source is written through that pipe.
 - **Targets on a `Pipeline`.** Redirect a single command instead.
 - **`path()` or `fd()` on Windows.** File and descriptor redirection needs
   POSIX descriptors; `pipe()` and `inherit()` work everywhere.
 
 Reusing one `fd()` target across several runs shares its file offset, so each
 run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
-only `pipe()` and `inherit()`: the input itself is passed to the run call, as
-the next section describes.
+only `pipe()` and `inherit()`: the input itself is passed to the run call's
+`stdin=` argument, as the next section describes.
 
 ### Binary output
 
@@ -685,10 +690,12 @@ result = count_lines.run_sync(stdin=StdinStream(chunks=rows()))
 assert result.stdout == "1000\n"
 ```
 
-Cuprum pulls one chunk, writes it, and waits for the child to accept it before
+Cuprum pulls one chunk, writes it, and waits for the write to drain before
 pulling the next, so a slow reader slows the producer down rather than letting
-input pile up in memory. Each chunk is held in full while it is written, so
-yield chunks of a bounded size when peak memory matters.
+input pile up in memory. A drained write is not proof that the child has read
+the chunk: some bytes can still sit in the transport buffer or the OS pipe.
+Each chunk is held in full while it is written, so yield chunks of a bounded
+size when peak memory matters.
 
 - **Chunk types:** a `str` chunk is encoded with the context's `encoding` and
   `errors`, and a character split across two chunks is still encoded correctly.
@@ -700,8 +707,11 @@ yield chunks of a bounded size when peak memory matters.
 - **A child that stops reading:** closing stdin early, as `head` does, is not
   an error. The run continues to the child's exit code, and the cut-short write
   is reported as a `stdin_error` event.
-- **Clean-up:** Cuprum closes the child's stdin and then the producer on every
-  exit path, so the caller need not close the generator.
+- **Clean-up:** on every exit path, Cuprum closes the child's stdin and then
+  calls the producer's `aclose()`, when it has one. Both waits are bounded: a
+  producer whose `aclose()` takes longer is cancelled, and one that ignores the
+  cancellation may still be cleaning up after the run returns. A generator
+  needs no closing by the caller.
 
 ## Connect a pipeline
 

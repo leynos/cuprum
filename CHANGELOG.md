@@ -132,11 +132,11 @@ _Applications upgrading from 0.1 should follow the
 ### Added
 
 - **Streaming stdin:** `stdin=StdinStream(chunks=...)` feeds a child from an
-  async producer of `str` or `bytes` chunks, pulling each chunk only once the
-  child has accepted the previous one, so large input never has to be held in
-  memory. A producer failure terminates the child and raises `StdinSourceError`
-  with the original exception chained; a child that closes stdin early is not
-  an error ([#445](https://github.com/leynos/cuprum/issues/445)).
+  async producer of `str` or `bytes` chunks, pulling each chunk only after the
+  previous write has drained, so large input never has to be held in memory. A
+  producer failure terminates the child and raises `StdinSourceError` with the
+  original exception chained; a child that closes stdin early is not an error
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
 - **Standard-stream redirection:** `RunOutputOptions.stdout` and `.stderr`
   accept a `StdioTarget` that sends the stream to a pipe, the parent's own
   stream, a file Cuprum opens and closes, or a descriptor the caller owns.

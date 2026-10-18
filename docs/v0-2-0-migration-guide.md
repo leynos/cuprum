@@ -971,15 +971,16 @@ are opt-in: an application that uses neither sees no change, and `StdinInput`
 works as before.
 
 - **Streaming input:** `stdin=StdinStream(chunks=...)` feeds the child from an
-  async iterable of `str` or `bytes` chunks, pulling the next chunk only once
-  the child has accepted the last. A producer failure terminates the child and
+  async iterable of `str` or `bytes` chunks, pulling the next chunk only after
+  the previous write has drained. A producer failure terminates the child and
   raises `StdinSourceError`, with the original exception chained. See
   [Stream input from a producer](users-guide.md#stream-input-from-a-producer).
 - **Redirection:** `RunOutputOptions(stdout=..., stderr=...)` takes a
   `StdioTarget` to send a stream to a file (`path()`), a descriptor the caller
   owns (`fd()`), or the parent's own stream (`inherit()`), instead of capturing
-  it. Contradictory combinations, such as capture with a redirected stream,
-  raise `ValueError`, and file or descriptor targets need a POSIX platform. See
+  it. Contradictory combinations, such as capture with a redirected stream or
+  an inherited stdin alongside a stdin source, raise `ValueError`, and file or
+  descriptor targets need a POSIX platform. See
   [Send a stream to a file or the parent](users-guide.md#send-a-stream-to-a-file-or-the-parent).
 
 `StdinStream`, `StdinSource`, `StdinSourceError`, and `StdioTarget` are
