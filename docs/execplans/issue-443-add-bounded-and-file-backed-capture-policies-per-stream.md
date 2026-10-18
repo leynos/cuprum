@@ -731,6 +731,50 @@ Thresholds that trigger escalation when breached.
   where production resolves it, and splitting a module silently moves that
   contract. Date/Author: 2026-10-18, implementation agent.
 
+- Observation (rebase acceptance, 2026-10-18): the replay is 38 commits onto
+  `d93df9563`, and `git range-diff` matched all 38 one-to-one. Seven differ
+  textually — 10, 11, 14, 19, 21, 22, 26, 29 — and every one was traced to a
+  cause that is benign or deliberate, so none is a silent loss. The pattern in
+  all seven is that `main` advanced a hunk the branch also touched, and the
+  replay kept both sides where a textual diff shows only `main`'s.
+
+  The two that look most like loss are worth recording. Commit 14's diff shows a
+  `pyproject.toml` dead-code entry being replaced, but the replacement is
+  `main`'s own pre-existing `StdioTarget.__post_init__` reason appearing as
+  *context*, and this branch's added `cuprum.capture_policy._is_positive_int`
+  entry is byte-identical before and after; nothing was dropped. Commit 21's
+  diff removes two of `main`'s `nose` duplication entries —
+  `_pipeline_finalize ~ _command_finalization` and
+  `_command_internals ~ _subprocess_execution` — and that is correct rather
+  than a lost suppression: the rebased modules no longer share the import
+  blocks those entries described, so keeping them would have left stale
+  suppressions that the gate itself reports.
+
+  The whole-tree audit backs the same conclusion:
+  `git diff --diff-filter=D d93df9563 HEAD` is empty, there are no conflict
+  markers, and no weave advisory was emitted during the replay.
+
+  One genuine defect did surface, and it is the rebase's most useful lesson.
+  `main`'s `docs/developers-guide.md` described `_reconcile_shielded` as taking
+  "the run's capture setting" and its call sites as passing `capture=True` or
+  `capture=False`. This branch renamed that parameter to `preserve` and removed
+  the `_SubprocessExecution.capture` attribute entirely, so the inherited prose
+  named an argument and an attribute that no longer exist. The text is equally
+  stale at the pre-rebase branch head, so the rebase surfaced a latent branch
+  defect rather than creating one; three passages now describe the `preserve`
+  flag and the per-stream policies it reads. The lesson: a rebase that keeps
+  `main`'s documentation green can still keep `main`'s *claims*, and prose
+  about a renamed parameter is invisible to every gate.
+
+  Finally, gate evidence does not survive a rewrite. The certification logs on
+  disk name `HEAD=6f47e18ed69e17914526122996f0962756af3bf7`, which is the
+  seventh commit of the pre-rebase series and is not an ancestor of the rebased
+  head; the most recent `make test` log names `c12f2aa52`, two commits behind.
+  Both are true statements about trees that no longer exist. Every gate has to
+  run again at the final head before the branch is offered for review, and the
+  log header is what makes that checkable. Date/Author: 2026-10-18,
+  implementation agent.
+
 - Observation (review, bounded trim): the leading-edge trim was written for
   UTF-8 and applied to every encoding. Its loop skips bytes in the
   `0x80`-`0xBF` range, which is UTF-8's continuation range but is also an

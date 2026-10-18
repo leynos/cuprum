@@ -7308,11 +7308,12 @@ is the private bundle of stream configuration, PID, and the stdout/stderr
 diagnostics collectors that the streamed run creates before handing those
 values to the consumer tasks. `_reconcile_shielded` is the reconciliation both
 pre-gather exit routes owe: it drains the consumers under one
-`_shielded_cleanup`, and takes the run's capture setting rather than deciding
-for itself, because the routes disagree about what the drained text is for —
-the exit-wait deadline hands it to the caller's `TimeoutExpired`, while the
-route re-raising some other failure settles promptly and keeps `capture=False`
-so the capture grace is not spent on text nobody will read.
+`_shielded_cleanup`, and takes a `preserve` flag rather than deciding for
+itself, because the routes disagree about what the drained text is for — the
+exit-wait deadline hands it to the caller's `TimeoutExpired`, while the route
+re-raising some other failure settles promptly and keeps `preserve=False` so
+the capture grace is not spent on text nobody will read. Preserving applies the
+run's per-stream capture policies; discarding reports `(None, None)`.
 
 `cuprum/_command_finalization.py` owns the post-spawn finalization cluster that
 was split out of `cuprum/_command_internals.py` when the stdio-resolution work
@@ -7566,21 +7567,22 @@ there is no group signal to release it at all. The phase therefore calls
 writer, drains the consumers, and settles the diagnostics.
 
 The drain boundary carries an important teardown policy. The routes that reach
-the caller as a `TimeoutExpired` pass `capture=True`, allowing the fixed
+the caller as a `TimeoutExpired` pass `preserve=True`, allowing the fixed
 `_CAPTURE_EOF_GRACE_S` window to preserve text that is about to arrive at EOF.
 There are two such routes, and they must agree: a deadline expiring during the
 *exit wait* drains from `_wait_for_streamed_process_exit`, and one expiring
 *after* the child has exited — in the post-exit boundary the module docstring
-describes — drains from `_settle_group_and_reconcile_consumers`. Both pass
-`execution.capture` and hand the drained text to `_handle_stream_timeout`, so a
-capturing run reports its output whichever half of the run the deadline landed
-in. Cancellation, stdin-writer failure, and consumer-failure cleanup pass
-`capture=False`, so they cancel and settle promptly without waiting for that
-window or retaining output. The timeout and cancellation reconciliations run
-under `_shielded_cleanup`; if cancellation arrives during capture grace, both
-consumer tasks are settled before `CancelledError` is re-raised. Keep these
-choices at the drain boundary: moving capture draining into generic cleanup
-changes both timeout output and cancellation latency.
+describes — drains from `_settle_group_and_reconcile_consumers`. Both build the
+drain context from the run's per-stream capture policies and hand the drained
+text to `_handle_stream_timeout`, so a capturing run reports its output
+whichever half of the run the deadline landed in. Cancellation, stdin-writer
+failure, and consumer-failure cleanup pass `preserve=False`, so they cancel and
+settle promptly without waiting for that window or retaining output. The
+timeout and cancellation reconciliations run under `_shielded_cleanup`; if
+cancellation arrives during capture grace, both consumer tasks are settled
+before `CancelledError` is re-raised. Keep these choices at the drain boundary:
+moving capture draining into generic cleanup changes both timeout output and
+cancellation latency.
 
 All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
@@ -8047,10 +8049,10 @@ executes:
    with the stdout/stderr consumer tasks. On `TimeoutError` or
    `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
    stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
-   The timeout reconciliation passes the execution's capture setting so the
-   bounded EOF grace preserves partial text before `_handle_stream_timeout`
-   raises `_SubprocessTimeoutError`; cancellation passes `capture=False` and
-   re-raises `CancelledError` after all tasks settle.
+   The timeout reconciliation passes `preserve=True` so the bounded EOF grace
+   preserves partial text before `_handle_stream_timeout` raises
+   `_SubprocessTimeoutError`; cancellation passes `preserve=False` and re-raises
+   `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits the exit through `_await_exit_or_writer_failure`, which settles the
