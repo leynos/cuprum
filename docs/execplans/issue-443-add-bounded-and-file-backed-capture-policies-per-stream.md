@@ -1181,6 +1181,37 @@ Thresholds that trigger escalation when breached.
   the way to tell the two apart is repeated runs at the enforced bound, not
   loosening the bound. Date/Author: 2026-10-18, implementation agent.
 
+- Observation (review round 10 follow-up, the duplication entry moves with the
+  import): `94184c222` routed the line-stream cleanup's two inline
+  `_DrainContext` constructions through `_drain_context`, which added
+  `_await_exit_or_writer_failure`, `_drain_context`, `_reconcile_run_tasks`, and
+  `_wait_for_exit_code_within_timeout` to
+  `cuprum/_line_stream/coordinator.py`'s `_subprocess_wait` import. The
+  reasoned exception then named only `_subprocess_stream_run.py` and
+  `_subprocess_stream_exit.py`, so the family it covered had grown a third
+  member: the gate reported the entry stale *and* the surviving family
+  blocking, failing `make lint` at the Python half. The gate's own report drew
+  the distinction that mattered — it named the three-member overlap and said
+  the entry was superseded rather than merely coincidental — so the fix was to
+  add the coordinator and say why, not to delete the entry. A deduplication
+  that moves an import into a new module moves that module into every import
+  family the import belongs to, which the gate cannot infer from the source
+  edit alone. Date/Author: 2026-10-18, implementation agent.
+
+- Observation (review round 10 follow-up, a gate leaf the host refused): after
+  the duplication fix, `make lint`'s Python half passed in full — ruff,
+  interrogate, both Pylint interpreters, the DF12 pass, ambrleaks, Skylos, and
+  the duplication gate — and then `lint-clippy` failed with
+  `build-limits: the supervisor refused: unhealthy` before any compiler ran.
+  `build-limits-status` reported `capacity 4, held 2, UNHEALTHY`, a `live_work`
+  drain fault, `visible compiler roots=0`, and two `server-drain` groups held
+  for over 1050 s (netsuke's and pyo3's). This is the host's admission
+  supervisor, not this branch: nothing about a `pyproject.toml` exception can
+  make a `rustc -vV` probe be refused, and the required recovery is
+  `build-limits-recover`, which is the operator's job. The non-Rust gates were
+  run instead and all passed; the Rust leaves stay unobserved until admission
+  recovers. Date/Author: 2026-10-18, implementation agent.
+
 ## Decision log
 
 - Decision: place `captures` after `relay_fallbacks` and mark it `kw_only`.
@@ -1621,6 +1652,17 @@ Thresholds that trigger escalation when breached.
   decoding decision is imposed on it. The documented guarantee was wrong, not
   the code. Date/Author: 2026-10-18, implementation agent; raised by review
   round 10.
+
+- Decision: widen the import-family exception to a third member rather than
+  extracting a shared import. Rationale: the detector reports a *span of import
+  declarations*, and each module must bind the name into its own namespace to
+  call it. A shared helper cannot remove an import; it can only add one. The
+  entry therefore records the dependency surface each module declares, and its
+  membership must track which modules declare it. The gate already reports a
+  superseded entry by name, which is why the stale line and the blocking line
+  arrived together — the entry was widened rather than deleted because the
+  duplication is the intended prologue of a deliberate split. Date/Author:
+  2026-10-18, implementation agent; raised by review round 10 follow-up.
 
 ## Outcomes & retrospective
 
