@@ -19,10 +19,10 @@ import typing as typ
 import pytest
 
 from cuprum import ScopeConfig, scoped
-from cuprum.capture_events import CaptureEvent, CaptureEventCategory
 from cuprum.capture_observation import observe_capture
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.sh import Pipeline, RunOutputOptions, SafeCmd
+from cuprum.unittests._capture_witness_support import _SpillWitness
 from tests.helpers.catalogue import PythonCatalogue, build_python_catalogue_env
 
 if typ.TYPE_CHECKING:
@@ -47,25 +47,6 @@ _COPY_STDIN = "import sys; sys.stdout.write(sys.stdin.read())"
 
 class _AfterHookError(Exception):
     """Raised by the failing pipeline after-hook in this module."""
-
-
-class _SpillWitness:
-    """Record every capture event the run emits."""
-
-    def __init__(self) -> None:
-        """Start with no events seen."""
-        self.categories: list[CaptureEventCategory] = []
-
-    def __call__(self, event: CaptureEvent) -> None:
-        """Record one capture event's category."""
-        self.categories.append(event.category)
-
-    def spilled(self) -> None:
-        """Assert at least one stream really spilled."""
-        assert CaptureEventCategory.SPILLED_TO_FILE in self.categories, (
-            "the run never spilled, so the removal assertion below would hold "
-            f"for the wrong reason; events seen: {self.categories}"
-        )
 
 
 def _options(directory: pathlib.Path) -> RunOutputOptions:
