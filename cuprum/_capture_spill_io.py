@@ -46,8 +46,8 @@ raises is the one the traceback names.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import typing as typ
+from tempfile import NamedTemporaryFile
 
 from cuprum._process_lifecycle import _shielded_cleanup
 
@@ -162,6 +162,12 @@ def _create_spill(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
     a longer method, and the obligation to release it passed to the caller
     along with it.
 
+    ``NamedTemporaryFile`` is imported by name, so this module owns the seam a
+    test replaces. Patching ``tempfile.NamedTemporaryFile`` instead would
+    rewrite the standard library's own attribute for the whole process, which
+    reaches every other importer for as long as the patch lives and leaves this
+    module's dependency on it untested rather than substituted.
+
     Parameters
     ----------
     directory : pathlib.Path | str | None
@@ -180,7 +186,7 @@ def _create_spill(directory: pathlib.Path | str | None) -> typ.IO[bytes]:
         The open spill file, positioned at the start. Creating it raises
         whatever the filesystem raises, which the accumulator absorbs.
     """
-    return tempfile.NamedTemporaryFile(
+    return NamedTemporaryFile(
         delete=False,
         dir=directory,
     )

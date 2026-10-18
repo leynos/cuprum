@@ -138,7 +138,7 @@ class _SpillFiles:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch the spill create to hand out files this factory configures."""
         monkeypatch.setattr(
-            "cuprum._capture_spill_io.tempfile.NamedTemporaryFile",
+            "cuprum._capture_spill_io.NamedTemporaryFile",
             typ.cast("typ.Any", self.factory),
         )
 
@@ -167,7 +167,7 @@ class _RefusingCreate:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch the spill create to refuse every attempt."""
         monkeypatch.setattr(
-            "cuprum._capture_spill_io.tempfile.NamedTemporaryFile",
+            "cuprum._capture_spill_io.NamedTemporaryFile",
             typ.cast("typ.Any", self),
         )
 
