@@ -442,23 +442,23 @@ Thresholds that trigger escalation when breached.
   tripped the tree's `R9104` trivial-attribute-wrapper rule.
   `asyncio.to_thread` alone starts a separate worker per call, so the file's
   contents would otherwise follow executor-scheduling order rather than the
-  order the child wrote. Every call
-  is shielded through the existing `_shielded_cleanup`, so a cancelled drain
-  waits for an in-flight write before teardown unlinks the file underneath it.
-  `CaptureSink.absorb` and `finalize` are now coroutines on all three
-  accumulators, so the drain awaits one protocol rather than testing which
-  policy it holds; the two heap-backed accumulators answer without suspending.
-  `SpillHandle.close` closes its descriptor on a worker for the same reason,
-  `keep_file=True` excepted as before. The leaf's scope, the import direction
-  that keeps it acyclic, and the protocol change are recorded in the ADR-007
-  addendum of 2026-10-18 and referenced from the design doc's capture section.
-  Five test modules moved to the async seam; the two that arm a simulated
-  filesystem failure between two awaits keep the phases inside one
-  `asyncio.run`, because splitting them would let a sink pass here that cannot
-  finish a stream in a real run. Evidence: 186 passed across the five converted
-  modules, 8 passed in `test_capture_spill_cleanup.py`, 11 passed in the two
-  modules whose stub sinks also grew the async seam, and 1159 passed, 68
-  skipped, 2730 deselected across
+  order the child wrote. Every call is shielded through the existing
+  `_shielded_cleanup`, so a cancelled drain waits for an in-flight write before
+  teardown unlinks the file underneath it. `CaptureSink.absorb` and `finalize`
+  are now coroutines on all three accumulators, so the drain awaits one
+  protocol rather than testing which policy it holds; the two heap-backed
+  accumulators answer without suspending. `SpillHandle.close` closes its
+  descriptor on a worker for the same reason, `keep_file=True` excepted as
+  before. The leaf's scope, the import direction that keeps it acyclic, and the
+  protocol change are recorded in the ADR-007 addendum of 2026-10-18 and
+  referenced from the design doc's capture section. Five test modules moved to
+  the async seam; the two that arm a simulated filesystem failure between two
+  awaits keep the phases inside one `asyncio.run`, because splitting them would
+  let a sink pass here that cannot finish a stream in a real run. Evidence: 186
+  passed across the five converted modules, 8 passed in
+  `test_capture_spill_cleanup.py`, 11 passed in the two modules whose stub
+  sinks also grew the async seam, and 1159 passed, 68 skipped, 2730 deselected
+  across
   `cuprum/unittests/ -k "capture or spill or drain or stream or pipeline or
   line_stream"`
   (log: `/tmp/converted-capture-<branch>.out` and the broad sweep it followed).

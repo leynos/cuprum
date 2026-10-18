@@ -1429,11 +1429,11 @@ capture's contract is _order_: the buffered prefix must land before the chunks
 after it, and the flush before the read-back. Serializing one accumulator's
 calls needs state, and that state has to live somewhere.
 
-`cuprum/_capture_spill_io.py` is that somewhere. It holds `_create_spill` —
-the one blocking call that has to exist as a named function, because it is the
-seam the failure tests patch — plus `_SpillIo`, the object that runs each
-blocking call on a worker under a per-accumulator lock. Every other call is a
-bound method supplied at the call site: the accumulator awaits
+`cuprum/_capture_spill_io.py` is that somewhere. It holds `_create_spill` — the
+one blocking call that has to exist as a named function, because it is the seam
+the failure tests patch — plus `_SpillIo`, the object that runs each blocking
+call on a worker under a per-accumulator lock. Every other call is a bound
+method supplied at the call site: the accumulator awaits
 `self._io.run(file.write, chunk)` and gets the result or the `OSError`. Naming
 each call as a one-line forwarding function was the first shape, and the tree's
 own `R9104` rule rejects that as a trivial attribute wrapper; supplying the
