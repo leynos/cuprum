@@ -21,6 +21,15 @@ _PYLINT = "pylint"
 _ASTROID = "astroid"
 _DF12_PLUGIN = "df12_python_lints"
 
+#: The DF12 plugin resolves a git dependency, so `uv tool run` fetches that
+#: repository before Pylint can start. With a cold uv cache the environment
+#: case below measured 14.56s on its own and the whole file 21.40s, against the
+#: suite-wide `timeout = 30`; the second case adds a `make pylint-classic`
+#: subprocess whose `verify-classic-pylint` prerequisite runs its own
+#: `uv tool run`. Both therefore state their own bound, as the integration
+#: scenarios do, instead of relying on a default sized for in-process tests.
+_DF12_TIMEOUT_S = 180
+
 
 def _required_environment(name: str) -> str:
     """Read an integration-contract setting supplied by the Makefile."""
@@ -178,6 +187,7 @@ def test_classic_astroid_inspects_pypy_builtin_descriptors() -> None:
     assert completed.stdout.strip() == "descriptor inspection succeeded"
 
 
+@pytest.mark.timeout(_DF12_TIMEOUT_S)
 def test_df12_environment_is_cpython_314_and_not_loaded_by_classic() -> None:
     """DF12 stays in its dedicated CPython environment and plugin boundary."""
     classic = _run_classic(
@@ -208,6 +218,7 @@ def test_df12_environment_is_cpython_314_and_not_loaded_by_classic() -> None:
     ]
 
 
+@pytest.mark.timeout(_DF12_TIMEOUT_S)
 def test_df12_diagnostic_and_make_failure_propagate(tmp_path: pathlib.Path) -> None:
     """Both the DF12 plugin and the Makefile propagate a failing Pylint pass."""
     fixture = tmp_path / "bare_assert.py"
