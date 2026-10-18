@@ -311,15 +311,21 @@ def test_tar_create_places_option_shaped_sources_after_separator(
     archive: str,
     sources: list[str],
 ) -> None:
-    """Every ``-``/``--`` source follows ``--``, which follows the archive."""
+    """Every ``-``/``--`` source follows ``--``, which follows the archive.
+
+    The checks are positional rather than a search for ``--``: a generated
+    archive name may itself be ``--``, so the first match need not be the
+    separator.
+    """
     options = TarCreateOptions(allow_relative=True)
     argv = _tar_create_argv(archive, sources, options)
 
     assert argv == ("-c", "-f", archive, "--", *sources), (
         "the separator must directly follow the archive, then the sources"
     )
-    separator = argv.index("--")
-    assert separator + 1 == len(argv) - len(sources), (
+    separator_index = 3
+    assert argv[separator_index] == "--", "the separator must occupy index three"
+    assert argv[separator_index + 1 :] == tuple(sources), (
         "no source may appear before the separator"
     )
 

@@ -232,6 +232,19 @@ def test_tar_create_separates_option_shaped_relative_source(
     )
 
 
+def test_tar_create_separator_stays_fixed_when_archive_is_dashdash() -> None:
+    """An archive literally named ``--`` must not be mistaken for the separator."""
+    sources = ["--checkpoint=1", "plain"]
+    cmd = tar_create("--", sources, options=TarCreateOptions(allow_relative=True))
+
+    assert cmd.argv == ("-c", "-f", "--", "--", *sources), (
+        "the archive value must keep its slot before the separator"
+    )
+    assert cmd.argv.index("--", 3) == 3, (
+        "searching after the archive value must find the separator"
+    )
+
+
 def test_tar_create_separator_precedes_every_source_verbatim() -> None:
     """Mixed ordinary and option-shaped sources keep their order after ``--``."""
     archive = "/srv/archive.tar"
