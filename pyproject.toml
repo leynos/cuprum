@@ -927,13 +927,6 @@ reason = "Two path classifiers that share a check order and a `_WINDOWS_ABS_PATT
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/sh/safe_cmd.py::lines",
-    "cuprum/sh/safe_cmd.py::run",
-]
-reason = "Two entry points on one class that resolve the same call inputs — context, allowlist enforcement, stdin, timeout — and then diverge completely: `run` buffers a result while `lines` streams an iterator under an execution tracker. The trailing divergence is the method, and a shared prologue would need the caller's own state construction handed back to it."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/_bytes_run.py::_require_bytes_command_result",
     "cuprum/_pipeline_results.py::_require_bytes_stage",
 ]
