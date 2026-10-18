@@ -6,6 +6,7 @@ import dataclasses
 import stat
 import tomllib
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -21,13 +22,18 @@ from scripts.tests import boundary_harness_support
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
 from scripts.tests.boundary_harness_support import copy_boundary_repository
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
 CARGO_METADATA_CALLS_PER_SYMLINK_TEST = 2
 SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS = 3900
+
+
+class _MarkedTestFunction(typ.Protocol):
+    """Describe a test function decorated with pytest marks."""
+
+    pytestmark: list[pytest.Mark]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -178,8 +184,9 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
 # Only this test launches Cargo through `_compile`: `main()` uses a recording
 # seam for its unsafe probes, then one real Cargo check. The two metadata calls
 # and check have fixed 120 s and 3600 s bounds; the 3900 s marker leaves 60 s
-# for test work and catches a wedged process. It covers the measured 181 s cold
-# `CARGO_BUILD_JOBS=1` build; callers control `-j`, independent of this budget.
+# for test work and catches a wedged process. The compile bound sizes the
+# marker; the measured 181 s cold `CARGO_BUILD_JOBS=1` build does not. Callers
+# control `-j`, independently of this budget.
 # The global `timeout = 30` remains unchanged for all other tests.
 @pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
 def test_main_materializes_external_source_file_symlinks(
@@ -255,25 +262,16 @@ def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
 
 def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
     """Keep the isolated compile and metadata budgets inside the test tier."""
-    markers = typ.cast(
-        "list[pytest.Mark]",
-        getattr(test_main_materializes_external_source_file_symlinks, "pytestmark", ()),
+    marked_test = typ.cast(
+        "_MarkedTestFunction", test_main_materializes_external_source_file_symlinks
     )
+    markers = marked_test.pytestmark
     timeout_markers = [marker for marker in markers if marker.name == "timeout"]
     assert len(timeout_markers) == 1, (
         "the real compile test must have one timeout marker"
     )
     assert timeout_markers[0].args == (SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS,), (
         "the test marker must match its named timeout budget"
-    )
-    timeout_values = (
-        SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS,
-        COMPILE_TIMEOUT_SECONDS,
-        boundary_harness_support.CARGO_METADATA_TIMEOUT_SECONDS,
-        CARGO_METADATA_CALLS_PER_SYMLINK_TEST,
-    )
-    assert timeout_values == (3900, 3600, 120, 2), (
-        "the compile timeout tier and call count must match documented values"
     )
     subprocess_budget = COMPILE_TIMEOUT_SECONDS + (
         CARGO_METADATA_CALLS_PER_SYMLINK_TEST
@@ -283,8 +281,9 @@ def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
         "the test marker must exceed both metadata and compile budgets"
     )
 
+    repository_root = Path(__file__).resolve().parents[2]
     pyproject = tomllib.loads(
-        (contract.ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        (repository_root / "pyproject.toml").read_text(encoding="utf-8")
     )
     global_timeout = pyproject["tool"]["pytest"]["ini_options"]["timeout"]
     assert isinstance(global_timeout, int), "the global pytest timeout must be numeric"

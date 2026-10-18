@@ -151,6 +151,9 @@ through `timeout = 30` in `pyproject.toml`.
 
 ## Boundary harness compile tier
 
+This pytest-only tier sits outside the Rust and coverage tiers in Table 1 and
+is not configured through nextest.
+
 The external-source symlink test in `scripts/tests/test_boundary_workspace.py`
 reaches one real Cargo check after the boundary verifier's other compile calls
 use a recording seam. The check is bounded by `COMPILE_TIMEOUT_SECONDS` (3600
@@ -163,6 +166,6 @@ for surrounding test work and catches a wedged test process.
 The marker covers the cold `CARGO_BUILD_JOBS=1` build measured at 181 s. The
 test does not set Cargo's job count; parallelism belongs to its caller, so the
 allowance does not depend on the caller's `-j` value. The suite-wide global
-`timeout = 30` remains tight, and only this test raises its own bound. The fast
+`timeout = 30` remains tight, and only this test raises its bound. The fast
 contract test `test_real_compile_test_timeout_exceeds_compile_budget` pins the
 marker and both timeout relationships.

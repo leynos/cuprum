@@ -63,7 +63,7 @@ def cargo_target_roots(crate: Path) -> tuple[Path, ...]:
 
 
 def record_cargo_metadata_calls(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """Record metadata helper calls while preserving the real implementation."""
+    """Record calls; callers must resolve the helper through this module."""
     calls: list[Path] = []
     read_metadata = cargo_target_roots
 

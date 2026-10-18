@@ -4595,7 +4595,7 @@ of its two metadata calls. Its `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` marker is
 3900 s, above their combined 3840 s subprocess budget. It covers a cold
 `CARGO_BUILD_JOBS=1` build measured at 181 s; the test leaves parallelism to
 its caller. The suite-wide `timeout = 30` remains tight, and only this test
-raises its own bound. `test_real_compile_test_timeout_exceeds_compile_budget`
+raises its bound. `test_real_compile_test_timeout_exceeds_compile_budget`
 enforces the ordering. See
 [Boundary harness compile tier](coverage-timeout-tiers.md#boundary-harness-compile-tier).
 
