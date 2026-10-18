@@ -714,36 +714,47 @@ def test_a_byte_mode_bound_hands_back_the_child_bytes_untouched() -> None:
     character. A byte-exact run does not decode, so a binary tail that happens
     to end in a continuation-shaped byte — ``b"\\xc3"`` is the leading byte of
     a UTF-8 two-byte character and also an ordinary byte in a binary payload —
-    must survive untouched. Trimming it would drop data the caller asked for
-    and count a cut that never happened.
+    must survive untouched. The bound still applies, and only the bound: the
+    payload here is one byte over it, so the case would also catch a byte mode
+    that quietly skipped the retention limit.
     """
-    payload = b"\x00\x01\x02\xc3"
-    sink = _byte_sink(BoundedCapture(max_bytes=len(payload) + 4))
+    payload = b"\x00\x01\x02\x03\xc3"
+    sink = _byte_sink(BoundedCapture(max_bytes=4))
 
     final = _retained(sink, [payload])
 
-    assert final.payload == payload, (
-        f"a byte-exact capture must return the child's own bytes; got {final.payload!r}"
+    assert final.payload == payload[-4:], (
+        "a byte-exact capture must return the child's own bytes, cut only by "
+        f"the bound; got {final.payload!r}"
     )
-    assert final.capture.dropped_bytes == 0, (
-        "a byte-exact capture must not count a trim it never made; got "
+    assert final.capture.dropped_bytes == 1, (
+        "a byte-exact capture counts only the bytes the bound discarded; got "
         f"{final.capture.dropped_bytes}"
     )
-    assert final.capture.truncated is False, (
-        "a byte-exact capture that dropped nothing must not report truncation"
+    assert final.capture.truncated is True, (
+        "a byte-exact capture that met its bound by dropping a byte is truncated"
     )
 
 
 def test_a_byte_mode_bound_keeps_a_continuation_shaped_leading_byte() -> None:
-    """A byte-exact tail starting with ``0x80``-``0xBF`` is not a torn code point."""
-    payload = b"\x80\x81\x82\x83"
-    sink = _byte_sink(BoundedCapture(max_bytes=len(payload)))
+    """A byte-exact tail starting with ``0x80``-``0xBF`` is not a torn code point.
+
+    The stream begins with a real three-byte character and is cut inside it, so
+    a byte mode that applied the text trim would walk the cut forward over the
+    ``0x80``-``0xBF`` bytes and drop bytes the bound already accounted for.
+    """
+    payload = "中".encode() + b"\x80\x81\x82"
+    sink = _byte_sink(BoundedCapture(max_bytes=3))
 
     final = _retained(sink, [payload])
 
-    assert final.payload == payload, (
-        "a binary prefix must not be mistaken for continuation bytes; "
-        f"got {final.payload!r}"
+    assert final.payload == b"\x80\x81\x82", (
+        "a binary prefix must not be mistaken for continuation bytes, so the "
+        f"bound alone decides the tail; got {final.payload!r}"
+    )
+    assert final.capture.dropped_bytes == len(payload) - 3, (
+        "the 0x80-0xBF leading bytes must not be counted as dropped by a trim "
+        f"that byte mode never makes; got {final.capture.dropped_bytes}"
     )
 
 
