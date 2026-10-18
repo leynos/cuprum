@@ -85,7 +85,9 @@ def test_command_result_require_captured_reports_missing_streams(
     with pytest.raises(ValueError, match=missing) as exc_info:
         result.require_captured()
 
-    assert "RunOutputOptions(capture=True)" in str(exc_info.value)
+    assert "RunOutputOptions(capture=True)" in str(exc_info.value), (
+        f"the diagnostic must point to explicit capture, got {exc_info.value!s}"
+    )
 
 
 def test_command_result_require_captured_rejects_non_text_streams() -> None:
@@ -102,4 +104,6 @@ def test_command_result_require_captured_rejects_non_text_streams() -> None:
     with pytest.raises(ValueError, match="stdout") as exc_info:
         result.require_captured()
 
-    assert "not captured as text" in str(exc_info.value)
+    assert "not captured as text" in str(exc_info.value), (
+        f"the diagnostic must reject non-text streams, got {exc_info.value!s}"
+    )

@@ -30,6 +30,24 @@ async def default_async_run_returns_captured_streams() -> None:
     typ.assert_type(result.stderr, str)
 
 
+def explicit_none_sync_run_returns_captured_streams() -> None:
+    """Preserve the default capture overload with explicit ``None``."""
+    command = sh.make(ECHO)()
+    result = command.run_sync(output=None)
+    typ.assert_type(result, CapturedResult)
+    typ.assert_type(result.stdout, str)
+    typ.assert_type(result.stderr, str)
+
+
+async def explicit_none_async_run_returns_captured_streams() -> None:
+    """Preserve the capture overload when awaiting with ``output=None``."""
+    command = sh.make(ECHO)()
+    result = await command.run(output=None)
+    typ.assert_type(result, CapturedResult)
+    typ.assert_type(result.stdout, str)
+    typ.assert_type(result.stderr, str)
+
+
 def explicit_sync_options_keep_optional_streams() -> None:
     """Even explicit capture settings retain the broader result contract."""
     command = sh.make(ECHO)()

@@ -420,7 +420,9 @@ def test_guard_allows_a_definition_in_each_branch_arm() -> None:
 )
 def test_guard_allows_complete_overload_groups(source: str) -> None:
     """Overload declarations are valid when one implementation follows."""
-    assert not _find_shadowing(source, filename="probe.py")
+    assert not _find_shadowing(source, filename="probe.py"), (
+        "complete overload groups must not be reported as shadowed definitions"
+    )
 
 
 def test_guard_reports_overloads_without_an_implementation() -> None:
@@ -434,8 +436,12 @@ def test_guard_reports_overloads_without_an_implementation() -> None:
     found = _find_shadowing(source, filename="probe.py")
 
     assert len(found) == 1, f"expected one incomplete overload report, got {found}"
-    assert found[0].name == "_run"
-    assert [site[1] for site in found[0].sites] == [4, 7]
+    assert found[0].name == "_run", (
+        "the incomplete overload report must identify the overloaded function"
+    )
+    assert [site[1] for site in found[0].sites] == [4, 7], (
+        "the incomplete overload report must identify both overload declarations"
+    )
 
 
 def test_guard_allows_a_nested_definition_shadowing_its_outer_name() -> None:

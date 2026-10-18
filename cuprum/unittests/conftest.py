@@ -19,11 +19,15 @@ from benchmarks.pipeline_throughput_scenarios import (
     CI_RATCHET_WORKER_ITERATIONS as WORKER_ITERATIONS,
 )
 from benchmarks.ratchet_history import BaselineHistory, HistorySample
+from cuprum import ECHO, Program, sh
+from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
     import re
+
+    from cuprum.sh import Pipeline
 
 settings.register_profile(
     "crosshair",
@@ -157,6 +161,19 @@ def candidate_artefacts(tmp_path: pth.Path) -> tuple[pth.Path, pth.Path]:
             payload=throughput,
         ),
     )
+
+
+@pytest.fixture
+def identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
+    """Build a pipeline and allowlist for forwarding captured text."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    echo = sh.make(ECHO)
+    pipeline = echo("-n", "echoed") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+    return pipeline, frozenset([ECHO, python_program])
 
 
 def _sample(

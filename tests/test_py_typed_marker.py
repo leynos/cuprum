@@ -29,7 +29,6 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
-from tests.helpers.packaging import PACKAGING_BACKENDS
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult
@@ -46,8 +45,7 @@ _ARCHIVE_SUFFIXES = {"wheel": "*.whl", "sdist": "*.tar.gz"}
 
 
 def _run_packaging_frontend(
-    arguments: tuple[str, ...],
-    timeout_seconds: int,
+    arguments: tuple[str, ...], *, timeout: int
 ) -> CommandResult:
     """Run one packaging command through Cuprum's own safe-command layer."""
     program = Program("uv")
@@ -59,7 +57,7 @@ def _run_packaging_frontend(
     command = sh.make(program, catalogue=catalogue)
     with scoped(ScopeConfig(allowlist=frozenset({program}))):
         return command(*arguments).run_sync(
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout_seconds)
+            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout)
         )
 
 
@@ -80,12 +78,7 @@ def _distribution_arguments(
     )
 
 
-def _build_distribution(
-    backend: str,
-    kind: str,
-    destination: Path,
-    timeout_seconds: int,
-) -> Path:
+def _build_distribution(backend: str, kind: str, destination: Path) -> Path:
     """Build one archive and return it, failing the test unless exactly one appears.
 
     Parameters
@@ -104,7 +97,9 @@ def _build_distribution(
     """
     suffix = _ARCHIVE_SUFFIXES[kind]
     result = _run_packaging_frontend(
-        _distribution_arguments(backend, kind, destination), timeout_seconds
+        _distribution_arguments(backend, kind, destination),
+        # Maturin inspects the Rust workspace and queues on shared Cargo locks.
+        timeout=3600 if backend == "maturin" else 180,
     )
     assert result.exit_code == 0, (
         f"{backend} {kind} build failed with {result.exit_code}: {result.stderr}"
@@ -134,15 +129,10 @@ def _wheel_marker(wheel_path: Path) -> str | None:
         return archive.read(MARKER_PATH).decode("utf-8")
 
 
-@pytest.mark.parametrize(
-    ("backend", "timeout_seconds"),
-    PACKAGING_BACKENDS,
-)
-def test_wheel_ships_the_pep561_marker(
-    backend: str,
-    timeout_seconds: int,
-    tmp_path: Path,
-) -> None:
+# The outer budget must outlast the Maturin command's shared-Cargo allowance.
+@pytest.mark.timeout(3720)
+@pytest.mark.parametrize("backend", ["uv", "maturin"])
+def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     """Every wheel carries an empty, complete ``py.typed`` marker.
 
     The native wheel is built here even though
@@ -151,7 +141,7 @@ def test_wheel_ships_the_pep561_marker(
     *content*, which decides whether a type checker reads the annotations at
     all or reads them as a partial stub.
     """
-    wheel_path = _build_distribution(backend, "wheel", tmp_path, timeout_seconds)
+    wheel_path = _build_distribution(backend, "wheel", tmp_path)
     marker = _wheel_marker(wheel_path)
 
     assert marker is not None, (
@@ -165,13 +155,11 @@ def test_wheel_ships_the_pep561_marker(
     )
 
 
-@pytest.mark.parametrize(
-    ("backend", "timeout_seconds"),
-    PACKAGING_BACKENDS,
-)
+# The outer budget must outlast the Maturin command's shared-Cargo allowance.
+@pytest.mark.timeout(3720)
+@pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
     backend: str,
-    timeout_seconds: int,
     tmp_path: Path,
 ) -> None:
     """Both source archives carry the marker, so a from-source install stays typed.
@@ -180,7 +168,7 @@ def test_source_distribution_ships_the_pep561_marker(
     cuprum cuprum`` builds from the sdist, so the marker must travel in the
     archive that build unpacks.
     """
-    archive_path = _build_distribution(backend, "sdist", tmp_path, timeout_seconds)
+    archive_path = _build_distribution(backend, "sdist", tmp_path)
 
     with tarfile.open(archive_path) as archive:
         # Both frontends nest the tree under a single ``cuprum-<version>/``

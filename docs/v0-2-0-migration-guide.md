@@ -30,6 +30,7 @@ where to find the fix. A row that does not match the application can be skipped.
 | Change                                                                                            | Affects code that…                                                |
 | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [`run(capture=, echo=)` moved to `RunOutputOptions`](#capture-and-echo-moved-to-runoutputoptions) | passes `capture=` or `echo=` to `run()` or `run_sync()`           |
+| [Captured single-command streams are non-optional](#captured-single-command-results)              | coalesces result streams with `or ""` or checks the exact type    |
 | [Scopes take a `ScopeConfig`](#scopes-take-a-scopeconfig)                                         | calls `scoped(allowlist=...)` or `CuprumContext.narrow(...)`      |
 | [Disjoint nested scopes deny](#disjoint-nested-scopes-now-deny-everything)                        | nests scopes whose allowlists share no program                    |
 | [Execution options are not child flags](#execution-options-are-no-longer-child-flags)             | passes `cwd=`, `env=`, `timeout=`, and similar to a builder       |
@@ -48,7 +49,7 @@ _Table 1: Upgrade checklist for applications using Cuprum 0.1._
 ## Upgrading from 0.2.0-beta1
 
 Beta testers already have most of 0.2.0. These changes arrived after beta1; the
-first six can need an edit:
+first seven can need an edit:
 
 - [Execution options are no longer child flags](#execution-options-are-no-longer-child-flags).
 - [Builder arguments are a typed contract](#builder-arguments-are-a-typed-contract):
@@ -59,6 +60,9 @@ first six can need an edit:
 - [Metrics count failures from the settled event](#metrics-count-failures-from-the-settled-event).
 - The reserved builder keywords include `env_mode` and `process_group`, which
   are new `ExecutionContext` fields.
+- [Captured single-command results](#captured-single-command-results) now use
+  `CapturedResult` for default text capture; explicit `RunOutputOptions` calls
+  keep the broader `CommandResult` type.
 
 The rest is additive:
 
@@ -110,6 +114,21 @@ else:
 `Pipeline.run()` and `run_sync()` still accept the old keywords for now, but
 emit a `DeprecationWarning`; move them to `output=` as well. `IOOptions` is a
 deprecated alias of `RunOutputOptions` and also warns.
+
+### Captured single-command results
+
+Default `SafeCmd.run()` and `run_sync()` calls, including explicit
+`output=None`, now return `CapturedResult`, whose decoded streams are always
+strings. An empty stream is `""`. Calls with explicit `RunOutputOptions` keep
+the `CommandResult` type because those options can disable capture, even when
+their particular value enables it.
+
+Replace `result.stdout or ""` and `result.stderr or ""` with
+`result.require_captured().stdout` and `.stderr`. Checked narrowing raises
+`ValueError` when capture was omitted, preserving the missing diagnostic
+instead of turning it into an empty string. `CapturedResult` is a distinct
+dataclass, so exact type checks and cross-class equality checks may also need
+updating; use `isinstance(result, CommandResult)` for base-result checks.
 
 ### Scopes take a `ScopeConfig`
 

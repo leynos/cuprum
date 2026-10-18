@@ -283,8 +283,18 @@ def _build_command_result(
             program=execution.cmd.program,
             argv=execution.cmd.argv,
             exit_code=completion.exit_code,
-            stdout=_require_captured_text(completion.stdout_text, "stdout"),
-            stderr=_require_captured_text(completion.stderr_text, "stderr"),
+            stdout=_require_captured_text(
+                completion.stdout_text,
+                "stdout",
+                program=execution.cmd.program,
+                exec_id=str(execution.observation.exec_id),
+            ),
+            stderr=_require_captured_text(
+                completion.stderr_text,
+                "stderr",
+                program=execution.cmd.program,
+                exec_id=str(execution.observation.exec_id),
+            ),
             **measurements.as_kwargs(),
         )
     return sh.CommandResult(

@@ -149,6 +149,26 @@ def test_explicit_capture_returns_captured_result(
     )
 
 
+def test_explicit_none_uses_default_capture_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """An explicit ``output=None`` captures both streams for both run methods."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "pass")
+
+    result = execute(command, {"output": None})
+
+    assert isinstance(result, sh.CapturedResult), (
+        "explicit output=None must preserve default capture, got "
+        f"{type(result).__name__}"
+    )
+    assert (result.stdout, result.stderr) == ("", ""), (
+        "empty captured streams must remain strings, got "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+
+
 def test_bounded_stderr_echo_keeps_complete_capture(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

@@ -27,6 +27,16 @@ __all__ = [
 ]
 
 
+def _missing_text_streams(stdout: object, stderr: object) -> str:
+    """Return the unavailable text stream names joined with ``and``."""
+    missing = [
+        name
+        for name, value in (("stdout", stdout), ("stderr", stderr))
+        if not isinstance(value, str)
+    ]
+    return " and ".join(missing)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class CommandResult:
     """Structured result returned by command execution.
@@ -149,16 +159,11 @@ class CommandResult:
         """
         stdout = self.stdout
         stderr = self.stderr
-        missing = [
-            name
-            for name, value in (("stdout", stdout), ("stderr", stderr))
-            if not isinstance(value, str)
-        ]
+        missing = _missing_text_streams(stdout, stderr)
         if missing:
-            streams = " and ".join(missing)
-            was_were = "was" if len(missing) == 1 else "were"
+            was_were = "were" if " and " in missing else "was"
             msg = (
-                f"{streams} {was_were} not captured as text; use "
+                f"{missing} {was_were} not captured as text; use "
                 "RunOutputOptions(capture=True) to request captured output"
             )
             raise ValueError(msg)
@@ -198,14 +203,9 @@ class CapturedResult(CommandResult):
 
     def __post_init__(self) -> None:
         """Enforce the captured-stream invariant at every construction path."""
-        if not isinstance(self.stdout, str) or not isinstance(self.stderr, str):
-            missing = [
-                name
-                for name, value in (("stdout", self.stdout), ("stderr", self.stderr))
-                if not isinstance(value, str)
-            ]
-            streams = " and ".join(missing)
-            msg = f"CapturedResult requires captured {streams} text"
+        missing = _missing_text_streams(self.stdout, self.stderr)
+        if missing:
+            msg = f"CapturedResult requires captured {missing} text"
             raise TypeError(msg)
 
 

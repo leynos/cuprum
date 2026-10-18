@@ -726,6 +726,9 @@ strings, including `""` for empty streams. The final stage can be narrowed with
 because its `stdout` was passed to the next process. Pipeline results keep their
 `PipelineResult` type and optional stream annotations.
 
+Timeouts still raise `TimeoutExpired`, whose `output` and `stderr` remain
+`str | bytes | None` because the streams may be partial when the child stops.
+
 When a non-final stage fails while peers remain active, Cuprum terminates those
 peers. The first observed failure is recorded in `failure_index`;
 near-simultaneous completions may use stage order as a tie-break. Interior

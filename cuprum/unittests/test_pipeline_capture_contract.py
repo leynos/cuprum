@@ -6,17 +6,17 @@ import asyncio
 
 import pytest
 
-from cuprum import ScopeConfig, scoped, sh
-from cuprum.sh import RunOutputOptions
-from cuprum.unittests.test_pipeline_output_options import _identity_pipeline
+from cuprum import Program, ScopeConfig, scoped, sh
+from cuprum.sh import Pipeline, RunOutputOptions
 
 
 @pytest.mark.parametrize("run_sync", [False, True], ids=["run()", "run_sync()"])
 def test_captured_pipeline_final_stage_can_be_narrowed(
     run_sync: bool,
+    identity_pipeline: tuple[Pipeline, frozenset[Program]],
 ) -> None:
     """Only the captured final stage has both text streams available."""
-    pipeline, allowed_programs = _identity_pipeline()
+    pipeline, allowed_programs = identity_pipeline
 
     with scoped(ScopeConfig(allowlist=allowed_programs)):
         output = RunOutputOptions(capture=True)

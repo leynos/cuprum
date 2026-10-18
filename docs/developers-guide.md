@@ -21,11 +21,35 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
 - [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
 - [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
+- [ADR-024: Type captured command output](adr-024-captured-command-output-types.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
 is the source of truth for native safety contracts, verifier bounds, trusted
 assumptions, and current proof status.
+
+## Captured single-command result assembly
+
+`cuprum._subprocess_execution._build_command_result` selects the result class
+for a settled single command: text capture builds `CapturedResult`, while
+capture-off builds `CommandResult`. `_require_captured_text` in
+`cuprum._result_assembly` checks each decoded stream before the narrowed result
+is constructed. A missing stream on this path logs the operation, text mode,
+stream, program, and execution ID without rendering command output, then raises
+the existing execution-invariant error.
+
+`SafeCmd.run` and `run_sync` mirror that runtime boundary in their overloads:
+omitted `output` and `output=None` return `CapturedResult`; an explicit
+`RunOutputOptions` argument returns `CommandResult` to static checkers, even
+when the value enables capture. The implementation annotations remain
+`CommandResult`. Call `require_captured()` before consuming text from an
+explicit-options result.
+
+Pipeline result construction remains in the pipeline path. Captured final-stage
+stdout and each stage's stderr are strings, while interior-stage stdout remains
+`None` because it is forwarded to the next process. `TimeoutExpired.output` and
+`.stderr` remain `str | bytes | None` and may be partial; timeout construction
+does not use `CapturedResult`.
 
 ## Published documentation examples
 

@@ -177,10 +177,25 @@ def _require_text(payload: _StreamPayload | None, stream: str) -> str | None:
     return _require_mode_payload(payload, stream, str, CaptureMode.TEXT)
 
 
-def _require_captured_text(payload: _StreamPayload | None, stream: str) -> str:
+def _require_captured_text(
+    payload: _StreamPayload | None,
+    stream: str,
+    *,
+    program: str,
+    exec_id: str,
+) -> str:
     """Require a decoded stream when a single-command run captured output."""
     text = _require_text(payload, stream)
     if text is None:
+        _LOGGER.error(
+            "captured result assembly found a missing text stream: "
+            "operation=%s capture_mode=%s stream=%s program=%s exec_id=%s",
+            "single_command_result_assembly",
+            CaptureMode.TEXT,
+            stream,
+            program,
+            exec_id,
+        )
         msg = f"text capture was enabled but {stream} was not captured"
         raise _ExecutionInvariantError(msg)
     return text
