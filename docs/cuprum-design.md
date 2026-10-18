@@ -1533,6 +1533,26 @@ the retained bytes and the family codec strips it, so the caller is never
 handed a leading U+FEFF that a full capture does not report. The bytes the
 repair costs are counted as dropped, so the reported drop count stays exact.
 
+The repair covers exactly two families, so a bounded *text* capture is accepted
+only where one of them applies. UTF-8 announces its own continuation bytes and
+the fixed-width codecs can be realigned by offset; a single-byte encoding has
+no interior boundary to repair at all, and the classifier establishes that
+property by probing rather than by naming codecs, so the registry's full
+breadth is covered without a list that could go stale. Everything else —
+Shift-JIS, EUC, GBK, Big5, the ISO-2022 escape families — can leave a trail
+byte that is an ordinary byte value, which a decoder handed the headless tail
+would read as a character of its own. A Shift-JIS slice cut between `b"\x81"`
+and `b"a"` decodes the orphaned `b"a"` and reports text the child never wrote,
+so the run is refused with `ValueError` before the child is spawned. The
+refusal is the honest answer to a request whose result cannot be correct: the
+alternatives are a truncation that invents a character, or silently ignoring
+the bound, and neither is one a caller could want. A byte-exact capture is
+never restricted, because it is never decoded; a caller needing those encodings
+as text can use `FullCapture` or `FileBackedCapture`, which do not truncate the
+leading edge. Both the single-command and the pipeline paths consult the same
+check before spawning, so no entry point can reach the drain with a policy the
+other refuses.
+
 A capture policy governs what the *result* retains. It does not govern what a
 pipeline stage hands to the next stage: an interior stage's stdout is the
 child's own pipe, and the parent never reads it, which is why the relay's

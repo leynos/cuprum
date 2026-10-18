@@ -114,8 +114,12 @@ class RunOutputOptions(_ResolvedOptionsMixin):
         ``max_bytes`` of the stream and reports the exact dropped byte count,
         and a :class:`~cuprum.capture_policy.FileBackedCapture` spills to a
         temporary file past a threshold, reporting the path instead of the
-        text. The policy governs the capture tap only: bytes a pipeline stage
-        relays to the next stage are never affected.
+        text. A bounded *text* capture is refused before spawning under an
+        encoding whose code-point boundaries a truncated tail cannot repair,
+        which is every multi-byte codec except UTF-8 and fixed-width UTF-16
+        or UTF-32; byte captures are not restricted. The policy governs the
+        capture tap only: bytes a pipeline stage relays to the next stage are
+        never affected.
     capture_stderr : CapturePolicy | bool | None, keyword-only, default=None
         How stderr is captured, resolved exactly as ``capture_stdout`` is and
         independently of it, so the two streams can be configured differently

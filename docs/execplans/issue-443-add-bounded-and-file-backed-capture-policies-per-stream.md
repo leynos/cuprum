@@ -382,8 +382,8 @@ Thresholds that trigger escalation when breached.
   `coderabbit review --agent` pass. Six needed code or test changes: a bare
   `return` removed from a pump double (pylint's enabled `useless-return` would
   have caught it at the next full `make lint`); `test_pipeline_config.py` now
-  asserts the per-stream policies the config actually carries instead of
-  merely that construction succeeded; the `_Retained` record in
+  asserts the per-stream policies the config actually carries instead of merely
+  that construction succeeded; the `_Retained` record in
   `test_bounded_capture_drain.py` makes the suffix property measure the
   accumulator's own payload rather than a slice of the input; the two
   timeout-cleanup tests enter the capture observer before the deadline can
@@ -396,10 +396,40 @@ Thresholds that trigger escalation when breached.
   addendum). Two findings were reasoned skips: the release gate's `_drain`
   really does return `(None, None)` on the discarding route, and the
   `docs/developers-guide.md` line it cited describes that correctly. Verified
-  with `uv run ruff check` (clean), `uv run ruff format --check` (clean),
-  pinned `ty==0.0.74` (clean), pinned `pylint==4.0.9` (10.00/10 on both
-  modules), and `pytest` over the five affected test modules (`74 passed`).
-  Date/Author: 2026-10-18, implementation agent.
+  with `uv run ruff check` (clean), `uv run ruff format --check` (clean), pinned
+  `ty==0.0.74` (clean), pinned `pylint==4.0.9` (10.00/10 on both modules), and
+  `pytest` over the five affected test modules (`74 passed`). Date/Author:
+  2026-10-18, implementation agent.
+- [x] (2026-10-18) Close the round-8 finding against the trim's
+  unrepairable-codec gap, and record the corrected scope in prose. The report
+  was concrete: for Shift-JIS, `b"\x81a"` decodes to `"‖"`, so with
+  `max_bytes=1` the trim leaves the orphaned trail byte and `_render` returns
+  `"a"` — a character the child never wrote. Took the report's second option
+  and refuse before spawning rather than tracking decoder state, because a
+  stateful accumulator would have to keep the *whole* stream to resolve a
+  boundary, which is the memory the bound exists to avoid. The classifier in
+  the new `cuprum/_bounded_encoding.py` calls a codec trim-safe when it is a
+  repairable name (UTF-8, the fixed-width UTF-16/UTF-32 names, `utf-8-sig`) or
+  when a probe shows it is single-byte; the probe feeds every one of the 256
+  byte values to a fresh incremental decoder and asks `getstate()` what it is
+  holding, which is a definition rather than a sample. Verified exact across
+  all 98 registry names: 59 single-byte accepted, 7 UTF names accepted, 32
+  multi-byte/stateful refused, 7 transform codecs refused. The escape families
+  are the reason the probe is a pending-byte question: `hz` and `iso2022_*`
+  decode every lone byte as text, so a decoded-length comparison admits them.
+  Wired into both pre-spawn seams — `_build_subprocess_execution` for the
+  single-command paths and `_prepare_pipeline_config` for both pipeline entry
+  points — because a rule only one seam consults is a rule the others flout.
+  Witnesses measured under mutation, each reverted with `cp`: disabling the
+  guard body fails 5 cases, the command seam 2, the pipeline seam 1, and the
+  pending-byte probe 2 (`hz` and `iso2022_jp`). Verified with
+  `uv run ruff check` and `ruff format --check` (both clean), pinned
+  `ty==0.0.74` (clean), pinned `pylint==4.0.9` (10.00/10 on all four modules),
+  48 new unit cases, and 234 cases across the capture-related unit and
+  behaviour modules. No `tests/features/` scenario was added: the pipeline seam
+  is already exercised through the public `run_sync` on a real two-stage
+  pipeline in the unit module, so a BDD row would restate the same run rather
+  than add a distinction. Date/Author: 2026-10-18, implementation agent.
 
 ## Surprises & discoveries
 
@@ -954,23 +984,23 @@ Thresholds that trigger escalation when breached.
   leave the old path behind. Restoring it needs a module-level `__getattr__`,
   because a real import is a cycle, and the adapter plus its docstring took
   `output.py` from exactly 400 lines to 439 — `C0302` again. The four
-  resolved-value properties were extracted to
-  `cuprum/sh/_resolved_options.py` as a `__slots__ = ()` mixin, which returns
-  the module to 359 lines. Verified at run time under `python -I`: the
-  properties resolve through the base class, `IOOptions is
-  cuprum.sh._deprecated.IOOptions`, the deprecation warning still fires on
-  construction, an inherited `resolved_capture` works on the subclass, and the
-  instance still has no `__dict__`. The ADR-007 addendum records why this
-  reverses the earlier refusal to move `resolved_capture`: all four move
+  resolved-value properties were extracted to `cuprum/sh/_resolved_options.py`
+  as a `__slots__ = ()` mixin, which returns the module to 359 lines. Verified
+  at run time under `python -I`: the properties resolve through the base class,
+  `IOOptions is cuprum.sh._deprecated.IOOptions`, the deprecation warning still
+  fires on construction, an inherited `resolved_capture` works on the subclass,
+  and the instance still has no `__dict__`. The ADR-007 addendum records why
+  this reverses the earlier refusal to move `resolved_capture`: all four move
   together, and the alternatives were a suppression or a broken public path.
   Date/Author: 2026-10-18, implementation agent.
 
 - Observation (review round 8, a rule that read the shorthand): the
   redirection guard in `cuprum/sh/stdio_rules.py` asked
-  `options.capture or echo_*`, so `RunOutputOptions(capture=False,
-  capture_stdout=FullCapture(), stdout=StdioTarget.path(...))` was accepted —
-  a redirect to a file with a policy told to capture the stream that has no
-  parent-side pipe left to read. The guard now reads
+  `options.capture or echo_*`, so
+  `RunOutputOptions(capture=False, capture_stdout=FullCapture(),
+  stdout=StdioTarget.path(…))`
+  was accepted — a redirect to a file with a policy told to capture the stream
+  that has no parent-side pipe left to read. The guard now reads
   `options.resolved_capture[0 if name == "stdout" else 1] is not None`, which
   is the same resolved view the drain uses. The two new parametrized cases fail
   with the shorthand restored and pass with the fix; the message text is
@@ -988,6 +1018,19 @@ Thresholds that trigger escalation when breached.
   "return the finalized payload": `dropped_bytes` can exceed the overflow when
   the trim cuts a code point, so the record and the payload are deliberately
   two different measurements and `_Retained` keeps both. Date/Author:
+  2026-10-18, implementation agent.
+
+- Observation (the encoding classifier's second probe was dead weight): the
+  first `_is_single_byte` compared the length of decoding all 256 byte values
+  against 256, on the theory that a multi-byte codec would decode some bytes
+  away. Mutation 5 removed that comparison and *no* test failed, which is the
+  signal to check whether the probe can ever fire rather than to add a test for
+  it. Measured over the whole registry, the pending-byte probe never admits a
+  codec the length comparison rejects — a codec either holds an incomplete byte
+  (caught by `getstate()`) or emits one character per byte, and there is no
+  third case for a text codec. The comparison was removed, `_ALL_BYTES` with
+  it, and the docstring rewritten around the pending-byte definition the
+  remaining probe actually implements. The 48 cases still pass. Date/Author:
   2026-10-18, implementation agent.
 
 ## Decision log
@@ -1317,25 +1360,25 @@ Thresholds that trigger escalation when breached.
 
 - Decision: restore `cuprum.sh.output.IOOptions` through a module-level
   `__getattr__`, and pay for it by moving the four resolved-value properties
-  into a `__slots__ = ()` mixin in `cuprum/sh/_resolved_options.py`.
-  Rationale: `IOOptions` was importable from `cuprum.sh.output` on `main` and
-  the 2026-10-14 split moved the class without leaving the path behind, so a
-  caller importing it from the old location gets an `ImportError` — a break
-  this branch introduced, not a deprecation it documented. The lazy resolver
-  is the only cycle-free way to publish a name whose module imports this one.
-  It costs 39 lines against a 30-line headroom, so the ceiling failed again;
-  the mixin is the only option that is neither a suppression nor a broken
-  public path. The cut is a real one: the properties are the *query* half of
-  the options, deriving from fields that stay on the dataclass. Alternatives
-  rejected: a `too-many-lines` suppression (the standing contract);
-  re-exporting from `cuprum/sh/_deprecated.py` instead (that is the module
-  that imports us, and the finding is that the *old* path must work); and
-  moving `__post_init__`'s validation out instead, which is the command half
-  and would split one constructor's contract across two modules. This
-  reverses the 2026-10-14 refusal to move `resolved_capture` alone, on the
-  ground it had to mirror `resolved_echo`; moving all four keeps that
-  invariant. Recorded as a fifth split in the ADR-007 addendum.
-  Date/Author: 2026-10-18, implementation agent; raised by review round 8.
+  into a `__slots__ = ()` mixin in `cuprum/sh/_resolved_options.py`. Rationale:
+  `IOOptions` was importable from `cuprum.sh.output` on `main` and the
+  2026-10-14 split moved the class without leaving the path behind, so a caller
+  importing it from the old location gets an `ImportError` — a break this
+  branch introduced, not a deprecation it documented. The lazy resolver is the
+  only cycle-free way to publish a name whose module imports this one. It costs
+  39 lines against a 30-line headroom, so the ceiling failed again; the mixin
+  is the only option that is neither a suppression nor a broken public path.
+  The cut is a real one: the properties are the *query* half of the options,
+  deriving from fields that stay on the dataclass. Alternatives rejected: a
+  `too-many-lines` suppression (the standing contract); re-exporting from
+  `cuprum/sh/_deprecated.py` instead (that is the module that imports us, and
+  the finding is that the *old* path must work); and moving `__post_init__`'s
+  validation out instead, which is the command half and would split one
+  constructor's contract across two modules. This reverses the 2026-10-14
+  refusal to move `resolved_capture` alone, on the ground it had to mirror
+  `resolved_echo`; moving all four keeps that invariant. Recorded as a fifth
+  split in the ADR-007 addendum. Date/Author: 2026-10-18, implementation agent;
+  raised by review round 8.
 
 - Decision: the stdio redirection guard reads `resolved_capture` rather than
   the `capture` shorthand. Rationale: the rule exists because capture needs a
@@ -1349,6 +1392,25 @@ Thresholds that trigger escalation when breached.
   `capture=False` and `echo=False` substrings, and widening the check does not
   change what the caller has to do. Date/Author: 2026-10-18, implementation
   agent; raised by review round 8.
+
+- Decision: refuse a bounded text capture under an unrepairable codec before
+  spawning, rather than tracking decoder state while the bound absorbs bytes.
+  Rationale: the report offered both routes, and the stateful one cannot
+  deliver what it appears to promise. Resolving a boundary *after* the head has
+  been dropped means knowing which byte in the retained tail is a lead byte,
+  which a stateful codec only records from the start of the stream — so the
+  accumulator would have to keep the whole stream, exactly the memory the bound
+  exists to avoid. Refusal is also the only option that cannot be silently
+  wrong: the alternatives are to invent a character or to ignore the bound, and
+  a caller who wanted either would have said so. Restricting the *encodings*
+  rather than the *bound* keeps the policy's other promise intact — the bound
+  is still exactly a byte count, and a caller who needs a multi-byte codec as
+  text has `FullCapture` and `FileBackedCapture`, which do not truncate the
+  leading edge. Classifying by probing rather than by a codec list is what
+  keeps the rule true as the registry changes; the one cost is that the probe
+  runs at each pre-spawn seam, which is bounded by 256 decoder constructions
+  and is small beside the spawn it precedes. Date/Author: 2026-10-18,
+  implementation agent; raised by review round 8.
 
 ## Outcomes & retrospective
 

@@ -1115,11 +1115,22 @@ assert default.stderr == "kept"
 ```
 
 `BoundedCapture(max_bytes=N)` keeps the last `N` **bytes** in memory. The bound
-is a byte count rather than a character count, and it never splits a code
-point, so the tail it retains is always decodable and the count is what a
-caller can reason about without knowing the encoding. The run also reports what
-it dropped, on the new `captures` field of `CommandResult` and `PipelineResult`
-(and of their byte-exact counterparts):
+is a byte count rather than a character count, so it is what a caller can
+reason about without knowing the encoding. The retained tail can therefore
+begin inside a code point, and it is trimmed forwards to a boundary when the
+capture is finalized; the leading bytes that trim costs are counted as dropped,
+so the count stays exact.
+
+That repair is only possible for encodings whose boundaries survive the loss of
+the head: UTF-8, fixed-width UTF-16 and UTF-32, and single-byte codecs. A
+multi-byte East Asian codec — Shift-JIS, EUC, GBK, Big5, the ISO-2022 families
+— is refused with `ValueError` before the spawn when the capture is text, since
+a trail byte separated from its lead would otherwise decode as a character the
+child never wrote. Byte captures are never restricted. Use `FullCapture` or
+`FileBackedCapture` if such an encoding must be read as text.
+
+The run also reports what it dropped, on the new `captures` field of
+`CommandResult` and `PipelineResult` (and of their byte-exact counterparts):
 
 <!-- tested-example: migration-capture-metadata -->
 

@@ -1393,15 +1393,15 @@ A fifth split followed from restoring a public import path rather than from the
 capture feature itself. `cuprum.sh.output.IOOptions` was exported from
 `cuprum/sh/output.py` on `main` and the 2026-10-14 split moved the class to
 `cuprum/sh/_deprecated.py` without leaving the name behind. Restoring it there
-is an import cycle — `_deprecated` imports `RunOutputOptions` from `output.py`
-— so the module resolves it lazily through a module-level `__getattr__`, and
-that adapter plus its docstring took `output.py` from 400 lines to 439, back
-over the ceiling.
+is an import cycle — `_deprecated` imports `RunOutputOptions` from
+`output.py` — so the module resolves it lazily through a module-level
+`__getattr__`, and that adapter plus its docstring took `output.py` from 400
+lines to 439, back over the ceiling.
 
 `cuprum/sh/_resolved_options.py` now owns the four resolved-value queries —
 `resolved_broken_pipe_policy`, `resolved_capture`, `captures_any_stream`, and
 `resolved_echo` — as `_ResolvedOptionsMixin`, which `RunOutputOptions`
-inherits. The cut is a genuine one: these are the *query* half of the options,
+inherits. The cut is a genuine one: these are the _query_ half of the options,
 what the caller's spelling resolved to, while the fields they read stay
 declared on the dataclass. It is a deliberate reversal of the ground on which
 the 2026-10-14 convenience-sink addendum declined to move `resolved_capture`
@@ -1413,6 +1413,6 @@ The mixin declares `__slots__ = ()` for the reason `_BytesEntryPoints` and
 `_OwnedStart` do: an un-slotted mixin donates a `__dict__` to the frozen,
 slotted dataclass inheriting it, which would silently defeat the slots.
 `cuprum/sh/output.py` keeps no re-export of the properties, because there were
-never separate names to re-export — the class's own attribute lookup finds
-them through the base, so every `options.resolved_capture` call site is
-unchanged and the class docstring's examples still hold.
+never separate names to re-export — the class's own attribute lookup finds them
+through the base, so every `options.resolved_capture` call site is unchanged
+and the class docstring's examples still hold.

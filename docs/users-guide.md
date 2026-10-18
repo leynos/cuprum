@@ -620,6 +620,17 @@ A bound is a decision about what the _result_ keeps. It never shortens what a
 pipeline stage hands to the stage after it, and it never shortens the mirrored
 copy an echo sink receives; those read the child's own pipe.
 
+Because the head of the stream is gone, a bounded _text_ capture can only be
+trimmed back to a character boundary for encodings whose boundaries survive
+that loss. UTF-8, the fixed-width UTF-16 and UTF-32 codecs, and single-byte
+encodings such as Latin-1 or CP1252 all qualify. A multi-byte East Asian codec
+— Shift-JIS, EUC-JP, GBK, Big5, and their relatives — does not: once the lead
+byte is dropped, its trail byte is indistinguishable from a character of its
+own. A run that pairs `BoundedCapture` with such an encoding is refused with
+`ValueError` before the child is spawned, rather than returning text the child
+never wrote. Use `FullCapture` or `FileBackedCapture` for those encodings, or
+capture the stream as bytes, where nothing is decoded and no cut can be misread.
+
 ### File-backed capture
 
 `FileBackedCapture` keeps the stream on the parent's heap until it passes

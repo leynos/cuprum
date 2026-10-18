@@ -96,6 +96,17 @@ class BoundedCapture:
     most 4096 bytes of text, which is between 4096 and 1024 characters
     depending on the script. See the module docstring for why.
 
+    A text-mode bounded capture requires an encoding whose code-point
+    boundaries can still be found once the head of the stream has been
+    dropped: UTF-8, the fixed-width UTF-16 and UTF-32 codecs, and any
+    single-byte encoding. A multi-byte East Asian codec is refused before
+    anything is spawned, because a cut between its lead and trail bytes would
+    decode the orphaned trail as a character the child never wrote. Byte
+    captures are never restricted, since they are never decoded; a
+    :class:`~cuprum.capture_policy.FileBackedCapture` or
+    :class:`FullCapture` is available to a caller who needs those encodings
+    as text.
+
     Parameters
     ----------
     max_bytes : int
