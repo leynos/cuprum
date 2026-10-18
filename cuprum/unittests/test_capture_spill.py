@@ -16,6 +16,7 @@ transition, would still produce a file and still report ``storage`` of
 from __future__ import annotations
 
 import asyncio
+import threading
 import typing as typ
 
 import pytest
@@ -361,6 +362,102 @@ def test_a_spill_survives_a_chunk_partition_that_splits_characters(
         f"got {final.capture.path.read_bytes()!r}"
     )
     _cleanup(final)
+
+
+class _BlockingSpillFile:
+    """A spill file whose write waits until the test lets it finish.
+
+    Holds the spill's transition open between creating the file and the prefix
+    reaching it, which is the window a cancellation can land in.
+    """
+
+    def __init__(self, path: pathlib.Path) -> None:
+        """Create *path*, so the file exists before the write is entered."""
+        self.name = str(path)
+        self.started = False
+        self._released = threading.Event()
+        self._file = path.open("wb")
+
+    def write(self, data: bytes) -> int:
+        """Signal that the write is in flight, then wait to be released."""
+        self.started = True
+        self._released.wait(30)
+        return self._file.write(data)
+
+    def flush(self) -> None:
+        """Flush the underlying file."""
+        self._file.flush()
+
+    def close(self) -> None:
+        """Close the underlying file."""
+        self._file.close()
+
+    def release(self) -> None:
+        """Let the blocked write finish."""
+        self._released.set()
+
+
+async def _await_started_write(blocking: _BlockingSpillFile) -> None:
+    """Fail unless the spill begins writing its file before the deadline.
+
+    The signal is set by a worker thread, which no asyncio primitive can
+    observe, so polling is the coordination.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10.0
+    while loop.time() < deadline:
+        if blocking.started:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("the spill never began writing the file it created")
+
+
+def test_a_cancelled_spill_leaves_cleanup_a_file_to_remove(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation between creating the file and writing it must not orphan it.
+
+    The file is made with ``delete=False``, so from the moment it exists only
+    the accumulator can remove it. If the handle were published only after the
+    prefix was written and flushed, a cancellation during those awaits would
+    leave a file no result names and no sink knows about — and teardown would
+    have nothing to close or unlink.
+
+    ``keep_file=True`` is deliberate: the caller's exemption covers the file
+    the run was asked to hand over, not one a cancelled spill never finished
+    writing, so teardown still removes it.
+    """
+    blocking = _BlockingSpillFile(tmp_path / "cancelled-spill")
+    monkeypatch.setattr(
+        "cuprum._capture_spill_io.NamedTemporaryFile",
+        lambda **_: blocking,
+    )
+    accumulator = _FileAccumulator(
+        policy=_spilling_to(tmp_path, threshold=1, keep_file=True),
+        stream="stdout",
+        settings=_TEXT,
+    )
+
+    async def spill_then_cancel() -> None:
+        """Cancel the absorb while its first write is still in flight."""
+        task = asyncio.create_task(accumulator.absorb(_PAYLOAD))
+        await _await_started_write(blocking)
+        task.cancel()
+        blocking.release()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(spill_then_cancel())
+
+    assert list(tmp_path.iterdir()), (
+        "this case needs the created file to still be on disk before cleanup"
+    )
+    asyncio.run(accumulator.cleanup())
+    assert not list(tmp_path.iterdir()), (
+        "teardown must remove a file created by a spill that was cancelled "
+        f"before it wrote the prefix; found {list(tmp_path.iterdir())}"
+    )
 
 
 @pytest.mark.parametrize("threshold", [1, 2, 8, 64])

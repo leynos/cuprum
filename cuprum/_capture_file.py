@@ -72,6 +72,7 @@ class _FileAccumulator:
         "_io",
         "_path",
         "_policy",
+        "_provisional",
         "_settings",
         "_spilled_bytes",
         "_stream",
@@ -104,6 +105,11 @@ class _FileAccumulator:
         # also close it from the sink, and a fresh object each time would give
         # those two paths independent ``closed`` flags.
         self._handle: SpillHandle | None = None
+        # The handle while it is still provisional: published so teardown can
+        # remove a half-made file, and not yet carrying the caller's keep
+        # policy. Cleared by `_promote_provisional_spill` once the prefix has
+        # really reached the file.
+        self._provisional: SpillHandle | None = None
         self._path: pathlib.Path | None = None
         self._total = 0
         self._spilled_bytes = 0
@@ -145,7 +151,10 @@ class _FileAccumulator:
         """Close this run's spill file, removing it unless the caller kept it."""
         handle = self._handle
         if handle is not None:
-            await handle.close(remove=not self._policy.keep_file)
+            # ``handle.keep`` rather than the policy: a handle published
+            # provisionally, before a spill finished, carries ``keep=False``
+            # even under ``keep_file=True``. See :meth:`_spill`.
+            await handle.close(remove=not handle.keep)
 
     def _should_spill(self, buffered: int) -> bool:
         """Whether *buffered* bytes have outgrown the configured threshold."""
@@ -169,12 +178,18 @@ class _FileAccumulator:
         complete text. The half-made file is removed and the sink stops
         retrying, so a full or read-only directory costs one syscall rather
         than one per chunk.
+
+        The file is published to :attr:`_handle` before the prefix is written,
+        so a cancellation during those awaits still leaves teardown a way to
+        remove what was created. :meth:`_promote_provisional_spill` then
+        applies the caller's keep policy, which only makes sense once the
+        spill has succeeded.
         """
         buffered = self._buffer
         if buffered is None:
             return
         try:
-            handle = await self._io.run(_create_spill, self._policy.directory)
+            file = await self._publish_provisional_spill(self._policy.directory)
         except OSError as exc:
             self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
             return
@@ -182,17 +197,17 @@ class _FileAccumulator:
             # ``bytes`` rather than the live buffer: the worker must see the
             # prefix as it stood when the spill was decided, not whatever a
             # later read appends before the worker is scheduled.
-            await self._io.run(handle.write, bytes(buffered))
-            await self._io.run(handle.flush)
+            await self._io.run(file.write, bytes(buffered))
+            await self._io.run(file.flush)
         except OSError as exc:
-            await self._discard_failed_spill(handle, exc)
+            await self._discard_failed_spill(file, exc)
             return
         self._spilled_bytes = len(buffered)
         self._flushed_bytes = len(buffered)
-        self._file = handle
-        path = pathlib.Path(handle.name)
+        self._file = file
+        path = pathlib.Path(file.name)
         self._path = path
-        self._handle = SpillHandle(path=path, file=handle, keep=self._policy.keep_file)
+        self._promote_provisional_spill()
         self._buffer = None
         _emit_capture_event(
             CaptureEvent(
@@ -201,6 +216,45 @@ class _FileAccumulator:
                 spilled_bytes=self._spilled_bytes,
             )
         )
+
+    async def _publish_provisional_spill(
+        self,
+        directory: pathlib.Path | str | None,
+    ) -> typ.IO[bytes]:
+        """Create the spill file and publish a handle cleanup can always reach.
+
+        A ``NamedTemporaryFile`` is made with ``delete=False``, so the moment it
+        exists it is a file only this accumulator knows about. Publishing the
+        handle *after* the write and the flush — the natural reading of "don't
+        publish until it worked" — leaves the file unreachable by teardown for
+        as long as those awaits take, and a cancellation landing there would
+        orphan it: the drain never settles, so no result carries a path, and
+        the sink has nothing to remove.
+
+        So the handle is published first, marked with ``keep=False`` whatever
+        the policy says. Until the spill has completed there is no caller-owned
+        file yet, so the exception the caller asked for does not apply:
+        teardown must be free to remove a file that never carried the prefix.
+
+        Returns
+        -------
+        typ.IO[bytes]
+            The new file, for the caller to write the buffered prefix through.
+            A filesystem failure creating it propagates for :meth:`_spill` to
+            absorb as a failed create.
+        """
+        file = await self._io.run(_create_spill, directory)
+        path = pathlib.Path(file.name)
+        self._provisional = SpillHandle(path=path, file=file, keep=False)
+        self._handle = self._provisional
+        return file
+
+    def _promote_provisional_spill(self) -> None:
+        """Give the published handle the keep policy the spill has now earned."""
+        provisional = self._provisional
+        if provisional is not None:
+            provisional.keep = self._policy.keep_file
+            self._provisional = None
 
     async def _discard_failed_spill(
         self,
@@ -217,6 +271,13 @@ class _FileAccumulator:
             await self._io.run(handle.close)
         with contextlib.suppress(OSError):
             await self._io.run(pathlib.Path(handle.name).unlink, missing_ok=True)
+        # The file is gone, so the provisional handle published for teardown
+        # must not be closed a second time by it. Dropping the reference
+        # leaves the sink nothing to clean up for this file; the descriptor
+        # was already closed above, so the handle would only duplicate that.
+        if self._handle is self._provisional:
+            self._handle = None
+        self._provisional = None
         self._fail_storage(exc, CaptureEventCategory.STORAGE_WRITE_FAILED)
 
     def _fail_storage(
