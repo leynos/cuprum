@@ -10,14 +10,17 @@ decode the orphaned ``b"a"`` on its own and put a character on the result the
 child never wrote.
 
 These cases pin the classifier that decides which encodings are admissible,
-and the two pre-spawn seams that apply it. The seams matter as much as the
-classifier: a rule only one entry point consults is a rule three other entry
-points silently flout, so every case that asserts a refusal through ``run``
-also asserts it through ``run_sync``, ``lines``, and a pipeline.
+and every pre-spawn entry point that applies it. The seams matter as much as
+the classifier: a rule only one entry point consults is a rule the others
+silently flout, so the refusal is asserted through ``run``, ``run_sync``,
+``lines``, and a pipeline. ``run`` and ``run_sync`` reach the guard through
+``_prepare_owned_command``; ``lines`` builds its execution at the call site;
+the pipeline resolves its own configurations.
 """
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 import pytest
@@ -268,6 +271,46 @@ def test_a_bounded_byte_capture_admits_any_encoding(
         "a byte-exact bounded capture has no code-point edge to repair, so it "
         f"must admit Shift-JIS; got {result.stdout!r}"
     )
+
+
+def test_an_async_run_refuses_bounded_shift_jis_before_spawning(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The awaited entry point refuses through the same preparation seam.
+
+    ``run_sync`` is a wrapper around ``run``, so this case reaches the guard
+    from the coroutine itself rather than from its synchronous twin: the
+    refusal must arrive before the first await either way.
+    """
+    command = python_builder("-c", "print('hi')")
+
+    async def _run() -> None:
+        await command.run(
+            output=RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=4)),
+            context=ExecutionContext(encoding="shift_jis"),
+        )
+
+    with pytest.raises(ValueError, match="BoundedCapture requires an encoding"):
+        asyncio.run(_run())
+
+
+def test_line_iteration_refuses_bounded_shift_jis_before_spawning(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """``lines`` builds its execution directly, without ``run``'s preparation.
+
+    The line path assembles the subprocess execution at the call site rather
+    than through the owned-command helper ``run`` uses, so it is the second
+    seam that has to consult the guard. The refusal is raised while the stream
+    is being built, before the caller ever iterates it.
+    """
+    command = python_builder("-c", "print('hi')")
+
+    with pytest.raises(ValueError, match="BoundedCapture requires an encoding"):
+        command.lines(
+            output=RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=4)),
+            context=ExecutionContext(encoding="shift_jis"),
+        )
 
 
 def test_a_pipeline_refuses_bounded_shift_jis_before_spawning(
