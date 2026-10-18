@@ -1420,15 +1420,15 @@ and the class docstring's examples still hold.
 
 ## Addendum (2026-10-18): the spill-I/O leaf and the asynchronous capture seam
 
-CodeRabbit's round-8 review of the per-stream capture work made the filesystem
-calls of a file-backed capture blocking work that ran on the run's event loop:
-create, write, flush, and byte-mode read-back all executed inline, so a slow or
-full disk held up the child's other stream, the deadline, and cancellation for
-as long as the write took. Moving them onto a worker is not a rewrite of one
-call site. `asyncio.to_thread` starts a separate worker per call, and the
-capture's contract is _order_: the buffered prefix must land before the chunks
-after it, and the flush before the read-back. Serializing one accumulator's
-calls needs state, and that state has to live somewhere.
+CodeRabbit's round-8 review of the per-stream capture work identified the
+filesystem calls of a file-backed capture as blocking work on the run's event
+loop: create, write, flush, and byte-mode read-back all executed inline, so a
+slow or full disk held up the child's other stream, the deadline, and
+cancellation for as long as the write took. Moving them onto a worker is not a
+rewrite of one call site. `asyncio.to_thread` starts a separate worker per
+call, and the capture's contract is _order_: the buffered prefix must land
+before the chunks after it, and the flush before the read-back. Serializing one
+accumulator's calls needs state, and that state has to live somewhere.
 
 `cuprum/_capture_spill_io.py` is that somewhere. It holds `_create_spill` — the
 one blocking call that has to exist as a named function, because it is the seam

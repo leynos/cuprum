@@ -1145,9 +1145,11 @@ pass over the child's stream.
 
 - [x] 13.2.1. Add the accumulator types and the spill mechanism.
   - Success: a bounded capture retains the last `max_bytes` bytes at the
-    drain's chunk boundary and never splits a code point; a file-backed capture
-    stays on the heap until it passes its threshold and then appends to a file,
-    so retention stops tracking the child's output.
+    drain's chunk boundary and, in text capture, never splits a code point; a
+    byte-exact capture returns the exact byte tail, which need not be
+    independently decodable; a file-backed capture stays on the heap until it
+    passes its threshold and then appends to a file, so retention stops
+    tracking the child's output.
 - [x] 13.2.2. Drive the accumulator from `cuprum/_streams.py`.
   - Success: capture, echo, and line observation still see every chunk, and a
     bounded or spilled stream is finalized on the raising route as well as the

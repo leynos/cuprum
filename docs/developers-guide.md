@@ -2258,15 +2258,21 @@ capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
 
 `CaptureSink` in `cuprum._capture_types` is asynchronous — `absorb`,
-`finalize`, and `cleanup` are all coroutines — and the drain awaits them in
-that order. The two heap-backed accumulators answer without suspending, so the
-await costs a coroutine step per chunk; the file-backed one spills through
-`cuprum._capture_spill_io`, whose `_SpillIo` serializes that accumulator's
-blocking calls onto a worker thread so the loop stays free and the file's
-contents stay in the order the child wrote. A new accumulator implements the
-same three coroutines rather than a second synchronous protocol, because a
-policy test in the drain would be one place where a file-backed sink could be
-driven on the loop by accident.
+`finalize`, and `cleanup` are all coroutines — but no single owner awaits all
+three. The drain awaits `absorb` once per raw chunk and `finalize` once, when
+the drain settles. `cleanup` belongs to the run's teardown instead:
+`_finalize_capture_handles` is awaited by the success path beside result
+assembly and by `_reconcile_run_tasks` after a teardown drain, and it closes
+the handles the drain results carry before calling `_cleanup_capture_sinks` on
+the accumulators. That second call is the only path reaching a drain that was
+cancelled mid-await and so never finalized. The two heap-backed accumulators
+answer without suspending, so the await costs a coroutine step per chunk; the
+file-backed one spills through `cuprum._capture_spill_io`, whose `_SpillIo`
+serializes that accumulator's blocking calls onto a worker thread so the loop
+stays free and the file's contents stay in the order the child wrote. A new
+accumulator implements the same three coroutines rather than a second
+synchronous protocol, because a policy test in the drain would be one place
+where a file-backed sink could be driven on the loop by accident.
 
 The pipeline side uses the same keyword-only contract: `_pump_stream` and its
 `_relay_chunks`, `_drain_stream_reader`, and `_drain_stream_reader_bounded`

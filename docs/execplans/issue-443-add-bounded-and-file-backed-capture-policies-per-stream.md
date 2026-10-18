@@ -1678,7 +1678,7 @@ Obligations introduced or preserved by this change.
 
 **O1 — Bounded tail retains a suffix and never splits a code point.**
 Invariant: for any byte stream `S` and any `max_bytes = n > 0`, the retained
-bytes equal the last `m` bytes of `S` for some `m` in `(0, n]`, and the union
+bytes equal the last `m` bytes of `S` for some `m` in `[0, n]`, and the union
 of retained and dropped bytes is exactly `S` in order; the retained bytes are a
 decodable suffix (they start on a code-point boundary). Lemma:
 `dropped_bytes + len(retained) == total_bytes`. Method: property test with

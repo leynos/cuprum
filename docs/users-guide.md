@@ -586,7 +586,11 @@ spawned.
 
 `BoundedCapture` keeps the tail of a stream in memory and reports what it
 dropped. The bound counts **bytes, not characters**, so a multi-byte character
-is never split; the retained tail is always decodable on its own:
+is never split _in text capture_; a text run's retained tail is always
+decodable on its own. A byte-exact run (`run_bytes()`) asks for the child's own
+bytes, so it is handed the exact byte tail instead: trimming it to a code-point
+boundary would discard data the caller asked for, and that tail need not be
+independently decodable.
 
 <!-- tested-example: users-guide-bounded-capture -->
 
