@@ -128,6 +128,18 @@ Thresholds that trigger escalation when breached.
       and superseded the no-link-rewriting constraint above.
 - [x] Commit the change.
 - [x] (2026-10-19) Opened the pull request as a draft.
+- [x] (2026-10-19) Rebased onto `origin/main` at
+      `102951f4860a0a0a41e75abbebb8b2b7558f5d6e` from boundary `991dee642`.
+      No conflicts arose. Three adaptations followed from the advanced base:
+      `typos.toml` is no longer touched by this branch, because the spelling
+      gate on `main` independently regenerated the same two entries plus
+      others, so the rebased link-rewriting commit carries documentation
+      changes only; the two line citations in this plan were re-anchored,
+      because `main`'s `AGENTS.md` and `developers-guide.md` edits moved the
+      quoted sentences without changing them; and the four imported documents
+      were added to `docs/contents.md`, because that index covers every other
+      top-level document in `docs/` and these were the only ones missing (see
+      the decision log).
 
 Remaining: review and merge, which this task explicitly excludes. No
 implementation work remains.
@@ -143,9 +155,9 @@ implementation work remains.
   migration reduces to the documentation import plus applicability analysis.
 
 - Observation: the same string does appear in tracked files, which is what makes
-  the premise look plausible at a glance. Evidence: `AGENTS.md:260` says new
+  the premise look plausible at a glance. Evidence: `AGENTS.md:282` says new
   features are validated "using `rstest` and `rstest-bdd`", and
-  `docs/developers-guide.md:358` describes an sccache A/B comparison against
+  `docs/developers-guide.md:394` describes an sccache A/B comparison against
   "Whitaker, rstest-bdd, and Netsuke". Both are statements about *other*
   repositories' practices. Impact: a keyword-only survey would have produced an
   invented adoption task.
@@ -199,21 +211,34 @@ implementation work remains.
   upstream ADR numbers also occupy a numbering space independent of this
   repository's, which already defines `ADR-006` and `ADR-007` for unrelated
   decisions. Copying upstream files under colliding names would place two
-  different documents at the same identity, and rewriting the imported links
-  would violate byte-for-byte fidelity. Date/Author: 2026-09-26, migration
-  agent.
+  different documents at the same identity. Date/Author: 2026-09-26, migration
+  agent. **Amended 2026-10-15:** the request later required every relative link
+  to be made absolute, which removes the collision hazard at its source and
+  supersedes the "do not rewrite links" half of this decision. The targets are
+  still not vendored.
 
 - Decision: keep local migration notes outside the imported copies.
   Rationale: explicitly required, and it is what allows the imported text to
   stay pristine. Date/Author: 2026-09-26, migration agent.
 
+- Decision: index the four imported documents in `docs/contents.md` under a
+  dedicated "Vendored upstream documentation" heading, rather than under the
+  project's own guidance. Rationale: after the rebase onto `origin/main`,
+  `docs/contents.md` was the canonical index for every other top-level document
+  in `docs/`, and these four were the only ones absent from it. A separate
+  heading keeps the upstream status and the absence of any dependency visible,
+  so a reader does not mistake imported text for Cuprum's own guidance.
+  Date/Author: 2026-10-19, migration agent.
+
 ## Outcomes & retrospective
 
 The repository is left holding the authoritative `rstest-bdd` v0.6.0
-documentation, byte-for-byte, with a provenance record and a search-backed
-applicability matrix. No dependency, manifest, lockfile, source file, test, or
-gate was changed, because none needed to be: the repository has no `rstest-bdd`
-consumer, and the request explicitly excludes inventing one.
+documentation with a provenance record and a search-backed applicability
+matrix. The imported prose is upstream text verbatim; the only divergence is
+the cross-file link rewriting recorded in the provenance document. No
+dependency, manifest, lockfile, source file, test, or gate was changed, because
+none needed to be: the repository has no `rstest-bdd` consumer, and the request
+explicitly excludes inventing one.
 
 Compared against the original purpose, the delivered change is smaller than the
 request's framing implies and larger than a version edit. It is smaller because
@@ -237,8 +262,12 @@ Residual gaps, recorded rather than hidden:
    checks, harness-adoption checks) have no subject in this repository. They
    are not satisfied; they are inapplicable, and the applicability matrix
    states why for each.
-2. The imported documents' five relative links are not locally resolvable, as
-   documented. This is a deliberate consequence of byte-for-byte fidelity.
+2. The imported documents' cross-file links point at upstream files that are
+   deliberately not vendored here, so the targets resolve on GitHub but not
+   inside this checkout. The links are absolute, so they cannot misdirect a
+   reader to a same-named local document; the
+   [provenance record](rstest-bdd-v0-6-0-import-provenance.md#files-not-vendored)
+   states why each omitted file is omitted.
 3. Consumers that *do* need this migration are `leynos/whitaker` and
    `leynos/netsuke`, both pinned at `rstest-bdd = "0.5.0"`. They are outside
    this repository's scope and were not modified.
