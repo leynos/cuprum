@@ -7116,7 +7116,7 @@ and `_pipeline_config.py` resolve destinations and retain setup ownership;
 and `_sink_lifecycle.py` serializes presentation-session close after active
 writes. `_daemon_thread.py` bridges only these bounded teardown operations
 without depending on the event loop's shared default executor. See
-[ADR-024](adr-024-bounded-output-delivery.md) for the queue, loss, and shutdown
+[ADR-025](adr-025-bounded-output-delivery.md) for the queue, loss, and shutdown
 contract.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in

@@ -165,7 +165,7 @@ open each document.
 [adr-022]: adr-022-adopt-nose-duplication-gate.md
 [adr-023]: adr-023-opt-in-telemetry-redaction.md
 [adr-024]: adr-024-captured-command-output-types.md
-[adr-025]: adr-024-bounded-output-delivery.md
+[adr-025]: adr-025-bounded-output-delivery.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

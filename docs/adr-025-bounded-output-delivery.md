@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 024: Bounded output delivery
+# Architectural decision record (ADR) 025: Bounded output delivery
 
 ## Status
 
