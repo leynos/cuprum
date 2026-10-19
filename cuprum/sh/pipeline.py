@@ -34,6 +34,7 @@ from cuprum._bytes_run import (
 )
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.sh.execution import ExecutionContext
@@ -189,7 +190,9 @@ class Pipeline:
         try:
             return _require_pipeline_result(await _run_pipeline(self.parts, config))
         except BaseException as run_error:
-            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
+            await _shielded_cleanup(
+                config.sink_bracket.aclose(outcome=_outcome_for_error(run_error))
+            )
             raise
 
     def run_sync(
@@ -304,7 +307,9 @@ class Pipeline:
                 await _run_pipeline(self.parts, config)
             )
         except BaseException as run_error:
-            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
+            await _shielded_cleanup(
+                config.sink_bracket.aclose(outcome=_outcome_for_error(run_error))
+            )
             raise
 
     def run_bytes_sync(

@@ -31,7 +31,12 @@ from hypothesis.stateful import (
 )
 
 from cuprum._idle_diagnostic import _idle_subject
-from cuprum._idle_heartbeat import _build_idle_monitor, _IdleMonitor, _IdleSchedule
+from cuprum._idle_heartbeat import (
+    _build_idle_monitor,
+    _IdleMonitor,
+    _IdleSchedule,
+    _IdleSinkConfig,
+)
 from cuprum.unittests._rust_pump_test_helpers import ControllableMonotonicClock
 
 _INTERVAL = st.floats(
@@ -75,7 +80,7 @@ class _IdleHeartbeatMachine(RuleBasedStateMachine):
             interval,
             None,
             _idle_subject(_PROGRAM),
-            self._sink,
+            _IdleSinkConfig(sink=self._sink),
         )
         assert monitor is not None, "an interval must build a monitor"
         clock = ControllableMonotonicClock(now)

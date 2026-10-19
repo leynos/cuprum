@@ -87,11 +87,13 @@ class CommandResult:
         are approximate under ``run_concurrent``. ``None`` on Windows, on
         platforms without child resource accounting, and for pipeline stages.
     relay_fallbacks:
-        Handled echo-disablement records from this command's own streams, one
-        per affected drain in stdout-then-stderr order. The ordering does not
-        reconstruct chronological interleaving between the two streams. Empty
-        when no echo write was handled as failed, and an echo failure does not
-        change ``exit_code`` or ``ok``.
+        Categorical echo-failure and bounded-delivery loss records from this
+        command's own streams, grouped in stdout-then-stderr order. A
+        ``DROPPED`` record is emitted for each rejected chunk; ``UNDELIVERED``
+        byte counts are grouped by stream at worker close. The ordering does
+        not reconstruct chronological interleaving between streams. Empty
+        when no output was lost or handled as an echo failure; these diagnostic
+        records do not alter captured output or the child's exit status.
 
     """
 

@@ -1400,15 +1400,18 @@ close on every terminal path. The shared mechanics live in
   the original echo destinations while continuing to use `session.log` for its
   own workflow commands; the GitHub Actions adapter does this when only failure
   annotations are enabled.
-- Every terminal path finalizes through `_SinkBracket.close`, which releases the
+- Every terminal path finalizes through the sink bracket, which releases the
   session and delegates to `_close_sink_session` with a bounded
   `SessionOutcome`. The close is exactly-once — only the first reaches the
-  adapter — so a later guard cannot overwrite an early, precise outcome.
-  `_outcome_for_result` maps a completed run's exit code and
-  `_outcome_for_error` maps timeout, cancellation, and earlier failures. A
-  pipeline reports its first failing stage's exit code through
-  `_pipeline_result_outcome` (`cuprum/_pipeline_sink.py`). Only categorical
-  detail reaches the adapter; exception text and argv never do.
+  adapter — so a later guard cannot overwrite an early, precise outcome. With
+  bounded delivery, it runs on a daemon finalizer serialized with worker
+  writes; the run waits for the delivery grace and terminal framing may remain
+  open if an active destination write never returns. `_outcome_for_result` maps
+  a completed run's exit code and `_outcome_for_error` maps timeout,
+  cancellation, and earlier failures. A pipeline reports its first failing
+  stage's exit code through `_pipeline_result_outcome`
+  (`cuprum/_pipeline_sink.py`). Only categorical detail reaches the adapter;
+  exception text and argv never do.
 - The close runs before the shielded task drain, deliberately: the drain can
   aggregate a failing after-hook or observe task into a `BaseExceptionGroup`,
   so closing afterwards would record the aggregate in place of the precise
@@ -6889,13 +6892,14 @@ collection paths.
 
 `RunOutputOptions` is the canonical carrier for command output behaviour: it
 holds `capture`, the `echo` shorthand, the resolved `echo_stdout` and
-`echo_stderr` gates, and the idle-reporting fields `idle_after` and `on_idle`.
-`capture` is one joint switch for both streams, while an unset per-stream gate
-inherits `echo`. The idle fields follow the same rule as the rest of the
-carrier: spawn paths read `idle_after` and `on_idle` off the object rather than
-threading them as separate arguments, and a run that sets neither idle field
-keeps the existing no-stream fast path. Public command execution should accept
-or construct this object rather than threading separate `capture` and `echo`
+`echo_stderr` gates, the idle-reporting fields `idle_after` and `on_idle`, and
+the optional `delivery` policy for bounded presentation output. `capture` is
+one joint switch for both streams, while an unset per-stream gate inherits
+`echo`. The idle fields follow the same rule as the rest of the carrier: spawn
+paths read `idle_after` and `on_idle` off the object rather than threading them
+as separate arguments, and a run that sets neither idle field keeps the
+existing no-stream fast path. Public command execution should accept or
+construct this object rather than threading separate `capture` and `echo`
 keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
 handling stays explicit, testable, and compatible with the `IOOptions`
 deprecation path.
@@ -7104,6 +7108,16 @@ to, and what a completed teardown waits for. The two idle-heartbeat modules,
 the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
+
+Bounded output has a parallel ownership seam: `_bounded_delivery.py` owns the
+shared byte-bounded FIFO and its daemon worker; `_command_execution_config.py`
+and `_pipeline_config.py` resolve destinations and retain setup ownership;
+`_delivery_lifecycle.py` closes the worker and publishes loop-side diagnostics;
+and `_sink_lifecycle.py` serializes presentation-session close after active
+writes. `_daemon_thread.py` bridges only these bounded teardown operations
+without depending on the event loop's shared default executor. See
+[ADR-025](adr-025-bounded-output-delivery.md) for the queue, loss, and shutdown
+contract.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the

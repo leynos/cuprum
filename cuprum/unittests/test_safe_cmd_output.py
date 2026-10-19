@@ -15,7 +15,12 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, sh
-from cuprum.sh import CommandResult, ExecutionContext, IOOptions, RunOutputOptions
+from cuprum.sh import (
+    CommandResult,
+    ExecutionContext,
+    IOOptions,
+    RunOutputOptions,
+)
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.execution import ExecuteFn, _RunKwargs, assert_capture_disabled
 

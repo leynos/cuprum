@@ -26,6 +26,7 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
+import functools
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
 from cuprum._bytes_run import _require_command_result
@@ -54,6 +55,7 @@ from cuprum.sh.line_options import (
     # binding that no production call path resolves.
     _line_iteration_tracking,
     _reject_redirected_lines_stdout,
+    _resolve_line_stdin_source,
 )
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import CapturedResult, CommandResult
@@ -246,7 +248,7 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
         _reject_redirected_lines_stdout(out)
-        stdin_source = _resolve_stdin_source(stdin, ctx)
+        stdin_source = _resolve_line_stdin_source(stdin, ctx, out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _line_iteration_tracking()
         state = _ExecutionState(
@@ -257,16 +259,14 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         )
         observation = _prepare_execution_observation(self, state, tracking)
 
-        return LineStream(
-            _iter_line_events(
-                _build_subprocess_execution(
-                    self,
-                    state,
-                    observation=observation,
-                ),
-                tracking,
-            ),
+        execution_factory = functools.partial(
+            _build_subprocess_execution,
+            self,
+            state,
+            observation=observation,
+            sink_bracket=tracking.sink_bracket,
         )
+        return LineStream(_iter_line_events(execution_factory, tracking))
 
     @typing.overload
     def run_sync(

@@ -24,6 +24,7 @@ import codecs
 import logging
 import typing as typ
 
+from cuprum._bounded_delivery import _DeliveryPayload, _DeliveryWorker
 from cuprum._echo_truncation import _split_echo_segments
 from cuprum.echo_events import (
     BrokenPipePolicy,
@@ -42,16 +43,13 @@ _LOGGER = logging.getLogger("cuprum.stream")
 
 
 def _write_chunk(
-    config: _StreamConfig,
+    state: _DrainState,
     chunk: bytes,
     *,
-    decoder: codecs.IncrementalDecoder | None = None,
     final: bool = False,
-) -> None:
-    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
-
-    For stdio echo this blocking write is acceptable; future slow-sink handling
-    can layer on a background writer if needed.
+    source_bytes: int | None = None,
+) -> int:
+    """Write a bytes chunk synchronously or enqueue it for bounded delivery.
 
     A text-only sink is given a decoded *view*. In a byte-exact run an
     undecodable byte is replaced rather than left to raise, because a mirror is
@@ -59,20 +57,52 @@ def _write_chunk(
     not be stranded by a display decode. A text run keeps the caller's policy,
     so echo under ``errors="strict"`` raises exactly as it did before byte mode
     existed. See :data:`cuprum._constants.OBSERVER_ERROR_POLICY`.
+
+    A configured delivery worker receives the prepared payload without a
+    blocking loop-side destination call. The return value is the number of
+    original source bytes rejected by queue saturation.
+
+    Returns
+    -------
+    int
+        Original source bytes rejected by queue saturation.
     """
+    config = state.config
+    delivery = config.delivery
+    accounted_bytes = len(chunk) if source_bytes is None else source_bytes
     buffer = getattr(config.sink, "buffer", None)
     if buffer is not None:
+        if delivery is not None:
+            return _enqueue_delivery(delivery, state, chunk, accounted_bytes)
         buffer.write(chunk)
         buffer.flush()
-        return
+        return 0
     text = (
         chunk.decode(config.encoding, errors=config.view_errors)
-        if decoder is None
-        else decoder.decode(chunk, final=final)
+        if state.echo_decoder is None
+        else state.echo_decoder.decode(chunk, final=final)
     )
+    if delivery is not None:
+        return _enqueue_delivery(delivery, state, text, accounted_bytes)
     if text:
         config.sink.write(text)
     config.sink.flush()
+    return 0
+
+
+def _enqueue_delivery(
+    delivery: _DeliveryWorker,
+    state: _DrainState,
+    value: str | bytes,
+    source_bytes: int,
+) -> int:
+    """Queue a prepared echo payload while preserving source-byte accounting."""
+    return delivery.enqueue(
+        state.config.stream,
+        _DeliveryPayload(value=value, source_bytes=source_bytes),
+        flush=True,
+        diagnostics=state.relay_diagnostics,
+    )
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
@@ -166,7 +196,11 @@ def _write_finished_echo_line(
         errors=state.config.errors,
         is_text_sink=state.echo_decoder is not None,
     )
-    was_written = _echo_write(state, finished.payload)
+    was_written = _echo_write(
+        state,
+        finished.payload,
+        source_bytes=finished.source_bytes,
+    )
     if was_written and finished.dropped_bytes:
         _emit_echo_event(
             EchoEvent(
@@ -182,12 +216,21 @@ def _echo_write(
     chunk: bytes,
     *,
     final: bool = False,
+    source_bytes: int | None = None,
 ) -> bool:
     """Write one echo payload and report whether the sink accepted it."""
     if state.echo_guard.disabled:
         return False
     try:
-        _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
+        dropped_bytes = _write_chunk(
+            state,
+            chunk,
+            final=final,
+            source_bytes=source_bytes,
+        )
+        if dropped_bytes:
+            _record_dropped_delivery(state, dropped_bytes)
+            return False
         mirror = state.config.mirror
         if mirror is not None:
             # Only a chunk that reached the sink moves the cursor: a write that
@@ -212,6 +255,23 @@ def _echo_write(
             error_category=EchoErrorCategory.BROKEN_PIPE,
         )
     return True
+
+
+def _record_dropped_delivery(state: _DrainState, dropped_bytes: int) -> None:
+    """Publish one saturation report while leaving later echo chunks enabled."""
+    state.relay_diagnostics.fallbacks.append(
+        RelayFallback(
+            stream=state.config.stream,
+            error_category=EchoErrorCategory.DROPPED,
+        ),
+    )
+    _emit_echo_event(
+        EchoEvent(
+            stream=state.config.stream,
+            error_category=EchoErrorCategory.DROPPED,
+            dropped_bytes=dropped_bytes,
+        ),
+    )
 
 
 def _disable_echo(state: _DrainState, *, error_category: EchoErrorCategory) -> bool:

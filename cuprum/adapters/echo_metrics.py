@@ -1,9 +1,10 @@
-"""Metrics adapter for stream-echo failure and truncation events.
+"""Metrics adapter for stream-echo and bounded-delivery events.
 
 Counts how often a text-only echo sink rejected the subprocess output, per
-output stream, and how often a bounded echoed line was successfully truncated.
-Those facts are otherwise visible only through a ``WARNING`` log record or the
-echo observation hook, which dashboards cannot aggregate.
+output stream, how often a bounded echoed line was successfully truncated,
+and how many bounded-delivery events and bytes were lost. Those facts are
+otherwise visible only through the echo observation hook, which dashboards
+cannot aggregate.
 
 The hook consumes :class:`~cuprum.echo_events.EchoEvent` values from
 :func:`~cuprum.echo_observation.observe_echo`. It reuses the
@@ -69,6 +70,16 @@ policy the error propagates and no event is emitted.
 ECHO_TRUNCATIONS_TOTAL = "cuprum_echo_truncations_total"
 """Successfully written bounded echo lines, labelled by ``stream``."""
 
+ECHO_DELIVERY_EVENTS_TOTAL = "cuprum_echo_delivery_events_total"
+"""Bounded delivery drops, write failures, and undelivered groups.
+
+The counter is labelled by the closed-set ``stream`` and ``error_category``
+values, so its cardinality remains bounded.
+"""
+
+ECHO_DELIVERY_BYTES_TOTAL = "cuprum_echo_delivery_bytes_total"
+"""Source bytes dropped or left undelivered, with the delivery event labels."""
+
 
 def _event_labels(event: EchoEvent) -> dict[str, str]:
     """Return the bounded label set for ``event``.
@@ -102,10 +113,9 @@ def _truncation_labels(event: EchoEvent) -> dict[str, str]:
 def _record_error_metric(collector: MetricsCollector, event: EchoEvent) -> None:
     """Record *event* on the counter its error category owns.
 
-    The three categories are one dispatch because each owns a distinct series:
-    an operator alerts on an unencodable payload and a closing destination
-    separately, and confining that mapping to one place keeps a new category
-    from silently inheriting another's counter.
+    Categories with the same operational meaning share a counter and retain
+    their closed category as a label. This keeps delivery outcomes visible
+    without creating a metric series for each event at runtime.
 
     The collector is a parameter rather than the hook's own attribute because a
     method forwarding ``self._record_error_metric(event)`` is a trivial
@@ -137,6 +147,19 @@ def _record_error_metric(collector: MetricsCollector, event: EchoEvent) -> None:
                 1.0,
                 _truncation_labels(event),
             )
+        case (
+            EchoErrorCategory.DROPPED
+            | EchoErrorCategory.DELIVERY_ERROR
+            | EchoErrorCategory.UNDELIVERED
+        ):
+            labels = _event_labels(event)
+            collector.inc_counter(ECHO_DELIVERY_EVENTS_TOTAL, 1.0, labels)
+            if event.dropped_bytes is not None:
+                collector.inc_counter(
+                    ECHO_DELIVERY_BYTES_TOTAL,
+                    float(event.dropped_bytes),
+                    labels,
+                )
 
 
 class EchoMetricsHook:
@@ -154,6 +177,12 @@ class EchoMetricsHook:
     ``error_category`` of ``broken_pipe``. It is a separate series, so a sink
     that cannot encode is never confused with a destination that keeps
     closing.
+
+    Bounded delivery events increment ``cuprum_echo_delivery_events_total``
+    with ``stream`` and ``error_category`` labels. Queue drops and shutdown
+    losses also add their source-byte count to
+    ``cuprum_echo_delivery_bytes_total``. Sink metadata and output contents
+    never become metric labels.
 
     A drain that has already disabled echo emits nothing further, so repeated
     chunks after the first failure do not compound the count.
@@ -214,6 +243,8 @@ def echo_metrics_hook(collector: MetricsCollector) -> EchoHook:
 
 __all__ = [
     "ECHO_BROKEN_PIPE_TOTAL",
+    "ECHO_DELIVERY_BYTES_TOTAL",
+    "ECHO_DELIVERY_EVENTS_TOTAL",
     "ECHO_ENCODING_FAILURES_TOTAL",
     "ECHO_TRUNCATIONS_TOTAL",
     "EchoMetricsHook",

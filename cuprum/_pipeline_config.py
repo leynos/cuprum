@@ -11,12 +11,16 @@ sink, encoding, and error configuration consumed by pipeline stream tasks.
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import sys
 import typing as typ
 
+from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
+from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
-from cuprum._idle_heartbeat import _build_idle_monitor
-from cuprum._sink_lifecycle import _SinkBracket
+from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
+from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
+from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum.echo_events import BrokenPipePolicy
@@ -66,6 +70,12 @@ class _PipelineRunConfig:
     capture_bytes: bool = False
 
     idle: _IdleMonitor | None = None
+
+    delivery_worker: _DeliveryWorker | None = None
+
+    delivery_grace_s: float | None = None
+
+    idle_delivery_diagnostics: _RelayDiagnostics | None = None
 
     @property
     def consumes_stdout(self) -> bool:
@@ -132,6 +142,7 @@ class _PipelineRunConfig:
             echo_max_line_bytes=self.max_echo_line_bytes,
             broken_pipe_policy=self.broken_pipe_policy,
             sink=framed,
+            delivery=self.delivery_worker,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             capture_bytes=self.capture_bytes,
@@ -194,6 +205,100 @@ def _prepare_pipeline_config(
     capture_bytes: bool = False,
 ) -> _PipelineRunConfig:
     """Normalize runtime options for pipeline execution from one options object."""
+    ctx, stdout_sink, stderr_sink = _resolve_pipeline_context(context)
+    # Keep ``RunOutputOptions`` as the only carrier for resolved output behaviour.
+    echo_stdout, echo_stderr = output.resolved_echo
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
+        bounded_delivery=output.delivery is not None,
+        delivery_grace_s=(
+            None if output.delivery is None else output.delivery.drain_grace_s
+        ),
+    )
+    delivery_worker: _DeliveryWorker | None = None
+    try:
+        delivery_worker = _build_pipeline_delivery_worker(
+            output,
+            sink_bracket,
+            stdout_sink,
+            stderr_sink,
+        )
+        idle, idle_delivery_diagnostics = _build_pipeline_idle_monitor(
+            output,
+            sink_bracket,
+            stderr_sink,
+            delivery_worker,
+        )
+        return _PipelineRunConfig(
+            ctx=ctx,
+            capture=output.capture,
+            echo_stdout=echo_stdout,
+            echo_stderr=echo_stderr,
+            max_echo_line_bytes=output.max_echo_line_bytes,
+            broken_pipe_policy=output.resolved_broken_pipe_policy,
+            timeout=timeout,
+            stdout_sink=stdout_sink,
+            stderr_sink=stderr_sink,
+            sink_bracket=sink_bracket,
+            capture_bytes=capture_bytes,
+            delivery_worker=delivery_worker,
+            delivery_grace_s=(
+                None if output.delivery is None else output.delivery.drain_grace_s
+            ),
+            idle_delivery_diagnostics=idle_delivery_diagnostics,
+            on_line=output.on_line,
+            # One aggregate heartbeat for the whole pipeline, labelled for what it
+            # actually observes: the parent-facing output, not the health of every
+            # stage. The clock starts when the first stage starts.
+            idle=idle,
+        )
+    except BaseException as run_error:
+        _cleanup_failed_pipeline_setup(
+            output,
+            delivery_worker,
+            sink_bracket,
+            run_error,
+        )
+        raise
+
+
+def _cleanup_failed_pipeline_setup(
+    output: RunOutputOptions,
+    delivery_worker: _DeliveryWorker | None,
+    sink_bracket: _SinkBracket,
+    run_error: BaseException,
+) -> None:
+    """Release the delivery worker and sink acquired before setup failed."""
+    if delivery_worker is not None:
+        try:
+            delivery_worker.close(grace=0.0)
+        except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
+            _note_setup_cleanup_failure(
+                run_error,
+                "Output delivery worker cleanup",
+                close_error,
+            )
+    try:
+        if output.delivery is None:
+            sink_bracket.close(outcome=_outcome_for_error(run_error))
+        else:
+            sink_bracket.close_bounded(
+                outcome=_outcome_for_error(run_error),
+                grace=0.0,
+            )
+    except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
+        _note_setup_cleanup_failure(
+            run_error,
+            "Presentation sink cleanup",
+            close_error,
+        )
+
+
+def _resolve_pipeline_context(
+    context: ExecutionContext | None,
+) -> tuple[ExecutionContext, typ.IO[str], typ.IO[str]]:
+    """Resolve the run context and its default stdout and stderr sinks."""
     # Deferred, unlike the module-scope import in ``_pipeline_results``: this
     # module is imported by ``_pipeline_streams``, which ``_pipeline_collect``
     # imports, so hoisting the import would close the cycle rather than avoid
@@ -204,40 +309,63 @@ def _prepare_pipeline_config(
     ctx = context or sh.ExecutionContext()
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
-    # ``RunOutputOptions`` is the canonical carrier for output behaviour, so
-    # the resolved gates are read straight off it rather than restated as
-    # separate arguments; the developer guide forbids parallel internal
-    # output-option objects.
-    echo_stdout, echo_stderr = output.resolved_echo
-    sink_bracket = _SinkBracket.open(
-        output.sink,
-        sinks.SessionStart(label="pipeline", argv=()),
+    return ctx, stdout_sink, stderr_sink
+
+
+def _build_pipeline_delivery_worker(
+    output: RunOutputOptions,
+    sink_bracket: _SinkBracket,
+    stdout_sink: typ.IO[str],
+    stderr_sink: typ.IO[str],
+) -> _DeliveryWorker | None:
+    """Start one shared worker for the pipeline's resolved stream sinks."""
+    delivery = output.delivery
+    if delivery is None:
+        return None
+    return _new_delivery_worker(
+        delivery,
+        sink_bracket.resolve_destination(stdout_sink),
+        sink_bracket.resolve_destination(stderr_sink),
+        operation_lock=sink_bracket.writer_lock,
     )
-    return _PipelineRunConfig(
-        ctx=ctx,
-        capture=output.capture,
-        echo_stdout=echo_stdout,
-        echo_stderr=echo_stderr,
-        max_echo_line_bytes=output.max_echo_line_bytes,
-        broken_pipe_policy=output.resolved_broken_pipe_policy,
-        timeout=timeout,
-        stdout_sink=stdout_sink,
-        stderr_sink=stderr_sink,
-        sink_bracket=sink_bracket,
-        capture_bytes=capture_bytes,
-        on_line=output.on_line,
-        # One aggregate heartbeat for the whole pipeline, labelled for what it
-        # actually observes: the parent-facing output, not the health of every
-        # stage. The clock starts when the first stage starts.
-        idle=_build_idle_monitor(
-            output.idle_after,
-            output.on_idle,
-            _PIPELINE_IDLE_SUBJECT,
-            # The same resolution the mirrored streams use: an active session
-            # frames them, so a keepalive written anywhere else would land
-            # outside the group the run is claiming. One resolution, not two,
-            # because _echo_mirror recognizes the diagnostic by comparing the
-            # resolved destinations.
-            sink_bracket.resolve_destination(stderr_sink),
+
+
+def _build_pipeline_idle_monitor(
+    output: RunOutputOptions,
+    sink_bracket: _SinkBracket,
+    stderr_sink: typ.IO[str],
+    delivery_worker: _DeliveryWorker | None,
+) -> tuple[_IdleMonitor | None, _RelayDiagnostics | None]:
+    """Build aggregate idle reporting through the pipeline's stderr route."""
+    diagnostics = _RelayDiagnostics() if delivery_worker is not None else None
+    idle_delivery = (
+        None
+        if delivery_worker is None or diagnostics is None
+        else functools.partial(
+            _queue_idle_diagnostic,
+            delivery_worker,
+            diagnostics,
+        )
+    )
+    # Resolve through the active session so the keepalive shares the run's sink.
+    idle = _build_idle_monitor(
+        output.idle_after,
+        output.on_idle,
+        _PIPELINE_IDLE_SUBJECT,
+        _IdleSinkConfig(
+            sink=sink_bracket.resolve_destination(stderr_sink),
+            delivery=idle_delivery,
         ),
+    )
+    return idle, diagnostics
+
+
+def _note_setup_cleanup_failure(
+    run_error: BaseException,
+    cleanup_action: str,
+    cleanup_error: BaseException,
+) -> None:
+    """Attach a bounded cleanup diagnostic without replacing setup failure."""
+    run_error.add_note(
+        f"{cleanup_action} also failed ({type(cleanup_error).__name__})."
     )

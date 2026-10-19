@@ -1464,6 +1464,19 @@ Output hooks may be invoked on each line or chunk. Care must be taken to:
   service);
 - handle partial lines correctly.
 
+Opt-in bounded delivery moves sink writes and flushes to one run-owned daemon
+worker with a byte-bounded queue shared by stdout and stderr. Saturated chunks
+are dropped from presentation and reported; capture remains complete. The
+worker has a bounded shutdown drain and reports output left queued or in flight
+as undelivered if it must be abandoned. See
+[ADR-025](adr-025-bounded-output-delivery.md) for the delivery, ownership, and
+failure contract.
+
+Command and pipeline configuration keep their destination resolution and
+partial-setup cleanup local to their execution modules because each path owns
+different context and failure inputs. Shared session ownership and serialized
+close ordering remain in `_sink_lifecycle`.
+
 Users should be able to choose:
 
 - `echo=True, capture=True` – tee behaviour;
@@ -1552,16 +1565,17 @@ parent-facing output — framing it in a GitHub Actions log group and annotating
 failures — without changing capture, success semantics, or the returned result.
 The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
 one session before the subprocess starts, route echoed output through the
-session's `log` writer by default, and close the session exactly once per
-terminal path with a bounded categorical outcome. A session may opt out of echo
-redirection with `redirects_echo = False`; the annotation-only
-`GitHubActionsSession` uses this to leave stdout and stderr on their usual
-destinations while still writing workflow commands through its `log` writer.
-All presentation knowledge (workflow-command syntax, escaping, injection
-shielding) stays inside the adapter; runs without a sink are unchanged. The
-single-command and pipeline runners share this contract, and both close the
-session through the same shielded finalization that reconciles observe-hook
-tasks, so cancellation cannot abandon the framing part-way.
+session's `log` writer by default, and close the session with a bounded
+categorical outcome. A session may opt out of echo redirection with
+`redirects_echo = False`; the annotation-only `GitHubActionsSession` uses this
+to leave stdout and stderr on their usual destinations while still writing
+workflow commands through its `log` writer. In bounded-delivery mode, the
+worker and session finalizer share a per-run lock; finalization runs off-loop,
+waits behind an active write, and may leave the session open if that write
+never returns. All presentation knowledge (workflow-command syntax, escaping,
+injection shielding) stays inside the adapter; runs without a sink are
+unchanged. The single-command and pipeline runners share this contract and
+shield the bounded finalization against cancellation.
 
 Activation policy is also adapter-local: `GitHubActionsSink` reads
 `GITHUB_ACTIONS` from the parent environment at `open_session` time and

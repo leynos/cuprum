@@ -29,6 +29,7 @@ from cuprum._context_policy import (
 from cuprum._context_policy import (
     _enforce_allowlist as _enforce_allowlist,
 )
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import _drain_tasks_during_cleanup
 from cuprum._pipeline_collect import (
@@ -37,6 +38,7 @@ from cuprum._pipeline_collect import (
     _collect_pipeline_inputs,
     _gather_pipeline_outputs,
     _sh_module,
+    _stage_relay_fallbacks,
 )
 from cuprum._pipeline_finalize import (
     _PIPELINE_FINALIZATION_ERROR,
@@ -87,6 +89,7 @@ if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._pipeline_config import _PipelineRunConfig
+    from cuprum._pipeline_records import _PipelineStageResultInputs
     from cuprum._result_types import _AnyPipelineResult
     from cuprum.sh import SafeCmd
 
@@ -141,7 +144,7 @@ async def _run_spawned_pipeline(
     observations = observers.observations
     sink_bracket = config.sink_bracket
     try:
-        inputs = await _collect_pipeline_inputs(parts, spawn, config)
+        inputs = await _collect_and_settle_pipeline_inputs(parts, config, spawn)
     except _sh_module().TimeoutExpired as timeout_error:
         await _finalize_pipeline_timeout(config, spawn, observers, timeout_error)
         raise
@@ -174,6 +177,30 @@ async def _run_spawned_pipeline(
         failure_index=inputs.wait_result.failure_index,
         capture_bytes=config.capture_bytes,
     )
+
+
+async def _collect_and_settle_pipeline_inputs(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+    spawn: _PipelineSpawnResult,
+) -> _PipelineStageResultInputs:
+    """Collect outputs, close delivery, and attach final relay diagnostics."""
+    inputs = await _collect_pipeline_inputs(parts, spawn, config)
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            config.delivery_worker,
+            drain_grace_s=config.delivery_grace_s,
+        ),
+    )
+    relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)
+    idle_diagnostics = config.idle_delivery_diagnostics
+    if idle_diagnostics is not None:
+        idle_diagnostics.settle()
+        relay_fallbacks_by_stage = (
+            *relay_fallbacks_by_stage[:-1],
+            relay_fallbacks_by_stage[-1] + idle_diagnostics.snapshot(),
+        )
+    return dc.replace(inputs, relay_fallbacks_by_stage=relay_fallbacks_by_stage)
 
 
 async def _run_pipeline(
@@ -233,7 +260,13 @@ async def _spawn_and_drive_pipeline(
         )
     except BaseException as spawn_error:
         outcome = _outcome_for_error(spawn_error)
-        config.sink_bracket.close(outcome=outcome)
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                config.delivery_worker,
+                drain_grace_s=config.delivery_grace_s,
+            ),
+        )
+        await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
         _emit_terminal_events(observations, outcome.outcome)
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(

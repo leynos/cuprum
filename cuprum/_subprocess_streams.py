@@ -324,6 +324,7 @@ def _build_stream_config(
         capture_bytes=execution.capture_bytes,
         broken_pipe_policy=execution.broken_pipe_policy,
         sink=stdout_sink,
+        delivery=execution.delivery_worker,
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
@@ -340,10 +341,10 @@ def _prepare_stream_spawn(
 
     Every streamed run reaches this point with a live child and nothing else
     started, so the work here is deliberately infallible: it reads the
-    execution, allocates an event and two collectors, and builds a frozen
-    context. A caller can therefore build these inputs without risking a
-    half-started run, which is the property the direct-run and handle paths
-    both document.
+    execution, allocates an event and either reuses the run's collectors or
+    creates two, and builds a frozen context. A caller can therefore build
+    these inputs without risking a half-started run, which is the property the
+    direct-run and handle paths both document.
 
     Parameters
     ----------
@@ -358,7 +359,9 @@ def _prepare_stream_spawn(
         The discard latch, the spawn context, and the diagnostics collectors.
     """
     discard_on_cancel = asyncio.Event()
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    relay_diagnostics = execution.relay_diagnostics
+    if relay_diagnostics is None:
+        relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,

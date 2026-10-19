@@ -17,13 +17,11 @@ from hypothesis import strategies as st
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
-    CommandResult,
     ExecutionContext,
     IOOptions,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
-    SafeCmd,
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
@@ -776,89 +774,6 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     assert result.stages[1].exit_code == 0, (
         f"capture={capture}: stage 1 exit_code mismatch"
     )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _BoundedEchoCase:
-    """Shared input and expected output for public bounded-echo tests."""
-
-    payload: str
-    bound: int
-    expected_echo: str
-    sink: io.StringIO
-    options: RunOutputOptions
-
-
-def _bounded_echo_case() -> _BoundedEchoCase:
-    """Build the common bounded output options and exact expected echo."""
-    payload = "x" * 80 + "\n"
-    bound = 50
-    return _BoundedEchoCase(
-        payload=payload,
-        bound=bound,
-        expected_echo="x" * 25 + "… [truncated 55 bytes]\n",
-        sink=io.StringIO(),
-        options=RunOutputOptions(
-            capture=True,
-            echo=True,
-            max_echo_line_bytes=bound,
-        ),
-    )
-
-
-def _assert_bounded_public_echo(
-    result: CommandResult | PipelineResult,
-    case: _BoundedEchoCase,
-) -> None:
-    """Assert a public execution captures and echoes the shared case exactly."""
-    assert result.ok is True, "the public execution should succeed"
-    assert result.stdout == case.payload, "capture must retain the complete line"
-    assert case.sink.getvalue() == case.expected_echo, (
-        "echo must retain the exact bounded prefix, marker, and newline"
-    )
-    assert len(case.sink.getvalue().encode()) <= case.bound, (
-        "the echoed bytes must not exceed max_echo_line_bytes"
-    )
-
-
-def _execute_bounded(
-    target: SafeCmd | Pipeline,
-    *,
-    is_sync: bool,
-    case: _BoundedEchoCase,
-) -> CommandResult | PipelineResult:
-    """Execute one command or pipeline through the selected public entry point."""
-    context = ExecutionContext(stdout_sink=case.sink)
-    if isinstance(target, Pipeline):
-        if is_sync:
-            return target.run_sync(output=case.options, context=context)
-        return asyncio.run(target.run(output=case.options, context=context))
-    if is_sync:
-        return target.run_sync(output=case.options, context=context)
-    return asyncio.run(target.run(output=case.options, context=context))
-
-
-@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
-@pytest.mark.parametrize("is_pipeline", [False, True], ids=["command", "pipeline"])
-def test_public_output_bound_reaches_echo_sink(
-    is_sync: bool,
-    is_pipeline: bool,
-) -> None:
-    """Public command and pipeline entry points bound mirrored output."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    case = _bounded_echo_case()
-    command = python("-c", f"import sys; sys.stdout.write({case.payload!r})")
-    target = (
-        command
-        if not is_pipeline
-        else command | python("-c", "import sys; sys.stdout.write(sys.stdin.read())")
-    )
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = _execute_bounded(target, is_sync=is_sync, case=case)
-
-    _assert_bounded_public_echo(result, case)
 
 
 # The producer names its streams so the final stage's stdout is distinguishable

@@ -93,7 +93,7 @@ from cuprum.sh.execution import _CwdType as _CwdType
 from cuprum.sh.execution import _EnvMapping as _EnvMapping
 from cuprum.sh.execution import cabc as cabc
 from cuprum.sh.factory import make
-from cuprum.sh.output import IOOptions, RunOutputOptions, StdioTarget
+from cuprum.sh.output import BoundedDelivery, IOOptions, RunOutputOptions, StdioTarget
 from cuprum.sh.output import _validate_convenience_flags as _validate_convenience_flags
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
@@ -115,6 +115,7 @@ from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BoundedDelivery",
     "BytesCommandResult",
     "BytesPipelineResult",
     "CapturedResult",
