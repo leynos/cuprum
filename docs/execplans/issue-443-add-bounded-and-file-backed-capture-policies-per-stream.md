@@ -1911,6 +1911,62 @@ byte-exact mode reads the whole spill file back to return the child's bytes,
 which is O(stream size) and so does not carry the bounded-memory guarantee that
 text mode does. This is stated in `docs/users-guide.md`.
 
+## Review round two on the replayed head
+
+`coderabbit review --agent` over `a40898789..2c8fce82d` (125 files reviewed)
+reported four findings. An earlier run of the same review had been killed by
+SIGTERM before it finished, discarding its results; the five leads it had
+streamed were triaged against the code instead, and every one that proved
+genuine was acted on here too. All the changes below are documentation,
+test-documentation or dead-code corrections in this branch's own surface; none
+changed runtime behaviour.
+
+- **O5 over-promised the kept spill file.** It said the file survives with
+  "complete contents" for every outcome, which is false on the timeout and
+  cancellation routes: the file holds the bytes received before the run
+  stopped. O5 now splits the two returning routes (whole stream) from those two
+  (received prefix) and points at O8, which already stated the partial
+  behaviour. Discharging evidence for the split already existed:
+  `test_a_kept_spill_file_survives_a_timed_out_run_whole` asserts the flushed
+  prefix, not the whole payload.
+- **The users' guide's policy table claimed a file unconditionally.** Below
+  `spill_threshold_bytes` the capture never leaves memory, and
+  `test_a_stream_under_its_threshold_is_not_a_witnessed_spill` is the negative
+  control that pins it. The `FileBackedCapture` row now says the file appears
+  only past the threshold.
+- **The UTF-16 realignment docstring named the wrong dropped prefix.** A
+  scratch probe confirmed the review's arithmetic: the 10-byte payload
+  `a中b文c` bounded at 7 starts its tail at offset 3, realignment moves it to
+  4, and the survivors are `b文c` — which is what the assertion already pinned.
+  Only the sentence was wrong.
+- **`_DecodeSettings.max_code_point_bytes` was dead.** No trim step read it,
+  its table keyed `latin-1` while the codec registry's canonical name is
+  `iso8859-1`, and `_trim_to_code_point`'s `Returns` section stated a
+  shortening bound of `max_code_point_bytes - 1` that the two-edge trim does
+  not honour. The field, its `__post_init__` and the table are removed; the
+  constant the UTF-8 scan actually uses remains, and the bound is now prose
+  that describes one partial code point lost at each edge.
+- **`_capture` in the behaviour suite asserted truthiness.** It returned
+  `matching[0]` after any non-empty match, so a second record for the same
+  stream would have been silently ignored. Two records are not reachable today —
+  `_recorded_captures` flattens a two-slot pair and `PipelineResult.captures`
+  forwards the final stage's tuple — but the helper now requires exactly one
+  and names the whole tuple when it fails.
+
+A sweep for the same class of defect found four more module docstrings on this
+branch that narrated the rebase or branch history ("while this branch was in
+flight", "when the rebase onto ``main`` pushed that module past the 400-line
+ceiling"). Those were rewritten to state the constraint rather than the
+incident. The sweep was scoped to lines this branch's diff adds: the same
+phrasing appears in several files inherited from `main` (the module splits
+recorded by `_stdio_ownership.py`, `pipeline_output.py` and friends), and
+rewriting those would be unrelated churn.
+
+Two phrasing hits were *not* changed because they use "branch" in its other
+senses: `_stream_drain_finish.py`'s "keeps this branch" is a code path, and
+`test_broken_pipe_echo_snapshot.py`'s "edited on this branch" is a test-double
+rationale about sibling modules rather than a historical narrative.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
