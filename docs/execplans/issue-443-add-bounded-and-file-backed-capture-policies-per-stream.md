@@ -737,6 +737,16 @@ Thresholds that trigger escalation when breached.
     suites and `4022 tests collected` across `cuprum/unittests`.
 
   Date/Author: 2026-10-19, implementation agent.
+- [x] (2026-10-19) Replayed the 106 child-owned commits a second time, onto
+  `f359f2ec4`, because the first replay targeted `d93df9563` and upstream had
+  moved nine commits further on. The new head is `75ee5826e`; the replay itself
+  ends at `ce446cf5d`, and the two commits above it reconcile the result class
+  with the per-stream policies (see "Second replay onto upstream main" below).
+  The audit is recorded there: six range-diff entries differ, five only in hunk
+  context and one, the byte-result commit, at the `_build_command_result` seam
+  where the child predicate was reconciled.
+
+  Date/Author: 2026-10-19, implementation agent.
 
 ## Surprises & discoveries
 
@@ -2183,6 +2193,107 @@ recording because neither is a defect in the feature:
   started unless the tree can be left alone until all gates finish, and the
   remaining four gates were correctly abandoned rather than run against a
   drifting head.
+
+Date/Author: 2026-10-19, implementation agent.
+
+## Second replay onto upstream main
+
+The first replay was cut against `d93df9563`. Upstream then advanced to
+`f359f2ec4`, and PR #635's merge ref would have been built on a base that
+already carried newer work in the same modules, so the series was replayed
+again from the preserved child commits rather than merged forward. The replay
+boundary is unchanged: `a40898789..83c1fefeb`, 106 child-owned commits, with
+the parent PR's squash commit `d93df9563` excluded as inherited history.
+
+Recovery material, retained until publication is accepted:
+
+- `refs/recovery/issue443-head-83c1fefeb` — the pre-rebase child head.
+- `refs/recovery/issue443-target-f359f2ec4` — the second target.
+- `refs/recovery/issue443-old-base-a40898789` — the exclusive replay boundary.
+- `refs/recovery/issue443-rebased-ef2f084bc` — the abandoned weave run.
+- `refs/recovery/issue443-rebased-nonweave-ce446cf5d` — the accepted replay.
+- `backup/issue443-pre-rebase-20261018` — a backup branch at the old head.
+
+**The weave incident.** The first replay attempt ran with the repository's
+configured weave merge driver. It exited 0, but the replay was corrupt: several
+`cuprum/_result_assembly.py` and `cuprum/_subprocess_execution.py` hunks were
+fabricated — text that neither side contained — and the corruption was only
+visible by reading the replayed patches, not by the exit status. The run was
+abandoned (`refs/recovery/issue443-rebased-ef2f084bc`), and the replay was
+repeated with the driver disabled via `git -c core.attributesFile=/dev/null`.
+Lesson: a clean exit from a merge driver is not evidence that a replay is
+semantically sound; the replayed patches have to be read.
+
+**Conflicts and resolutions.** Sixteen files conflicted, all in the execution
+core (`_result_assembly.py`, `_subprocess_execution.py`, `_subprocess_wait.py`,
+`_subprocess_stream_run.py`, `_pipeline_internals.py`, `_stream_drain.py`,
+`sh/results.py`, `sh/output.py`, and their tests). Every resolution took the
+target's newer structure and re-expressed the child change inside it; none took
+a whole side. The one that matters for review is the result-class seam, below.
+
+**The result-class reconciliation (`3581a06b3`, ADR-025).** Upstream's
+`f359f2ec4` carries ADR-024, which had been written on this branch and
+upstreamed: "every single-command text run that captures output constructs
+`CapturedResult`". The replay initially resolved `_build_command_result` to
+`if execution.capture:` — a field this branch deleted when capture became a
+per-stream policy pair — and dropped `captures=` from every construction. That
+predicate is both unbuildable and semantically wrong. The check that settles it
+is that `CapturedResult` redeclares `stdout`/`stderr` as `str`, while a
+text-mode `FileBackedCapture` that spilled reports its payload as `None`
+(pinned by `test_capture_spill.py`, relied on by
+`test_capture_spill_cleanup.py`), and a single-stream capture leaves the other
+stream `None`. So "did the run capture anything" cannot decide the class.
+
+ADR-025 records the narrower rule: `_build_command_result` constructs
+`CapturedResult` exactly when both settled payloads are `str`, through
+`_is_captured_text_pair`, and threads `captures` into all three constructions.
+A default `RunOutputOptions()` run resolves both streams to `FullCapture`, so
+both payloads are `str` and ADR-024's contract holds unchanged. The predicate
+was probed in both directions: forced `True` fails the single-stream and spill
+cases with
+`_ExecutionInvariantError: text capture was enabled but stderr was not captured`;
+forced `False` fails the full-capture and bounded cases. The probe was
+restored with `cp` and `git diff --quiet` confirmed the file matched its
+committed blob. `75ee5826e` adds the five cases that witness the rule.
+
+**Audit of the second replay.**
+`git range-diff a40898789..83c1fefeb f359f2ec4..HEAD` reports 106 entries: 100
+identical (`=`), six differing (`!`). Each difference was read rather than
+counted:
+
+| Entry | Commit                                                             | Difference                                                                                                  | Verdict                       |
+| ----- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 1     | `Split deprecated and convenience machinery out of output options` | Hunk context only: the `sh/__init__.py` module map gains `CapturedResult`, which target carries             | Intended                      |
+| 2     | `Add per-stream capture policies and capture metadata`             | `CapturedStream`'s import position in `__all__` follows the target's ordering                               | Intended                      |
+| 4     | `Remove owned spill files on the single-command success path`      | Hunk header follows the target's `_require_captured_text`; the added `_recorded_captures` is byte-identical | Intended                      |
+| 7     | `Document the per-stream capture policies`                         | One context line differs because target reworded the pipeline contract note                                 | Intended                      |
+| 26    | `Fix review findings in capture-policy tests and docs`             | Same context line as entry 7                                                                                | Intended                      |
+| 36    | `Report capture records on byte-exact results`                     | The `_build_command_result` hunk now ends at a narrower predicate, not the deleted `execution.capture`      | Intended — the reconciliation |
+
+The file-set audit compared the child's patch against the same target at both
+heads. Fifteen paths that the old child patch touched are absent from the new
+one; all fifteen exist at both heads and none is child-owned, so their absence
+means "identical to target", not "dropped". Five further paths the old patch
+recorded as deletions (`test_captured_result_layout.py`,
+`test_command_result_narrowing.py`, `test_pipeline_capture_contract.py`,
+`typing_fixtures/captured_result_valid.py`, and
+`adr-024-captured-command-output-types.md`) are files the *old base* lacked and
+the target already carried: they are inherited parent work, correctly not
+re-delivered by the child. The child's net patch onto the target deletes no file
+(`git diff --diff-filter=D --name-only f359f2ec4 HEAD` is empty), and
+`docs/adr-024-captured-command-output-types.md` is byte-identical to the
+target, so ADR-024 is neither rewritten nor resurrected.
+
+A second file-set check asked whether upstream added tests asserting the *old*
+narrowing rule, which ADR-025 would break. `test_captured_result_layout.py`,
+`test_command_result_narrowing.py`, `test_pipeline_capture_contract.py` and
+`test_capture_mode_telemetry.py` all go through `require_captured()` or the
+`capture=True` convenience, which still resolves both streams to `FullCapture`;
+none asserts narrowing for a partial or spilled run. A targeted 172-test run
+around the execution core passed at `3581a06b3` with the head recorded at both
+ends of the log (`/tmp/pytest-targeted-rebase-issue443-onto-f359f2ec4.out`).
+
+`git diff --check f359f2ec4 HEAD` exits 0.
 
 Date/Author: 2026-10-19, implementation agent.
 
