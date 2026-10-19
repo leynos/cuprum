@@ -10,7 +10,8 @@ The implementation is split across submodules by responsibility:
 - ``builder`` holds the ``SafeCmdBuilder`` callable contract.
 - ``execution`` holds the execution context, stdin, and timeout types.
 - ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
-  counterparts ``BytesCommandResult`` and ``BytesPipelineResult``.
+  counterparts ``BytesCommandResult`` and ``BytesPipelineResult``, plus
+  ``CapturedResult`` for captured single-command text.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
 - ``stdio`` holds the ``StdioTarget`` standard-stream binding vocabulary.
 - ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
@@ -103,6 +104,7 @@ from cuprum.sh.pipeline import _resolve_pipeline_output as _resolve_pipeline_out
 from cuprum.sh.results import (
     BytesCommandResult,
     BytesPipelineResult,
+    CapturedResult,
     CommandResult,
     PipelineResult,
 )
@@ -115,6 +117,7 @@ __all__ = [
     "ArgValue",
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CapturedResult",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",

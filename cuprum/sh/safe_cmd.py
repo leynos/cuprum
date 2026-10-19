@@ -26,6 +26,7 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
+import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
 from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
@@ -55,7 +56,7 @@ from cuprum.sh.line_options import (
     _reject_redirected_lines_stdout,
 )
 from cuprum.sh.output import RunOutputOptions
-from cuprum.sh.results import CommandResult
+from cuprum.sh.results import CapturedResult, CommandResult
 
 __all__ = [
     "SafeCmd",
@@ -93,6 +94,36 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
     def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
         """Compose this command with another stage, producing a Pipeline."""
         return Pipeline.concat(self, other)
+
+    @typing.overload
+    async def run(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CapturedResult: ...
+
+    @typing.overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions,
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
+
+    @typing.overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions | None,
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
 
     async def run(
         self,
@@ -236,6 +267,36 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
                 tracking,
             ),
         )
+
+    @typing.overload
+    def run_sync(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CapturedResult: ...
+
+    @typing.overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
+
+    @typing.overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions | None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
 
     def run_sync(
         self,

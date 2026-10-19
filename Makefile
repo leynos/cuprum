@@ -230,8 +230,8 @@ TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
 # Interrogate the whole Python estate, not only the production package: tests,
 # benchmarks, scripts, and the root conftest document their definitions too.
-# Per-scope tuning may be added under a [tool.interrogate] section in
-# pyproject.toml; none is configured today.
+# The [tool.interrogate] section in pyproject.toml excludes overload signatures,
+# whose shared implementation carries the required docstring.
 INTERROGATE_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 INTERROGATE = $(UV_RUN_ENV) uv run interrogate --fail-under 100 $(INTERROGATE_TARGETS)
 # PyPy 8.0.0's Python 3.12 build is beta quality. uv's catalogue does not yet

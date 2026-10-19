@@ -23,7 +23,11 @@ import pytest
 from cuprum import sh
 from cuprum._bytes_run import _validate_bytes_output
 from cuprum._pipeline_types import _ExecutionInvariantError
-from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._result_assembly import (
+    _require_bytes,
+    _require_captured_text,
+    _require_text,
+)
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
@@ -170,13 +174,13 @@ class TestCaptureModeInSpanAttributes:
 
 
 class TestCaptureModeDiagnosticsCarryNoPayload:
-    """The two mode-boundary diagnostics publish no captured output.
+    """Mode-boundary diagnostics publish context but no captured output.
 
     Both sit on paths a run never reaches — the refusal is raised before the
-    spawn and the invariant violation while a result is assembled — so they are
-    driven directly. Each probe asserts the payload is nowhere in the record
-    *and* that the fields which should be there are, because a search for an
-    absent string passes against an empty or missing record too.
+    spawn, while invariant violations occur during result assembly — so they
+    are driven directly. Each probe asserts the payload is nowhere in the
+    record *and* that the fields which should be there are, because a search for
+    an absent string passes against an empty or missing record too.
     """
 
     @staticmethod
@@ -267,3 +271,42 @@ class TestCaptureModeDiagnosticsCarryNoPayload:
                 f"the diagnostic must name the payload type it refused, got {message!r}"
             )
             self._assert_payload_absent(message)
+
+    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
+    def test_missing_captured_stream_logs_execution_context(
+        self,
+        stream: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An impossible missing stream is logged with safe correlation fields."""
+        with (
+            caplog.at_level(logging.ERROR, logger="cuprum._result_assembly"),
+            pytest.raises(_ExecutionInvariantError, match="was not captured"),
+        ):
+            _require_captured_text(
+                None,
+                stream,
+                program="python",
+                exec_id="exec-515",
+            )
+
+        records = [
+            record
+            for record in caplog.records
+            if record.name == "cuprum._result_assembly"
+        ]
+        assert [record.levelno for record in records] == [logging.ERROR], (
+            f"a missing captured stream must record one error, got {records!r}"
+        )
+        message = records[0].getMessage()
+        for field in (
+            "operation=single_command_result_assembly",
+            "capture_mode=text",
+            f"stream={stream}",
+            "program=python",
+            "exec_id=exec-515",
+        ):
+            assert field in message, (
+                f"the invariant diagnostic must include {field!r}, got {message!r}"
+            )
+        self._assert_payload_absent(message)

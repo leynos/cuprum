@@ -130,6 +130,38 @@ def test_captures_and_echoes_stderr(
     assert captured.err.strip() == "err"
 
 
+@pytest.mark.parametrize(
+    "run_kwargs",
+    [
+        pytest.param({}, id="omitted-output"),
+        pytest.param({"output": None}, id="output-none"),
+        pytest.param(
+            {"output": RunOutputOptions(capture=True)},
+            id="explicit-capture",
+        ),
+    ],
+)
+def test_captured_runs_return_captured_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    run_kwargs: _RunKwargs,
+) -> None:
+    """Capturing calls return narrowed results for both run methods."""
+    _, execute = execution_strategy
+    command = python_builder("-c", "pass")
+
+    result = execute(command, run_kwargs)
+
+    assert isinstance(result, sh.CapturedResult), (
+        "capturing calls must return CapturedResult, "
+        f"got {type(result).__name__} for {run_kwargs!r}"
+    )
+    assert (result.stdout, result.stderr) == ("", ""), (
+        "captured empty streams must remain strings, got "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+
+
 def test_bounded_stderr_echo_keeps_complete_capture(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -307,6 +339,9 @@ def test_allows_disabling_capture(
 
     result = execute(command, {"output": RunOutputOptions(capture=False)})
 
+    assert type(result) is CommandResult, (
+        f"disabled capture must return CommandResult, got {type(result).__name__}"
+    )
     assert_capture_disabled(result)
 
 

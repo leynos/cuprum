@@ -87,6 +87,11 @@ exclude = [
     "scripts/tests/test_nose_settings.py",
 ]
 
+[tool.interrogate]
+# Overload signatures share the implementation's documentation; Ruff requires
+# the docstring to live on the implementation rather than each signature.
+ignore_overloaded_functions = true
+
 [tool.ruff]
 line-length = 88
 preview = true

@@ -63,6 +63,13 @@ single-command execution.
 - [x] 1.2.3. Add typed inherited, overlay, and replacement environment
   policies, including explicit deletion and shared single-command and pipeline
   rendering ([#434](https://github.com/leynos/cuprum/issues/434)).
+- [x] 1.2.4. Make captured single-command output visible in the type system and
+  keep pipeline and timeout limits explicit
+  ([#515](https://github.com/leynos/cuprum/issues/515)).
+  - [x] Add the runtime `CapturedResult` and checked
+    `CommandResult.require_captured()`.
+  - [x] Add capture-sensitive `SafeCmd` overloads and pinned `ty` fixtures.
+  - [x] Complete boundary tests, documentation, and release notes.
 
 ### 1.3. Context and hooks
 

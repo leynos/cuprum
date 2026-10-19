@@ -101,6 +101,9 @@ open each document.
 - [ADR-023: Opt-in telemetry redaction][adr-023] -
   accepted decision to redact configured values at opted-in export boundaries
   while preserving execution inputs and bounded metric labels.
+- [ADR-024: Type captured command output][adr-024] - accepted decision to make
+  captured single-command text non-optional while preserving the optional
+  `CommandResult` contract for explicit and uncaptured calls.
 
 ## Requests for comments
 
@@ -159,6 +162,7 @@ open each document.
 [adr-021]: adr-021-process-group-ownership.md
 [adr-022]: adr-022-adopt-nose-duplication-gate.md
 [adr-023]: adr-023-opt-in-telemetry-redaction.md
+[adr-024]: adr-024-captured-command-output-types.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

@@ -30,6 +30,7 @@ if typ.TYPE_CHECKING:
     from cuprum.context import CuprumContext
     from cuprum.sh import (
         BytesCommandResult,
+        CapturedResult,
         CommandResult,
         ExecutionContext,
         TimeoutExpired,
@@ -102,7 +103,7 @@ class _ShModule(typ.Protocol):
     """Structural view of the ``cuprum.sh`` members reached lazily.
 
     The names below are the ones accessed through :func:`_sh_module`:
-    ``CommandResult`` and ``BytesCommandResult`` in
+    ``CommandResult``, ``CapturedResult``, and ``BytesCommandResult`` in
     ``cuprum._subprocess_execution``, where the run's mode picks between them,
     ``TimeoutExpired`` in ``cuprum._subprocess_timeout``, and
     ``StdinSourceError`` in ``cuprum._subprocess_stdin_errors``, so naming
@@ -111,6 +112,7 @@ class _ShModule(typ.Protocol):
     """
 
     CommandResult: type[CommandResult]
+    CapturedResult: type[CapturedResult]
     BytesCommandResult: type[BytesCommandResult]
     TimeoutExpired: type[TimeoutExpired]
     StdinSourceError: type[Exception]

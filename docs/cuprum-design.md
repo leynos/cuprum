@@ -444,7 +444,13 @@ Represents a prepared command instance that, when run, yields a value (e.g.
 - carries execution options (cwd, env overrides, timeout, echo options);
 - exposes both async and sync run methods.
 
-Example (type sketch, not final signature):
+For implementation cohesion, `SafeCmd` inherits its byte-mode entry points from
+the private `_BytesEntryPoints` mixin in `cuprum/sh/bytes_entry_points.py`.
+That mixin groups `run_bytes` and `run_bytes_sync` with their byte-specific
+execution helpers; it is not a general command base or an extension point for
+other command classes.
+
+Typing sketch (run implementations omitted):
 
 ```python
 class SafeCmd:
@@ -454,13 +460,67 @@ class SafeCmd:
     def before(self, hook: BeforeHook) -> "SafeCmd": ...
     def after(self, hook: AfterHook) -> "SafeCmd": ...
 
+    @overload
+    async def run(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CapturedResult: ...
+    @overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
+    @overload
+    async def run(
+        self,
+        *,
+        output: RunOutputOptions | None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
     async def run(
         self,
         *,
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CapturedResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
+    ) -> CommandResult: ...
+    @overload
+    def run_sync(
+        self,
+        *,
+        output: RunOutputOptions | None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
     def run_sync(
         self,
@@ -468,11 +528,31 @@ class SafeCmd:
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult: ...
 
     def __or__(self, other: "SafeCmd") -> "Pipeline": ...
 ```
+
+The overloads above describe the public typing surface; the implementations
+remain annotated as returning `CommandResult`. Calls with omitted `output` or
+`output=None` are typed as returning `CapturedResult`. An explicit
+`RunOutputOptions` value, or a variable typed `RunOutputOptions | None`, returns
+`CommandResult` statically because those values can disable capture. At
+runtime, a direct single-command run with default text capture constructs
+`CapturedResult`, whose streams are `str` and use `""` for empty output. An
+explicit `RunOutputOptions(capture=True)` call also constructs
+`CapturedResult`, though its static type remains `CommandResult`. Call
+`CommandResult.require_captured()` to check and narrow it: an already narrowed
+result is returned unchanged, two present text streams produce a captured copy,
+and an unavailable stream raises `ValueError`. This also prevents an uncaptured
+diagnostic from being silently replaced with `""`. The decision and its
+compatibility limits are recorded in
+[ADR-024](adr-024-captured-command-output-types.md).
+
+The `RunOutputOptions | None` overload accepts variables that may hold either
+explicit options or `None` and returns `CommandResult`. Its broader return type
+reflects that capture may be disabled by the options value.
 
 #### 6.1.3 `DynamicCmd[Out]`
 
@@ -538,12 +618,20 @@ class PipelineResult:
 Contract notes:
 
 - When output capture is enabled (`RunOutputOptions(capture=True)`, the
-  default), `PipelineResult.stdout` contains the final stage stdout.
+  default), the final stage stdout and every stage's stderr are strings;
+  `PipelineResult.stdout` contains the final stage stdout.
+- Interior stage stdout is still `None` because it is sent directly to the next
+  process. `require_captured()` succeeds on the final stage and raises
+  `ValueError` for an interior stage.
 - When capture is disabled (`RunOutputOptions(capture=False)`),
   `PipelineResult.stdout` is `None`.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
+
+`TimeoutExpired.output` and `stderr` remain `str | bytes | None` and may
+contain partial output. A timeout can stop a child before its streams have been
+fully drained, so timeout exceptions do not use `CapturedResult`.
 
 #### 6.1.6 Byte-exact results
 

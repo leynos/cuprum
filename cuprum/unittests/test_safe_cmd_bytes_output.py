@@ -24,6 +24,7 @@ from cuprum.context import ScopeConfig
 from cuprum.echo_events import EchoErrorCategory, EchoStream
 from cuprum.sh import (
     BytesCommandResult,
+    CapturedResult,
     CommandResult,
     ExecutionContext,
     RunOutputOptions,
@@ -190,11 +191,14 @@ def test_byte_exact_capture_reports_a_failing_child(
 def test_text_mode_is_unchanged_beside_the_byte_exact_entry_point(
     bytes_cmd: SafeCmd,
 ) -> None:
-    """The ordinary entry point still decodes, and still returns its own class."""
+    """The ordinary entry point decodes into the captured text result subtype."""
     result = asyncio.run(bytes_cmd.run())
 
-    assert type(result) is CommandResult, (
-        f"run() must keep reporting a CommandResult, got {type(result).__name__}"
+    assert type(result) is CapturedResult, (
+        f"run() must report a CapturedResult, got {type(result).__name__}"
+    )
+    assert isinstance(result, CommandResult), (
+        "CapturedResult must remain usable through the CommandResult base type"
     )
     assert result.stdout == _FAILING_PAYLOAD.decode("utf-8", errors="replace"), (
         "run() must keep decoding with the configured error handler, got "

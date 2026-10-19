@@ -2,10 +2,12 @@
 
 ``CommandResult`` and ``PipelineResult`` describe the outcome of running a
 single command or a pipeline of commands whose streams are decoded as text.
+``CapturedResult`` narrows the text streams for a single command whose output
+was captured.
 ``BytesCommandResult`` and ``BytesPipelineResult`` are their byte-exact
 counterparts, returned by the ``run_bytes()`` entry points so that captured
 output survives a round trip through values that are not valid UTF-8. The
-``cuprum.sh`` package re-exports all four.
+``cuprum.sh`` package re-exports all five.
 """
 
 # No ``from __future__ import annotations`` here: the result fields are public
@@ -19,9 +21,20 @@ from cuprum.program import Program
 __all__ = [
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CapturedResult",
     "CommandResult",
     "PipelineResult",
 ]
+
+
+def _missing_text_streams(stdout: object, stderr: object) -> str:
+    """Return the unavailable text stream names joined with ``and``."""
+    missing = [
+        name
+        for name, value in (("stdout", stdout), ("stderr", stderr))
+        if not isinstance(value, str)
+    ]
+    return " and ".join(missing)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -120,6 +133,81 @@ class CommandResult:
         """
         return self.exit_code == 0
 
+    def require_captured(self) -> "CapturedResult":
+        """Narrow to ``CapturedResult`` after checking both text streams.
+
+        Return this result unchanged if it is already captured; otherwise
+        return a copy when both streams are strings. Empty output is ``""``.
+        Request capture with ``RunOutputOptions(capture=True)``.
+
+        Returns
+        -------
+        CapturedResult
+            This result or a captured copy with the same fields.
+
+        Raises
+        ------
+        ValueError
+            If either stream is unavailable.
+
+        Examples
+        --------
+        >>> from cuprum import CommandResult, ECHO
+        >>> result = CommandResult(ECHO, (), 0, 1, "output", "")
+        >>> result.require_captured().stdout
+        'output'
+        """
+        stdout = self.stdout
+        stderr = self.stderr
+        missing = _missing_text_streams(stdout, stderr)
+        if missing:
+            was_were = "were" if " and " in missing else "was"
+            msg = (
+                f"{missing} {was_were} not captured as text; use "
+                "RunOutputOptions(capture=True) to request captured output"
+            )
+            raise ValueError(msg)
+
+        if isinstance(self, CapturedResult):
+            return self
+
+        result_fields = {
+            field.name: getattr(self, field.name) for field in dc.fields(CommandResult)
+        }
+        return CapturedResult(**result_fields)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class CapturedResult(CommandResult):
+    """Single-command result with both decoded output streams present.
+
+    Captured streams are always strings; an empty stream is ``""``. Other
+    fields, positional layout, and keyword-only measurements match
+    :class:`CommandResult`.
+
+    Attributes
+    ----------
+    stdout, stderr:
+        Captured text, or ``""`` when the child wrote nothing.
+
+    Examples
+    --------
+    >>> from cuprum import CapturedResult, ECHO
+    >>> CapturedResult(ECHO, (), 0, 1, "", "").stdout
+    ''
+
+    """
+
+    stdout: str
+    stderr: str
+
+    def __post_init__(self) -> None:
+        """Enforce the captured-stream invariant at every construction path."""
+        missing = _missing_text_streams(self.stdout, self.stderr)
+        if missing:
+            msg = f"CapturedResult requires captured {missing} text"
+            raise TypeError(msg)
+
 
 @dc.dataclass(frozen=True, slots=True)
 class PipelineResult:
@@ -194,48 +282,19 @@ class PipelineResult:
 class BytesCommandResult:
     """Byte-exact result returned by the binary-output command entry points.
 
-    The fields, defaults, and helpers mirror :class:`CommandResult`; only the
-    captured-output fields differ, so a caller that switches entry point
-    switches the static type of what it reads rather than the shape of the
-    record. Bytes reach a caller untouched — no decoding, no surrogate escape —
-    which is what lets every byte value survive the round trip.
+    Fields and defaults mirror :class:`CommandResult`, but
+    ``require_captured()`` is available only on text result types. Captured
+    bytes remain untouched, so every byte value survives the round trip without
+    decoding or surrogate escapes.
 
     Attributes
     ----------
-    program:
-        Program that was executed.
-    argv:
-        Argument vector (excluding the program name) passed to the process.
-    exit_code:
-        Exit status reported by the process.
-    pid:
-        Process identifier; ``-1`` when unavailable.
     stdout:
-        Captured standard output bytes, or ``None`` when capture was disabled.
-        A stream that was consumed but produced nothing is ``b""``, which is
-        distinguishable from the ``None`` of a run that never captured.
+        Captured bytes. ``b""`` means captured and empty; ``None`` means
+        capture was disabled.
     stderr:
-        Captured standard error bytes, with the same ``None``/``b""``
-        distinction as ``stdout``.
-    started_at:
-        Wall-clock timestamp at which process execution started.
-    duration:
-        Monotonic process duration in seconds.
-    max_rss_bytes:
-        Peak resident set size of the executed child in bytes, under the same
-        platform rules as :class:`CommandResult`.
-    user_cpu_seconds:
-        User CPU time consumed by the executed child in seconds, under the
-        same platform rules as :class:`CommandResult`.
-    system_cpu_seconds:
-        System CPU time consumed by the executed child in seconds, under the
-        same platform rules as :class:`CommandResult`.
-    resolved_path:
-        The executable that actually ran, under the same rules as
-        :class:`CommandResult`.
-    relay_fallbacks:
-        Handled echo-disablement records from this command's own streams, in
-        the order and with the meaning :class:`CommandResult` documents.
+        Captured bytes, with the same ``b""``/``None`` distinction as
+        ``stdout``.
 
     """
 
@@ -270,14 +329,13 @@ class BytesCommandResult:
 
 @dc.dataclass(frozen=True, slots=True)
 class BytesPipelineResult:
-    """Byte-exact result returned by the binary-output pipeline entry points.
+    """Binary-output pipeline result with :class:`PipelineResult` semantics.
 
     Attributes
     ----------
     stages:
-        Per-stage results in execution order. Stages whose stdout is streamed
-        into the next stage carry ``stdout`` of ``None``; the final stage
-        carries captured stdout bytes when capture is enabled.
+        Per-stage byte results in execution order. Interior ``stdout`` is
+        ``None``; the final stage carries captured bytes when enabled.
     failure_index:
         Index of the stage that triggered fail-fast termination, or ``None``
         when all stages completed successfully.

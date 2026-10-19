@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import contextlib as cl
 import dataclasses as dc
 import io
 import typing as typ
@@ -85,18 +86,6 @@ def _assert_echoed_and_captured(
     assert result.ok is True, "the pipeline should succeed"
     assert result.stdout == expected, "capture must return the final stage output"
     assert sink.getvalue() == expected, "echo must also tee the output to the sink"
-
-
-def _identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
-    """Build a two-stage pipeline that forwards stdin to stdout."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    echo = sh.make(ECHO)
-    pipeline = echo("-n", "echoed") | python(
-        "-c",
-        "import sys; sys.stdout.write(sys.stdin.read())",
-    )
-    return pipeline, frozenset([ECHO, python_program])
 
 
 def _run_per_stream_echo_pipeline(
@@ -183,44 +172,38 @@ def _assert_only_selected_stream_echoed(
 
 
 @pytest.mark.usefixtures("stream_backend")
-def test_pipeline_output_options_echo_for_run_and_run_sync(
+@pytest.mark.parametrize(
+    "deprecated_flat_flags",
+    [
+        pytest.param(False, id="output-options"),
+        pytest.param(True, id="deprecated-flat-flags"),
+    ],
+)
+def test_pipeline_echo_options_for_run_and_run_sync(
     pipeline_execution_strategy: tuple[str, PipelineExecuteFn],
+    identity_pipeline: tuple[Pipeline, frozenset[Program]],
+    deprecated_flat_flags: bool,
 ) -> None:
-    """Pipeline run() and run_sync() honour output echo options."""
+    """Pipeline entry points honour output options and deprecated flat flags."""
     _, execute = pipeline_execution_strategy
-    pipeline, allowlist = _identity_pipeline()
+    pipeline, allowlist = identity_pipeline
     stdout_sink = io.StringIO()
+    output_kwargs: dict[str, typ.Any] = (
+        {"capture": True, "echo": True}
+        if deprecated_flat_flags
+        else {"output": RunOutputOptions(capture=True, echo=True)}
+    )
+    warning_context = (
+        pytest.warns(DeprecationWarning, match="RunOutputOptions")
+        if deprecated_flat_flags
+        else cl.nullcontext()
+    )
 
-    with scoped(ScopeConfig(allowlist=allowlist)):
+    with scoped(ScopeConfig(allowlist=allowlist)), warning_context:
         result = execute(
             pipeline,
             {
-                "output": RunOutputOptions(capture=True, echo=True),
-                "context": ExecutionContext(stdout_sink=stdout_sink),
-            },
-        )
-
-    _assert_echoed_and_captured(result, stdout_sink, "echoed")
-
-
-@pytest.mark.usefixtures("stream_backend")
-def test_pipeline_flat_capture_echo_kwargs_are_deprecated_for_public_entrypoints(
-    pipeline_execution_strategy: tuple[str, PipelineExecuteFn],
-) -> None:
-    """Pipeline run() and run_sync() accept deprecated flat kwargs and warn."""
-    _, execute = pipeline_execution_strategy
-    pipeline, allowlist = _identity_pipeline()
-    stdout_sink = io.StringIO()
-
-    with (
-        scoped(ScopeConfig(allowlist=allowlist)),
-        pytest.warns(DeprecationWarning, match="RunOutputOptions"),
-    ):
-        result = execute(
-            pipeline,
-            {
-                "capture": True,
-                "echo": True,
+                **output_kwargs,
                 "context": ExecutionContext(stdout_sink=stdout_sink),
             },
         )
@@ -838,59 +821,42 @@ def _assert_bounded_public_echo(
     )
 
 
-def _execute_bounded_command(
-    command: SafeCmd,
+def _execute_bounded(
+    target: SafeCmd | Pipeline,
     *,
     is_sync: bool,
     case: _BoundedEchoCase,
-) -> CommandResult:
-    """Execute one SafeCmd through its selected public entry point."""
+) -> CommandResult | PipelineResult:
+    """Execute one command or pipeline through the selected public entry point."""
     context = ExecutionContext(stdout_sink=case.sink)
+    if isinstance(target, Pipeline):
+        if is_sync:
+            return target.run_sync(output=case.options, context=context)
+        return asyncio.run(target.run(output=case.options, context=context))
     if is_sync:
-        return command.run_sync(output=case.options, context=context)
-    return asyncio.run(command.run(output=case.options, context=context))
-
-
-def _execute_bounded_pipeline(
-    pipeline: Pipeline,
-    *,
-    is_sync: bool,
-    case: _BoundedEchoCase,
-) -> PipelineResult:
-    """Execute one Pipeline through its selected public entry point."""
-    context = ExecutionContext(stdout_sink=case.sink)
-    if is_sync:
-        return pipeline.run_sync(output=case.options, context=context)
-    return asyncio.run(pipeline.run(output=case.options, context=context))
+        return target.run_sync(output=case.options, context=context)
+    return asyncio.run(target.run(output=case.options, context=context))
 
 
 @pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
-def test_safe_command_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
-    """SafeCmd public entry points retain capture while bounding mirrored output."""
+@pytest.mark.parametrize("is_pipeline", [False, True], ids=["command", "pipeline"])
+def test_public_output_bound_reaches_echo_sink(
+    is_sync: bool,
+    is_pipeline: bool,
+) -> None:
+    """Public command and pipeline entry points bound mirrored output."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     case = _bounded_echo_case()
     command = python("-c", f"import sys; sys.stdout.write({case.payload!r})")
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = _execute_bounded_command(command, is_sync=is_sync, case=case)
-
-    _assert_bounded_public_echo(result, case)
-
-
-@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
-def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
-    """Pipeline public entry points propagate the output bound to the final sink."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    case = _bounded_echo_case()
-    pipeline = python("-c", f"import sys; sys.stdout.write({case.payload!r})") | python(
-        "-c",
-        "import sys; sys.stdout.write(sys.stdin.read())",
+    target = (
+        command
+        if not is_pipeline
+        else command | python("-c", "import sys; sys.stdout.write(sys.stdin.read())")
     )
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = _execute_bounded_pipeline(pipeline, is_sync=is_sync, case=case)
+        result = _execute_bounded(target, is_sync=is_sync, case=case)
 
     _assert_bounded_public_echo(result, case)
 
