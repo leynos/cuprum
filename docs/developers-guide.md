@@ -85,6 +85,25 @@ that, such a line truncated the section silently, and the contract failed as a
 at the extractor. A section whose extracted length looks wrong is worth
 checking against that helper first.
 
+## Scope manager lifecycle
+
+`scoped()` validates and stores its configuration when constructed. Each `with`
+entry reads the active context and derives fresh allowlist, hooks, environment,
+catalogue, bindings, and timeout policy from it. A manager may be reused
+sequentially, nested, or across async tasks without carrying a prior entry's
+policy into the next one.
+
+The context package keeps a context-local immutable stack of `(manager, token)`
+entries. Entries must exit in LIFO order in the context where they were
+entered. An out-of-order or foreign-manager exit raises `RuntimeError` without
+changing the active state. `allow()` remains the explicit way to widen an
+allowlist.
+
+Registration handles have a different lifecycle. Factories such as `allow()` and
+`before()` install their derived context when the handle is constructed;
+`detach()` restores the captured context once. A `scoped()` manager stores only
+configuration at construction and applies it when entered.
+
 ## Boundary compilation selections
 
 [`scripts/boundary_compile.py`](../scripts/boundary_compile.py) defines named

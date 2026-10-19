@@ -7,6 +7,12 @@ Feature: Execution context and hooks
     Then echo is allowed in the inner scope
     And ls is not allowed in the inner scope
 
+  Scenario: A scope manager constructed earlier respects the active restriction
+    Given a preconstructed scope allowing echo and ls
+    When I enter that scope under an echo-only restriction
+    Then only echo is allowed in the prepared scope
+    And ls is forbidden in the prepared scope
+
   Scenario: Context restores after scope exits
     Given a context that allows echo and ls
     When I enter and exit a scoped context allowing only echo

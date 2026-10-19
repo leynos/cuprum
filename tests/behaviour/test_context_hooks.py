@@ -10,6 +10,7 @@ from pytest_bdd import given, scenario, then, when
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
     CuprumContext,
+    ForbiddenProgramError,
     ScopeConfig,
     before,
     current_context,
@@ -24,6 +25,8 @@ from tests.behaviour._context_hooks_support import (
 )
 
 if typ.TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from cuprum.context import BeforeHook
     from cuprum.program import Program
 
@@ -34,6 +37,14 @@ if typ.TYPE_CHECKING:
 )
 def test_scoped_context_narrows_allowlist() -> None:
     """Behavioural coverage for allowlist narrowing."""
+
+
+@scenario(
+    "../features/context_hooks.feature",
+    "A scope manager constructed earlier respects the active restriction",
+)
+def test_preconstructed_scope_respects_active_restriction() -> None:
+    """Behavioural coverage for entry-time scope derivation."""
 
 
 @scenario(
@@ -86,13 +97,7 @@ def test_context_isolated_async_tasks() -> None:
 
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
-    """Shared mutable state for behaviour scenarios.
-
-    Returns
-    -------
-    dict[str, object]
-        An empty dictionary shared across scenario steps.
-    """
+    """Provide mutable state shared across behaviour steps."""
     return {}
 
 
@@ -101,14 +106,51 @@ def behaviour_state() -> dict[str, object]:
     target_fixture="outer_context",
 )
 def given_context_allows_echo_and_ls() -> CuprumContext:
-    """Set up an outer context allowing both ECHO and LS.
-
-    Returns
-    -------
-    CuprumContext
-        A context whose allowlist contains ECHO and LS.
-    """
+    """Build an outer context allowing ECHO and LS."""
     return CuprumContext(allowlist=frozenset([ECHO, LS]))
+
+
+@given("a preconstructed scope allowing echo and ls")
+def given_preconstructed_scope(behaviour_state: dict[str, object]) -> None:
+    """Prepare the scope manager before a later parent restriction."""
+    behaviour_state["prepared_scope"] = scoped(
+        ScopeConfig(allowlist=frozenset([ECHO, LS]))
+    )
+
+
+@when("I enter that scope under an echo-only restriction")
+def when_enter_preconstructed_scope(
+    behaviour_state: dict[str, object],
+) -> None:
+    """Enter the prepared manager after the active scope becomes narrower."""
+    manager = typ.cast(
+        "AbstractContextManager[CuprumContext]",
+        behaviour_state["prepared_scope"],
+    )
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), manager as context:
+        behaviour_state["prepared_context"] = context
+
+
+@then("only echo is allowed in the prepared scope")
+def then_only_echo_allowed_in_prepared_scope(
+    behaviour_state: dict[str, object],
+) -> None:
+    """Verify the effective allowlist is the intersection with its parent."""
+    context = typ.cast("CuprumContext", behaviour_state["prepared_context"])
+    assert context.allowlist == frozenset([ECHO]), (
+        "the prepared scope must intersect with the echo-only parent"
+    )
+
+
+@then("ls is forbidden in the prepared scope")
+def then_ls_forbidden_in_prepared_scope(
+    behaviour_state: dict[str, object],
+) -> None:
+    """Verify the prepared manager cannot authorize LS."""
+    context = typ.cast("CuprumContext", behaviour_state["prepared_context"])
+    assert context.is_allowed(LS) is False, "the prepared scope must not allow LS"
+    with pytest.raises(ForbiddenProgramError):
+        context.check_allowed(LS)
 
 
 @when("I enter a scoped context allowing only echo")
@@ -170,19 +212,7 @@ def then_ls_allowed_outer(behaviour_state: dict[str, object]) -> None:
 def given_multi_before_hooks(
     behaviour_state: dict[str, object],
 ) -> CuprumContext:
-    """Create context with multiple before hooks for ordering test.
-
-    Parameters
-    ----------
-    behaviour_state : dict[str, object]
-        Shared scenario state; receives the ordered call list under
-        ``"call_order"``.
-
-    Returns
-    -------
-    CuprumContext
-        A context registering the ordered before hooks.
-    """
+    """Build a context with ordered before hooks."""
     call_order: list[int] = []
     behaviour_state["call_order"] = call_order
     return build_before_hook_context(call_order)
@@ -211,19 +241,7 @@ def then_before_hooks_in_order(behaviour_state: dict[str, object]) -> None:
 def given_multi_after_hooks(
     behaviour_state: dict[str, object],
 ) -> CuprumContext:
-    """Create context with multiple after hooks for ordering test.
-
-    Parameters
-    ----------
-    behaviour_state : dict[str, object]
-        Shared scenario state; receives the ordered call list under
-        ``"after_call_order"``.
-
-    Returns
-    -------
-    CuprumContext
-        A context registering the ordered after hooks.
-    """
+    """Build a context with ordered after hooks."""
     call_order: list[int] = []
     behaviour_state["after_call_order"] = call_order
     return build_after_hook_context(call_order)
@@ -252,19 +270,7 @@ def then_after_hooks_in_reverse(behaviour_state: dict[str, object]) -> None:
 def given_context_with_hook(
     behaviour_state: dict[str, object],
 ) -> dict[str, object]:
-    """Set up a context with a hook that can be detached.
-
-    Parameters
-    ----------
-    behaviour_state : dict[str, object]
-        Shared scenario state; receives the hook function under
-        ``"test_hook"``.
-
-    Returns
-    -------
-    dict[str, object]
-        A mapping exposing the detachable hook under ``"hook"``.
-    """
+    """Create and expose a hook registration for detachment."""
 
     def my_hook(cmd: object) -> None:
         """Accept a command invocation without recording it."""
@@ -308,13 +314,7 @@ def then_hook_not_in_context(behaviour_state: dict[str, object]) -> None:
     target_fixture="thread_setup",
 )
 def given_two_threads_different_allowlists() -> dict[str, frozenset[Program]]:
-    """Set up allowlists for two threads.
-
-    Returns
-    -------
-    dict[str, frozenset[Program]]
-        The per-thread allowlists keyed by thread name.
-    """
+    """Set up distinct per-thread allowlists."""
     return {
         "thread1": frozenset([ECHO]),
         "thread2": frozenset([LS]),

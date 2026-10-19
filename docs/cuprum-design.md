@@ -384,9 +384,12 @@ command execution in a logical scope:
 Internally, a `ContextVar[CuprumContext]` holds the current context. Public APIs
 (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled way.
 
-Contexts are nested: entering a new `with sh.scoped(ScopeConfig(...))` creates
-a derived context, and exiting restores the previous one. This behaves
-correctly across threads and async tasks.
+Each `scoped()` entry derives its context from the context active at entry,
+then restores that exact parent on exit. A second `ContextVar` holds an
+immutable LIFO stack of `(manager, token)` entries. This lets one manager be
+reused sequentially or nested without sharing mutable token state, and keeps
+concurrent async task entries isolated. An out-of-order or foreign-manager exit
+raises `RuntimeError` before changing either context.
 
 ### 5.4 Hooks
 
@@ -1006,7 +1009,7 @@ from cmds import GIT
 
 
 async def deploy():
-    async with sh.scoped(
+    with sh.scoped(
         ScopeConfig(
             allowlist=frozenset([GIT]),
             before_hooks=(audit_hook,),
@@ -1019,13 +1022,14 @@ async def deploy():
 
 `sh.scoped` semantics:
 
-- Derive a new context from the current one.
-- Optionally **narrow** the allowlist to the provided set (typically an
-  intersection with the parent’s allowlist; exact rule is to be defined but
-  must never silently introduce programs unknown to the baseline configuration
-  in “safe” mode).
+- Derive a new context from the context active at each entry.
+- Intersect the provided allowlist with a restricted parent's allowlist. An
+  unrestricted empty parent can establish a base allowlist; a restricted empty
+  parent remains empty.
 - Extend hooks with the provided `before`/`after` lists.
 - Restore the previous context on exit.
+- Require nested entries to exit in LIFO order. Use `allow()` for explicit
+  widening.
 
 #### 6.2.5 Hooks via `sh.before` / `sh.after`
 

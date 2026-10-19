@@ -7,6 +7,8 @@ import io
 import typing as typ
 from collections import Counter
 
+import pytest
+
 from cuprum import RunOutputOptions, ScopeConfig, before, observe, scoped
 from cuprum.sh import ExecutionContext
 from cuprum.unittests._safe_cmd_lines_support import (
@@ -284,3 +286,25 @@ def test_lines_behaviour_streams_tags_and_text(
         f"stderr line e2 must be observed, got {observed!r}"
     )
     assert len(observed) == 6, f"expected 6 line events, got {observed!r}"
+
+
+def test_lines_rejects_manager_prepared_before_empty_restriction(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A prepared Python scope cannot widen an explicitly empty parent."""
+    from cuprum.context import ForbiddenProgramError
+
+    command = python_builder("-c", "print('must stay denied')")
+    manager = scoped(ScopeConfig(allowlist=frozenset([command.program])))
+
+    async def iterate() -> None:
+        """Consume the lazy stream so execution checks the active policy."""
+        async for _event in command.lines():
+            pass
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset())),
+        manager,
+        pytest.raises(ForbiddenProgramError),
+    ):
+        asyncio.run(iterate())

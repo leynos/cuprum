@@ -1647,6 +1647,13 @@ allowlist to the catalogue's programs _and_ supplies that catalogue to
 allowlist and leaves the active catalogue alone. See
 [Two enforcement points](#two-enforcement-points).
 
+Each entry derives its policy from the context active at that moment. A scope
+manager constructed before a restriction therefore still intersects with that
+restriction when entered. Managers may be reused sequentially, nested, or in
+different async tasks; every entry derives fresh policy and must exit in
+last-in, first-out order. Use `allow()` when code needs to widen an active
+allowlist explicitly.
+
 <!-- tested-example: restricted-scope -->
 
 ```python

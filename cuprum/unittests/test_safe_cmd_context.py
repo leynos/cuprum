@@ -78,6 +78,25 @@ def test_run_raises_forbidden_when_program_not_in_allowlist(
         execute(command, {})
 
 
+def test_preconstructed_scope_respects_active_parent_during_execution(
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A prepared manager cannot authorize ECHO inside a CAT-only parent."""
+    from cuprum.program import Program
+
+    _, execute = execution_strategy
+    cat = Program("cat")
+    command = sh.make(ECHO)("must stay denied")
+    manager = scoped(ScopeConfig(allowlist=frozenset([ECHO, cat])))
+
+    with scoped(ScopeConfig(allowlist=frozenset([cat]))), manager as context:
+        assert context.allowlist == frozenset([cat]), (
+            "a prepared manager must intersect with the CAT-only parent"
+        )
+        with pytest.raises(ForbiddenProgramError, match=r"echo"):
+            execute(command, {})
+
+
 def test_run_succeeds_when_program_in_allowlist(
     execution_strategy: tuple[str, ExecuteFn],
 ) -> None:
