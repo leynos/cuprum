@@ -131,29 +131,36 @@ async def _reconcile_pipeline_run_failure(
     cancelled consumer is what this path exists for, and it never finalizes, so
     its accumulator is the only remaining owner of the spill file; closing that
     file before the cancel has landed would race a reader that is still
-    appending. It runs in ``finally`` because the drain can raise: an observe
-    task that fails during cleanup still must not strand the spill files, and
-    the group the drain raises then propagates unchanged.
+    appending. Every step above it — the delivery close, the session close, and
+    the terminal events — runs inside the ``try`` whose ``finally`` holds the
+    release, because each of them can raise or, through the shield, re-raise a
+    cancellation. Cleanup that only guarded the drain would strand the spill
+    files on exactly those failures. The drain's own group, when it raises,
+    propagates unchanged.
     """
     outcome = _outcome_for_error(run_error)
-    await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-    await _close_delivery_worker(
-        config.delivery_worker,
-        drain_grace_s=config.delivery_grace_s,
-    )
-    await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
-    _emit_terminal_events(
-        observers.observations,
-        outcome.outcome,
-        processes=spawn.processes,
-        started_at=spawn.stages.started_at,
-    )
     try:
-        await _drain_tasks_during_cleanup(
-            observers.pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
+        await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
+        await _close_delivery_worker(
+            config.delivery_worker,
+            drain_grace_s=config.delivery_grace_s,
+        )
+        await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
+        _emit_terminal_events(
+            observers.observations,
+            outcome.outcome,
+            processes=spawn.processes,
+            started_at=spawn.stages.started_at,
         )
     finally:
-        await _cleanup_capture_sinks(spawn.captures.sinks)
+        try:
+            await _drain_tasks_during_cleanup(
+                observers.pending_tasks,
+                run_error,
+                message=_PIPELINE_FINALIZATION_ERROR,
+            )
+        finally:
+            await _cleanup_capture_sinks(spawn.captures.sinks)
 
 
 async def _finalize_timeout_cleanup(
@@ -230,30 +237,43 @@ async def _finalize_pipeline_timeout(
     observers: _PipelineObservers,
     timeout_error: BaseException,
 ) -> None:
-    """Report a pipeline timeout and finalize its sink and observe tasks."""
+    """Report a pipeline timeout and finalize its sink and observe tasks.
+
+    The delivery worker and the presentation session close before the capture
+    sinks, because those sinks may still be feeding the worker. Each of those
+    closes is shielded, but a shield completes its operation and then re-raises
+    the caller's cancellation, so an enclosing ``finally`` is what guarantees
+    the capture release still runs when the run is cancelled part-way through
+    teardown — the caller's cancellation, or an exception from a session close,
+    must not leave this run's spill files on disk.
+    """
     observations = observers.observations
-    await _shielded_cleanup(
-        _close_delivery_worker(
-            config.delivery_worker,
-            drain_grace_s=config.delivery_grace_s,
-        ),
-    )
-    await _shielded_cleanup(
-        config.sink_bracket.aclose(outcome=_outcome_for_error(timeout_error))
-    )
-    _report_pipeline_timeout_expiry(
-        observations,
-        spawn.processes,
-        configured_timeout=config.timeout,
-    )
-    _emit_timeout_exit_events(observations, spawn)
-    _emit_terminal_events(
-        observations,
-        _outcome_for_error(timeout_error).outcome,
-        processes=spawn.processes,
-        started_at=spawn.stages.started_at,
-    )
-    await _shielded_cleanup(_finalize_timeout_cleanup(observers, spawn, timeout_error))
+    try:
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                config.delivery_worker,
+                drain_grace_s=config.delivery_grace_s,
+            ),
+        )
+        await _shielded_cleanup(
+            config.sink_bracket.aclose(outcome=_outcome_for_error(timeout_error))
+        )
+        _report_pipeline_timeout_expiry(
+            observations,
+            spawn.processes,
+            configured_timeout=config.timeout,
+        )
+        _emit_timeout_exit_events(observations, spawn)
+        _emit_terminal_events(
+            observations,
+            _outcome_for_error(timeout_error).outcome,
+            processes=spawn.processes,
+            started_at=spawn.stages.started_at,
+        )
+    finally:
+        await _shielded_cleanup(
+            _finalize_timeout_cleanup(observers, spawn, timeout_error)
+        )
 
 
 async def _finalize_pipeline_stage_result_failure(
@@ -262,20 +282,29 @@ async def _finalize_pipeline_stage_result_failure(
     sink_bracket: _SinkBracket,
     result_error: BaseException,
 ) -> None:
-    """Settle stages and drain hooks after stage-result assembly fails."""
+    """Settle stages and drain hooks after stage-result assembly fails.
+
+    The capture sinks are released from a ``finally`` that encloses the
+    session close and the terminal events for the same reason as the timeout
+    path: a shielded close that re-raises a cancellation, or a session close
+    that raises, must not bypass the one step that removes this run's spill
+    files.
+    """
     outcome = _outcome_for_error(result_error)
-    await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
-    _emit_terminal_events(
-        observers.observations,
-        outcome.outcome,
-        processes=spawn.processes,
-        started_at=spawn.stages.started_at,
-    )
-    # Result assembly runs after process cleanup but before pipeline
-    # finalization, so this layer still owns the observe-hook tasks.
-    await _shielded_cleanup(
-        _finalize_result_failure_cleanup(observers, spawn, result_error)
-    )
+    try:
+        await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
+        _emit_terminal_events(
+            observers.observations,
+            outcome.outcome,
+            processes=spawn.processes,
+            started_at=spawn.stages.started_at,
+        )
+    finally:
+        # Result assembly runs after process cleanup but before pipeline
+        # finalization, so this layer still owns the observe-hook tasks.
+        await _shielded_cleanup(
+            _finalize_result_failure_cleanup(observers, spawn, result_error)
+        )
 
 
 __all__ = [
