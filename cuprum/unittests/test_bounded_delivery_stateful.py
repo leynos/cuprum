@@ -152,7 +152,10 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
         self._active = seed
         self._active_index = 0
         self._next_write_index = 1
-        self._attempted.append(self._sink.wait_for_write(0))
+        assert self._sink.wait_for_write(0) == seed[1], (
+            "the first sink write must match the modelled seed payload"
+        )
+        self._attempted.append(seed[1])
         self._started = True
 
     def _new_item(self, stream: EchoStream, source_bytes: int) -> _Item:
@@ -254,9 +257,10 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
                 self._active = item
                 self._active_index = self._next_write_index
                 self._next_write_index += 1
-                self._attempted.append(
-                    self._current_sink().wait_for_write(self._active_index),
-                )
+                assert (
+                    self._current_sink().wait_for_write(self._active_index) == item[1]
+                ), "the sink must start the modelled active payload"
+                self._attempted.append(item[1])
             else:
                 self._queued.append(item)
         self._assert_accounting()
@@ -281,8 +285,11 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
             self._active = self._queued.pop(0)
             self._active_index = index + 1
             self._next_write_index = self._active_index + 1
-            started_value = self._current_sink().wait_for_write(self._active_index)
-            self._attempted.append(started_value)
+            assert (
+                self._current_sink().wait_for_write(self._active_index)
+                == self._active[1]
+            ), "the next sink write must match the modelled FIFO head"
+            self._attempted.append(self._active[1])
         else:
             self._wait_until_idle()
             self._active = None

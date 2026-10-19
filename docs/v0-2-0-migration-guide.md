@@ -779,8 +779,12 @@ the run's own loop. An ordinary exception from the callback, or a failed
 synchronous diagnostic write when bounded delivery is not selected, disables
 further notifications for that run, emits one sanitized warning, and leaves the
 child's exit status and captured output untouched. With bounded delivery, a
-worker write or flush failure is instead reported as `DELIVERY_ERROR`.
-`KeyboardInterrupt` and `SystemExit` are never suppressed.
+worker write or flush failure is instead reported as `DELIVERY_ERROR`. The
+non-suppression guarantee applies to callbacks and synchronous diagnostic
+writes. With bounded delivery, any `BaseException` raised by a worker sink
+write or flush, including `KeyboardInterrupt` and `SystemExit`, is contained in
+the worker and reported as `DELIVERY_ERROR`; it is not propagated to the run
+caller.
 
 ### Opt-in presentation sink
 

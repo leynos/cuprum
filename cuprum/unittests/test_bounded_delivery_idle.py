@@ -108,6 +108,31 @@ def _assert_dropped_stderr_events(events: list[EchoEvent], run_kind: str) -> Non
     ), f"{run_kind} idle drops must report positive stderr source-byte counts"
 
 
+def _assert_saturated_idle_drop_result(
+    result: CommandResult | PipelineResult,
+    sink: io.StringIO,
+    events: list[EchoEvent],
+    run_kind: str,
+) -> None:
+    """Check capture, fallback, and event records after idle drops."""
+    assert result.stdout == "captured\n", (
+        f"{run_kind} capture must preserve the child output"
+    )
+    captured_stderr = (
+        result.stderr if isinstance(result, CommandResult) else result.final.stderr
+    )
+    assert not captured_stderr, (
+        f"{run_kind} idle diagnostics must not enter captured stderr"
+    )
+    assert not sink.getvalue(), f"{run_kind} idle lines must be rejected"
+    expected_fallback = RelayFallback(
+        stream=EchoStream.STDERR,
+        error_category=EchoErrorCategory.DROPPED,
+    )
+    _assert_successful_idle_drop(result, expected_fallback, run_kind)
+    _assert_dropped_stderr_events(events, run_kind)
+
+
 def _echoing_idle_case(
     run_kind: str,
 ) -> tuple[
@@ -190,59 +215,27 @@ def test_idle_output_uses_fifo_and_stays_out_of_capture(run_kind: str) -> None:
     _assert_echoing_idle_output(sink, result, run_kind)
 
 
-def test_saturated_idle_delivery_reports_dropped_source_bytes() -> None:
-    """A dropped keepalive is observable while command capture stays intact."""
-    runtime = build_python_catalogue_env()
-    command = runtime.builder("-c", "import time; time.sleep(0.4)")
-    sink = io.StringIO()
-    events: list[EchoEvent] = []
-
-    with (
-        observe_echo(events.append),
-        scoped(
-            ScopeConfig(allowlist=frozenset([runtime.program])),
-        ),
-    ):
-        result = command.run_sync(
-            output=RunOutputOptions(
-                capture=True,
-                echo=False,
-                idle_after=_IDLE_INTERVAL_S,
-                delivery=BoundedDelivery(max_queued_bytes=1),
-            ),
-            context=ExecutionContext(stderr_sink=sink),
-        )
-
-    expected_fallback = RelayFallback(
-        stream=EchoStream.STDERR,
-        error_category=EchoErrorCategory.DROPPED,
-    )
-    assert not result.stdout, "idle diagnostics must not enter captured stdout"
-    assert not result.stderr, "idle diagnostics must not enter captured stderr"
-    assert not sink.getvalue(), "the undersized queue must reject the idle line"
-    assert expected_fallback in result.relay_fallbacks, (
-        "command result must retain the stderr dropped record"
-    )
-    assert events, "queue saturation must emit an echo drop event"
-    assert all(
-        event.stream is EchoStream.STDERR
-        and event.error_category is EchoErrorCategory.DROPPED
-        and event.dropped_bytes is not None
-        and event.dropped_bytes > 0
-        for event in events
-    ), "each idle drop must report positive stderr source bytes"
-
-
-@pytest.mark.parametrize("run_kind", ["command", "pipeline"])
+@pytest.mark.parametrize(
+    ("run_kind", "synchronous"),
+    [
+        ("command", True),
+        ("command", False),
+        ("pipeline", True),
+        ("pipeline", False),
+    ],
+)
 def test_saturated_idle_delivery_preserves_successful_run_output(
     run_kind: str,
+    synchronous: bool,
 ) -> None:
-    """Command and pipeline idle drops preserve exact capture and success."""
+    """Sync and async command or pipeline drops preserve captured output."""
     runtime = build_python_catalogue_env()
-    python = runtime.builder
     script = "import time; time.sleep(0.4); print('captured', flush=True)"
-    command = python("-c", script)
-    target = command if run_kind == "command" else _pipeline(python, script)
+    target = (
+        runtime.builder("-c", script)
+        if run_kind == "command"
+        else _pipeline(runtime.builder, script)
+    )
     sink = io.StringIO()
     events: list[EchoEvent] = []
     output = RunOutputOptions(
@@ -256,20 +249,13 @@ def test_saturated_idle_delivery_preserves_successful_run_output(
         observe_echo(events.append),
         scoped(ScopeConfig(allowlist=frozenset([runtime.program]))),
     ):
-        result = asyncio.run(
-            _run_target(target, output, ExecutionContext(stderr_sink=sink)),
-        )
+        context = ExecutionContext(stderr_sink=sink)
+        if synchronous:
+            result = target.run_sync(output=output, context=context)
+        else:
+            result = asyncio.run(_run_target(target, output, context))
 
-    assert result.stdout == "captured\n", (
-        f"{run_kind} capture must preserve the child output"
-    )
-    assert not sink.getvalue(), f"{run_kind} idle lines must be rejected"
-    expected_fallback = RelayFallback(
-        stream=EchoStream.STDERR,
-        error_category=EchoErrorCategory.DROPPED,
-    )
-    _assert_successful_idle_drop(result, expected_fallback, run_kind)
-    _assert_dropped_stderr_events(events, run_kind)
+    _assert_saturated_idle_drop_result(result, sink, events, run_kind)
 
 
 @pytest.mark.parametrize("run_kind", ["command", "pipeline"])
@@ -318,7 +304,9 @@ def test_abandoned_idle_delivery_reports_exact_shutdown_loss(
             asyncio.run(start_and_cancel())
         finally:
             sink.release.set()
-            assert sink.finished.wait(timeout=1.0)
+            assert sink.finished.wait(timeout=1.0), (
+                f"{run_kind} blocked idle writer must finish after release"
+            )
 
     _assert_idle_shutdown_loss(events, sink, accepted_idle_bytes, run_kind)
 
