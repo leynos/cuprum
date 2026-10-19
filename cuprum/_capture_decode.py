@@ -128,9 +128,12 @@ def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettin
     resolutions below assume the mark can no longer be retained; applying them
     while it survives would leave a leading U+FEFF in the payload. A head that
     is gone also means the retained tail must be trimmed for the resolved
-    codec rather than the one the caller named: ``utf-8-sig`` strips a mark, so
-    its name cannot say where a cut inside a code point landed, and the
-    ``utf-16``/``utf-32`` family names accept no bytes at all without one.
+    codec rather than the one the caller named. Two rules need a concrete
+    codec name. The trim does not recognize ``utf-8-sig`` as UTF-8, so a cut
+    inside a multi-byte character would survive at the tail's leading edge. The
+    ``utf-16``/``utf-32`` family names carry a dropped mark into the decode: a
+    tail whose mark selected the order other than the platform's would be
+    decoded in native order and produce wrong text.
 
     Parameters
     ----------
@@ -161,16 +164,19 @@ def _bounded_settings(settings: _DecodeSettings, prefix: bytes) -> _DecodeSettin
 def _native_codec(family: str) -> str:
     """Return the concrete codec *family* assumes when its stream has no mark.
 
-    The ``utf-16`` and ``utf-32`` decoders fall back to the platform's byte
-    order when no mark is present, so a dropped head must not discard that
-    rule and invent one. The platform's decoder rejects a headless stream
-    before it gets this far, so only the bounded path ever needs it.
+    A whole-stream ``utf-16`` or ``utf-32`` decode falls back to the platform's
+    byte order when no mark is present, so a dropped head must not discard that
+    rule and invent one. The tail path cannot rely on the fallback twice over:
+    it decodes a cut tail rather than a whole stream, and the incremental
+    decoder it consults for a trailing partial code unit rejects a first chunk
+    with no mark. Naming the concrete codec keeps the rule and gives the trim a
+    fixed width to realign by.
 
     Returns
     -------
     str
-        The concrete little- or big-endian codec the platform's decoder would
-        select for *family*.
+        The concrete little- or big-endian codec the platform's whole-stream
+        decoder would select for *family*.
     """
     little, big = _BOM_SELECTED_CODECS[family]
     return little if sys.byteorder == "little" else big

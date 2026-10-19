@@ -171,8 +171,10 @@ class _BoundedAccumulator:
     _offset: int = dc.field(init=False, default=0)
     # The first bytes of the stream, kept so finalize can resolve a codec whose
     # byte order the retained tail no longer carries. A bound can discard the
-    # BOM that selects UTF-16's or UTF-32's endianness, and a decoder handed
-    # the BOM-less tail raises rather than guessing.
+    # BOM that selects UTF-16's or UTF-32's endianness; without it, a tail cut
+    # out of a stream that announced the other order decodes in native order
+    # and produces wrong text. The trim also needs the mark to name a
+    # fixed-width codec it can realign by stream offset.
     _prefix: bytes = dc.field(init=False, default=b"")
     # Whether the truncation event has already been published. ``finalize`` is
     # a query called again by some callers, and the event describes the run
