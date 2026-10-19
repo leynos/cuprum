@@ -427,6 +427,17 @@ jobs:
       # `test_each_cache_family_has_exactly_one_writer` exists to refuse, and
       # the registry holds the resolved dependency graph, which is the same
       # content either job would archive.
+      - name: Measure disk before the save (temporary)
+        if: always()
+        shell: bash
+        run: |
+          df -m / . || true
+          sudo du -xsm "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}"/target "${GITHUB_WORKSPACE}"/rust/*/target "${GITHUB_WORKSPACE}"/.uv-cache "${GITHUB_WORKSPACE}"/.uv-tools "${GITHUB_WORKSPACE}"/.tools "${GITHUB_WORKSPACE}"/.pypy "${GITHUB_WORKSPACE}"/actionlint ~/.cargo ~/.cargo/registry ~/.cargo/git ~/.cargo/bin ~/.rustup ~/.rustup/toolchains/* ~/.cache ~/.cache/sccache ~/.cache/* ~/.npm ~/.local /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share /usr/local/lib /var/lib/docker /tmp /home/runner/work 2>/dev/null | sort -rn | head -60 || true
+          sudo du -xm --max-depth=1 / 2>/dev/null | sort -rn | head -25 || true
+          sudo du -xm --max-depth=2 "${GITHUB_WORKSPACE}" 2>/dev/null | sort -rn | head -25 || true
+          docker images 2>/dev/null | head || true
+          sccache --show-stats | grep -i -E 'cache size|max cache' || true
+
       - name: Save the compiler cache
         # The `lint` build shape is produced by no other job, so this remains
         # the sole writer of its compiler-cache family. Only the lane in the
