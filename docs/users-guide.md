@@ -558,7 +558,8 @@ before the child starts, rather than silently choosing one side:
 Reusing one `fd()` target across several runs shares its file offset, so each
 run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
 only `pipe()` and `inherit()`: the input itself is passed to the run call's
-`stdin=` argument, as the next section describes.
+`stdin=` argument, as it always has been; see
+[Stream input from a producer](#stream-input-from-a-producer).
 
 ### Capture policies
 
@@ -577,10 +578,15 @@ and `capture_stderr`:
 
 A per-stream field left at `None` inherits `capture`, and a per-stream value
 always wins for its own stream: `capture=True, capture_stderr=False` captures
-stdout in full and nothing on stderr. So mixing `capture=` with
-`capture_stdout=` is allowed and well defined, not an error. A value that is
-neither a policy nor a `bool` is refused with `ValueError` before the child is
-spawned.
+stdout in full and nothing on stderr. Mixing `capture=` with `capture_stdout=`
+is allowed and well defined, not an error. A value that is neither a policy nor
+a `bool` is refused with `ValueError` before the child is spawned.
+
+A policy decides what the run keeps and how it reports it; it does not decide
+whether a stream may be redirected. `capture` stays the whole-run switch, so a
+run that redirects a stream turns capture off for that stream too: use
+`capture=False` when both streams are redirected, or set the stream's own
+`capture_stdout`/`capture_stderr` to `False` when only one of them is.
 
 ### Bounded capture
 
