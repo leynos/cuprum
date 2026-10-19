@@ -2165,6 +2165,27 @@ in part.
   cancellation drivers from the fidelity cases — with the moved tests still
   collected.
 
+The certification run at `dc6e5c0a9` was red, on two counts that are worth
+recording because neither is a defect in the feature:
+
+- `make check-fmt` failed at its mdtablefix leaf on the execplan addition
+  itself. A literal `→` in the round-five record made mdtablefix's proximity
+  rule pull the following word onto the arrow's line, so a document that had
+  passed `make markdownlint` minutes earlier still failed the formatter.
+  `9bf2e4c27` rewrites the arrow as `returns`, which is stable under the
+  formatter. Lesson: `make markdownlint` does not run mdtablefix, so prose
+  containing symbolic punctuation needs `make check-fmt` (or a bare mdtablefix
+  `--check` with the same flags) before a certification is requested.
+- That repair was committed while `make lint` was running, so the lint log
+  opens at `dc6e5c0a9` and closes at `9bf2e4c27`: the Python and Rust leaves
+  ran before the commit and the spelling, yamllint and actionlint leaves after
+  it. An exit code of 0 across two heads certifies neither. No gate may be
+  started unless the tree can be left alone until all gates finish, and the
+  remaining four gates were correctly abandoned rather than run against a
+  drifting head.
+
+Date/Author: 2026-10-19, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
