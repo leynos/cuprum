@@ -69,11 +69,11 @@ do not merely appear plausible. Verified fragments include
 
 Sixteen cross-file link sites were rewritten across the three documents.
 
-| Document                               | Sites | Form                                           |
-| -------------------------------------- | ----- | ---------------------------------------------- |
-| `rstest-bdd-users-guide.md`            | 1     | One reference definition.                      |
-| `rstest-bdd-v0-6-0-migration-guide.md` | 13    | Four inline links; nine reference definitions. |
-| `rstest-bdd-v0-5-0-migration-guide.md` | 2     | One inline link; one footnote definition.      |
+| Document                               | Sites | Form                                            |
+| -------------------------------------- | ----- | ----------------------------------------------- |
+| `rstest-bdd-users-guide.md`            | 1     | One reference definition.                       |
+| `rstest-bdd-v0-6-0-migration-guide.md` | 13    | Five inline links; eight reference definitions. |
+| `rstest-bdd-v0-5-0-migration-guide.md` | 2     | One inline link; one footnote definition.       |
 
 Four of the rewritten definitions, and one prose line that a rewritten inline
 link pushed past 80 columns, were re-wrapped to satisfy `make check-fmt`. The
