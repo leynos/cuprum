@@ -96,6 +96,45 @@ def test_accumulator_bounds_a_run_before_its_terminator_arrives() -> None:
     assert accumulator.pending_chars == 0, "a completed line retains nothing"
 
 
+def test_accumulator_splits_one_large_chunk_without_recopying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Splitting a large chunk is linear even when the bound is one.
+
+    ``_take`` copies the retained head whenever it keeps a partial part, so
+    taking one fragment per bound-sized slice would copy the rest of the chunk
+    once per fragment: quadratic in the chunk for a small bound. The spy counts
+    ``_take`` calls, and each call beyond the first re-copies the retained
+    remainder. A linear split of one chunk takes nothing during ``feed`` and
+    once during ``finish``, so the count is deterministic rather than a
+    wall-clock measurement.
+    """
+    from cuprum import _stream_line_boundaries
+
+    copied: list[int] = []
+    original = _stream_line_boundaries._LineAccumulator._take
+
+    def counting_take(self: _LineAccumulator, count: int) -> str:
+        """Record the characters a take copies, then delegate."""
+        copied.append(count)
+        return original(self, count)
+
+    monkeypatch.setattr(
+        _stream_line_boundaries._LineAccumulator,
+        "_take",
+        counting_take,
+    )
+    text = "x" * 4096
+
+    lines = _drain(_LineAccumulator(1), (text,))
+
+    assert "".join(lines) == text, "splitting must preserve every character"
+    assert copied == [1], (
+        "one chunk must be sliced once by finish(), not once per fragment; "
+        f"_take ran {len(copied)} times over {len(text)} characters"
+    )
+
+
 def test_accumulator_treats_a_line_exactly_at_the_bound_as_one_line() -> None:
     """Terminators are not counted, so no empty fragment follows."""
     accumulator = _LineAccumulator(4)

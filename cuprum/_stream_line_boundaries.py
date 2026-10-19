@@ -198,11 +198,25 @@ class _LineAccumulator:
 
     def _split_overflow(self) -> list[str]:
         """Return fragments that keep the pending line within the bound."""
-        if self._max_line_chars is None:
+        bound = self._max_line_chars
+        if bound is None or self._pending_chars <= bound:
             return []
-        fragments: list[str] = []
-        while self._pending_chars > self._max_line_chars:
-            fragments.append(self._take(self._max_line_chars))
+
+        # Join once and slice once. Taking each fragment with _take would copy
+        # the remaining head again for every fragment, which is quadratic in a
+        # single large chunk when the bound is small. The retained text is at
+        # most one bound plus the newest chunk, so this stays linear.
+        pending = "".join(self._parts)
+        fragment_count = (len(pending) - 1) // bound
+        fragments = [
+            pending[index * bound : (index + 1) * bound]
+            for index in range(fragment_count)
+        ]
+        remainder = pending[fragment_count * bound :]
+        self._parts.clear()
+        if remainder:
+            self._parts.append(remainder)
+        self._pending_chars = len(remainder)
         return fragments
 
     def _complete_line(self) -> list[str]:

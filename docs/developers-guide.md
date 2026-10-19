@@ -1319,8 +1319,10 @@ Its contract is the following:
   terminators are never part of the event text.
 - A chunk ending in a lone `"\r"` sets an internal skip-next-LF flag rather
   than emitting the line, because the next chunk may begin with `"\n"` and
-  complete a CRLF pair. That flag is also why `finish()` reports an empty final
-  line when the stream ended in a bare carriage return.
+  complete a CRLF pair. That flag is also why `finish()` returns an empty line
+  for a stream that ended in a bare carriage return with nothing pending before
+  it; when text was pending, `finish()` returns that text, so `"line\r"` yields
+  `"line"`.
 - `max_line_chars` bounds the *content* retained for one line. Terminators are
   not counted, so a line of exactly the bound followed by a terminator emits
   one event rather than a fragment plus an empty one. A longer line is emitted
@@ -1338,8 +1340,9 @@ hold a complete string, and now lives in the same module. It calls
 trailing partial remainder, stripping one recognized terminator from each
 completed line. Its `final=False` mode holds a trailing lone `"\r"` in the
 remainder so a following `"\n"` can complete the CRLF pair; the default
-`final=True` treats it as the terminator it then is. The stream consumer
-flushes its incremental decoder before stripping a final pending terminator.
+`final=True` treats it as the terminator it then is. The stream drain does not
+call this function: `_consume_stream_with_lines` feeds the flushed decoder
+output to `_LineAccumulator` and publishes whatever `finish()` returns.
 
 `_strip_line_ending(line)` removes at most one trailing CRLF pair or one of the
 individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does not

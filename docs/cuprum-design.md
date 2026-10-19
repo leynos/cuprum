@@ -3089,12 +3089,15 @@ does not remove the Python implementation's allocation or GIL costs:
 That hook awaits each per-line sink, so a sink that must apply backpressure
 holds the read loop rather than letting lines queue without bound; a single
 `_READ_SIZE` chunk can carry thousands of lines, so the bound cannot be
-enforced between reads alone. Two modules divide the work: `_streams.py` owns
-the awaited emission beside `_drain()`, while
+enforced between reads alone. Two modules divide the work:
+`cuprum/_stream_line_consumer.py` owns the awaited emission, through
+`_emit_line` and the `publish` helper inside `_consume_stream_with_lines`, while
 `cuprum/_stream_line_boundaries.py` owns the stateful `_LineAccumulator` and
-the pure splitting rules, so the rules can be tested directly and the loop and
-its tests cannot drift apart. The await stays with the loop because awaiting a
-sink is the loop's contract, not a splitting rule.
+the pure splitting rules, so the rules can be tested directly and the consumer
+and its tests cannot drift apart. `_streams.py` dispatches to
+`_consume_stream_with_lines` when a line observer is registered. The await
+stays with the consumer because awaiting a sink is the drain's contract, not a
+splitting rule.
 
 The accumulator exists because the earlier concatenate-and-rescan approach was
 quadratic: every chunk copied the whole pending line and searched it again, so
@@ -4057,7 +4060,8 @@ Both pathways are tested as first-class implementations:
   unterminated line is retained only up to the bound. The rules live in
   `_stream_line_boundaries.py` so both the drain loop and its tests can depend
   on them without importing the loop; `cuprum/_streams.py` re-exports the pure
-  helpers and owns the drain-side emission that awaits each result;
+  helpers, and `cuprum/_stream_line_consumer.py` owns the drain-side emission
+  that awaits each result;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.
