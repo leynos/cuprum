@@ -1967,6 +1967,44 @@ senses: `_stream_drain_finish.py`'s "keeps this branch" is a code path, and
 `test_broken_pipe_echo_snapshot.py`'s "edited on this branch" is a test-double
 rationale about sibling modules rather than a historical narrative.
 
+## Review round three on the pushed head
+
+`coderabbit review --agent` over the pushed head `418ca8dc9` (125 files
+reviewed) reported three findings, all minor or trivial, and all documentation.
+Each was checked against the code before being acted on; none changed runtime
+behaviour.
+
+- **The guides over-promised `keep_file=True` under cancellation.** If
+  cancellation lands before the initial spill's prefix is written,
+  `_publish_spill` has published the handle with `keep=False` and
+  `_promote_provisional_spill` has not run, so `_FileAccumulator.cleanup`
+  closes it with `remove=not handle.keep` and the file goes even under
+  `keep_file=True`. The users' guide, the migration guide, the design document,
+  and the `keep_file` parameter now state that exception, and O5 above names it
+  too. The code is unchanged: the ordering is deliberate and is recorded in the
+  ADR-007 addendum.
+- **The users' guide implied a storage failure always leaves a result.** A
+  removal failure on a timeout or cancellation route is absorbed, but there is
+  no result on that route to attach anything to; the users' guide and the
+  design document now say the run's own outcome stands and reserve "receives a
+  result" for the returning routes.
+- **The spill directory's latency was undocumented.** `_run_off_loop` shields
+  every worker call through `_shielded_cleanup`, so a write blocked on a
+  stalled mount cannot be abandoned: `_settle_consumers` gathers the task, and
+  the timeout or cancellation waits with it. The `directory` parameter's
+  docstring and the users' guide now say to use a local, responsive filesystem
+  when the deadline guarantee matters. The suggestion to emit a time-based
+  warning was not taken: a wall-clock threshold on a shielded call is a new
+  observable and a new tuning knob, and the cancellation contract does not
+  depend on it.
+
+`capture_policy.py` sits at the 400-line module ceiling, so the two added
+parameter notes were paid for by tightening the surrounding docstring prose
+rather than by growing the module. After the review the same claim was found
+untested in the other prose that describes `keep_file`: the design document and
+the migration guide both promised the kept file on every exit route, so both
+were corrected in the same commit.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
@@ -2103,13 +2141,17 @@ success, non-zero exit, timeout, and cancellation, a run with
 `keep_file=True` the file survives holding every byte that reached it before
 the run stopped — the whole stream on the two returning routes, and the
 received prefix on timeout and cancellation, which is the partial output O8
-describes. Method: parameterized end-to-end test over the four outcomes,
-asserting `Path.exists()` afterwards. Artefact:
-`cuprum/unittests/test_capture_spill_cleanup.py`. Evidence: the timeout and
-cancellation cases fail before the cleanup is registered through
-`_shielded_cleanup`. Non-vacuity: each case first asserts the file *existed*
-during the run (via the reported metadata path), so "not there afterwards"
-cannot be satisfied by never having written it.
+describes. One cancellation is excluded, and it is the one that lands before
+the initial spill's prefix is written: the handle is still the provisional one
+that `_publish_spill` created with `keep=False`, so cleanup removes the file
+even under `keep_file=True`. That is deliberate — until the prefix lands there
+is no caller-owned file — and it is recorded in the ADR addendum. Method:
+parameterized end-to-end test over the four outcomes, asserting `Path.exists()`
+afterwards. Artefact: `cuprum/unittests/test_capture_spill_cleanup.py`.
+Evidence: the timeout and cancellation cases fail before the cleanup is
+registered through `_shielded_cleanup`. Non-vacuity: each case first asserts
+the file *existed* during the run (via the reported metadata path), so "not
+there afterwards" cannot be satisfied by never having written it.
 
 **O6 — A bound never reaches the relay.** Invariant: in a pipeline where the
 final stage's stdout is bounded, the stage after the producer reads the

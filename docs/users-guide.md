@@ -689,12 +689,21 @@ that text mode does.
 survives the run, `record.owned` is `False`, and removing it is the caller's
 job. Without it, `record.owned` is `True` and the run removes the file before
 returning the result — on the success path, on a non-zero exit, on a timeout,
-and on cancellation alike.
+and on cancellation alike. One cancellation is the exception: if the run stops
+before the initial spill's prefix is written, the file has not become the
+caller's yet and cleanup removes it even under `keep_file=True`.
+
+Spill I/O runs off the event loop but is shielded, so a write already handed to
+a worker is never abandoned mid-flight. The operational cost is that a stalled
+spill filesystem — a hung NFS mount, a frozen FUSE filesystem — stalls the run
+with it: the child's deadline may terminate the process, but the run cannot
+settle until the blocked write returns. Put `directory` on a local, responsive
+filesystem when the timeout and cancellation guarantees matter.
 
 A failure on any of the spill file's routes — create, append, read back in byte
 mode, or remove at the end of the run — is absorbed rather than raised: a
-failure of the storage is not a failure of the command that produced it. The
-run still completes and the caller still receives a result, and the three
+failure of the storage is not a failure of the command that produced it. When
+the run otherwise returns, the caller still receives a result and the three
 retention failures set `storage_failed=True` on the record. Read that flag
 together with `storage`, because the pair distinguishes the cases:
 
@@ -715,7 +724,9 @@ A failed removal sets nothing: it is housekeeping, and cleanup runs on the way
 out of every run, including one already carrying the caller's own timeout or
 cancellation. An error about a temporary file must not replace either, so that
 route absorbs its own failure silently: it sets no flag and emits no
-`CaptureEvent`, and the surviving file is the only trace.
+`CaptureEvent`, and the surviving file is the only trace. A storage failure
+never turns a timeout or cancellation into an ordinary result; it is absorbed
+so the run's own outcome stands.
 
 ### Reading a stream's capture metadata
 

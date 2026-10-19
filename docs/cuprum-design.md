@@ -1604,11 +1604,14 @@ two. The leaf module and the protocol change it serves are recorded in the
 
 A storage failure is absorbed rather than raised: a failure to retain output is
 not a failure of the command that produced it, so the child is still reaped and
-the caller still receives a result. A failed *creation* leaves the stream on
-the heap, where it is still reported complete; a failed *append* stops writing,
-keeps the prefix that reached the file, and reports `storage_failed`. Both emit
-a `CaptureEvent` and name the error's class rather than its message, because
-the event channel's consumers treat fields as low-cardinality labels.
+a run that otherwise returns still hands the caller a result. On the timeout
+and cancellation routes there is no result to attach anything to; the storage
+failure is absorbed so that the run's own outcome stands. A failed *creation*
+leaves the stream on the heap, where it is still reported complete; a failed
+*append* stops writing, keeps the prefix that reached the file, and reports
+`storage_failed`. Both emit a `CaptureEvent` and name the error's class rather
+than its message, because the event channel's consumers treat fields as
+low-cardinality labels.
 
 A failed *read-back*, which only byte mode performs, reports `storage_failed`
 too, and the record's payload is absent. The file follows the policy rather
@@ -1635,7 +1638,10 @@ run it under `_shielded_cleanup`, so the two paths agree rather than racing.
 The handle's own close and unlink are blocking filesystem calls, so they too
 run on a worker rather than on the loop that is unwinding the run.
 `keep_file=True` is the sole exception: the descriptor is closed and the file
-is left for the caller.
+is left for the caller. The one cancellation that still removes a kept file is
+the one landing before the initial spill's prefix is written: `_publish_spill`
+published the handle with `keep=False` and the accumulator promotes it only
+once the prefix has landed, so until then the file is the run's.
 
 `RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
 default is 64 KiB, and the bound includes retained child bytes, the encoded

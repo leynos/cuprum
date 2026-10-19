@@ -835,13 +835,17 @@ _Applications upgrading from 0.1 should follow the
 
   Cuprum owns the file it creates and removes it on every outcome — success,
   non-zero exit, timeout, and cancellation alike — so a long-lived process
-  cannot accumulate spill files across runs; `keep_file=True` is the sole
-  exception and transfers it to the caller. Cleanup is a pair of steps with one
+  cannot accumulate spill files across runs. `keep_file=True` leaves the file
+  for the caller on every exit route, except for a cancellation landing before
+  the initial spill's prefix is written: until that write lands the file is
+  still the run's, so cleanup removes it. Cleanup is a pair of steps with one
   owner: the result-construction site closes the handle every settled drain
   reports, and teardown reconciles the accumulators themselves, which is the
   only path that reaches a drain cancelled mid-await. `SpillHandle.close` is
   idempotent and both callers run it under `_shielded_cleanup`, so the two
-  paths agree rather than racing.
+  paths agree rather than racing. Spill I/O is shielded as well, so a stalled
+  spill filesystem stalls the run with it: a timeout or cancellation cannot
+  settle until a blocked write returns.
 
   Every captured stream contributes one `CapturedStream` to the new
   stdout-then-stderr-ordered `CommandResult.captures`, and `PipelineResult`
@@ -854,8 +858,10 @@ _Applications upgrading from 0.1 should follow the
   `owned` says who must remove it, and `storage_failed` says the file is
   incomplete rather than merely short. A storage failure is absorbed rather
   than raised — a failure to _retain_ output is not a failure of the command
-  that produced it — so the child is still reaped and the caller still receives
-  a result; a failed creation leaves the stream on the heap where it is still
+  that produced it — so the child is still reaped and a run that otherwise
+  returns still hands the caller a result; on a timeout or cancellation there
+  is no result to equip, and the failure is absorbed so the run's own outcome
+  stands. A failed creation leaves the stream on the heap where it is still
   reported complete, while a failed append keeps the prefix that reached the
   file and reports `storage_failed`. Both are distinguished by reading the flag
   together with `storage`. `cuprum.capture_events` and

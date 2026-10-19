@@ -144,13 +144,13 @@ class FileBackedCapture:
     """Keep the stream in memory, then spill it to a temporary file.
 
     The parent heap holds the stream only until it exceeds
-    ``spill_threshold_bytes``; past that point the bytes that have already
-    arrived are written to a file and every later chunk is appended there, so
-    retention stops growing with the child's output. A stream that never
-    crosses the threshold is finalized exactly as :class:`FullCapture` would
-    have finalized it — decoded text on the result, ``storage`` reported as
-    ``"memory"`` — so raising the threshold is a pure memory decision and
-    never changes what the caller reads.
+    ``spill_threshold_bytes``; past that the bytes already arrived are written
+    to a file and every later chunk is appended there, so retention stops
+    growing with the child's output. A stream that never crosses the threshold
+    is finalized exactly as :class:`FullCapture` would have finalized it —
+    decoded text on the result, ``storage`` reported as ``"memory"`` — so
+    raising the threshold is a pure memory decision and never changes what the
+    caller reads.
 
     A spilled text-mode stream is reported as ``None`` on ``stdout``/``stderr``.
     The library created the spill file and removes it *before the result is
@@ -169,18 +169,18 @@ class FileBackedCapture:
         on the heap at all. A ``bool`` is rejected, as for
         :class:`BoundedCapture`.
     directory : pathlib.Path | str | None, default=None
-        Directory the spill file is created in. ``None`` uses the process's
-        temporary directory, which is the right default; name one when the
-        spill must land on a particular filesystem, or when ``keep_file``
-        means the caller will collect it. A ``str`` is normalized to a
-        :class:`~pathlib.Path`, mirroring how
-        ``RunOutputOptions.broken_pipe_policy`` accepts either a member or its
-        string value.
+        Directory the spill file is created in; ``None`` uses the process's
+        temporary directory. Name one when the spill must land on a particular
+        filesystem, or when ``keep_file`` means the caller will collect it. A
+        ``str`` is normalized to a :class:`~pathlib.Path`. Writes are shielded
+        so teardown never unlinks a file under an in-flight write: a stalled
+        mount here stalls the run, and a timeout or cancellation cannot settle
+        until the blocked call returns, so use a local, responsive filesystem.
     keep_file : bool, default=False
         Leave the spill file in place when the run finishes, transferring it
-        to the caller. The path is reported either way, so a caller who keeps
-        the file knows where it is and a caller who does not never has to
-        clean up.
+        to the caller. The path is reported either way. A cancellation landing
+        before the initial spill's prefix is written still removes the file:
+        until that write lands, the file is the run's, not the caller's.
 
     Examples
     --------

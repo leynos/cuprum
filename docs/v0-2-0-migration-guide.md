@@ -1171,7 +1171,9 @@ byte mode the file is read back, so byte mode does not carry the bounded-memory
 guarantee. The file is removed by the run before it returns unless
 `keep_file=True` is passed, on every exit route including a timeout and a
 cancellation. Set `keep_file=True` if the caller wants the file, and read
-`record.owned` to know which case applies.
+`record.owned` to know which case applies. One cancellation is the exception:
+if the run stops before the initial spill's prefix is written, the file is not
+the caller's yet and cleanup removes it even under `keep_file=True`.
 
 A failure to create, write, flush, or read back the spill file does not fail
 the run: it is reported on the record as `storage_failed=True` and through a
