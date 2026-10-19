@@ -11,6 +11,14 @@ PACKAGE_NAME = "cuprum"
 # complete.
 DEFAULT_ECHO_MAX_LINE_BYTES = 64 * 1024
 
+# Line observation retains an incomplete line until its terminator arrives.
+# That wait is unbounded only if the terminator never does, so the default
+# bounds it in *decoded characters* — not bytes, and not counting the
+# terminator — and a longer line is published as a sequence of fragments.
+# Chosen to match the echo bound so a default run does not retain more per
+# line than it would mirror.
+DEFAULT_MAX_LINE_CHARS = 64 * 1024
+
 # Error policy a byte-exact run's *views* decode under. A view is any decode
 # that renders the child's bytes for display or inspection — line observation,
 # echo, the bounded mirror — rather than the run's capture. In byte mode the

@@ -56,6 +56,7 @@ class _TerminalHookGate:
     """Hold terminal observers until the test delivers both cancellations."""
 
     def __init__(self, stage_count: int) -> None:
+        """Start with no held hooks and no stage observed."""
         self.stage_count = stage_count
         self.release = asyncio.Event()
         self.all_started = asyncio.Event()

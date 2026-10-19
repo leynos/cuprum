@@ -3090,11 +3090,23 @@ That hook awaits each per-line sink, so a sink that must apply backpressure
 holds the read loop rather than letting lines queue without bound; a single
 `_READ_SIZE` chunk can carry thousands of lines, so the bound cannot be
 enforced between reads alone. Two modules divide the work: `_streams.py` owns
-the awaited emitter (`_emit_completed_lines()`) beside `_drain()`, while
-`cuprum/_line_splitting.py` owns the pure splitting rules, so the rules can be
-tested directly and the loop and its tests cannot drift apart. The emitter
-stays with the loop because awaiting a sink is the loop's contract, not a
-splitting rule.
+the awaited emission beside `_drain()`, while
+`cuprum/_stream_line_boundaries.py` owns the stateful `_LineAccumulator` and
+the pure splitting rules, so the rules can be tested directly and the loop and
+its tests cannot drift apart. The await stays with the loop because awaiting a
+sink is the loop's contract, not a splitting rule.
+
+The accumulator exists because the earlier concatenate-and-rescan approach was
+quadratic: every chunk copied the whole pending line and searched it again, so
+a child that never sent a terminator both exhausted memory and burned CPU in
+proportion to the square of its line length. Retaining the pending chunks in a
+deque and searching only the new chunk makes the work linear, and
+`max_line_chars` bounds retention by publishing a longer line as fragments of
+exactly the bound through the same awaited sink. Fragments are emitted as soon
+as the bound is exceeded, not only when the terminator arrives, because the
+unterminated case is the one that must be bounded. Terminators are excluded
+from the count, so a line of exactly the bound is one event rather than a
+fragment plus an empty one.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_streams.py` splits raw reads
@@ -4035,12 +4047,17 @@ Both pathways are tested as first-class implementations:
   output through real pipeline execution under both backends;
 - pure line-splitting property tests in
   `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
-  `_strip_line_ending()` from `cuprum/_line_splitting.py`, proving that
+  `_strip_line_ending()`, while
+  `cuprum/unittests/test_stream_line_boundaries.py` covers `_LineAccumulator`,
+  all from `cuprum/_stream_line_boundaries.py`. The accumulator property
+  compares its events with a `splitlines()` oracle for arbitrary chunkings and
+  asserts no event exceeds `max_line_chars`. Together they prove that
   line-callback text is not dropped, that recognized line endings are stripped
-  consistently, and that trailing partial lines remain buffered. The pure rules
-  live in `_line_splitting.py` so both the drain loop and its tests can depend
-  on them without importing the loop; `cuprum/_streams.py` re-exports them and
-  owns the drain-side emitter that awaits each result;
+  consistently, that trailing partial lines remain buffered, and that an
+  unterminated line is retained only up to the bound. The rules live in
+  `_stream_line_boundaries.py` so both the drain loop and its tests can depend
+  on them without importing the loop; `cuprum/_streams.py` re-exports the pure
+  helpers and owns the drain-side emission that awaits each result;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.

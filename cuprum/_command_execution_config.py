@@ -82,6 +82,7 @@ def _build_subprocess_execution(
             echo_stdout=state.output.resolved_echo[0],
             echo_stderr=state.output.resolved_echo[1],
             max_echo_line_bytes=state.output.max_echo_line_bytes,
+            max_line_chars=state.output.max_line_chars,
             broken_pipe_policy=state.output.resolved_broken_pipe_policy,
             sink_session=sink_bracket.session,
             timeout=state.timeout,

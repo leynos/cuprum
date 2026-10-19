@@ -15,7 +15,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
-from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES, DEFAULT_MAX_LINE_CHARS
+from cuprum._testing import _prepare_pipeline_config
 from cuprum.sh import (
     ExecutionContext,
     IOOptions,
@@ -474,6 +475,103 @@ def test_run_output_options_rejects_invalid_echo_bound(
         RunOutputOptions(max_echo_line_bytes=invalid_bound)
 
 
+@pytest.mark.parametrize("invalid_bound", [0, -1, True, 1.5, "8"])
+def test_run_output_options_rejects_invalid_line_bound(
+    invalid_bound: object,
+) -> None:
+    """Invalid ``max_line_chars`` values are rejected at construction.
+
+    ``True`` is the interesting case: as an ``int`` subclass it would pass a
+    bare ``isinstance(value, int)`` check, yet a bool is not the size the
+    caller meant, so it is refused exactly as ``max_echo_line_bytes`` refuses
+    it. A float and a numeric string are refused for the same reason: the
+    field types a decoded-character count, not something coercible to one.
+    """
+    with pytest.raises(ValueError, match="max_line_chars must be a positive integer"):
+        RunOutputOptions(
+            max_line_chars=typ.cast("int | None", invalid_bound),
+        )
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [pytest.param(None, id="unbounded"), pytest.param(1, id="one-char")],
+)
+def test_run_output_options_accepts_valid_line_bounds(bound: int | None) -> None:
+    """``None`` disables the bound and any positive int sets it."""
+    options = RunOutputOptions(max_line_chars=bound)
+
+    assert options.max_line_chars == bound
+
+
+def test_run_output_options_default_line_bound_matches_constant() -> None:
+    """The default line bound is the shared 64 Ki decoded-character constant."""
+    assert RunOutputOptions().max_line_chars == DEFAULT_MAX_LINE_CHARS
+    assert DEFAULT_MAX_LINE_CHARS == 64 * 1024
+
+
+def test_max_line_chars_leaves_on_line_in_its_positional_slot() -> None:
+    """Adding the bound did not shift ``on_line`` or any later field.
+
+    The field is keyword-only precisely so an existing call that passes
+    ``on_line`` positionally keeps binding it to the same parameter; the new
+    bound then keeps its default instead of capturing that callable.
+    """
+    events: list[LineEvent] = []
+
+    def hook(event: LineEvent) -> None:
+        """Record the observed event; the test only needs the identity."""
+        events.append(event)
+
+    # Positional order is the contract under test, not an API flag a keyword
+    # would express more clearly.
+    options = RunOutputOptions(True, False, None, None, None, hook)  # ruff: ignore[boolean-positional-value-in-call] - positional order under test
+
+    assert options.on_line is hook, (
+        "the sixth positional argument must still bind on_line"
+    )
+    assert options.max_line_chars == DEFAULT_MAX_LINE_CHARS, (
+        "the keyword-only bound must not consume a positional argument"
+    )
+
+
+def test_pipeline_config_carries_the_line_bound_to_both_streams() -> None:
+    """Pipeline resolution copies the caller's bound onto every stream config.
+
+    The bound is one property of the run, not of a stage or a stream, so the
+    resolved pipeline config and both of the stream configs it derives must
+    agree with the options object the caller supplied.
+    """
+    config = _prepare_pipeline_config(
+        output=RunOutputOptions(max_line_chars=7),
+        timeout=None,
+        context=ExecutionContext(),
+    )
+
+    assert config.max_line_chars == 7, (
+        "pipeline resolution must carry the caller's max_line_chars"
+    )
+    assert config.stream_config.max_line_chars == 7, (
+        "the final stage's stdout must observe the caller's bound"
+    )
+    assert config.stderr_stream_config.max_line_chars == 7, (
+        "a stage's stderr must observe the caller's bound"
+    )
+
+
+def test_pipeline_config_line_bound_defaults_from_the_constant() -> None:
+    """A pipeline built from default options inherits the shared bound."""
+    config = _prepare_pipeline_config(
+        output=RunOutputOptions(),
+        timeout=None,
+        context=ExecutionContext(),
+    )
+
+    assert config.max_line_chars == DEFAULT_MAX_LINE_CHARS
+    assert config.stream_config.max_line_chars == DEFAULT_MAX_LINE_CHARS
+    assert config.stderr_stream_config.max_line_chars == DEFAULT_MAX_LINE_CHARS
+
+
 # ---------------------------------------------------------------------------
 # Group and annotate flags
 # ---------------------------------------------------------------------------
@@ -839,6 +937,71 @@ def test_pipeline_on_line_observes_without_capture_or_echo() -> None:
     )
     assert all(event.at >= 0.0 for event in events), (
         "line stamps must be monotonic seconds since the stage started"
+    )
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_on_line_bounds_unterminated_lines_on_every_stream() -> None:
+    """The line bound reaches the final stdout and every stage's stderr.
+
+    Each stage here writes one newline-free megabyte, tagged with a character
+    of its own so the events can be attributed: the final stage writes ``o``
+    to stdout and ``c`` to stderr, and the intermediate stage writes ``p`` to
+    stderr. Nothing is captured or echoed, so line observation is the only
+    consumer holding any of it, and each event must respect the bound while
+    the pieces still reconstruct the child's complete output.
+    """
+    line_bound = 1024
+    chunk = 1 << 20
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python(
+        "-c",
+        f"import sys; sys.stderr.write('p' * {chunk})",
+    )
+    consumer = python(
+        "-c",
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write('c' * {chunk})\n"
+        f"sys.stdout.write('o' * {chunk})\n",
+    )
+    events: list[LineEvent] = []
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (producer | consumer).run_sync(
+            output=RunOutputOptions(
+                capture=False,
+                echo=False,
+                on_line=events.append,
+                max_line_chars=line_bound,
+            ),
+        )
+
+    def joined(stream: str, filler: str) -> str:
+        """Reassemble one stream's events whose text is entirely *filler*."""
+        return "".join(
+            event.text
+            for event in events
+            if event.stream == stream and set(event.text) == {filler}
+        )
+
+    assert joined("stdout", "o") == "o" * chunk, (
+        "the final stage's stdout must be delivered whole, in bounded fragments"
+    )
+    assert joined("stderr", "c") == "c" * chunk, (
+        "the final stage's stderr must also honour the bound"
+    )
+    assert joined("stderr", "p") == "p" * chunk, (
+        "an intermediate stage's stderr must also honour the bound"
+    )
+    assert all(len(event.text) <= line_bound for event in events), (
+        "no observed event may exceed max_line_chars, got "
+        f"{max(len(event.text) for event in events)} chars"
+    )
+    assert result.ok is True, f"the pipeline should succeed, got {result!r}"
+    assert result.final.stdout is None, (
+        "capture=False must leave the final stdout unset"
     )
 
 

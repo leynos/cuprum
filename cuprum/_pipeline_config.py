@@ -16,6 +16,7 @@ import sys
 import typing as typ
 
 from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
+from cuprum._constants import DEFAULT_MAX_LINE_CHARS
 from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
 from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
@@ -56,6 +57,13 @@ class _PipelineRunConfig:
     sink_bracket: _SinkBracket
 
     on_line: _LineHookFn | None = None
+
+    # One decoded-character bound for the whole pipeline, inherited by every
+    # stage's stdout and stderr config: the caller named it once on the options
+    # object, and a stage is not the place to second-guess how much of an
+    # unterminated line may be retained. Defaulted for the callers that build
+    # this config directly; ``None`` disables the bound.
+    max_line_chars: int | None = DEFAULT_MAX_LINE_CHARS
 
     # One policy for the whole pipeline, inherited by every stage's stdout and
     # stderr config: the caller named it once on the options object, and a
@@ -140,6 +148,7 @@ class _PipelineRunConfig:
             capture_output=self.capture,
             echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
+            max_line_chars=self.max_line_chars,
             broken_pipe_policy=self.broken_pipe_policy,
             sink=framed,
             delivery=self.delivery_worker,
@@ -236,6 +245,7 @@ def _prepare_pipeline_config(
             echo_stdout=echo_stdout,
             echo_stderr=echo_stderr,
             max_echo_line_bytes=output.max_echo_line_bytes,
+            max_line_chars=output.max_line_chars,
             broken_pipe_policy=output.resolved_broken_pipe_policy,
             timeout=timeout,
             stdout_sink=stdout_sink,

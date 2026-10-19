@@ -1298,46 +1298,91 @@ configuration.
 
 ## Stream line-splitting properties
 
-Line callbacks in the Python stream backend use two pure helpers from
-`cuprum/_line_splitting.py`:
+Line callbacks in the Python stream backend use the helpers in
+`cuprum/_stream_line_boundaries.py`.
 
-- `_split_complete_lines(text)` calls
-  `text.splitlines(keepends=True)` and returns completed decoded lines plus a
-  trailing partial remainder. It strips one recognized line terminator from
-  each completed line. The recognized boundaries match `str.splitlines()`:
-  CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, LS, and PS. A trailing `"\r"` remains
-  in `remainder` so a following `"\n"` can complete the CRLF pair. The stream
-  consumer flushes its incremental decoder before stripping a final pending
-  terminator.
-- `_strip_line_ending(line)` removes at most one trailing CRLF pair or one of
-  the individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does
-  not normalize or edit interior text.
+`_LineAccumulator` is what the drain actually feeds. Text arrives one decoded
+chunk at a time, so the earlier concatenate-and-rescan approach copied the
+whole pending line on every chunk and searched it again: quadratic work and
+unbounded memory for a child that never sends a terminator. The accumulator
+instead retains the pending chunks in a deque and searches only the new chunk
+for the next boundary, so the total work is linear in the decoded text and
+appending never copies what is already held.
 
-These helpers are re-exported from `cuprum/_testing.py` so tests can state the
-contract directly without driving subprocess I/O. Keep them private to the
-package: they exist to make `_emit_completed_lines` small and testable, not as
-public user API.
+Its contract is the following:
 
-`cuprum/unittests/test_line_splitting.py` contains the direct property suite.
-Hypothesis generates text with mixed recognized line endings and checks that
-normalized text is preserved, the final remainder is partial, and stripping is
-idempotent. CrossHair runs PEP 316 (Python Enhancement Proposal 316) contracts
-over bounded symbolic inputs for the same invariants. CrossHair is a
-development dependency only; the tests skip the symbolic checks whenever
-CrossHair cannot run on the active interpreter. Rather than hard-coding a
-Python-version gate, the suite probes CrossHair at import time and degrades to
-skipping only for expected availability failures: a missing dev dependency
-(`ImportError`) or an interpreter whose opcode set CrossHair cannot yet trace
+- `feed(text)` consumes one decoded chunk and returns the completed lines it
+  unlocked, in stream order. `finish()` returns the final unterminated line, or
+  `None` when nothing is pending.
+- The recognized boundaries match `str.splitlines()`: CRLF, LF, CR, VT, FF,
+  FS, GS, RS, NEL, LS, and PS. Exactly one terminator is stripped per line and
+  terminators are never part of the event text.
+- A chunk ending in a lone `"\r"` sets an internal skip-next-LF flag rather
+  than emitting the line, because the next chunk may begin with `"\n"` and
+  complete a CRLF pair. That flag is also why `finish()` reports an empty final
+  line when the stream ended in a bare carriage return.
+- `max_line_chars` bounds the *content* retained for one line. Terminators are
+  not counted, so a line of exactly the bound followed by a terminator emits
+  one event rather than a fragment plus an empty one. A longer line is emitted
+  as fragments of exactly the bound, as soon as the bound is exceeded rather
+  than only at its terminator, so an unterminated run cannot grow without
+  limit. Fragments travel through the same awaited sink as complete lines, so
+  backpressure is preserved. `None` disables the bound.
+- Output is independent of read boundaries: any partition of the same text
+  yields the same sequence of events, which is the property the Hypothesis
+  suite checks against a `splitlines()` oracle.
+
+`_split_complete_lines(text, *, final=True)` remains for callers that already
+hold a complete string, and now lives in the same module. It calls
+`text.splitlines(keepends=True)` and returns completed decoded lines plus a
+trailing partial remainder, stripping one recognized terminator from each
+completed line. Its `final=False` mode holds a trailing lone `"\r"` in the
+remainder so a following `"\n"` can complete the CRLF pair; the default
+`final=True` treats it as the terminator it then is. The stream consumer
+flushes its incremental decoder before stripping a final pending terminator.
+
+`_strip_line_ending(line)` removes at most one trailing CRLF pair or one of the
+individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does not
+normalize or edit interior text.
+
+`_LineAccumulator`, `_split_complete_lines`, and `_strip_line_ending` are
+re-exported from `cuprum/_testing.py` so tests can state the contract directly
+without driving subprocess I/O. Keep them private to the package: they are
+implementation seams, not public user API.
+
+The `lines()` driver's queue is a separate bound from `max_line_chars`. The
+queue holds at most 256 events, which bounds how many *events* can be
+outstanding when the iterator is slower than the child; `max_line_chars` bounds
+how much text any one of them can carry. Neither bound substitutes for the
+other: a queue of small events is bounded by its capacity, and a single event
+is bounded by its characters.
+
+`cuprum/unittests/test_stream_line_boundaries.py` contains the direct
+accumulator suite, including a Hypothesis property that compares the event
+sequence with a `splitlines()` oracle for any chunking of the same text and
+checks that no event exceeds the bound.
+`cuprum/unittests/test_line_splitting.py` keeps the property suite for
+`_split_complete_lines` and `_strip_line_ending`. Hypothesis generates text
+with mixed recognized line endings and checks that normalized text is
+preserved, the final remainder is partial, and stripping is idempotent.
+CrossHair runs PEP 316 (Python Enhancement Proposal 316) contracts over bounded
+symbolic inputs for the same invariants. CrossHair is a development dependency
+only; the tests skip the symbolic checks whenever CrossHair cannot run on the
+active interpreter. Rather than hard-coding a Python-version gate, the suite
+probes CrossHair at import time and degrades to skipping only for expected
+availability failures: a missing dev dependency (`ImportError`) or an
+interpreter whose opcode set CrossHair cannot yet trace
 (`crosshair.tracers.TraceException`, as with the `CALL_KW` gap on early Python
 3.15 betas, issue #109). Any other probe exception is allowed to propagate so
 that unexpected import failures stay visible. The probe self-resolves once
 CrossHair supports the interpreter.
 
-When changing `_emit_completed_lines`, `_split_complete_lines`, or
+When changing `_LineAccumulator`, `_split_complete_lines`, or
 `_strip_line_ending`, run:
 
 ```bash
-uv run pytest -q cuprum/unittests/test_line_splitting.py
+uv run pytest -q cuprum/unittests/test_stream_line_boundaries.py \
+  cuprum/unittests/test_line_splitting.py cuprum/unittests/test_stream_drain.py
 ```
 
 Run `make test` before committing so the stream behaviour and the pure helper
@@ -7232,6 +7277,16 @@ tests that monkeypatch them by module path resolve the same names as before:
   rules: which of the four kinds a target names, which payload each kind
   carries, and the normalization a `path` payload undergoes, so two spellings
   of one file compare equal.
+- `cuprum/sh/output_rules.py` owns the construction-time checks on
+  individual `RunOutputOptions` fields: `_validate_max_line_chars` (a positive
+  decoded-character count, or `None`) and `_validate_convenience_flags` (the
+  `group` and `annotate_failure` flags must be real `bool` values).
+  `cuprum/sh/output.py` re-exports both under their original names, so
+  `RunOutputOptions.__post_init__` still calls them by those names and
+  `cuprum.sh` keeps publishing `_validate_convenience_flags` with unchanged
+  object identity. The split keeps `output.py` --- which owns the dataclass and
+  its long docstring --- under the module ceiling, and follows the same
+  vocabulary-versus-policing boundary as `stdio` and `stdio_rules`.
 - `cuprum/sh/stdio_rules.py` owns the rules policing *combinations* of
   targets, which read a whole `RunOutputOptions`. `_validate_stdio_targets` is
   every construction-time rule — the three `_reject_*` helpers,

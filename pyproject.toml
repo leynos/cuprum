@@ -1013,13 +1013,6 @@ reason = "Two scope modules binding the same overlay names and carrying the same
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_bytes_run.py",
-    "cuprum/sh/__init__.py",
-]
-reason = "Two modules importing the same four result names. `_bytes_run` must take them from the results module directly rather than through the facade, because the facade imports it and reaching the facade would close an import cycle; the facade's own re-export is its documented purpose."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/adapters/control_metrics.py",
     "cuprum/adapters/stream_metrics.py",
 ]
@@ -1031,9 +1024,6 @@ reason = "The buffered and bytes result records in one module: `CommandResult` a
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_process_signal.py", "cuprum/adapters/_tracing_control_join.py"]
 reason = "A two-line `if <field> is None: return` guard in two unrelated modules: one declines to report a teardown for a run with no report to file, the other declines to record an event with no execution to attribute it to. The shared text is the None-tolerance guard this codebase uses at every optional-collaborator boundary — the same idiom the seven-module and two-module entries elsewhere in this list adjudicate — not a shared operation. Neither module has a collaborator to hand the guard, and collapsing them would mean one module importing the other only to restate two lines."
-[[tool.duplication_gate.allow]]
-members = ["cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py", "cuprum/_group_teardown.py"]
-reason = "`if <field> is None: return` over an observation (three times, in three modules), native file descriptors, a session, and a teardown report: each is a same-module early return guarding a different optional collaborator, and the shared text is the guard idiom rather than a shared operation. Grown from four locations to five by `main`, which added the `_group_teardown.py` report guard while this branch was rebasing. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_command_internals.py", "cuprum/_pipeline_observation.py"]
 reason = "Two modules whose import prologue repeats: the same five-name `from cuprum._observability import (...)` re-import, followed by the same `_pipeline_types` and `_subprocess_context` imports. Import declarations cannot be factored into a shared helper — re-importing from a common module would not remove the per-module binding, and a wildcard re-export would trade a reviewable list for an invisible one — for the reason the import-family entries above record. Each block is that module's declared dependency surface; the observation code below them diverges."
@@ -1076,6 +1066,9 @@ reason = "The direct command finalizer and the async line-stream iterator each b
 [[tool.duplication_gate.allow]]
 unit = "cuprum/adapters/echo_metrics.py"
 reason = "The adjacent metric calls intentionally keep the public broken-pipe and truncation counters separate because each describes a different fault and uses a different label contract; the detector reports both fragments anonymously, so this path is the narrowest available key."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_group_teardown.py", "cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py", "cuprum/sh/output_rules.py"]
+reason = "`if <field> is None: return` in seven places across six modules: an observation (three times, in two modules), native file descriptors, a session, a teardown report, and the optional `max_line_chars` bound this branch adds. Each is a same-module early return guarding a different optional collaborator, and the shared text is the None-tolerance guard idiom this codebase uses at every optional-collaborator boundary, not a shared operation. Grown from five locations to seven by this branch: `output_rules.py` adds the bound guard, and widening the surface made the two `_pipeline_wait_records.py` locations visible where the earlier entry named the file only once. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

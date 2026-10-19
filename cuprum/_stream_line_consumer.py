@@ -1,9 +1,11 @@
 """Incrementally decode a drained stream and publish completed lines.
 
 Reached through :func:`cuprum._streams._consume_stream` whenever a line
-observer is registered. Each decoded chunk is split on line boundaries and
-every complete line is published through :func:`_emit_line`, which awaits a
-sink that answers with an awaitable: that await is what lets the ``lines()``
+observer is registered. Each decoded chunk is fed to a stateful
+:class:`~cuprum._stream_line_boundaries._LineAccumulator`, which finds line
+boundaries in the new chunk rather than rescanning text it has already seen,
+and every complete line is published through :func:`_emit_line`, which awaits
+a sink that answers with an awaitable: that await is what lets the ``lines()``
 driver's bounded queue push back on a chatty child instead of queueing output
 without bound. The pure splitting rules live in
 ``cuprum._stream_line_boundaries``.
@@ -16,7 +18,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._result_assembly import _require_bytes, _require_text
-from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
+from cuprum._stream_line_boundaries import _LineAccumulator
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -43,31 +45,6 @@ async def _emit_line(sink: _LineSink, line: str) -> None:
         await outcome
 
 
-async def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: _LineSink,
-) -> str:
-    """Emit complete lines from text and return the remaining partial line.
-
-    Awaits each sink call so a sink that must apply backpressure to the
-    producer holds the read loop instead of letting the lines queue without
-    bound. See :func:`_emit_line`.
-
-    Returns
-    -------
-    str
-        The trailing partial line that carries no line ending yet, retained so
-        the next chunk can complete it.
-    """
-    lines, remainder = _split_complete_lines(text, final=False)
-
-    for line in lines:
-        await _emit_line(on_line, line)
-
-    return remainder
-
-
 async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     consumption: _LineConsumption,
@@ -91,15 +68,16 @@ async def _consume_stream_with_lines(
         return _empty_capture(consumption.config)
 
     decoder = _incremental_decoder(consumption.config)
-    pending_text = ""
+    accumulator = _LineAccumulator(consumption.config.max_line_chars)
+
+    async def publish(lines: list[str]) -> None:
+        """Send each completed line or fragment through the awaited sink."""
+        for line in lines:
+            await _emit_line(consumption.on_line, line)
 
     async def feed_decoder(chunk: bytes) -> None:
         """Decode one chunk and emit only lines whose boundary is complete."""
-        nonlocal pending_text
-        pending_text = await _emit_completed_lines(
-            pending_text + decoder.decode(chunk),
-            on_line=consumption.on_line,
-        )
+        await publish(accumulator.feed(decoder.decode(chunk)))
 
     captured = await consumption.drain(
         stream,
@@ -107,12 +85,10 @@ async def _consume_stream_with_lines(
         on_chunk=feed_decoder,
         relay_diagnostics=consumption.relay_diagnostics,
     )
-    pending_text = await _emit_completed_lines(
-        pending_text + decoder.decode(b"", final=True),
-        on_line=consumption.on_line,
-    )
-    if pending_text:
-        await _emit_line(consumption.on_line, _strip_line_ending(pending_text))
+    await publish(accumulator.feed(decoder.decode(b"", final=True)))
+    trailing = accumulator.finish()
+    if trailing is not None:
+        await _emit_line(consumption.on_line, trailing)
     if consumption.config.capture_bytes:
         return _require_bytes(captured, "line-observed stream")
     return _require_text(captured, "line-observed stream")

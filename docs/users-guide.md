@@ -416,6 +416,19 @@ assert [(line.stream, line.text) for line in lines] == [
 The callback runs synchronously and should return promptly. Line order is
 guaranteed within each stream, not across streams.
 
+A child that never terminates a line would otherwise grow the retained text
+without limit, and rescan it for every read. Observation therefore keeps at most
+`max_line_chars` decoded characters (64 Ki by default) for one line, and
+publishes anything longer through the same callback as fragments of exactly
+that many characters. The count covers line content only; terminators are not
+counted, so a line of exactly the bound with a terminator is still one event. A
+fragment is not a line in the grammatical sense: it can split a grapheme
+cluster, and the same fragmenting applies to `SafeCmd.lines()` and pipeline
+`on_line` callbacks. The bound is independent of `capture` and `echo` — a run
+with capture off retains no more than a capturing one — and it is distinct from
+`max_echo_line_bytes`, which bounds the mirrored copy in bytes only. Set
+`max_line_chars=None` only when retaining one unbounded line is appropriate.
+
 For async consumers needing backpressure, `SafeCmd.lines()` returns a
 `LineStream`: an async iterator of `LineEvent(stream, at, text)` whose `result`
 is available after iteration finishes.
@@ -1238,6 +1251,14 @@ assert asyncio.run(first_line()) == "0"
 
 After a loop that runs to completion, `stream.result` holds the same
 `CommandResult` that `run()` would have returned.
+
+An unterminated line reaches `lines()` in bounded fragments too, exactly as it
+reaches `on_line`: each event carries at most `max_line_chars` decoded
+characters, the bound applies to both streams, and terminator characters are
+not counted. A slow iterator keeps working because the event queue is finite:
+the child's drain waits for a free slot instead of buffering output without
+limit. Neither mechanism changes what is captured; `max_line_chars` only bounds
+how much any single event carries.
 
 ### Handle a slow command
 
@@ -2224,7 +2245,10 @@ hooks receive `ExecEvent` values describing:
 
 Line events omit their line terminators. A carriage-return and line-feed (CRLF)
 pair split across internal reads is held until both bytes arrive, so it emits
-one line event and never an empty event for the boundary.
+one line event and never an empty event for the boundary. A line that never
+receives a terminator is published in fragments of at most `max_line_chars`
+characters, so a very long line yields several events rather than one; the
+fragments join back to the child's exact text.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
