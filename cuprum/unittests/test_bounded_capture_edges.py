@@ -17,19 +17,14 @@ to both; only the trim is text-only.
 from __future__ import annotations
 
 import io
-import typing as typ
 
 import pytest
 
 from cuprum._streams import _StreamConfig
 from cuprum.capture_policy import BoundedCapture
 from cuprum.echo_events import EchoStream
-from cuprum.unittests._bounded_capture_support import _Retained, _sink
+from cuprum.unittests._bounded_capture_support import _byte_sink, _Retained, _sink
 from cuprum.unittests._capture_sink_support import _drain_sink, _finalize
-
-if typ.TYPE_CHECKING:
-    from cuprum._capture_types import CaptureSink
-    from cuprum.capture_policy import CapturePolicy
 
 
 @pytest.mark.parametrize("max_bytes", [1, 7, 8, 9, 16, 4096])
@@ -206,25 +201,6 @@ def test_the_accumulator_counts_bytes_across_arbitrary_chunk_partitions() -> Non
         "the retained tail must be the stream's last eight bytes, not the "
         "last eight bytes of each read"
     )
-
-
-def _byte_sink(policy: CapturePolicy) -> CaptureSink:
-    """Return the accumulator a byte-exact run with *policy* retains into."""
-    config = _StreamConfig(
-        capture=policy,
-        echo_output=False,
-        # The accumulator is all this helper needs, and a byte-exact run's
-        # sink is never written to by it; a text sink keeps the config's
-        # declared type and avoids a bytes stream the echo would never use.
-        sink=io.StringIO(),
-        encoding="utf-8",
-        errors="strict",
-        stream=EchoStream.STDOUT,
-        capture_bytes=True,
-    )
-    sink = config.capture_sink
-    assert sink is not None, "a named policy must build an accumulator"
-    return sink
 
 
 def test_a_byte_mode_bound_hands_back_the_child_bytes_untouched() -> None:

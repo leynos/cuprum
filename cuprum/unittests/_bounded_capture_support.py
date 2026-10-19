@@ -46,6 +46,26 @@ def _sink(policy: CapturePolicy) -> CaptureSink:
     return sink
 
 
+def _byte_sink(policy: CapturePolicy) -> CaptureSink:
+    """Return the accumulator a byte-exact run with *policy* retains into.
+
+    The only difference from :func:`_sink` is the ``capture_bytes`` flag, so
+    the two suites that need byte mode share this rather than each rebuilding
+    the config and risking a second, subtly different one. The text
+    ``io.StringIO`` sink stays: a byte-exact run's accumulator is the only
+    object these cases read, and the config's echo destination is never
+    written to.
+
+    Returns
+    -------
+    CaptureSink
+        The byte-exact accumulator the config built for *policy*.
+    """
+    sink = dc.replace(_config(policy), capture_bytes=True).capture_sink
+    assert sink is not None, "a named policy must build an accumulator"
+    return sink
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _Retained:
     """What one bounded accumulation actually kept.
