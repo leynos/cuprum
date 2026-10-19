@@ -1127,11 +1127,14 @@ rsync would read it as a remote specification.
 
 `_local_rsync_operand()` in `cuprum/builders/rsync.py` runs after `safe_path()`
 for each operand and enforces rsync's local-only grammar. It returns the
-normalized `SafePath` or raises `ValueError` naming the operand role (`source`
-or `destination`). The private predicate `_is_remote_rsync_operand()` reports
-remote spelling when the value starts with `rsync://` (case-insensitive) or
-contains `:` before the first `/`. A colon at or after the first separator, as
-in `dir/host:path`, stays local.
+normalized `SafePath`, or raises `ValueError` naming the operand role (`source`
+or `destination`) when it is the layer that rejects the operand. That
+role-specific message is only reachable once `safe_path()` has accepted the
+value; under default options a relative remote spelling may instead fail
+earlier as `PathRejection.NOT_ABSOLUTE`. The private predicate
+`_is_remote_rsync_operand()` reports remote spelling when the value starts with
+`rsync://` (case-insensitive) or contains `:` before the first `/`. A colon at
+or after the first separator, as in `dir/host:path`, stays local.
 
 The helper applies the predicate to both the raw value and the normalized
 `SafePath` string, so normalization cannot hide a remote endpoint.
@@ -1152,10 +1155,15 @@ holds the parameterized unit tests and the direct helper test;
 `host::module/path` operands for both roles, with a non-vacuity property
 asserting each generated example first passes `safe_path(allow_relative=True)`;
 and the `Rsync builder rejects remote operands` scenario in
-`tests/features/builder_library.feature` asserts that no command is built. The
-acceptance fixtures use `/cygdrive/c/...`, a spelling that is neutral between
-POSIX and Windows, so the tests exercise the policy rather than a host-specific
-absolute-path rule.
+`tests/features/builder_library.feature` asserts that no command is built.
+
+The unit tests live in their own module, kept separate from
+`test_builder_library.py` so the per-module line budget is not spent on one
+feature. They select neutral counterparts that stay local on both hosts: a
+native absolute path from `tmp_path` on POSIX, and the MSYS mount spelling
+`/cygdrive/c/data` under `allow_relative=True`. A Windows drive prefix is
+remote-ending syntax for rsync even where `PurePath` calls it absolute, so it
+can never serve as the neutral operand.
 
 ### End-of-options separators for positional operands
 

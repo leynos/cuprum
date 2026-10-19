@@ -34,13 +34,15 @@ Two independent routes reach that state.
 After this change, `safe_path()` decides absoluteness with host-native rules
 only, and the rsync builder applies a private local-only operand check to both
 operands after `safe_path()` has validated and normalized them. Remote
-spellings are rejected with an actionable `ValueError` that names the role
-(source or destination), whether or not `allow_relative` is set. Ordinary local
-absolute and relative paths continue to work exactly as before.
+spellings are rejected whether or not `allow_relative` is set. The error names
+the role (source or destination) when the rsync check is the layer that
+rejects; under default options a relative remote spelling can instead fail the
+earlier generic check as `PathRejection.NOT_ABSOLUTE`. Ordinary local absolute
+and relative paths continue to work exactly as before.
 
-Observable success: the regression tests in
-`cuprum/unittests/test_builder_library.py` fail on the current tree and pass
-afterwards; `rsync_sync()` can never emit an operand that begins with
+Observable success: the regression tests, now in
+`cuprum/unittests/test_rsync_operand_policy.py`, failed on the pre-change tree
+and pass afterwards; `rsync_sync()` can never emit an operand that begins with
 `rsync://` or contains `:` before its first `/`.
 
 ## Constraints
@@ -116,8 +118,14 @@ afterwards; `rsync_sync()` can never emit an operand that begins with
       `/tmp/lint-issue-531.out`, `/tmp/typecheck-issue-531.out`,
       `/tmp/test-issue-531.out`, `/tmp/markdownlint-issue-531.out`,
       `/tmp/nixie-issue-531.out`, `/tmp/duplication-issue-531.out`.
-- [ ] (2026-10-19) Commit, push, and open a draft PR with `Closes #531`.
-- [ ] (2026-10-19) CodeRabbit review and concern disposition.
+- [x] (2026-10-19) Commit, push, and open a draft PR with `Closes #531`.
+      Evidence: commit `af8798eaa`, draft PR #649.
+- [ ] (2026-10-19) CodeRabbit review and concern disposition. First pass
+      produced three findings, all addressed: neutral test operands no longer
+      assume POSIX absoluteness; the role-message claim is qualified in the
+      guides; platform-specific cases are scoped by marker. The rsync operand
+      tests now live in `cuprum/unittests/test_rsync_operand_policy.py` so
+      `test_builder_library.py` stays under the line cap.
 
 ## Surprises & discoveries
 
@@ -140,11 +148,26 @@ afterwards; `rsync_sync()` can never emit an operand that begins with
   private helpers that return or raise. Evidence: `make lint` reported
   `docstring-missing-returns` and `docstring-missing-exception` for the new
   rsync helpers. Impact: both private helpers now carry structured sections.
+- Observation: a POSIX absolute path cannot be the neutral operand in a
+  cross-platform test. Evidence: `PureWindowsPath("/srv/local").is_absolute()`
+  is `False`, so on Windows the counterpart operand would be rejected as
+  `NOT_ABSOLUTE` and mask which operand the assertion targets. A Windows drive
+  path is worse: `PureWindowsPath("C:/path").is_absolute()` is `True`, yet `C:`
+  before any separator is exactly rsync's remote grammar. Impact: neutral
+  operands are now the MSYS mount spelling `/cygdrive/c/data` under
+  `allow_relative=True`, or a `tmp_path`-derived native path in POSIX-only
+  tests.
+- Observation: the rsync operand tests pushed
+  `cuprum/unittests/test_builder_library.py` to the 400-line ceiling. Evidence:
+  the module reached 407 lines mid-edit. Impact: the policy tests were moved to
+  a dedicated `test_rsync_operand_policy.py`, which also groups them with the
+  contract they pin.
 
 ## Decision log
 
 - D1. Files in scope: `cuprum/builders/args.py`, `cuprum/builders/rsync.py`,
   `cuprum/unittests/test_builder_library.py`,
+  `cuprum/unittests/test_rsync_operand_policy.py`,
   `cuprum/unittests/test_builder_property_based.py`,
   `tests/features/builder_library.feature`,
   `tests/behaviour/test_builder_library_behaviour.py`, `docs/users-guide.md`,
@@ -286,9 +309,11 @@ is static, and the security scan did not run a live exploit.
 `_rsync_argv()`, and `rsync_sync()`. `_rsync_argv()` is the pure argv builder;
 `rsync_sync()` wraps its result with `sh.make(RSYNC)`.
 
-Tests live in three layers: unit (`cuprum/unittests/test_builder_library.py`),
-property (`cuprum/unittests/test_builder_property_based.py`), and behaviour
-(`tests/features/builder_library.feature` plus
+Tests live in three layers: unit
+(`cuprum/unittests/test_rsync_operand_policy.py` for the rsync operand policy,
+`cuprum/unittests/test_builder_library.py` for the rest of the builder
+surface), property (`cuprum/unittests/test_builder_property_based.py`), and
+behaviour (`tests/features/builder_library.feature` plus
 `tests/behaviour/test_builder_library_behaviour.py`).
 
 ## Plan of work
@@ -337,7 +362,8 @@ make nixie 2>&1 | tee /tmp/nixie-issue-531.out
 Focused red/green runs:
 
 ```plaintext
-uv run pytest -q cuprum/unittests/test_builder_library.py \
+uv run pytest -q cuprum/unittests/test_rsync_operand_policy.py \
+  cuprum/unittests/test_builder_library.py \
   cuprum/unittests/test_builder_property_based.py \
   tests/behaviour/test_builder_library_behaviour.py
 ```

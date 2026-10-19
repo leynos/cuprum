@@ -24,7 +24,6 @@ from cuprum.builders import (
     tar_extract,
 )
 from cuprum.builders.args import PathRejection
-from cuprum.builders.rsync import _local_rsync_operand
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -190,107 +189,6 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         source.as_posix(),
         destination.as_posix(),
     ), "rsync_sync argv mismatch"
-
-
-# Each spelling is a remote operand for rsync even though safe_path accepts
-# it once relative paths are enabled. The drive-prefixed rows are tagged
-# separately because default-absolute validation may reject them first.
-_REMOTE_OPERANDS = (
-    "host:path",
-    "host:/path",
-    "host::module/path",
-    "host::module",
-    "user@host:path",
-    "rsync://host/module/dir",
-    "RSYNC://host/module/dir",
-    "[::1]:path",
-    "./host:path",
-)
-_DRIVE_OPERANDS = ("C:/path", "C:\\path")
-
-
-@pytest.mark.parametrize("role", ["source", "destination"])
-@pytest.mark.parametrize("operand", _REMOTE_OPERANDS)
-def test_rsync_rejects_remote_operands_when_relative(
-    operand: str,
-    role: str,
-) -> None:
-    """With relative paths enabled, remote syntax must be named as such."""
-    local = "/srv/local"
-    source, destination = (operand, local) if role == "source" else (local, operand)
-    options = RsyncOptions(allow_relative=True)
-    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
-        rsync_sync(source, destination, options=options)
-
-
-@pytest.mark.parametrize("role", ["source", "destination"])
-@pytest.mark.parametrize("operand", _REMOTE_OPERANDS + _DRIVE_OPERANDS)
-def test_rsync_rejects_remote_operands_by_default(
-    operand: str,
-    role: str,
-) -> None:
-    """Default options reject every remote spelling, whatever layer reports it."""
-    local = "/srv/local"
-    source, destination = (operand, local) if role == "source" else (local, operand)
-    with pytest.raises(
-        ValueError, match=rf"SafePath|rsync {role} must be a local path"
-    ):
-        rsync_sync(source, destination)
-
-
-@pytest.mark.parametrize("role", ["source", "destination"])
-@pytest.mark.parametrize("operand", _DRIVE_OPERANDS)
-def test_rsync_rejects_drive_prefixed_operands_when_relative(
-    operand: str,
-    role: str,
-) -> None:
-    """A drive prefix stays a remote operand even with relative paths allowed."""
-    local = "/srv/local"
-    source, destination = (operand, local) if role == "source" else (local, operand)
-    options = RsyncOptions(allow_relative=True)
-    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
-        rsync_sync(source, destination, options=options)
-
-
-@pytest.mark.parametrize(
-    ("operand", "allow_relative"),
-    [
-        ("/srv/data", False),
-        ("/srv/data", True),
-        ("dir/file", True),
-        ("dir/host:path", True),
-        ("/abs/host:path", False),
-    ],
-)
-def test_rsync_accepts_local_operands_unchanged(
-    operand: str,
-    *,
-    allow_relative: bool,
-) -> None:
-    """Accepted local operands reach the argv as safe_path normalizes them."""
-    expected = str(safe_path(operand, allow_relative=allow_relative))
-    cmd = rsync_sync(
-        operand,
-        operand,
-        options=RsyncOptions(allow_relative=allow_relative),
-    )
-    assert cmd.argv == (expected, expected), (
-        "accepted local operands must be emitted in normalized form"
-    )
-
-
-@pytest.mark.parametrize("operand", ["host:path", "host::module", "host::module/path"])
-def test_rsync_local_operand_rejects_remote_syntax_directly(operand: str) -> None:
-    """The private operand check rejects remote syntax independent of _rsync_argv."""
-    with pytest.raises(ValueError, match="rsync source must be a local path"):
-        _local_rsync_operand(operand, role="source", allow_relative=True)
-
-
-@_POSIX_ONLY
-def test_rsync_rejects_drive_prefixed_destination_by_default() -> None:
-    """A Windows drive destination is not a local absolute path on POSIX."""
-    with pytest.raises(ValueError, match="SafePath"):
-        rsync_sync("/src", "C:/path")
 
 
 def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:

@@ -105,6 +105,15 @@ def _emitted_operand(argv: tuple[str, ...], role: str) -> str:
     return argv[-1] if role == "destination" else argv[-2]
 
 
+# The opposite operand in each rejection property must be a valid local path
+# on every host. A Windows drive path is remote-ending syntax for rsync even
+# where ``PurePath`` calls it absolute, and a bare POSIX path is not absolute
+# on Windows, so both would be rejected in their own right and mask which
+# operand the test targets. The MSYS mount spelling keeps its colon after a
+# separator, so rsync reads it as local on either host.
+_LOCAL_OPERAND = "/cygdrive/c/data"
+
+
 @settings(max_examples=200)
 @given(
     archive=_ABS_PATHS,
@@ -325,7 +334,7 @@ def test_rsync_rejects_remote_specification_in_either_operand(
     is_source: bool,
 ) -> None:
     """Generated host-colon-path operands are rejected as source and destination."""
-    local = "/srv/local"
+    local = _LOCAL_OPERAND
     source, destination = (operand, local) if is_source else (local, operand)
     role = "source" if is_source else "destination"
     with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
@@ -341,7 +350,7 @@ def test_rsync_accepted_operands_are_never_remote(candidate: str) -> None:
     valid absolute ones, so the implication is exercised on both sides rather
     than being satisfied vacuously.
     """
-    local = "/srv/local"
+    local = _LOCAL_OPERAND
     for role, arguments in (
         ("source", (candidate, local)),
         ("destination", (local, candidate)),
@@ -372,7 +381,7 @@ def test_remote_strategy_examples_reach_the_sink_check(example: str) -> None:
         "the generated operand must actually carry remote spelling"
     )
     with pytest.raises(ValueError, match="rsync source must be a local path"):
-        _rsync_argv(example, "/srv/local", RsyncOptions(allow_relative=True))
+        _rsync_argv(example, _LOCAL_OPERAND, RsyncOptions(allow_relative=True))
 
 
 _LEADING_DASH = st.sampled_from(("-", "--"))
