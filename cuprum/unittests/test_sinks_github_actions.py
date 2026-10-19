@@ -36,6 +36,7 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
     from cuprum.sh import SafeCmd
+    from cuprum.sinks._github_actions_options import _GitHubActionsSinkOptionsKwargs
 
 
 def _python_builder() -> cabc.Callable[..., SafeCmd]:
@@ -142,14 +143,20 @@ def _open_gha_session(
     force: bool = True,
     emit_group: bool = True,
     emit_annotation: bool = True,
+    argv_title: bool = False,
 ) -> tuple[GitHubActionsSession, io.StringIO]:
     """Open one forced-active adapter session and return it with its buffer."""
     buffer = io.StringIO()
+    options: _GitHubActionsSinkOptionsKwargs = {
+        "force": force,
+        "emit_group": emit_group,
+        "emit_annotation": emit_annotation,
+    }
+    if argv_title:
+        options["argv_title"] = True
     sink = GitHubActionsSink(
         typ.cast("typ.IO[str]", buffer),
-        force=force,
-        emit_group=emit_group,
-        emit_annotation=emit_annotation,
+        **options,
     )
     session = sink.open_session(SessionStart(label="project: program", argv=argv))
     assert session is not None, "a forced sink must return an active session"
@@ -221,9 +228,9 @@ def test_sink_activation_follows_environment_and_force(
         return
     assert session is not None, "an enabling configuration must return a session"
     written = buffer.getvalue()
-    assert written == f"::group::hi\n::stop-commands::{session.stop_token}\n", (
-        f"activation must write the titled group then its lease; got {written!r}"
-    )
+    assert written == (
+        f"::group::project: program\n::stop-commands::{session.stop_token}\n"
+    ), f"activation must write the bounded label then its lease; got {written!r}"
 
 
 def test_inactive_sink_leaves_runner_output_unframed(
@@ -269,13 +276,13 @@ def test_inactive_sink_leaves_runner_output_unframed(
 
 
 def test_session_frames_group_then_lease() -> None:
-    """Opening a session writes the titled group and then the lease."""
+    """Opening a session writes the bounded label and then the lease."""
     session, buffer = _open_gha_session(("echo", "hi"))
 
     written = buffer.getvalue()
-    assert written == f"::group::echo hi\n::stop-commands::{session.stop_token}\n", (
-        f"opening must write the argv-titled group then its lease; got {written!r}"
-    )
+    assert written == (
+        f"::group::project: program\n::stop-commands::{session.stop_token}\n"
+    ), f"opening must write the bounded label then its lease; got {written!r}"
 
 
 def test_session_frames_the_group_exactly_once() -> None:
@@ -390,36 +397,36 @@ def test_cancellation_and_error_close_annotate_categorically(
 
 
 def test_failure_annotation_omits_argv() -> None:
-    """A group titled with argv must not republish those arguments.
-
-    The annotation title is a workflow-command property, so reusing the argv
-    group title would copy arguments — including secrets — into the run's
-    summary.
-    """
+    """The default group and annotation titles both omit argv values."""
     secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
     session, buffer = _open_gha_session(("deploy", "--token", secret))
 
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
 
     value = buffer.getvalue()
-    assert f"::group::deploy --token {secret}\n" in value, (
-        f"the group title is argv-derived and keeps the arguments; got {value!r}"
+    group = value.splitlines()[0]
+    assert group == "::group::project: program", (
+        f"the group title must use the bounded run label; got {group!r}"
+    )
+    assert secret not in group, (
+        f"the default group title must not publish argv; got {group!r}"
     )
     assert value.endswith("::error title=project%3A program::exit_nonzero\n"), (
         f"the annotation must carry the bounded label; got {value!r}"
     )
     annotation = value.split("::error ", 1)[1]
     assert secret not in annotation, (
-        f"the annotation must not republish argv; got {annotation!r}"
+        f"the annotation must not publish argv; got {annotation!r}"
     )
 
 
 def test_title_override_labels_group_and_annotation() -> None:
-    """An explicit title replaces the argv group title and the annotation title."""
+    """An explicit title wins over argv and labels the annotation."""
     buffer = io.StringIO()
     sink = GitHubActionsSink(
         typ.cast("typ.IO[str]", buffer),
         title="Deploy",
+        argv_title=True,
         force=True,
     )
     session = sink.open_session(
@@ -453,24 +460,92 @@ def test_close_is_idempotent() -> None:
     )
 
 
-def test_group_title_uses_program_args() -> None:
-    """The group title is the joined program args, escaped as command data."""
-    _session, buffer = _open_gha_session(("brew", "install", "wget"))
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(
+            ("brew", "install", "cuprum-sentinel-token-0000"),
+            id="argument-value",
+        ),
+        pytest.param(
+            ("deploy", "--token", "cuprum-sentinel-token-0000"),
+            id="token-shaped-argument",
+        ),
+    ],
+)
+def test_group_title_defaults_to_bounded_run_label(
+    argv: tuple[str, ...],
+) -> None:
+    """Default group titles omit ordinary and token-shaped argv values."""
+    _session, buffer = _open_gha_session(argv)
 
-    written = buffer.getvalue()
-    assert "::group::brew install wget\n" in written, (
-        f"the group title must join the program args; got {written!r}"
+    group = buffer.getvalue().splitlines()[0]
+    assert group == "::group::project: program", (
+        f"the group line must contain only the bounded run label; got {group!r}"
+    )
+    assert "cuprum-sentinel-token-0000" not in group, (
+        f"argv values must not reach the group line; got {group!r}"
+    )
+
+
+def test_empty_title_keeps_group_empty_and_annotation_bounded() -> None:
+    """An empty title stays on the group and falls back for annotation."""
+    buffer = io.StringIO()
+    sink = GitHubActionsSink(
+        typ.cast("typ.IO[str]", buffer),
+        force=True,
+        title="",
+        argv_title=True,
+    )
+    session = sink.open_session(
+        SessionStart(label="project: program", argv=("deploy", "--token", "secret"))
+    )
+    assert session is not None, "a forced sink must return an active session"
+
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
+
+    lines = buffer.getvalue().splitlines()
+    assert lines[0] == "::group::", (
+        f"the explicit group title must stay empty: {lines!r}"
+    )
+    assert lines[-1] == "::error title=project%3A program::exit_nonzero", (
+        f"the empty title must fall back to the bounded annotation label: {lines!r}"
+    )
+
+
+def test_argv_title_opt_in_joins_arguments_and_keeps_annotation_bounded() -> None:
+    """Explicit argv titles join argv while annotations keep the run label."""
+    token = "cuprum-sentinel-token-0000"  # ruff: ignore[hardcoded-password-string] - synthetic regression value, never a real credential.
+    session, buffer = _open_gha_session(
+        ("deploy", "--token", token),
+        argv_title=True,
+    )
+
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
+
+    value = buffer.getvalue()
+    assert value.startswith(f"::group::deploy --token {token}\n"), (
+        f"argv_title=True must use a plain space join; got {value!r}"
+    )
+    assert value.endswith("::error title=project%3A program::exit_nonzero\n"), (
+        f"the annotation must retain the bounded label; got {value!r}"
     )
 
 
 def test_group_title_escapes_delimiters_as_data() -> None:
-    """Delimiters stay literal in a group title: the title is a data segment.
+    """Delimiters in an explicit title stay literal group data.
 
     Property escaping would rewrite ``:`` and ``,`` to ``%3A`` and ``%2C``,
-    which the runner does not decode in the data position, so a default
-    ``"<project>: <program>"`` label would surface mangled.
+    which the runner does not decode in the data position.
     """
-    _session, buffer = _open_gha_session(("echo: a,b",))
+    buffer = io.StringIO()
+    sink = GitHubActionsSink(
+        typ.cast("typ.IO[str]", buffer),
+        force=True,
+        title="echo: a,b",
+    )
+    session = sink.open_session(SessionStart(label="project: program", argv=()))
+    assert session is not None, "a forced sink must return an active session"
 
     written = buffer.getvalue()
     assert "::group::echo: a,b\n" in written, (
@@ -542,7 +617,7 @@ def test_emit_annotation_false_suppresses_every_error(
         f"emit_annotation=False must suppress {outcome} annotations; got {value!r}"
     )
     assert value == (
-        f"::group::deploy\n::stop-commands::{session.stop_token}\n"
+        f"::group::project: program\n::stop-commands::{session.stop_token}\n"
         f"::{session.stop_token}::\n::endgroup::\n"
     ), f"the group must open and close around a suppressed annotation; got {value!r}"
 
@@ -599,11 +674,17 @@ def _sink_with_invalid_annotation(value: object) -> GitHubActionsSink:
     return GitHubActionsSink(emit_annotation=typ.cast("bool", value))
 
 
+def _sink_with_invalid_argv_title(value: object) -> GitHubActionsSink:
+    """Construct a sink with an invalid argv title toggle for validation."""
+    return GitHubActionsSink(argv_title=typ.cast("bool", value))
+
+
 @pytest.mark.parametrize(
     ("toggle", "construct"),
     [
         pytest.param("emit_group", _sink_with_invalid_group, id="group"),
         pytest.param("emit_annotation", _sink_with_invalid_annotation, id="annotation"),
+        pytest.param("argv_title", _sink_with_invalid_argv_title, id="argv-title"),
     ],
 )
 @pytest.mark.parametrize("invalid", [1, 0, "yes", None, 1.0])

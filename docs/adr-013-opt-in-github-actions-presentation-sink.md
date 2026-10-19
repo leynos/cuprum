@@ -33,11 +33,11 @@ asynchronous, so the framing close must survive cancellation and be idempotent.
 ## Decision drivers
 
 - Keep the feature opt-in per invocation, with no behaviour change by default.
-- Title each group with the command's program arguments, as CI callers read
-  collapsed groups by their command line.
+- Give each group a bounded run label by default, with an explicit opt-in for
+  command-line titles when CI callers need them.
 - Prevent child output from injecting workflow commands into the log.
-- Emit exactly one error annotation per failed run, carrying only bounded,
-  categorical detail rather than exception text or argument values.
+- Emit exactly one error annotation per failed run. Keep its message bounded
+  and categorical rather than including exception text or argument values.
 - Preserve capture and the returned result on every path, including timeout and
   cancellation teardown.
 - Keep protocol knowledge (workflow-command syntax) inside the adapter, so the
@@ -87,9 +87,11 @@ implements the adapter; `RunOutputOptions.sink` carries the opt-in on both
 
 Framing order per run:
 
-1. `::group::<title>` opens the group before the subprocess starts, titled
-   with the program arguments for single commands (the adapter's `title`
-   override wins; pipelines default to `pipeline`).
+1. `::group::<title>` opens the group before the subprocess starts. A
+   single-command group defaults to the bounded run label
+   (`"<project>: <program>"`); an explicit `title` wins, while
+   `argv_title=True` opts into a plain space-joined argv title. Pipelines
+   default to `pipeline`.
 2. A fresh stop-commands bracket — `::stop-commands::<token>` with a
    cryptographically random per-session token — opens immediately after the
    group command, so the runner processes the group command itself and then
@@ -99,9 +101,10 @@ Framing order per run:
 4. At teardown the session releases the lease before writing `::endgroup::`,
    so the runner processes the endgroup command itself.
 5. A failed outcome emits exactly one `::error::` annotation after the lease
-   release. The title is the bounded run label; the message is the categorical
-   detail (`timeout`) or the outcome value. Exception text and argv never reach
-   it.
+   release. Its title is `title or` the bounded run label; its message contains
+   bounded categorical detail (`timeout`) or the outcome value. The message
+   never includes exception text or argv, and argv titles require explicit
+   opt-in.
 
 The execution layer opens the session before the subprocess starts and
 finalizes the run's `_SinkBracket` on every terminal path — success, non-zero
@@ -269,3 +272,22 @@ explicit even if it came from another object's flag-generated adapter; its
 concrete type does not determine precedence. The default adapter does not
 serialize concurrent sessions, so grouped commands that write to the same
 parent stderr must run sequentially to keep their workflow frames intact.
+
+### Amendment (2026-10-19): bounded group titles by default
+
+Security finding `csf_0258c8ba4380b545fdf90ac9`, tracked in
+[issue #535](https://github.com/leynos/cuprum/issues/535), showed that
+argv-derived group titles could put secret-bearing arguments in a job log
+before the child started. The group header is written while opening the
+session, regardless of echo or capture settings. Keep `SessionStart` and the
+lifecycle bracket unchanged; the adapter now uses the bounded run label unless
+the caller sets `argv_title=True` or supplies `title`. A supplied title takes
+precedence over the argv opt-in. The annotation title remains
+`title or start.label`, and a pipeline's default label remains `pipeline`.
+
+`argv_title=True` deliberately publishes the complete program and argument
+vector joined with plain spaces, without shell quoting. Caller-supplied titles,
+project names and program names also enter workflow logs. Workflow-command
+escaping protects the command syntax; it does not redact values. Callers that
+put sensitive values in any of these fields must configure a redaction policy
+or choose safe labels.

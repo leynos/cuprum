@@ -28,12 +28,19 @@ _LEASE_PREFIX = "::stop-commands::"
 
 
 def _forced_sink(
-    *, redaction: RedactionPolicy | None = None
+    *,
+    argv_title: bool = False,
+    redaction: RedactionPolicy | None = None,
+    title: str | None = None,
 ) -> tuple[GitHubActionsSink, io.StringIO]:
     """Build a GitHub Actions sink over a buffer, activated regardless of CI."""
     buffer = io.StringIO()
     sink = GitHubActionsSink(
-        typ.cast("typ.IO[str]", buffer), force=True, redaction=redaction
+        typ.cast("typ.IO[str]", buffer),
+        argv_title=argv_title,
+        force=True,
+        redaction=redaction,
+        title=title,
     )
     return sink, buffer
 
@@ -58,22 +65,21 @@ def _assert_framed(
     value : str
         The sink buffer's contents after the run.
     command : sh.SafeCmd
-        The command the run executed; its argv titles the group.
+        The command the run executed; its bounded run label titles the group
+        unless an expected title is supplied.
     child_output : str
         The one line echoed between the start and end framing.
     expected_group_title : str | None
-        The expected title when a presentation policy transforms argv.
+        The expected title when a caller explicitly selects one.
     """
     group, lease, child, release, endgroup = value.splitlines()
     token = lease.removeprefix(_LEASE_PREFIX)
     group_title = (
-        " ".join(command.argv_with_program)
-        if expected_group_title is None
-        else expected_group_title
+        _run_label(command) if expected_group_title is None else expected_group_title
     )
     expected_group = f"::group::{group_title}"
     assert group == expected_group, (
-        f"the group must be titled with the command's argv; "
+        f"the group must use its configured title; "
         f"got {group!r}, expected {expected_group!r}"
     )
     assert lease == f"{_LEASE_PREFIX}{token}", (
@@ -105,13 +111,16 @@ def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
     _assert_framed(buffer.getvalue(), command)
 
 
-def test_forced_sink_redacts_argv_title_without_changing_run() -> None:
-    """The presentation title is sanitized while command execution stays raw."""
+def test_forced_sink_redacts_opt_in_argv_title_without_changing_run() -> None:
+    """Explicit argv titles are sanitized while command execution stays raw."""
     sentinel = "gha-e2e-secret-442"
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     command = python("-c", "import sys; print(sys.argv[-1])", sentinel)
-    sink, buffer = _forced_sink(redaction=RedactionPolicy(literals=(sentinel,)))
+    sink, buffer = _forced_sink(
+        argv_title=True,
+        redaction=RedactionPolicy(literals=(sentinel,)),
+    )
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
@@ -237,9 +246,12 @@ def test_failing_run_annotates_without_argv() -> None:
 
     value = buffer.getvalue()
     assert result.exit_code == 3, f"the failing run must report 3; got {result!r}"
-    # The group is titled with argv, so the annotation has to be the one place
-    # the arguments do not appear.
-    assert secret in value, f"argv still titles the group; got {value!r}"
+    assert value.splitlines()[0] == f"::group::{_run_label(command)}", (
+        f"the default group title must use the bounded label; got {value!r}"
+    )
+    assert secret not in value.splitlines()[0], (
+        f"the group line must omit argv; got {value.splitlines()[0]!r}"
+    )
     annotation = value.split("::error ", 1)[1]
     assert value.count("::error ") == 1, (
         f"a failure must annotate exactly once; got {value!r}"
@@ -247,6 +259,7 @@ def test_failing_run_annotates_without_argv() -> None:
     assert secret not in annotation, (
         f"the annotation must not republish argv; got {annotation!r}"
     )
+    assert secret not in value, f"default workflow output must omit argv; got {value!r}"
     assert annotation == (
         f"title={_escape_property(_run_label(command))}::exit_nonzero\n"
     ), "the annotation names the program and no arguments"
@@ -295,6 +308,8 @@ def _flags_output(
     *,
     group: bool = False,
     annotate_failure: bool = False,
+    capture: bool = True,
+    echo: bool = True,
 ) -> RunOutputOptions:
     """Build options carrying only the convenience flags under test.
 
@@ -304,10 +319,11 @@ def _flags_output(
     Returns
     -------
     RunOutputOptions
-        Echoing options carrying *flags* and no sink.
+        Options carrying *flags* and no sink.
     """
     return RunOutputOptions(
-        echo=True,
+        capture=capture,
+        echo=echo,
         group=group,
         annotate_failure=annotate_failure,
     )
@@ -344,6 +360,98 @@ def test_flags_frame_successful_run(
     assert result.ok is True, f"the framed run must still succeed; got {result!r}"
     assert result.stdout == "inside the group\n", "capture must be unchanged"
     _assert_framed(capsys.readouterr().err, command)
+
+
+@pytest.mark.parametrize("capture", [True, False], ids=["capture-on", "capture-off"])
+def test_group_flag_omits_token_argument_without_echo(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    capture: bool,
+) -> None:
+    """The convenience flag never logs argv, even without echo or capture."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    token = "cuprum-sentinel-token-0000"  # ruff: ignore[hardcoded-password-string] - synthetic regression value, never a real credential.
+    command, allowlist = _python_command("print('hidden by echo=False')", token)
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(
+            output=_flags_output(group=True, capture=capture, echo=False),
+        )
+
+    rendered = capsys.readouterr().err
+    group = rendered.splitlines()[0]
+    assert result.ok is True, f"the grouped command must succeed; got {result!r}"
+    assert group == f"::group::{_run_label(command)}", (
+        f"group=True must use the bounded label; got {group!r}"
+    )
+    assert token not in group, f"the token must not enter the group line; got {group!r}"
+    assert token not in rendered, (
+        f"the token must not enter workflow output; got {rendered!r}"
+    )
+    assert "hidden by echo=False" not in rendered, (
+        f"echo=False must keep child output out of the workflow log; got {rendered!r}"
+    )
+
+
+def test_group_and_annotation_flags_omit_argv_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Default group and error lines both omit a synthetic argv secret."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    token = "cuprum-sentinel-token-0000"  # ruff: ignore[hardcoded-password-string] - synthetic regression value, never a real credential.
+    command, allowlist = _python_command("raise SystemExit(2)", token)
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(
+            output=_flags_output(group=True, annotate_failure=True, echo=False),
+        )
+
+    rendered = capsys.readouterr().err
+    group = next(line for line in rendered.splitlines() if line.startswith("::group::"))
+    annotation = next(
+        line for line in rendered.splitlines() if line.startswith("::error ")
+    )
+    assert result.exit_code == 2, (
+        f"the child must fail with exit code 2; got {result!r}"
+    )
+    assert group == f"::group::{_run_label(command)}", (
+        f"the group line must use the bounded label; got {group!r}"
+    )
+    assert token not in group, f"argv must not reach the group line; got {group!r}"
+    assert token not in annotation, (
+        f"argv must not reach the annotation; got {annotation!r}"
+    )
+
+
+def test_explicit_safe_title_appears_in_real_group_header() -> None:
+    """A caller-provided safe title still labels an actual command run."""
+    command, allowlist = _python_command("print('inside the group')")
+    sink, buffer = _forced_sink(title="Safe operation")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(output=RunOutputOptions(echo=False, sink=sink))
+
+    assert result.ok is True, f"the titled command must succeed; got {result!r}"
+    assert buffer.getvalue().startswith("::group::Safe operation\n"), (
+        "the explicit safe title must appear in the group line; "
+        f"got {buffer.getvalue()!r}"
+    )
+
+
+def test_argv_title_opt_in_appears_in_real_group_header() -> None:
+    """A caller can deliberately put the plain-joined argv in the job log."""
+    command, allowlist = _python_command("print('inside the group')", "--mode", "safe")
+    sink, buffer = _forced_sink(argv_title=True)
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(output=RunOutputOptions(echo=False, sink=sink))
+
+    expected_title = " ".join(command.argv_with_program)
+    assert result.ok is True, f"the argv-titled command must succeed; got {result!r}"
+    assert buffer.getvalue().startswith(f"::group::{expected_title}\n"), (
+        f"argv_title=True must publish the plain-joined argv; got {buffer.getvalue()!r}"
+    )
 
 
 def test_flags_annotate_async_run(
@@ -599,11 +707,10 @@ def test_flags_annotation_omits_argv(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The annotation title is the bounded label, however the command is called.
+    """The annotation title is bounded and the group omits argv by default.
 
     ``group=True`` and ``annotate_failure=True`` together are the combination a
-    CI caller actually wants, and the one where a leaked argument would be
-    published beside the very group it was admitted to.
+    CI caller actually wants; both workflow-command lines must omit argv.
     """
     monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
     secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
@@ -618,9 +725,11 @@ def test_flags_annotation_omits_argv(
     assert result.exit_code == 2, f"the failing run must report 2; got {result!r}"
     assert value.count("::group::") == 1, "the group must open exactly once"
     assert value.count("::endgroup::") == 1, "the group must close exactly once"
+    group = next(line for line in value.splitlines() if line.startswith("::group::"))
     annotation = value.split("::error ", 1)[1]
+    assert secret not in group, f"the group must not publish argv; got {group!r}"
     assert secret not in annotation, (
-        f"the annotation must not republish argv; got {annotation!r}"
+        f"the annotation must not publish argv; got {annotation!r}"
     )
     assert annotation == (
         f"title={_escape_property(_run_label(command))}::exit_nonzero\n"

@@ -10,16 +10,16 @@ and annotations.
 
 Framing order per run:
 
-1. ``::group::<title>`` opens the group (title is the program args).
+1. ``::group::<title>`` opens the group (the bounded run label by default).
 2. The stop-commands lease opens immediately after the group command, so the
    runner processes the group command itself and then stops interpreting
    child output as workflow commands for the rest of the run.
 3. The run's mirrored output and any diagnostics flow into the group.
 4. At teardown the session releases the lease *before* writing
    ``::endgroup::``, so the runner processes the group command itself.
-5. A failed outcome emits exactly one ``::error::`` annotation with the run's
-   bounded label as the title and a categorical detail as the message, after
-   the lease has been released so the runner interprets it.
+5. A failed outcome emits exactly one ``::error::`` annotation with the
+   explicit ``title`` or bounded run label and a categorical detail as the
+   message, after the lease has been released so the runner interprets it.
 
 Steps 1, 2, and 4 are the *group* half of that sequence and step 5 is the
 *annotation* half; ``emit_group`` and ``emit_annotation`` switch each half off
@@ -283,6 +283,9 @@ class GitHubActionsSink:
 
     ``emit_group`` and ``emit_annotation`` independently control whether the
     session writes the collapsible group frame and failure annotation.
+    Single-command groups default to the bounded run label; pipelines use
+    ``pipeline``. ``title`` overrides that label, while ``argv_title=True``
+    explicitly opts into a plain space-joined command line.
 
     Parameters
     ----------
@@ -291,9 +294,12 @@ class GitHubActionsSink:
         output. Defaults to the parent's stderr, matching where GitHub
         Actions reads workflow commands from.
     title:
-        Optional explicit label for both the group and failure annotation.
-        By default, argv titles the group and the bounded run label titles
-        the annotation.
+        Optional explicit label for group and failure annotation. The
+        single-command default is the bounded label
+        (``"<project>: <program>"``). ``title`` wins over ``argv_title``. The
+        annotation uses ``title or start.label``, so an empty title leaves the
+        group empty and uses the bounded label for the annotation. Configured
+        redaction precedes escaping; escaping does not redact.
     force:
         Activate the sink even when the parent process does not run on
         GitHub Actions. Intended for local reproduction of CI framing and
@@ -308,6 +314,13 @@ class GitHubActionsSink:
         Whether a failed outcome emits its ``::error::`` annotation. ``False``
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
+    argv_title:
+        Whether to use the full program and arguments as the group title when
+        ``title`` is not supplied. The values are joined with plain spaces and
+        no shell quoting, and the title is written before the child starts,
+        regardless of echo or capture settings. Arguments can contain
+        secrets; leave this disabled unless their disclosure in the job log is
+        intentional.
     redaction:
         Optional policy for every emitted group and annotation title, including
         the bounded fallback label, applied before workflow-command escaping.
@@ -316,9 +329,9 @@ class GitHubActionsSink:
     Raises
     ------
     TypeError
-        If ``emit_group`` or ``emit_annotation`` is not a ``bool``. They gate
-        workflow commands, so a merely truthy value would frame a run on the
-        strength of something the caller never documented as a flag.
+        If ``emit_group``, ``emit_annotation`` or ``argv_title`` is not a
+        ``bool``. These flags control workflow output, so a merely truthy value
+        would change what the job log receives.
     """
 
     def __init__(
@@ -326,13 +339,14 @@ class GitHubActionsSink:
         destination: typ.IO[str] | None = None,
         **options: typ.Unpack[_GitHubActionsSinkOptionsKwargs],
     ) -> None:
-        """Store immutable configuration; no output happens until a run."""
+        """Store validated settings without writing workflow output."""
         settings = _normalize_github_actions_sink_options(options)
         self.destination = destination
         self.title = settings.title
         self.force = settings.force
         self.emit_group = settings.emit_group
         self.emit_annotation = settings.emit_annotation
+        self.argv_title = settings.argv_title
         self.redaction = settings.redaction
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
@@ -341,11 +355,10 @@ class GitHubActionsSink:
         Parameters
         ----------
         start : SessionStart
-            Bounded run metadata; ``start.argv`` titles the group so the
-            collapsed log entry reads ``<program args>``, while
-            ``start.label`` titles a failure annotation — an annotation is a
-            workflow-command property, so it never publishes argument
-            values.
+            Bounded run metadata. ``start.label`` titles the group by default
+            and titles failure annotations. ``start.argv`` is used for the
+            group only when ``argv_title=True`` and no explicit ``title`` was
+            supplied.
 
         Returns
         -------
@@ -358,14 +371,12 @@ class GitHubActionsSink:
         if not self._is_active():
             return None
         titles = _redacted_session_titles(
-            _session_titles(start, self.title),
+            _session_titles(start, self.title, argv_title=self.argv_title),
             self.redaction,
             emit_group=self.emit_group,
             emit_annotation=self.emit_annotation,
         )
-        # The annotation keeps the bounded label even when the group is titled
-        # with argv: an annotation is a workflow command property, so publishing
-        # arguments there would leak them into the run summary.
+        # An argv-derived group title must never broaden the annotation label.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
             log,

@@ -16,6 +16,7 @@ class _GitHubActionsSinkOptionsKwargs(typ.TypedDict, total=False):
     force: bool
     emit_group: bool
     emit_annotation: bool
+    argv_title: bool
     redaction: RedactionPolicy | None
 
 
@@ -27,6 +28,7 @@ class _GitHubActionsSinkOptions:
     force: bool = False
     emit_group: bool = True
     emit_annotation: bool = True
+    argv_title: bool = False
     redaction: RedactionPolicy | None = None
 
 
@@ -37,6 +39,7 @@ def _normalize_github_actions_sink_options(
     settings = _GitHubActionsSinkOptions(**options)
     _reject_non_bool("emit_group", settings.emit_group)
     _reject_non_bool("emit_annotation", settings.emit_annotation)
+    _reject_non_bool("argv_title", settings.argv_title)
     return settings
 
 

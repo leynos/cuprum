@@ -22,14 +22,19 @@ class _SessionTitles:
     annotation: str
 
 
-def _session_titles(start: SessionStart, title: str | None) -> _SessionTitles:
+def _session_titles(
+    start: SessionStart,
+    title: str | None,
+    *,
+    argv_title: bool,
+) -> _SessionTitles:
     """Resolve the configured group title and bounded annotation label."""
     if title is not None:
         return _SessionTitles(
             group=title,
-            annotation=title,
+            annotation=title or start.label,
         )
-    if start.argv:
+    if argv_title and start.argv:
         return _SessionTitles(
             group=" ".join(start.argv),
             annotation=start.label,

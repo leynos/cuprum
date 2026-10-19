@@ -91,10 +91,10 @@ notes, and top-level string-valued tag values. Plain-text logging applies the
 policy only to its argv projection. The GitHub Actions sink accepts the same
 keyword and applies the policy before workflow-command escaping to every
 emitted group and annotation title, including explicit titles, argv-derived
-group titles, and the bounded fallback annotation label. Mirrored child output
-remains unchanged. The convenience group and annotation flags do not accept a
-policy, so callers needing title redaction configure the sink directly. Passing
-`None` or an inert policy preserves existing output.
+group titles when `argv_title=True`, and the bounded fallback annotation label.
+Mirrored child output remains unchanged. The convenience group and annotation
+flags do not accept a policy, so callers needing title redaction configure the
+sink directly. Passing `None` or an inert policy preserves existing output.
 
 Tracing keeps its historical tag-derived project label unless the configured
 policy changes the `project` tag. When that tag is redacted and the event has a
