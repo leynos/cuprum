@@ -448,9 +448,11 @@ is available after iteration finishes.
 [Stream lines as they arrive](#stream-lines-as-they-arrive) shows it in use.
 Breaking out of the loop does not stop the child: close the stream with
 `async with cmd.lines() as stream:` or `await stream.aclose()` to guarantee
-teardown. Pipelines have no `lines()` method; `on_line` on a pipeline run
-observes final-stage stdout and every stage's stderr. Interior stdout feeds the
-next stage instead.
+teardown. The stream is prepared eagerly and run lazily, so leaving the
+creating task does not by itself authorize the run: the allowlist and timeout
+in force when the first event is pulled govern it. Pipelines have no `lines()`
+method; `on_line` on a pipeline run observes final-stage stdout and every
+stage's stderr. Interior stdout feeds the next stage instead.
 
 Line observation decodes for display, so an undecodable byte in text mode
 raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
@@ -1502,6 +1504,16 @@ assert asyncio.run(first_line()) == "0"
 After a loop that runs to completion, `stream.result` holds the same
 `CommandResult` that `run()` would have returned.
 
+`lines()` is lazy: it validates the program and resolves the deadline when the
+stream is built, but it does not plan or spawn the child until the first event
+is requested. Because those two moments can sit in different scopes, the
+allowlist and the timeout are checked again in the task that pulls the first
+event. A program forbidden by the scope that iterates the stream raises
+`ForbiddenProgramError` then — with no plan or start event, no before hook, and
+no child — and `stream.result` stays `None`. Preparing a stream is not, by
+itself, permission to run the program, and the timeout it was prepared with
+does not outlive the scope that supplied it.
+
 An unterminated line reaches `lines()` in bounded fragments too, exactly as it
 reaches `on_line`: each event carries at most `max_line_chars` decoded
 characters, the bound applies to both streams, and terminator characters are
@@ -2174,7 +2186,9 @@ reported as `UNDELIVERED`.
 
 The same guarantees apply to `SafeCmd.lines()`: delivery setup is deferred
 until iteration begins, and its worker closes before the final result is
-published or during stream cleanup.
+published or during stream cleanup. A stream refused by the consuming scope
+closes the worker it prepared before the denial propagates, so a denial cannot
+leave the delivery thread parked.
 
 At shutdown, Cuprum lets the worker drain for 0.25 seconds by default. Set
 `drain_grace_s` to a finite, non-negative number to choose another bound. If a
@@ -2235,9 +2249,16 @@ child itself had overrun.
 
 Cuprum uses the first of these that is set:
 
-1. An explicit `timeout` argument on `run()` / `run_sync()`.
+1. An explicit `timeout` argument on `run()` / `run_sync()` / `lines()`.
 2. `ExecutionContext.timeout`.
 3. A `ScopeConfig(timeout=...)` default from the enclosing `scoped()` block.
+
+For `lines()` the third term is the scope in force when the _first event is
+pulled_, not the scope the stream was built in. An explicit timeout — including
+`0`, which expires immediately — still wins, then `ExecutionContext.timeout`;
+leaving the argument as `None` falls through to the consuming scope rather than
+disabling timeouts. A stream prepared under a generous or absent deadline
+therefore cannot outlive a narrower scope that it is iterated in.
 
 `ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
 timeouts when constructed. Values must be finite and non-negative; `None` means
