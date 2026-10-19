@@ -2145,10 +2145,10 @@ in part.
 - **The `utf-16`/`utf-32` rationale was wrong, and the finding was right about
   that.** The docstrings said the family decoders "accept no bytes at all
   without" a mark and that "the platform's decoder rejects a headless stream".
-  A probe on this little-endian host shows `b"a\x00".decode("utf-16")` →
-  `"a"`, so a *one-shot* family decode certainly accepts a headless stream.
-  Probing further found the narrower truth: the *incremental* decoder that
-  `_pending_bytes` consults raises
+  A probe on this little-endian host returns `"a"` for
+  `b"a\x00".decode("utf-16")`, so a *one-shot* family decode certainly accepts
+  a headless stream. Probing further found the narrower truth: the
+  *incremental* decoder that `_pending_bytes` consults raises
   `UnicodeDecodeError: ... Stream does not start with BOM` for a first chunk
   with no mark, under both `strict` and `replace`. The corrected text names
   which decoder each claim is about instead of choosing a side, and keeps the
@@ -2156,8 +2156,8 @@ in part.
   would be decoded in native order and produce wrong text.
 - **The ADR-007 addendum had no empty line artefact to remove.** The finding
   asked for one as well as for the ownership rewrite. `git diff --check` exits
-  0 and lines 1258–1300 contain no consecutive blank lines, so only the
-  rewrite was actionable.
+  0 and lines 1258–1300 contain no consecutive blank lines, so only the rewrite
+  was actionable.
 - **The 400-line limit does not bind test modules.** The finding treated the
   533-line `test_capture_spill.py` as a violation. It is not one: test targets
   run pylint with `--disable=too-many-lines`, and `origin/main` carries test
