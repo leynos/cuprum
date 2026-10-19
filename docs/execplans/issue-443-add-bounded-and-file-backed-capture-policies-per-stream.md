@@ -654,6 +654,27 @@ Thresholds that trigger escalation when breached.
   contributes no record. All three were checked against the feature file, the
   timeout test, and `_build_stage_result` before editing. Date/Author:
   2026-10-18, implementation agent.
+- [x] (2026-10-19) Rebase the branch onto `origin/main` at `a40898789` so the
+  pull request's merge ref stops conflicting and CI can start. The replay
+  boundary is the merge base `d93df9563`, and `d93df9563..b25ea26ea` contains
+  91 commits; a merge-tree probe predicted one conflict and the replay hit
+  eight, because a probe of the final trees cannot see the intermediate states
+  each commit passes through. Every conflict was in documentation the upstream
+  redirect work had rewritten: `docs/users-guide.md` four times,
+  `docs/v0-2-0-migration-guide.md` twice, and both sides' claims had to be read
+  against the code rather than chosen by label. The resolved head is
+  `41e13f7be`, plus one follow-up commit for two prose corrections the replay
+  exposed. `git range-diff` reports eight commits whose patch text changed and
+  83 that are patch-identical. Four are the maturin wheel snapshot picking up
+  `cuprum/redaction.py` from the new base, and one is a table ordinal that
+  follows the new base's own numbering. The other three are the two
+  documentation commits above and the lint commit that shares their rewrapped
+  prose. Two things the replay taught: the branch's table ordinals (`_Table 4`
+  for observation channels) only agreed with the old base, and the upstream
+  commit that rewrote the redirect section landed on a different part of the
+  file than the branch's capture section, so the two had to be woven by hand
+  rather than by taking either side. Date/Author: 2026-10-19, implementation
+  agent.
 
 ## Surprises & discoveries
 
