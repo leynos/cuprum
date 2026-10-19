@@ -215,12 +215,23 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         governed by *output* independently: iterating lines does not disable
         either unless the caller asks.
 
+        The allowlist and the effective timeout are checked twice: once here,
+        when the lazy stream is prepared, and again when iteration starts, in
+        the context that pulls the first event. The second check is what makes
+        the deferred spawn obey a scope entered after the stream was built —
+        constructing a stream is not, by itself, permission to run the program.
+        A denial raises :class:`ForbiddenProgramError` before the stream is
+        handed back or, at the latest, without planning or spawning anything.
+
         Parameters
         ----------
         output:
             Optional ``RunOutputOptions`` controlling stdout/stderr handling.
         timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
+            Optional wall-clock timeout in seconds. The effective deadline is
+            resolved again when iteration starts: an explicit value here wins,
+            then ``context.timeout``, then the consuming scope's timeout.
+            ``None`` inherits those fallbacks rather than disabling timeouts.
             Expiry terminates the subprocess exactly as ``run()`` does.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
@@ -236,20 +247,28 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         Raises
         ------
         ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
+            If the program is not permitted by the active context allowlist,
+            either when the stream is created or when the first event is
+            requested.
         TimeoutExpired
-            If *timeout* elapses before the command completes.
+            If the effective timeout elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
         StdinSourceError
             If a ``StdinStream`` producer or its encoder fails.
         ValueError
-            If *output* redirects stdout: line iteration reads stdout through
-            a parent-side pipe, so a redirected stdout has nothing to iterate.
-            Use :meth:`run` when stdout goes to a file or descriptor.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+            If *output* redirects stdout or names a bounded capture whose
+            encoding a truncated tail could not survive: line iteration reads
+            stdout through a parent-side pipe, so a redirected stdout has
+            nothing to iterate. Use :meth:`run` when stdout goes to a file or
+            descriptor.
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, stdin encode, and the option checks
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
+        # Provisional checks. They fail fast at construction, but the run is not
+        # planned or spawned until the first ``__anext__``, and by then the
+        # active scope may differ — so ``_iter_line_events`` repeats the
+        # allowlist check in the consuming context before it does anything else.
         _reject_line_iteration_conflicts(self, out, ctx)
         stdin_source = _resolve_line_stdin_source(stdin, ctx, out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
@@ -269,7 +288,17 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
             observation=observation,
             sink_bracket=tracking.sink_bracket,
         )
-        return LineStream(_iter_line_events(execution_factory, tracking))
+        # The raw timeout travels with the generator, not the value resolved
+        # above: re-resolving that value would keep a timeout from a scope the
+        # caller has since left. ``None`` must stay ``None`` so the consuming
+        # scope's default can apply.
+        return LineStream(
+            _iter_line_events(
+                execution_factory,
+                tracking,
+                requested_timeout=timeout,
+            )
+        )
 
     @typing.overload
     def run_sync(

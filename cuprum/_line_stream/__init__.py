@@ -4,6 +4,8 @@ This package owns the coordination behind ``SafeCmd.lines()``. The submodules
 split that work by responsibility:
 
 - ``coordinator`` waits for exit, tears down, and hands the result back.
+- ``authorization`` re-checks the allowlist and deadline in the consuming
+  context before a prepared stream may spawn.
 - ``line_queue`` holds the bounded queue plumbing and the spawned-run record.
 - ``spawn`` starts, builds, and on failure unwinds a run before it is handed
   back.
@@ -16,6 +18,7 @@ regardless of which submodule defines it.
 
 from __future__ import annotations
 
+from cuprum._line_stream.authorization import _refresh_line_stream_execution
 from cuprum._line_stream.coordinator import (
     _cleanup_failed_line_stream_run,
     _coordinate_line_stream,
@@ -59,6 +62,7 @@ __all__ = [
     "_line_event_queue",
     "_observed_line_hook",
     "_queue_line_sink",
+    "_refresh_line_stream_execution",
     "_run_line_stream_teardown",
     "_run_to_command_result",
     "_start_line_stream_run",

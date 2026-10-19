@@ -57,6 +57,12 @@ async def _start_line_stream_run(
 ) -> _LineStreamRun:
     """Spawn the subprocess and its queue-feeding consumers.
 
+    ``execution`` must already be authorized for the context in force, with
+    its timeout resolved: the caller refuses a forbidden command before it
+    builds a queue or a task, and :func:`_refresh_line_stream_execution`
+    replaces the timeout the stream was prepared with. This function re-checks
+    neither, so it cannot be reached with a stale record by accident.
+
     Mirrors the streamed-path setup in :func:`_run_subprocess_with_streams`:
     spawn, record the start reference, start the stdin writer, then start the
     consumers with capture and echo as configured.
@@ -132,13 +138,11 @@ async def _abandon_unstarted_run(
 
     Reached when post-spawn setup raised, so nothing holds the run: the caller
     never received it, and none of the exits that settle a handed-back run will
-    ever see it. The heartbeat stops first — the pipeline's spawn helper does
-    the same, and a keepalive narrating a child that is already being torn down
-    is worse than no keepalive at all. The child is then stopped and reaped
-    before its streams are drained, because both drain policies wait for the
-    consumers to reach EOF and a live child can hold its own pipe open.
-    Discarding whatever the drain finds is what keeps the post-spawn failure the
-    one that propagates.
+    ever see it. The heartbeat stops first, matching the pipeline's spawn
+    helper. The child is then stopped and reaped before its streams are
+    drained, because both drain policies wait for the consumers to reach EOF
+    and a live child can hold its own pipe open. Discarding whatever the drain
+    finds is what keeps the post-spawn failure the one that propagates.
     """
     # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
     # lives in ``cuprum._line_stream.coordinator`` because a test patches its
@@ -167,9 +171,9 @@ def _with_line_sink_hooks(
 ) -> _SubprocessExecution:
     """Chain the caller's ``on_line`` ahead of the driver's queue sink.
 
-    Each hook is wrapped so its failure is correlated before it escapes, and
-    the result is a rebuilt execution rather than a mutated one: the bundle is
-    a frozen dataclass, and the stream consumers read ``on_line`` off it.
+    Each hook is wrapped so its failure is correlated before it escapes. The
+    result is rebuilt rather than mutated: the bundle is frozen and the stream
+    consumers read ``on_line`` off it.
 
     Returns
     -------
@@ -194,15 +198,12 @@ def _build_unstarted_run(
 ) -> _LineStreamRun:
     """Build the run and own every task it will need, before anything can fail.
 
-    Splitting this from the spawn keeps the ownership complete by construction:
-    by the time this returns, the stdin writer and both consumers exist, so the
-    caller's first fallible step — the ``start`` emission — already has a whole
-    run to abandon rather than a partial one to guess at.
-
-    Nothing here suspends or fails. The preparation helper only reads the
-    execution, the stdin writer and the stream consumers it starts are plain
-    ``create_task`` calls, and ``_LineStreamRun`` is a frozen dataclass, so no
-    exception can escape and leave a child running with half-built ownership.
+    Splitting this from the spawn keeps ownership complete by construction:
+    by the time this returns, the stdin writer and both consumers exist, so
+    the caller's first fallible step — the ``start`` emission — already has a
+    whole run to abandon rather than a partial one to guess at. Nothing here
+    suspends or fails, so no exception can escape and leave a child running
+    with half-built ownership.
 
     Returns
     -------
