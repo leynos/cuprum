@@ -319,7 +319,7 @@ the issue was filed:
   **The snapshot fix is verified** — `test_maturin_wheel_build_snapshot`
   passed ("1 snapshot passed"), and `test_rust_pump_debug_abort.py` passed, so
   the first `test-python` run's two `retry` rows resolve as: one real defect
-  fixed, one outage artifact now green. That leaves one failure, and the
+  fixed, one outage artefact now green. That leaves one failure, and the
   retraction above is confirmed on a second independent run: the doctest test
   failed again with admission in its body, now at an even earlier point — the
   `cargo`→`rustc` **version probe** was refused, so the scratch crate was never
@@ -465,7 +465,7 @@ the issue was filed:
   the only gated enumeration of shipped modules — `pyproject.toml`'s
   duplication allow-list and the module-boundary prose in `docs/` name modules
   too, but neither is asserted against the tree, and grepping every tracked
-  file for a module list found no other mechanised inventory. So the practical
+  file for a module list found no other mechanized inventory. So the practical
   rule is: **creating a module is a packaging change, and the wheel snapshot is
   the gate that will tell you.**
 
