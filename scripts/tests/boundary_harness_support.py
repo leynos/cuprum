@@ -63,7 +63,19 @@ def cargo_target_roots(crate: Path) -> tuple[Path, ...]:
 
 
 def record_cargo_metadata_calls(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """Record calls; callers must resolve the helper through this module."""
+    """Record Cargo metadata calls.
+
+    Parameters
+    ----------
+    monkeypatch
+        Pytest monkeypatch fixture. The patch remains active for the current
+        test.
+
+    Returns
+    -------
+    list[Path]
+        Recorded crate paths.
+    """
     calls: list[Path] = []
     read_metadata = cargo_target_roots
 

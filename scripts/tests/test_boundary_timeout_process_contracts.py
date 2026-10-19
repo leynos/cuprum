@@ -62,8 +62,8 @@ def test_compile_passes_its_named_timeout_to_execution_context(
 
     exit_code, output = boundary_compile._compile(tmp_path, target_directory)
 
-    assert contexts[0].timeout == boundary_compile.COMPILE_TIMEOUT_SECONDS, (
-        "the Cargo execution context must enforce the named compile budget"
+    assert contexts[0].timeout == 3600, (
+        "the Cargo execution context must enforce a 3600-second compile budget"
     )
     compile_context = contexts[0]
     assert compile_context.env is not None, (
@@ -122,10 +122,9 @@ def test_cargo_metadata_passes_its_named_timeout_and_propagates_expiry(
     assert options.get("check") is False, "metadata errors must use the helper's error"
     assert options.get("cwd") == tmp_path, "metadata must inspect the requested crate"
     assert options.get("text") is True, "metadata output must be decoded as text"
-    assert (
-        options.get("timeout")
-        == boundary_harness_support.CARGO_METADATA_TIMEOUT_SECONDS
-    ), "metadata must use its named subprocess budget"
+    assert options.get("timeout") == 120, (
+        "metadata must use a 120-second subprocess budget"
+    )
 
     timeout_error = boundary_harness_support.subprocess.TimeoutExpired(
         "cargo metadata",

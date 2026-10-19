@@ -270,8 +270,8 @@ def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
     assert len(timeout_markers) == 1, (
         "the real compile test must have one timeout marker"
     )
-    assert timeout_markers[0].args == (SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS,), (
-        "the test marker must match its named timeout budget"
+    assert timeout_markers[0].args == (3900,), (
+        "the test marker must set a 3900-second outer timeout"
     )
     subprocess_budget = COMPILE_TIMEOUT_SECONDS + (
         CARGO_METADATA_CALLS_PER_SYMLINK_TEST
@@ -287,6 +287,7 @@ def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
     )
     global_timeout = pyproject["tool"]["pytest"]["ini_options"]["timeout"]
     assert isinstance(global_timeout, int), "the global pytest timeout must be numeric"
+    assert global_timeout == 30, "the suite-wide pytest timeout must remain 30 seconds"
     assert global_timeout < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
         "the real compile test must exceed the unchanged global timeout"
     )
