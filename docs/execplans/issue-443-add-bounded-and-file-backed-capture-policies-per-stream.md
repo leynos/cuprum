@@ -700,6 +700,43 @@ Thresholds that trigger escalation when breached.
   pattern with a same-named positional capture. `5bf5d9325` restores those
   spellings; the forms match the same values. Date/Author: 2026-10-19,
   implementation agent.
+- [x] (2026-10-19) Clear the four findings of review round five in four
+  commits, after checking each against the code. Three were trivial prose
+  corrections and one was structural:
+
+  - `39ba953e3` corrects the rationale for resolving the `utf-16`/`utf-32`
+    family names, in both docstrings and in `docs/cuprum-design.md`. The
+    finding was right and the old text was wrong: a one-shot
+    `b"a\x00".decode("utf-16")` returns `"a"` on this little-endian host, so
+    the family decoders do *not* reject a headless stream. Probing further
+    showed the claim is true only of the path the retained tail actually
+    takes — the incremental decoder `_pending_bytes` consults raises
+    `UnicodeDecodeError ... Stream does not start with BOM` for a first chunk
+    with no mark, in both `strict` and `replace` modes. The rewritten text
+    distinguishes a whole-stream decode from the tail path rather than simply
+    taking either side. The new reason the resolution stands is the one the
+    finding gives: a dropped mark that selected the non-native order would
+    otherwise be decoded in native order and produce wrong text.
+  - `0eb210c38` states the duplication family's membership and idiom in
+    `pyproject.toml` without narrating the rebase. `make duplication` passes
+    with 68 reasoned exceptions afterwards.
+  - `09cf85901` states the same ownership in the ADR-007 branch-added addendum
+    without referring to `main` or to a branch in flight. The finding also
+    asked for an "empty line artefact" to be removed from that section; no
+    such artefact exists. `git diff --check` exits 0 and a scan of lines
+    1258–1300 finds no consecutive blank lines, so only the ownership rewrite
+    was actionable.
+  - `2bc21c202` splits `test_capture_spill.py` (533 lines) into itself (337)
+    and `test_capture_spill_cancellation.py` (175), moving the two
+    cancellation drivers and their cases rather than copying them, and lifts
+    `_spilling_to`/`_spill` into `_capture_sink_support.py` (132 lines).
+    Although the 400-line ceiling binds production only — test targets run
+    pylint with `--disable=too-many-lines`, and `origin/main` itself carries
+    test modules up to 959 lines — the split is still worth having. Both
+    moved cases are still collected; 39 tests pass across the four spill
+    suites and `4022 tests collected` across `cuprum/unittests`.
+
+  Date/Author: 2026-10-19, implementation agent.
 
 ## Surprises & discoveries
 
@@ -2098,6 +2135,35 @@ DF12 pass uses a message set that no other leaf shares, so a local lint of the
 changed files should run with `--enable` set to the repository's exact
 `DF12_PYLINT_MESSAGES` list before a certification is requested, not just plain
 `pylint` or ruff.
+
+## Review round five on the pushed head
+
+`coderabbit review --agent` over the pushed head `683513cb1` reported four
+findings: one major and three trivial. Three were acted on as written and one
+in part.
+
+- **The `utf-16`/`utf-32` rationale was wrong, and the finding was right about
+  that.** The docstrings said the family decoders "accept no bytes at all
+  without" a mark and that "the platform's decoder rejects a headless stream".
+  A probe on this little-endian host shows `b"a\x00".decode("utf-16")` →
+  `"a"`, so a *one-shot* family decode certainly accepts a headless stream.
+  Probing further found the narrower truth: the *incremental* decoder that
+  `_pending_bytes` consults raises
+  `UnicodeDecodeError: ... Stream does not start with BOM` for a first chunk
+  with no mark, under both `strict` and `replace`. The corrected text names
+  which decoder each claim is about instead of choosing a side, and keeps the
+  finding's real reason: a dropped mark that selected the non-native order
+  would be decoded in native order and produce wrong text.
+- **The ADR-007 addendum had no empty line artefact to remove.** The finding
+  asked for one as well as for the ownership rewrite. `git diff --check` exits
+  0 and lines 1258–1300 contain no consecutive blank lines, so only the
+  rewrite was actionable.
+- **The 400-line limit does not bind test modules.** The finding treated the
+  533-line `test_capture_spill.py` as a violation. It is not one: test targets
+  run pylint with `--disable=too-many-lines`, and `origin/main` carries test
+  modules up to 959 lines. The split was made anyway — it separates the two
+  cancellation drivers from the fidelity cases — with the moved tests still
+  collected.
 
 ## Context and orientation
 
