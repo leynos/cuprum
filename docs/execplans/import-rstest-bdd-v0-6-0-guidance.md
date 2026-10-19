@@ -140,6 +140,19 @@ Thresholds that trigger escalation when breached.
       were added to `docs/contents.md`, because that index covers every other
       top-level document in `docs/` and these were the only ones missing (see
       the decision log).
+- [x] (2026-10-19) Rebased again onto `origin/main` at
+      `87d38aff8fbfebb5f965f0df8fc267e9f03a678c`, from boundary `102951f48`.
+      No conflicts arose, and all five commits replayed byte-identically:
+      `main`'s single new commit touches `docs/developers-guide.md` and
+      `scripts/tests/test_markdown_format_makefile.py`, neither of which this
+      branch modifies. The advanced base required one further adaptation. The
+      "Documentation gates" section still carried counts from the first import
+      (82 Markdown files, 677 Python files) and recorded `make test`,
+      `make typecheck` and `make lint` as deliberately not run. `main`'s new
+      commit is itself a correction of stale Markdown-gate figures, so leaving
+      the same defect in this plan would have contradicted the change the
+      rebase had just imported. The counts were re-measured and the not-run
+      claim replaced with the actual gate results (see the decision log).
 
 Remaining: review and merge, which this task explicitly excludes. No
 implementation work remains.
@@ -229,6 +242,17 @@ implementation work remains.
   heading keeps the upstream status and the absence of any dependency visible,
   so a reader does not mistake imported text for Cuprum's own guidance.
   Date/Author: 2026-10-19, migration agent.
+
+- Decision: re-measure the "Documentation gates" evidence at each rebase
+  boundary instead of carrying forward the counts captured at import time.
+  Rationale: the counts in that table describe a tree that no longer exists once
+  `main` advances, and a plan that states 82 Markdown files while the gate
+  reports 101 is inaccurate in exactly the way `main`'s commit `87d38aff8`
+  corrects elsewhere. The same reasoning retired the "recorded as not run"
+  paragraph: the rebase instruction requires `make test`, `make typecheck` and
+  `make lint` for every merge, so the plan now records their results and
+  describes them as confirming the rebase rather than as evidence about the
+  imported text. Date/Author: 2026-10-19, migration agent.
 
 ## Outcomes & retrospective
 
@@ -425,11 +449,14 @@ again.
 
 Results, all captured after the final formatting pass:
 
-| Gate                | Exit | Evidence                                                                                                             |
-| ------------------- | ---- | -------------------------------------------------------------------------------------------------------------------- |
-| `make markdownlint` | 0    | 82 files linted, 0 errors; spelling gate clean.                                                                      |
-| `make check-fmt`    | 0    | 677 Python files already formatted; `cargo fmt --check` clean; `mdtablefix --check` reports 82 files left unchanged. |
-| `make spelling`     | 0    | `typos-config-builder` gate reports no findings and no `typos.toml` churn.                                           |
+| Gate                | Exit | Evidence                                                                                                               |
+| ------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------- |
+| `make markdownlint` | 0    | 101 files linted, 0 issues; spelling gate clean.                                                                       |
+| `make check-fmt`    | 0    | 1008 Python files already formatted; `cargo fmt --check` clean; `mdtablefix --check` reports 101 files left unchanged. |
+| `make spelling`     | 0    | `typos-config-builder` gate reports `current: typos.toml`, so the run leaves no churn.                                 |
+
+The file counts are lower than the tree's total because both gates ignore
+ignored and generated paths; they are measured, not estimated.
 
 Two en-GB spelling corrections were applied to this plan's own prose because
 the gate's correction table flags them: an Oxford "-ise" verb stem, and a noun
@@ -439,7 +466,19 @@ upstream documents required no correction at all: they passed the spelling gate
 on their first run, which is further evidence that the upstream prose already
 conforms to this repository's spelling policy.
 
-`make test` and the Rust gates are not affected by a documentation-only change
-and are recorded as not run, rather than claimed as passing. No `Cargo.toml`,
-`Cargo.lock`, Python module, or gate definition was modified, so there is no
-behavioural surface for those suites to exercise.
+**Amended 2026-10-19, after the rebase onto `origin/main` at `87d38aff8`.** The
+original text here recorded `make test`, `make typecheck` and `make lint` as
+not run, on the grounds that a documentation-only change has no behavioural
+surface. That reasoning was overridden by the rebase instruction, which
+requires all four gates to validate the merge, so they were run and are
+recorded rather than claimed.
+
+`make test`, `make typecheck` and `make lint` all exit 0. The counts are
+deliberately not reproduced here: they belong to the run's log, and `main`'s
+Markdown-gate changes show how quickly a copied figure drifts from the tree it
+describes. The gate that matters for this branch's correctness is the Markdown
+set above; the rest confirm that the rebase did not disturb code the branch
+never touched.
+
+The dependency facts are unchanged: no `Cargo.toml`, `Cargo.lock`, Python
+module, or gate definition is modified by this branch.
