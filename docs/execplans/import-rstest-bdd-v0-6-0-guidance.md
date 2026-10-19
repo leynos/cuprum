@@ -153,6 +153,19 @@ Thresholds that trigger escalation when breached.
       the same defect in this plan would have contradicted the change the
       rebase had just imported. The counts were re-measured and the not-run
       claim replaced with the actual gate results (see the decision log).
+- [x] (2026-10-19) Rebased a third time onto `origin/main` at
+      `ed45afde4bde458da0677e635186b385570bcde2`, from boundary `87d38aff8`.
+      No conflicts arose, and all six commits replayed as exact `range-diff`
+      equals. `main` added two commits: one edits `docs/roadmap.md` only, and
+      the other separates tar and rsync operands from options across the
+      builders, their unit and behavioural tests, and both guides. Neither
+      commit touches a path this branch modifies, and the tree delta between
+      the old and new heads is byte-identical to `main`'s own delta. The four
+      line citations in this plan were re-checked against the new base and all
+      still resolve at the same line numbers. The one required adaptation was
+      to the gate table: `main` added two Python source files, which moved the
+      `ruff format` total from 1008 to 1010 and exposed that the figure had
+      always carried the wrong label (see the decision log).
 
 Remaining: review and merge, which this task explicitly excludes. No
 implementation work remains.
@@ -253,6 +266,19 @@ implementation work remains.
   `make lint` for every merge, so the plan now records their results and
   describes them as confirming the rebase rather than as evidence about the
   imported text. Date/Author: 2026-10-19, migration agent.
+
+- Decision: describe the `ruff format` total as "files already formatted"
+  rather than "Python files already formatted", and state how it is derived.
+  Rationale: the third rebase moved the figure from 1008 to 1010, and asking
+  why it moved exposed the wrong noun. `ruff format --check` over `.md` alone
+  reports 101 files and over `.py` alone reports 909, and 909 + 101 = 1010,
+  because the formatter also formats the Python fenced code blocks inside
+  Markdown. The earlier figures decompose the same way at their own bases: 595
+  and 82 gave 677, and 907 and 101 gave 1008. The arithmetic was therefore
+  sound and only the label was wrong. The digits are corrected for the current
+  tree and the derivation is recorded, so a later reader can re-check the total
+  against a tree that has changed again, which a bare count cannot.
+  Date/Author: 2026-10-19, migration agent.
 
 ## Outcomes & retrospective
 
@@ -449,14 +475,27 @@ again.
 
 Results, all captured after the final formatting pass:
 
-| Gate                | Exit | Evidence                                                                                                               |
-| ------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------- |
-| `make markdownlint` | 0    | 101 files linted, 0 issues; spelling gate clean.                                                                       |
-| `make check-fmt`    | 0    | 1008 Python files already formatted; `cargo fmt --check` clean; `mdtablefix --check` reports 101 files left unchanged. |
-| `make spelling`     | 0    | `typos-config-builder` gate reports `current: typos.toml`, so the run leaves no churn.                                 |
+| Gate                | Exit | Evidence                                                                                                        |
+| ------------------- | ---- | --------------------------------------------------------------------------------------------------------------- |
+| `make markdownlint` | 0    | 101 files linted, 0 issues; spelling gate clean.                                                                |
+| `make check-fmt`    | 0    | 1010 files already formatted; `cargo fmt --check` clean; `mdtablefix --check` reports 101 files left unchanged. |
 
-The file counts are lower than the tree's total because both gates ignore
-ignored and generated paths; they are measured, not estimated.
+Both totals are the gates' own units, not a count of files of one type. The
+`markdownlint` total equals the tree's 101 tracked Markdown files. The
+`ruff format` total is the number of *Python and Markdown* files, because the
+formatter also formats the Python fenced code blocks inside Markdown. The tree
+holds 909 of the former and 101 of the latter, which is the observed 1010.
+Earlier revisions labelled this total "Python files"; the number was right and
+the noun was wrong. That mislabel is corrected here, and the derivation is
+recorded so a later reader can re-check the total against a tree that has
+changed again.
+
+The same decomposition holds at every base this plan has recorded. At the
+original base `991dee642` the tree held 595 Python files and 77 Markdown files,
+plus the 5 imported documents: 595 plus 82 gives 677, the figure first
+recorded. At `87d38aff8` the tree held 907 Python files and 101 Markdown files:
+907 plus 101 gives 1008. Both earlier numbers were therefore correct, and the
+only defect was the label placed on them.
 
 Two en-GB spelling corrections were applied to this plan's own prose because
 the gate's correction table flags them: an Oxford "-ise" verb stem, and a noun
