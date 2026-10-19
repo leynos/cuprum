@@ -2077,7 +2077,7 @@ Resolution order for timeouts:
 Providing `ExecutionContext(timeout=None)` is treated the same as omitting the
 context; resolution continues to the scoped default when present.
 
-`SafeCmd.lines()` resolves its deadline twice. Preparation resolves it eagerly
+`SafeCmd.lines()` resolves its deadline twice. Preparation resolves it eagerly,
 so a stream is not prepared with an obviously stale record, but iteration is
 deferred: the generator body runs in the task that pulls the first event, which
 may be a different task, and possibly a different `scoped()` block, from the

@@ -7287,7 +7287,7 @@ lifecycle modules so timeout and cancellation behaviour remains aligned with
 ### Deferred authorization of a prepared line stream
 
 `SafeCmd.lines()` returns a lazy stream, so the allowlist check and timeout
-resolution it performs are provisional. The binding checks belong to
+resolution in `lines()` are provisional. The binding checks belong to
 `_iter_line_events`, whose body runs in the task that pulls the first event and
 therefore in that task's context — possibly a different task, and a different
 `scoped()` block, from the one that built the stream.
@@ -7295,16 +7295,17 @@ therefore in that task's context — possibly a different task, and a different
 the repeat: it re-runs `_enforce_allowlist` and `_resolve_timeout` with the raw
 `requested_timeout` that `lines()` passed through, then rebuilds the frozen
 execution bundle with `dataclasses.replace` so the new deadline reaches the
-spawn. Do not resolve the timeout in `lines()` and hand *that* value on: a
-resolved number cannot distinguish "the caller asked for nothing" from "the
-preparing scope supplied a default", and the latter must not outlive its scope.
+spawn. Do not resolve the timeout in `lines()` and hand *that* value on,
+because a resolved number cannot distinguish "the caller asked for nothing"
+from "the preparing scope supplied a default", and the latter must not outlive
+its scope.
 
 The order in `_iter_line_events` is load-bearing. Refreshing before the queue,
 the result future, the plan event, the before hooks, and the coordinator task
 is what makes a denial total: a forbidden command raises
 `ForbiddenProgramError` with nothing planned, nothing spawned, no hook run, and
 `stream.result` left as `None`. The refusal path also closes any bounded
-output-delivery worker the preparation already started, because no coordinator
+output-delivery worker the preparation already started because no coordinator
 exists yet to close it and a daemon delivery thread must not be left parked.
 `_start_line_stream_run` keeps its signature and documents the contract
 instead: it may assume the execution it receives is already authorized, with
@@ -7317,7 +7318,7 @@ the defining module, or the call never sees the spy. A spy there can read
 spawn, which witnesses both halves of the deferred check — the deadline that
 was resolved and the fact that the denied run never arrived — without depending
 on wall-clock timing. The zero-timeout cases keep a literal equality assertion
-with a narrow `float-equality-comparison` suppression, because the point is that
+with a narrow `float-equality-comparison` suppression because the point is that
 `0.0` survives resolution unchanged; the short scoped deadline cases use
 `pytest.approx` instead.
 
