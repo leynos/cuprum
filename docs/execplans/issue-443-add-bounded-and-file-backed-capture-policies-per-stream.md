@@ -2612,7 +2612,7 @@ to the three finalizers, their bodies were the same drain-then-release pair
 differing only in the error object, and the duplication gate reported exactly
 that pair as a new family. Collapsing them removed the family outright, so no
 allow entry was added. The two direct-call cases in
-`test_pipeline_cleanup_finally.py` became a third parameterisation of the
+`test_pipeline_cleanup_finally.py` became a third parameterization of the
 finalizer-level drain case, which now drives all three paths.
 
 **Defect 2 — O4, a failed append hides accepted-but-unflushed bytes.**
