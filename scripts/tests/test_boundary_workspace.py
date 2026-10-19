@@ -4,25 +4,36 @@ from __future__ import annotations
 
 import dataclasses
 import stat
+import tomllib
 import typing as typ
+from pathlib import Path
 
 import pytest
 
 from scripts import check_boundary_contract as contract
-from scripts.boundary_compile import CompileTargets, compile_arguments
+from scripts.boundary_compile import (
+    COMPILE_TIMEOUT_SECONDS,
+    CompileTargets,
+    compile_arguments,
+)
 from scripts.boundary_workspace import copy_workspace
 from scripts.check_boundary_contract import safe_target_roots
+from scripts.tests import boundary_harness_support
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
-from scripts.tests.boundary_harness_support import (
-    cargo_target_roots,
-    copy_boundary_repository,
-)
+from scripts.tests.boundary_harness_support import copy_boundary_repository
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
+CARGO_METADATA_CALLS_PER_SYMLINK_TEST = 2
+SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS = 3900
+
+
+class _MarkedTestFunction(typ.Protocol):
+    """Describe a test function decorated with pytest marks."""
+
+    pytestmark: list[pytest.Mark]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -54,9 +65,9 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
     copy_workspace(rust, workspace, source_targets)
 
     copied_nested = workspace / nested.relative_to(rust)
-    assert copied_nested in cargo_target_roots(workspace / "cuprum-streams"), (
-        "Cargo metadata must retain the nested source directory named target"
-    )
+    assert copied_nested in boundary_harness_support.cargo_target_roots(
+        workspace / "cuprum-streams"
+    ), "Cargo metadata must retain the nested source directory named target"
     assert copied_nested.is_file(), "the nested source target must be copied"
     assert copied_nested.stat().st_mode & stat.S_IWUSR, (
         "the copied target must be writable for temporary probes"
@@ -143,7 +154,7 @@ def _assert_external_links_are_isolated(
     copied_links = tuple(
         copied_crate / source_link.link.relative_to(crate) for source_link in links
     )
-    assert cargo_target_roots(copied_crate) == tuple(
+    assert boundary_harness_support.cargo_target_roots(copied_crate) == tuple(
         copied_crate / path.relative_to(crate) for path in original_targets
     ), "Cargo metadata must retain the copied source-file targets"
     assert all(path.is_file() and not path.is_symlink() for path in copied_links), (
@@ -170,16 +181,14 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
     manifest.write_text(before + "[lints]\n" + after, encoding="utf-8")
 
 
-# The real isolated Cargo check can wait for the shared package-cache lock.
-# This is the only test in the file that reaches the real `_compile`: `main()`
-# and `_check_target` both resolve through the monkeypatched seam, so exactly
-# one `cargo check` runs here. Even narrowed to the two materialized test
-# targets, it measured 181s cold and 98s warm on this host once the Makefile
-# forced serial cargo builds (`CARGO_BUILD_JOBS=1`). That is well above the
-# suite-wide `timeout = 30` in pyproject.toml, so the bound is raised here
-# rather than left to the default. `check_boundary_contract._compile` owns the
-# real budget at 3600s; this sits above it and only catches a wedged process.
-@pytest.mark.timeout(3720)
+# Only this test launches Cargo through `_compile`: `main()` uses a recording
+# seam for its unsafe probes, then one real Cargo check. The two metadata calls
+# and check have fixed 120 s and 3600 s bounds; the 3900 s marker leaves 60 s
+# for test work and catches a wedged process. The compile bound sizes the
+# marker; the measured 181 s cold `CARGO_BUILD_JOBS=1` build does not. Callers
+# control `-j`, independently of this budget.
+# The global `timeout = 30` remains unchanged for all other tests.
+@pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -187,7 +196,8 @@ def test_main_materializes_external_source_file_symlinks(
     root = copy_boundary_repository(tmp_path)
     crate = root / "rust/cuprum-streams"
     links = _external_source_links(root, crate, tmp_path)
-    before = cargo_target_roots(crate)
+    metadata_calls = boundary_harness_support.record_cargo_metadata_calls(monkeypatch)
+    before = boundary_harness_support.cargo_target_roots(crate)
     assert links[0].link in before, "Cargo must recognize the relative source-file link"
     assert links[1].link in before, "Cargo must recognize the absolute source-file link"
     observed_sources: list[str] = []
@@ -207,6 +217,9 @@ def test_main_materializes_external_source_file_symlinks(
     )
     assert code == 0, output
     _assert_external_links_are_isolated(crate, copied_crate, links, before)
+    assert len(metadata_calls) == CARGO_METADATA_CALLS_PER_SYMLINK_TEST, (
+        "the real test must bound both Cargo metadata calls"
+    )
     assert all(
         any(probe in source for source in observed_sources) for probe in contract.PROBES
     ), "each unsafe probe must reach the isolated copied sources"
@@ -244,6 +257,39 @@ def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
     ), "the scoped check must compile both materialized test targets"
     assert "--all-targets" not in arguments, (
         "the scoped check must not rebuild unrelated package targets"
+    )
+
+
+def test_real_compile_test_timeout_exceeds_compile_budget() -> None:
+    """Keep the isolated compile and metadata budgets inside the test tier."""
+    marked_test = typ.cast(
+        "_MarkedTestFunction", test_main_materializes_external_source_file_symlinks
+    )
+    markers = marked_test.pytestmark
+    timeout_markers = [marker for marker in markers if marker.name == "timeout"]
+    assert len(timeout_markers) == 1, (
+        "the real compile test must have one timeout marker"
+    )
+    assert timeout_markers[0].args == (3900,), (
+        "the test marker must set a 3900-second outer timeout"
+    )
+    subprocess_budget = COMPILE_TIMEOUT_SECONDS + (
+        CARGO_METADATA_CALLS_PER_SYMLINK_TEST
+        * boundary_harness_support.CARGO_METADATA_TIMEOUT_SECONDS
+    )
+    assert subprocess_budget < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
+        "the test marker must exceed both metadata and compile budgets"
+    )
+
+    repository_root = Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads(
+        (repository_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    global_timeout = pyproject["tool"]["pytest"]["ini_options"]["timeout"]
+    assert isinstance(global_timeout, int), "the global pytest timeout must be numeric"
+    assert global_timeout == 30, "the suite-wide pytest timeout must remain 30 seconds"
+    assert global_timeout < SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, (
+        "the real compile test must exceed the unchanged global timeout"
     )
 
 

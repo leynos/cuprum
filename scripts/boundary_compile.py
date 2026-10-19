@@ -16,6 +16,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 TARGET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+COMPILE_TIMEOUT_SECONDS = 3600
 
 
 def _require_target_tuple(value: object) -> tuple[object, ...]:
@@ -154,7 +155,7 @@ def _compile(
     context = sh.ExecutionContext(
         cwd=workspace,
         env={"CARGO_TARGET_DIR": str(target_directory)},
-        timeout=3600,
+        timeout=COMPILE_TIMEOUT_SECONDS,
     )
     with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
         result = cargo(*compile_arguments(targets)).run_sync(context=context)

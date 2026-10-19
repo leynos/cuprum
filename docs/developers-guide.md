@@ -4656,6 +4656,16 @@ make boundary-faults
 `make boundary-faults` requires the verification harnesses to detect deliberate
 faults.
 
+The external-source symlink test uses `COMPILE_TIMEOUT_SECONDS` (3600 s) for
+its one real Cargo check and `CARGO_METADATA_TIMEOUT_SECONDS` (120 s) for each
+of its two metadata calls. Its `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` marker is
+3900 s, above their combined 3840 s subprocess budget. It covers a cold
+`CARGO_BUILD_JOBS=1` build measured at 181 s; the test leaves parallelism to
+its caller. The suite-wide `timeout = 30` remains tight, and only this test
+raises its bound. `test_real_compile_test_timeout_exceeds_compile_budget`
+enforces the ordering. See
+[Boundary harness compile tier](coverage-timeout-tiers.md#boundary-harness-compile-tier).
+
 Install the checksum-verified prebuilt tools first with `make install-verus` and
 `make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
 Python `3.14` explicitly, including when CI exports `UV_PYTHON=3.13`; this
