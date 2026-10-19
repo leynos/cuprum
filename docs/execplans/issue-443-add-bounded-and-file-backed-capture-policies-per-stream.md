@@ -2606,9 +2606,14 @@ have no result left to name them. The same shape was present in
 their existing `finally` enclosed only the drain, not the closes above it. All
 three finalizers now reach the capture release from a `finally` that encloses
 every preceding teardown step, preserving the order consumers-settle
-before-capture-files-close. `_finalize_timeout_cleanup` and
-`_finalize_result_failure_cleanup` were left as they were, so their tests keep
-describing the composition they were written for.
+before-capture-files-close. The two composed cleanups became one
+`_settle_observe_tasks(observers, spawn, cause)`: with the `finally` moved out
+to the three finalizers, their bodies were the same drain-then-release pair
+differing only in the error object, and the duplication gate reported exactly
+that pair as a new family. Collapsing them removed the family outright, so no
+allow entry was added. The two direct-call cases in
+`test_pipeline_cleanup_finally.py` became a third parameterisation of the
+finalizer-level drain case, which now drives all three paths.
 
 **Defect 2 — O4, a failed append hides accepted-but-unflushed bytes.**
 `_append` deliberately does not flush per chunk; `_flush_before_reading` is the
@@ -2647,6 +2652,8 @@ then the file restored from a `cp` copy (never `git checkout --`):
   new spill test with `got b'buffered prefix '`.
 - Flattening the timeout and stage-result finalizers fails three cases (the
   raising close on both paths, and the cancellation case).
+- Pointing either finalizer's `finally` at a drain-only cleanup, so the
+  release is skipped, fails that path's raising-close case.
 - Turning the run-failure outer `try/finally` into `if True:` fails the
   run-failure raising-close case.
 

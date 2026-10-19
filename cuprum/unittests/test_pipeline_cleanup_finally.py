@@ -1,12 +1,13 @@
 """A pipeline's capture sinks are released even when cleanup itself fails.
 
 Every failure path composes its observe-task drain with its capture release:
-``_reconcile_pipeline_run_failure``, ``_finalize_timeout_cleanup``, and
-``_finalize_result_failure_cleanup``. The drain re-raises a failing observe task
-as a ``BaseExceptionGroup``, so a composition that simply awaited the release
-next would lose the file exactly on the path where the run is already in
-trouble. These tests fail the drain and assert the sink still closed, and that
-the group the drain raised is what reached the caller.
+``_reconcile_pipeline_run_failure``, ``_finalize_pipeline_timeout``, and
+``_finalize_pipeline_stage_result_failure`` all reach ``_settle_observe_tasks``.
+The drain re-raises a failing observe task as a ``BaseExceptionGroup``, so a
+composition that simply awaited the release next would lose the file exactly on
+the path where the run is already in trouble. These tests fail the drain and
+assert the sink still closed, and that the group the drain raised is what
+reached the caller.
 
 The drain is not the only step that can end a teardown early. A presentation
 session's ``close`` may raise, and a shielded close re-raises the caller's
@@ -33,8 +34,6 @@ from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._pipeline_finalize import (
     _finalize_pipeline_stage_result_failure,
     _finalize_pipeline_timeout,
-    _finalize_result_failure_cleanup,
-    _finalize_timeout_cleanup,
     _reconcile_pipeline_run_failure,
 )
 from cuprum._pipeline_records import (
@@ -181,64 +180,6 @@ def _assert_drain_failure_preserved(error_group: BaseExceptionGroup) -> None:
     ), f"the drain failure must survive into the group; got {error_group!r}"
 
 
-_SinkCleanup = cabc.Callable[
-    [_PipelineObservers, _PipelineSpawnResult, BaseException],
-    cabc.Awaitable[None],
-]
-
-
-@pytest.mark.parametrize(
-    "cleanup",
-    [
-        pytest.param(_finalize_timeout_cleanup, id="timeout"),
-        pytest.param(_finalize_result_failure_cleanup, id="result-failure"),
-    ],
-)
-def test_a_failing_drain_still_releases_the_capture_sink(
-    cleanup: _SinkCleanup,
-) -> None:
-    """The release runs even though the drain raises out of the composition."""
-
-    async def run() -> None:
-        """Fail a drain and expect the group while the sink closes."""
-        scenario = _Scenario(_SinkWitness())
-        scenario.fail_next_drain()
-
-        with pytest.raises(BaseExceptionGroup) as exc_info:
-            await cleanup(scenario.observers, scenario.spawn, RuntimeError("active"))
-
-        _assert_drain_failure_preserved(exc_info.value)
-        assert scenario.sink.cleaned, (
-            "the drain failed, but the spill file must still be released"
-        )
-
-    asyncio.run(run())
-
-
-def test_a_failing_drain_still_releases_the_sink_after_a_run_failure() -> None:
-    """The run-failure path releases its sinks after a failing drain too."""
-
-    async def run() -> None:
-        """Fail a drain on the run-failure path and expect the group."""
-        scenario = _Scenario(_SinkWitness())
-        scenario.fail_next_drain()
-
-        with pytest.raises(BaseExceptionGroup) as exc_info:
-            await _reconcile_pipeline_run_failure(
-                scenario.config,
-                scenario.spawn,
-                scenario.observers,
-                RuntimeError("run failed"),
-            )
-
-        _assert_drain_failure_preserved(exc_info.value)
-        assert scenario.sink.cleaned, (
-            "the drain failed, but the spill file must still be released"
-        )
-
-    asyncio.run(run())
-
-
 _Finalizer = cabc.Callable[[_Scenario, BaseException], cabc.Awaitable[None]]
 
 
@@ -267,6 +208,35 @@ async def _finalize_run_failure(scenario: _Scenario, error: BaseException) -> No
         scenario.observers,
         error,
     )
+
+
+@pytest.mark.parametrize(
+    "finalize",
+    [
+        pytest.param(_finalize_timeout, id="timeout"),
+        pytest.param(_finalize_stage_result, id="stage-result"),
+        pytest.param(_finalize_run_failure, id="run-failure"),
+    ],
+)
+def test_a_failing_drain_still_releases_the_capture_sink(
+    finalize: _Finalizer,
+) -> None:
+    """The release runs even though the drain raises out of the composition."""
+
+    async def run() -> None:
+        """Fail a drain and expect the group while the sink closes."""
+        scenario = _Scenario(_SinkWitness())
+        scenario.fail_next_drain()
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await finalize(scenario, RuntimeError("active"))
+
+        _assert_drain_failure_preserved(exc_info.value)
+        assert scenario.sink.cleaned, (
+            "the drain failed, but the spill file must still be released"
+        )
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(
