@@ -2464,6 +2464,76 @@ failure; every crate compiled and the run finished.
 
 Date/Author: 2026-10-19, implementation agent.
 
+## Fifth integration: CodeScene remediation on the merged tree
+
+The hosted CodeScene check was red at `7cbb726fd`, the last published head, and
+the local engine reproduced the same findings on the merged tree. Three
+production and test files carried the reported findings:
+
+| File                                       | Finding                                                        | Repair                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `cuprum/_streams.py`                       | `_deliver_chunk` 48 lines, Bumpy Road                          | split into `_note_stream_activity`, `_absorb_into_capture`, `_fan_out_chunk`                  |
+| `cuprum/_subprocess_execution.py`          | `_build_command_result` 75 LoC, Large Method                   | extracted `_shared_result_fields` behind a `_SharedResultFields` TypedDict                    |
+| `cuprum/unittests/test_pipeline_config.py` | Over-arity, and a row pairing an accessor with the wrong sink  | dropped the redundant `sink_name` parameter; resolve the expected sink from the stream under test |
+
+Commit `f7d9e2066` carries those repairs. Three test files were also split to
+restore cohesion where a large unrelated test block had dragged `LCOM4` down:
+
+- `test_public_api.py` 779 → 564 lines, with the capture-policy cases moved to
+  the new `test_capture_policy_surface.py` (135 lines).
+- `test_stream_drain.py` 673 lines, with the cancelled-absorb case moved to the
+  new `test_stream_drain_cancelled_absorb.py` (102 lines).
+- `test_command_result_field_order.py` (113 lines) holds the public positional
+  contract of `CommandResult`, which had been one of the blocks pulling
+  `test_public_api.py` apart.
+
+Each extraction was confirmed by falsification rather than intuition: removing
+the candidate block and re-running `cs review` showed which one actually cleared
+the finding. `test_pipeline_stream_routing.py` was briefly created as a
+"duplicate" of `test_pipeline_config.py` and deleted again — the finding was on
+the existing file, so a new file would have changed nothing.
+
+`cs review` now reports 10.0 for every touched file. `test_bounded_encoding_guard.py`
+also collapsed two duplicated refusal tests into one parametrized case over
+`("stdout", "stderr")`, since both streams must be refused identically.
+
+**Seven-gate run at `f7d9e2066`.** All seven exited 0, sequentially, with a
+provenance header and trailer in each log:
+
+| Gate                | Elapsed | Closing evidence                                             |
+| ------------------- | ------- | ------------------------------------------------------------ |
+| `make check-fmt`    | 3s      | `1015 files already formatted`, `All checks passed!`         |
+| `make markdownlint` | 48s     | `Summary: 0 issues in 0 files` (95 files)                    |
+| `make nixie`        | 1s      | `All diagrams validated successfully!`                       |
+| `make duplication`  | 2s      | `duplication gate passed; 68 allowed by reasoned exceptions` |
+| `make typecheck`    | 3s      | `All checks passed!` on both passes                          |
+| `make lint`         | 465s    | pylint 10.00/10, Clippy `-D warnings`, Whitaker, spelling    |
+| `make test`         | 1629s   | 5425 passed, 113 skipped, 0 failed; nextest 167/167          |
+
+The pytest totals are parsed from the log's 22 summary lines rather than
+hand-counted. The Rust stage reported nextest `167 tests run: 167 passed` and
+three doctest binaries all `ok` (`0 passed; 0 failed`, twice, and
+`0 passed; 0 failed; 3 ignored`).
+
+**Residual CodeScene findings, repaired after that run.** `cs delta 85f91f6ec
+f7d9e2066` still reported two advisory `Large Method` findings, both at 71
+lines against a threshold of 70:
+
+- `SafeCmd.lines` in `cuprum/sh/safe_cmd.py` — the three pre-flight refusals
+  (allowlist, redirected stdout, bounded encoding) moved into
+  `_reject_line_iteration_conflicts` in `cuprum/sh/line_options.py`, which is
+  where the other line-iteration pre-flight rules already live. The moved helper
+  is re-exported through `safe_cmd` like its siblings.
+- `_build_subprocess_execution` in `cuprum/_command_execution_config.py` — the
+  bounded-encoding refusal moved into `_reject_contested_captures`, a named
+  step rather than an anonymous block between two other refusals.
+
+Both files then re-measured 10.0 under `cs review`. Because the docstring is
+counted by the rule, the repair had to move statements out of the method; no
+documentation was trimmed to game the metric.
+
+Date/Author: 2026-10-19, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed

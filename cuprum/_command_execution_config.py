@@ -47,6 +47,29 @@ def _resolve_command_destinations(
     )
 
 
+def _reject_contested_captures(state: _ExecutionState) -> None:
+    """Refuse a bounded capture the run's encoding cannot safely trim.
+
+    A bounded capture trimmed under an encoding the trim cannot repair would
+    decode an orphaned trail byte as a character of its own, and the caller
+    would read text the child never wrote. Both facts — the policy and the
+    encoding — are in hand here and nowhere earlier: the policy lives on the
+    options and the encoding on the context, and this seam is the first that
+    brings them together.
+
+    Raises
+    ------
+    ValueError
+        If either stream names a ``BoundedCapture`` whose encoding is not
+        trim-safe and the run renders text.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the guard this delegates to
+    _reject_unsupported_bounded_captures(
+        state.output.resolved_capture,
+        encoding=state.context.encoding,
+        capture_bytes=state.capture_bytes,
+    )
+
+
 def _build_subprocess_execution(
     cmd: SafeCmd,
     state: _ExecutionState,
@@ -63,18 +86,8 @@ def _build_subprocess_execution(
         state.output.stdin,
         has_source=state.stdin_data is not None,
     )
+    _reject_contested_captures(state)
     capture_stdout, capture_stderr = state.output.resolved_capture
-    # A bounded capture trimmed under an encoding the trim cannot repair would
-    # decode an orphaned trail byte as a character of its own, and the caller
-    # would read text the child never wrote. Both facts — the policy and the
-    # encoding — are in hand here and nowhere earlier: the policy lives on the
-    # options and the encoding on the context, and this seam is the first that
-    # brings them together.
-    _reject_unsupported_bounded_captures(
-        (capture_stdout, capture_stderr),
-        encoding=state.context.encoding,
-        capture_bytes=state.capture_bytes,
-    )
     delivery = state.output.delivery
     delivery_worker = (
         None

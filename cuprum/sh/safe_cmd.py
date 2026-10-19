@@ -29,7 +29,6 @@ import dataclasses as dc
 import functools
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
-from cuprum._bounded_encoding import _reject_unsupported_bounded_captures
 from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
     _build_subprocess_execution,
@@ -53,10 +52,14 @@ from cuprum.sh.line_options import (
     # Re-exported under this module's name as well as imported for use here.
     # This module is where the line-iteration path has always been read from;
     # re-importing the helpers elsewhere would give a test double a second
-    # binding that no production call path resolves.
+    # binding that no production call path resolves. The ``as`` form marks the
+    # names this module no longer calls but must keep binding.
     _line_iteration_tracking,
-    _reject_redirected_lines_stdout,
+    _reject_line_iteration_conflicts,
     _resolve_line_stdin_source,
+)
+from cuprum.sh.line_options import (
+    _reject_redirected_lines_stdout as _reject_redirected_lines_stdout,
 )
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import CapturedResult, CommandResult
@@ -247,17 +250,7 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        _reject_redirected_lines_stdout(out)
-        # The execution is built lazily, on the first iteration, so the guard
-        # the bundle runs would fire only after the caller had already started
-        # consuming. ``lines`` returns text, so a bounded capture here is
-        # always a text capture and always subject to the encoding rule.
-        _reject_unsupported_bounded_captures(
-            out.resolved_capture,
-            encoding=ctx.encoding,
-            capture_bytes=False,
-        )
+        _reject_line_iteration_conflicts(self, out, ctx)
         stdin_source = _resolve_line_stdin_source(stdin, ctx, out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _line_iteration_tracking()

@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._bounded_encoding import _reject_unsupported_bounded_captures
 from cuprum._execution_tracking import _ExecutionTracking
-from cuprum._pipeline_internals import _collect_hooks
+from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum.context import current_context
 from cuprum.sh.execution import _resolve_stdin_source
@@ -33,12 +34,55 @@ from cuprum.sh.stdio_rules import _reject_contested_stdin
 if typ.TYPE_CHECKING:
     from cuprum.sh.execution import ExecutionContext, StdinSource, StdinStream
     from cuprum.sh.output import RunOutputOptions
+    from cuprum.sh.safe_cmd import SafeCmd
 
 __all__ = [
     "_line_iteration_tracking",
+    "_reject_line_iteration_conflicts",
     "_reject_redirected_lines_stdout",
     "_resolve_line_stdin_source",
 ]
+
+
+def _reject_line_iteration_conflicts(
+    cmd: SafeCmd,
+    output: RunOutputOptions,
+    context: ExecutionContext,
+) -> None:
+    """Refuse everything that stops these options becoming a line iteration.
+
+    All three refusals decide the same thing — whether this command can be
+    iterated line by line at all — and all three must happen before the lazy
+    execution is built. The bounded-capture rule in particular would otherwise
+    fire only when the first event was pulled, after the caller had already
+    started consuming.
+
+    Parameters
+    ----------
+    cmd : SafeCmd
+        The command about to be iterated.
+    output : RunOutputOptions
+        The options resolved for this iteration.
+    context : ExecutionContext
+        The context whose allowlist and encoding govern the run.
+
+    Raises
+    ------
+    ForbiddenProgramError
+        If ``cmd``'s program is not permitted by the active allowlist.
+    ValueError
+        If ``output`` redirects stdout, leaving nothing to iterate, or names a
+        bounded capture whose encoding a truncated tail could not survive.
+    """  # ruff: ignore[docstring-extraneous-exception] - both propagate from the helpers this calls
+    _enforce_allowlist(cmd)
+    _reject_redirected_lines_stdout(output)
+    # ``lines`` yields text, so a bounded capture here is always a text capture
+    # and always subject to the encoding rule.
+    _reject_unsupported_bounded_captures(
+        output.resolved_capture,
+        encoding=context.encoding,
+        capture_bytes=False,
+    )
 
 
 def _line_iteration_tracking() -> _ExecutionTracking:
