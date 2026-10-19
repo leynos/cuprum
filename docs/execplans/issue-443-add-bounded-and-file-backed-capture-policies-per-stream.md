@@ -689,8 +689,17 @@ Thresholds that trigger escalation when breached.
   two `monkeypatch.setattr` values and the two `isinstance()` splits in the
   policy tests were mechanical. A probe that narrowed the discard-drain release
   to `captures[:1]` fails the new stderr assertion, which is what establishes
-  the strengthened case is not vacuous. Date/Author: 2026-10-19, implementation
-  agent.
+  the strengthened case is not vacuous. The first certification run then failed
+  `make lint` with `C0302` because the added docstring text took
+  `cuprum/sh/results.py` to 401 lines; tightening the two `captures` docstrings
+  brought it to 398 and the unpushed commit was amended, so every gate result
+  recorded before the amend certifies an orphaned commit and was discarded. The
+  next certification run then failed `make lint` on the two `match` statements
+  this round added: DF12 `match-class-bind-self` (R1905) wants
+  `case bool() as enabled:` and `case str() as name:` rather than a class
+  pattern with a same-named positional capture. `5bf5d9325` restores those
+  spellings; the forms match the same values. Date/Author: 2026-10-19,
+  implementation agent.
 
 ## Surprises & discoveries
 
@@ -2068,6 +2077,27 @@ wrong reason:
   bought nothing and added an `Any` the guidelines require be justified.
 - **The policy tests split on `isinstance()`.** Both splits are now `match`
   statements, as the project's style asks.
+
+The first certification run at the round-four commit failed `make lint`: the
+new interior-stderr paragraphs pushed `cuprum/sh/results.py` from exactly 400
+lines to 401, and `pylint-classic` reported
+`C0302: Too many lines in module (401/400)` before any later lint leaf could
+run. Trimming the two `captures` docstrings brought the module to 398. Because
+the commit had never been pushed, it was amended rather than fixed forward,
+which orphaned the lint log and every gate result recorded against the
+pre-amend head. Lesson: a docstring edit is a size change too, so check the
+module length before starting a long gate run, not after it.
+
+The cert5 run then failed `make lint` a second time, on the two `match`
+statements the same round introduced: `pylint` 4.0.9's DF12
+`match-class-bind-self` (R1905) reads `case bool(enabled):` and
+`case str(name):` as attribute lookups on `self` and asks for
+`case bool() as enabled:` and `case str() as name:` instead. The forms match
+the same values, and `5bf5d9325` restores the capture spelling. Lesson: the
+DF12 pass uses a message set that no other leaf shares, so a local lint of the
+changed files should run with `--enable` set to the repository's exact
+`DF12_PYLINT_MESSAGES` list before a certification is requested, not just plain
+`pylint` or ruff.
 
 ## Context and orientation
 
