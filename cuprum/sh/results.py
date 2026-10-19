@@ -298,9 +298,9 @@ class PipelineResult:
     def captures(self) -> tuple[CapturedStream, ...]:
         """Capture metadata for the final pipeline stage's streams.
 
-        Only the final stage's streams are captured for a caller; interior
-        stages relay their stdout to the next stage instead, so their bytes
-        are never retained. This is the same stage :attr:`stdout` reads.
+        This is the same stage :attr:`stdout` reads. Interior stages relay
+        their stdout to the next stage; their stderr, when captured, is
+        recorded on that stage's own ``stages[i].captures``.
 
         Returns
         -------
@@ -393,12 +393,16 @@ class BytesPipelineResult:
     def captures(self) -> tuple[CapturedStream, ...]:
         """The final stage's capture records.
 
+        Interior stages relay their stdout to the next stage; their stderr,
+        when captured, is recorded on that stage's own
+        ``stages[i].captures``.
+
         Returns
         -------
         tuple[CapturedStream, ...]
             One record per stream the final stage captured, in
             stdout-then-stderr order, with the meaning
-            :class:`CommandResult` documents. Empty when it captured nothing.
+            :class:`CommandResult` documents; empty when it captured none.
         """
         return self.final.captures
 

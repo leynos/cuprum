@@ -143,7 +143,7 @@ class _SpillFiles:
         """Patch the spill create to hand out files this factory configures."""
         monkeypatch.setattr(
             "cuprum._capture_spill_io.NamedTemporaryFile",
-            typ.cast("typ.Any", self.factory),
+            self.factory,
         )
 
     @property
@@ -172,7 +172,7 @@ class _RefusingCreate:
         """Patch the spill create to refuse every attempt."""
         monkeypatch.setattr(
             "cuprum._capture_spill_io.NamedTemporaryFile",
-            typ.cast("typ.Any", self),
+            self,
         )
 
 
@@ -544,8 +544,11 @@ def test_a_vanished_spill_file_is_absorbed_when_byte_mode_reads_it_back(
     )
     events: list[CaptureEvent] = []
     _absorb(accumulator, [_PAYLOAD])
-    path = accumulator._path
-    assert path is not None, "the capture had to spill before it could vanish"
+    entries = list(tmp_path.iterdir())
+    assert len(entries) == 1, (
+        f"the capture had to spill before it could vanish; found {entries}"
+    )
+    (path,) = entries
     path.unlink()
 
     with observe_capture(events.append):
@@ -581,8 +584,11 @@ def test_a_vanished_spill_file_is_still_reported_as_text_in_text_mode(
     """
     accumulator = _accumulator(directory=tmp_path)
     _absorb(accumulator, [_PAYLOAD])
-    path = accumulator._path
-    assert path is not None, "the capture had to spill before it could vanish"
+    entries = list(tmp_path.iterdir())
+    assert len(entries) == 1, (
+        f"the capture had to spill before it could vanish; found {entries}"
+    )
+    (path,) = entries
     path.unlink()
 
     final = _finalize(accumulator)
@@ -594,7 +600,7 @@ def test_a_vanished_spill_file_is_still_reported_as_text_in_text_mode(
         "a completed spill keeps the file-backed record"
     )
     assert final.capture.path == path, (
-        f"the record must name the kept file; got {final.capture.path!r}"
+        f"the record must name the spill file; got {final.capture.path!r}"
     )
     assert final.capture.storage_failed is False, (
         "nothing the text-mode capture asked for failed"

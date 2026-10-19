@@ -88,11 +88,13 @@ def test_each_stream_resolves_from_its_own_field(
 
     def expected(declared: DeclaredCapture) -> CapturePolicyKind | None:
         """Resolve *declared* independently of the stream it was written on."""
-        if declared is None:
-            return policy_kind(FullCapture()) if capture else None
-        if isinstance(declared, bool):
-            return policy_kind(FullCapture()) if declared else None
-        return policy_kind(declared)
+        match declared:
+            case None:
+                return policy_kind(FullCapture()) if capture else None
+            case bool(enabled):
+                return policy_kind(FullCapture()) if enabled else None
+            case _:
+                return policy_kind(declared)
 
     assert _kind(resolved_stdout) == expected(stdout), (
         f"stdout resolved to {resolved_stdout!r} for declared {stdout!r}"
@@ -135,11 +137,12 @@ def test_capture_resolution_matrix(
     # up rather than passed through: the assertion is what keeps an unknown
     # name from reaching the field as a string and being rejected there, where
     # it would fail for a reason the case did not mean to test.
-    if isinstance(declared, str):
-        assert declared in named, f"unknown policy name {declared!r}"
-        policy: DeclaredCapture = named[declared]
-    else:
-        policy = declared
+    match declared:
+        case str(name):
+            assert name in named, f"unknown policy name {name!r}"
+            policy: DeclaredCapture = named[name]
+        case _:
+            policy = declared
     options = RunOutputOptions(capture=capture, capture_stdout=policy)
     assert _kind(options.resolved_capture[0]) == expected, (
         f"capture={capture} declared={declared!r} resolved to "

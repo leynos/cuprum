@@ -558,7 +558,7 @@ before the child starts, rather than silently choosing one side:
 Reusing one `fd()` target across several runs shares its file offset, so each
 run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
 only `pipe()` and `inherit()`: the input itself is passed to the run call's
-`stdin=` argument, as it always has been; see
+`stdin=` argument, as it has always been; see
 [Stream input from a producer](#stream-input-from-a-producer).
 
 ### Capture policies
@@ -750,6 +750,12 @@ stream, or that the payload is a file rather than text:
 `truncated` is derived rather than stored, so it cannot disagree with the count
 beside it. Spill transitions and storage failures are also published as
 `CaptureEvent`s; see [Observe production runs](#observe-production-runs).
+
+On a pipeline, `PipelineResult.captures` reports the final stage alone: an
+interior stage relays its stdout to the next stage rather than capturing it, so
+those bytes have no record anywhere. An interior stage's stderr, when that
+stage captures it, is recorded on that stage's own `stages[i].captures`; a
+stage that captured neither stream has an empty `captures`.
 
 ### Binary output
 

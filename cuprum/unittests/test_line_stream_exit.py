@@ -391,13 +391,16 @@ def test_discard_drain_releases_the_capture_sinks(
     """
     double = _FailedExitTestDouble(error=ValueError("unused"))
     sink = _ReleasedSink()
+    # A release that touched only the stdout slot would pass just as well with
+    # ``captures=(sink, None)``, so hold a second sink in the stderr slot.
+    stderr_sink = _ReleasedSink()
     run = typ.cast(
         "_LineStreamRun",
         types.SimpleNamespace(
             tasks=types.SimpleNamespace(
                 consumers=object(),
                 discard_on_cancel=asyncio.Event(),
-                captures=(sink, None),
+                captures=(sink, stderr_sink),
             ),
             telemetry=types.SimpleNamespace(emit=double.emit),
         ),
@@ -417,7 +420,11 @@ def test_discard_drain_releases_the_capture_sinks(
 
     assert sink.released, (
         "the discard path drains no settled result, so it must release the "
-        "accumulator itself or the spill file survives the run"
+        "stdout accumulator itself or the spill file survives the run"
+    )
+    assert stderr_sink.released, (
+        "the release must cover every captured slot, not only stdout, or a "
+        "stderr spill file survives the run"
     )
 
 

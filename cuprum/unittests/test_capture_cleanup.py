@@ -96,12 +96,17 @@ class _RefusingClose(pathlib.Path):
     portable across the POSIX and Windows runs in CI.
     """
 
+    # Instance state on the subclass's ``__dict__``; counts how often removal
+    # was asked for, so a teardown that never tried cannot pass.
+    unlink_attempts: int = 0
+
     # Spelled as an override of ``Path.unlink`` so the typechecker accepts it:
     # positional-or-keyword, with a default that is not a boolean literal
     # (a boolean *default* is what the boolean-trap rule forbids).
     def unlink(self, missing_ok: bool | None = None) -> None:
         """Refuse the removal, whatever the caller asked for."""
         _ = missing_ok
+        self.unlink_attempts += 1
         raise PermissionError(13, "Operation not permitted")
 
 
@@ -109,14 +114,15 @@ def _spill_at_a_path_that_refuses_removal(
     directory: pathlib.Path,
     *,
     keep_file: bool = False,
-) -> tuple[_FileAccumulator, pathlib.Path]:
+) -> tuple[_FileAccumulator, _RefusingClose]:
     """Return a spilled accumulator whose handle names an unremovable path.
 
     Returns
     -------
-    tuple[_FileAccumulator, pathlib.Path]
+    tuple[_FileAccumulator, _RefusingClose]
         The accumulator and the ``Path`` its handle names, which is the
-        refusal-carrying subclass the cleanup step will be asked to remove.
+        refusal-carrying subclass carrying the removal count the cleanup step
+        will be asked to increment.
     """
     accumulator = _spilled_accumulator(directory, keep_file=keep_file)
     handle = _finalize(accumulator).handle
@@ -277,7 +283,8 @@ def test_an_unlink_that_fails_is_absorbed_by_the_result_path(
     is a failed *retention* call like any other and is absorbed. The result
     step runs first and must report rather than raise, or a successful command
     would be reported as failing because its temporary file outlived it. The
-    surviving file is the witness that the removal was really attempted.
+    surviving file alone is not the witness: a cleanup that never tried would
+    leave it there too, so the removal count proves the attempt.
     """
     accumulator, path = _spill_at_a_path_that_refuses_removal(tmp_path)
     final = _finalize(accumulator)
@@ -286,6 +293,10 @@ def test_an_unlink_that_fails_is_absorbed_by_the_result_path(
 
     assert path.exists(), (
         "the case has to leave the file behind for its refusal to mean anything"
+    )
+    assert path.unlink_attempts == 1, (
+        "teardown must attempt the removal exactly once; "
+        f"got {path.unlink_attempts} attempts"
     )
 
 
@@ -305,4 +316,8 @@ def test_an_unlink_that_fails_is_absorbed_by_the_sink_path(
 
     assert path.exists(), (
         "the case has to leave the file behind for its refusal to mean anything"
+    )
+    assert path.unlink_attempts == 1, (
+        "teardown must attempt the removal exactly once; "
+        f"got {path.unlink_attempts} attempts"
     )

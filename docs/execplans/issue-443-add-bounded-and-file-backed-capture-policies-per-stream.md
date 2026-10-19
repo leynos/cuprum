@@ -675,6 +675,22 @@ Thresholds that trigger escalation when breached.
   file than the branch's capture section, so the two had to be woven by hand
   rather than by taking either side. Date/Author: 2026-10-19, implementation
   agent.
+- [x] (2026-10-19) Clear the ten findings of review round four in one commit.
+  Six were documentation or docstrings: the `PipelineResult.captures` and
+  `BytesPipelineResult.captures` docstrings denied that an interior stage's
+  stderr is captured at all, which `_create_stage_capture_tasks` and
+  `_build_stage_result` contradict; three prose corrections and a changelog
+  sentence split followed. Four were test-strength corrections, each a case
+  that could pass for the wrong reason: the discard-drain release case held a
+  sink only in the stdout slot, the two refused-unlink cases could not tell an
+  absorbed refusal from a cleanup that never tried, the shared-directory case
+  could not see a "remove everything" cleanup, and the private `_path` reads
+  pinned an internal field name. The `typ.cast("typ.Any", ...)` wrappers around
+  two `monkeypatch.setattr` values and the two `isinstance()` splits in the
+  policy tests were mechanical. A probe that narrowed the discard-drain release
+  to `captures[:1]` fails the new stderr assertion, which is what establishes
+  the strengthened case is not vacuous. Date/Author: 2026-10-19, implementation
+  agent.
 
 ## Surprises & discoveries
 
@@ -2004,6 +2020,54 @@ rather than by growing the module. After the review the same claim was found
 untested in the other prose that describes `keep_file`: the design document and
 the migration guide both promised the kept file on every exit route, so both
 were corrected in the same commit.
+
+## Review round four on the pushed head
+
+`coderabbit review --agent` over the pushed head `2239573eb` (125 files
+reviewed) reported ten findings. Every one was checked against the code before
+being acted on; none changed runtime behaviour, and every one was valid.
+
+Documentation and docstrings:
+
+- **The `PipelineResult.captures` docstring denied interior stderr.** It said
+  only the final stage's streams are captured. `_create_stage_capture_tasks`
+  builds a stderr consumer for every stage whose `consumes_stderr` holds, and
+  `_build_stage_result` attaches `stderr_capture` to every stage result, so an
+  interior stage's stderr — truncation, spill, and storage-failure records
+  included — lives on `stages[i].captures`. The design document already said
+  so; the docstring and `BytesPipelineResult.captures` now say it too, and the
+  users' guide's capture-metadata section gained the same paragraph.
+- **Three prose corrections.** "as it always has been" became "as it has
+  always been"; the `CaptureSink` ownership paragraph lost a comma before
+  "when", "the await costs a coroutine step" became "awaiting costs one
+  coroutine step", and "by accident" became "inadvertently"; the changelog's
+  capture-resolution sentence was split so the example and the compatibility
+  claim each get their own sentence.
+
+Test-strength corrections, where the finding was that a case could pass for the
+wrong reason:
+
+- **The discard-drain release case held a sink in the stdout slot only.** A
+  release that touched only the first slot passed. A second `_ReleasedSink` in
+  the stderr slot is now asserted too, and a probe that narrowed the release to
+  `captures[:1]` fails the new assertion.
+- **The refusal cases could not tell "absorbed a refused unlink" from "never
+  tried".** `_RefusingClose.unlink` counts its attempts, and both cases assert
+  exactly one. A surviving file was doing double duty as the witness for
+  removal having been attempted, which it cannot be.
+- **The shared-directory case could not see a "remove everything" cleanup.**
+  With no file the run did not own in the directory, an empty listing was
+  equally consistent with a cleanup that deleted the whole listing. A bystander
+  file is written before the runs and asserted to survive both.
+- **Two vanished-file cases read the private `accumulator._path`.** They now
+  discover the sole entry in the policy's directory, so the cases do not pin an
+  internal field name. The text-mode message says "spill file", which is what
+  that policy produced.
+- **Two `monkeypatch.setattr` installers wrapped their value in
+  `typ.cast("typ.Any", ...)`.** `setattr` takes a plain object, so the casts
+  bought nothing and added an `Any` the guidelines require be justified.
+- **The policy tests split on `isinstance()`.** Both splits are now `match`
+  statements, as the project's style asks.
 
 ## Context and orientation
 

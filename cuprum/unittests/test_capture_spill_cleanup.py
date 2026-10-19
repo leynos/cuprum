@@ -361,14 +361,18 @@ def test_a_kept_spill_file_survives_a_timed_out_run_whole(
 def test_two_runs_into_one_directory_leave_nothing_behind(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Each run owns its own file, and neither this run's cleanup nor the other's.
+    """Each run removes its own spill file and leaves every other file alone.
 
     The handle is per-capture state, so two runs sharing a spill directory must
     not let one run's cleanup reach across to the other's file — and after both
-    have finished the directory must be empty either way. This is the case that
-    would catch a cleanup implemented as 'remove everything in the directory',
-    which would pass every single-run test above.
+    have finished the directory must be empty either way. The bystander file is
+    what makes this case catch a cleanup implemented as 'remove everything in
+    the directory', which an empty-directory check alone cannot see and which
+    would pass every single-run test above.
     """
+    bystander = tmp_path / "not-a-spill"
+    bystander.write_bytes(b"keep me")
+
     first = _SpillWitness(tmp_path)
     with observe_capture(first):
         first_result = _builder()("-c", _SPILL_THEN_EXIT.format(code=0)).run_sync(
@@ -376,10 +380,10 @@ def test_two_runs_into_one_directory_leave_nothing_behind(
         )
     first_path = _reported_path(_only_spill(first_result.captures))
 
-    # Between the runs no file exists: the second run's spill has not happened
-    # yet, so this assertion confirms the first run removed its own file rather
-    # than the second run removing both.
-    assert not list(tmp_path.iterdir()), (
+    # Between the runs only the bystander exists: the second run's spill has
+    # not happened yet, so this assertion confirms the first run removed its
+    # own file rather than the second run removing both.
+    assert list(tmp_path.iterdir()) == [bystander], (
         f"the first run must remove its file before the second starts; {first_path}"
     )
 
@@ -394,4 +398,8 @@ def test_two_runs_into_one_directory_leave_nothing_behind(
     assert second_path.name in second.awaited(), (
         f"the witness must have seen the second run's file {second_path.name}"
     )
+    assert bystander.read_bytes() == b"keep me", (
+        "a run's cleanup must not reach a file it did not create"
+    )
+    bystander.unlink()
     _directory_is_clean(tmp_path, outcome="two runs sharing a spill directory")

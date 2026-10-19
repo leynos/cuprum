@@ -797,9 +797,9 @@ _Applications upgrading from 0.1 should follow the
   today's behaviour — `BoundedCapture(max_bytes=N)`, or
   `FileBackedCapture(spill_threshold_bytes=…, directory=…, keep_file=…)`. A
   stream left at `None` inherits the existing `capture` shorthand and an
-  explicit per-stream value wins for its own stream, so
+  explicit per-stream value wins for its own stream: for example,
   `capture=True, capture_stderr=False` captures stdout in full and nothing on
-  stderr and every current caller resolves exactly as before. A value that is
+  stderr. Every current caller resolves exactly as before. A value that is
   neither a policy nor a `bool` is refused with `ValueError` before the child
   spawns, so a typo costs an exception rather than a run that captured
   something unintended.
