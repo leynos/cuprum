@@ -1643,13 +1643,15 @@ failure is absorbed so that the run's own outcome stands. A failed *creation*
 leaves the stream on the heap, where it is still reported complete; a failed
 *append* stops accepting new writes and reports `storage_failed`, but the
 prefix that reached the file is not truncated to the bytes the last flush
-carried: appends are buffered, so finalization flushes once before a byte-mode
-read-back even on the failed path, and the payload holds every byte the
-accumulator had accepted. That flush is reported as a flush failure only when
-no earlier failure already explains the capture, so the append's own event
-stays the one the caller reads. Both failures emit a `CaptureEvent` and name
-the error's class rather than its message, because the event channel's
-consumers treat fields as low-cardinality labels.
+carried: appends are buffered, so finalization attempts one flush before a
+byte-mode read-back even on the failed path. If that flush and the read-back
+succeed, the payload includes every byte the accumulator had accepted. If the
+flush also fails, buffered bytes are not guaranteed in the payload, and the
+earlier append-failure event remains authoritative. A flush failure is reported
+separately only when no earlier failure already explains the capture. Both
+failures emit a `CaptureEvent` and name the error's class rather than its
+message, because the event channel's consumers treat fields as low-cardinality
+labels.
 
 A failed *read-back*, which only byte mode performs, reports `storage_failed`
 too, and the record's payload is absent. The file follows the policy rather
