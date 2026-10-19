@@ -293,8 +293,10 @@ def test_rsync_sync_rejects_relative_paths_unless_opted_in(
 
 
 _LEADING_DASH = st.sampled_from(("-", "--"))
-# A relative path shaped like a tool option: a dash prefix immediately
-# followed by one to three ordinary segments, never a bare "-" or "--".
+# A relative path shaped like a tool option: a "-" or "--" prefix joined
+# directly to one to three "/"-separated segments. The segments may contain
+# hyphens, so "--" and "---" are reachable and the separator assertions below
+# stay positional rather than searching for the first "--".
 _OPTION_SHAPED_RELATIVE = _LEADING_DASH.flatmap(
     lambda dash: st.lists(_SEGMENTS, min_size=1, max_size=3).map(
         lambda parts: dash + "/".join(parts)
