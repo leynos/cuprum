@@ -2257,8 +2257,9 @@ For `lines()` the third term is the scope in force when the _first event is
 pulled_, not the scope the stream was built in. An explicit timeout — including
 `0`, which expires immediately — still wins, then `ExecutionContext.timeout`;
 leaving the argument as `None` falls through to the consuming scope rather than
-disabling timeouts. A stream prepared under a generous or absent deadline
-therefore cannot outlive a narrower scope that it is iterated in.
+disabling timeouts. Only a stream that _inherits_ its deadline is bounded by
+the consuming scope: an explicit timeout, such as `lines(timeout=60)` iterated
+under `ScopeConfig(timeout=1)`, still wins and may exceed that scope's deadline.
 
 `ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
 timeouts when constructed. Values must be finite and non-negative; `None` means
