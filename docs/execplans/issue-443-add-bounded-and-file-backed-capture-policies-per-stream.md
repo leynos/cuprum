@@ -2297,6 +2297,66 @@ ends of the log (`/tmp/pytest-targeted-rebase-issue443-onto-f359f2ec4.out`).
 
 Date/Author: 2026-10-19, implementation agent.
 
+## Third integration: merge onto bounded output delivery
+
+Between the second replay and publication, upstream merged PR #622 ("Support
+bounded output delivery off the execution loop", issue #436), landing as
+`102951f48` and advancing `origin/main` past this branch's replay target
+`f359f2ec4`. The PR merge ref is built on the current base, so the branch was
+merged forward onto `102951f48` rather than replayed a third time: the replay
+series is still child-owned and untouched, and a merge keeps every commit's
+identity visible for review.
+
+Merge commit `fd684768f` has parents `d087247b2` (the branch) and `102951f48`
+(the target). Sixteen paths conflicted; all are in the execution core, the
+snapshot, the duplication allow list, or the ADRs. `git ls-files -u` is empty
+after resolution and `compileall` plus an AST sweep report no syntax errors.
+
+Recovery material, retained until publication is accepted:
+
+- `refs/recovery/issue443-head-d087247b2` — the branch head before the merge.
+- `refs/recovery/issue443-integration-base-f359f2ec4` — the previous base.
+- `refs/recovery/issue443-target-102951f48` — the merge target.
+- Every replay ref listed above remains in place.
+
+**ADR numbering.** Both sides introduced an ADR 025. Main's is
+`adr-025-bounded-output-delivery.md` and it landed first, so it keeps the
+number; the branch-authored ADR was `git mv`d to
+`adr-026-narrowed-results-only-for-complete-text-capture.md` and every
+reference in `docs/` was repointed. Rewriting main's accepted ADR text was not
+an option: accepted ADRs in this repository are append-only.
+
+**Duplication allow list.** The first `[[tool.duplication_gate.allow]]` entry
+grew on both sides. The merged members are the true set union (41 modules),
+recomputed with `tomllib` across the two stages rather than taken from either
+side's list, and every member path was checked to exist on disk. Two further
+conflicts kept both sides' entries, because each names a different family.
+
+**`_pipeline_config` split.** Both sides added to this module and the merge
+pushed it past the 400-line ceiling. The delivery-worker, idle-monitor, and
+failed-setup cleanup helpers moved to `cuprum/_pipeline_config_setup.py`; the
+result is 340 lines, and the four moved names were confirmed by grep to have
+no external references, so no import site changed.
+
+**The line-path encoding guard.** Main made `SafeCmd.lines()` construct its
+execution lazily, inside the async generator, so the bounded-encoding guard in
+the execution bundle fires only once the caller starts iterating. The
+branch-authored contract (`test_bounded_encoding_guard.py`) pins the refusal
+to the call, before spawning and before consumption. The guard is therefore
+lifted into `_reject_unsupported_bounded_captures`, which takes the resolved
+`(stdout, stderr)` pair; the execution bundle and `lines()` both call it, and
+`lines()` calls it with `capture_bytes=False` because line iteration always
+returns text. Weakening the test was not an option: it states a real
+pre-spawn guarantee.
+
+**Finalization.** `_reconcile_pipeline_run_failure` keeps main's
+`observers.pending_tasks` drain and composes it with the branch's
+capture-sink release in `finally`, so a failing drain still cannot strand a
+spill file. The two defects found while merging this path (a wrong argument
+and a leftover bare local name) were fixed before the first smoke run.
+
+Date/Author: 2026-10-19, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
