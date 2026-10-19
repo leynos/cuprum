@@ -714,8 +714,9 @@ members = [
     "cuprum/_pipeline_spawn.py",
     "cuprum/_subprocess_stream_exit.py",
     "cuprum/_subprocess_wait.py",
+    "cuprum/_pipeline_internals.py",
 ]
-reason = "Forty-one modules whose `if typ.TYPE_CHECKING:` block repeats. The entry names the modules this tree's detector reports, as the union of the family each side of the merge recorded. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry. Both parents' module splits contribute members: the capture work added `_command_execution_config.py`, `_command_finalization.py`, `_command_internals.py`, `_pipeline_config.py`, `_pipeline_finalize.py`, `_pipeline_records.py`, `_pipeline_results.py`, `_pipeline_stage_streams.py`, `_stream_config.py`, and `_subprocess_execution.py`; the bounded-delivery work added `_line_stream/spawn.py`, `_pipeline_spawn.py`, `_subprocess_stream_exit.py`, and `_subprocess_wait.py`."
+reason = "Forty-two modules whose `if typ.TYPE_CHECKING:` block repeats. The entry names the modules this tree's detector reports, as the union of the family each side of the merge recorded. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry. Both parents' module splits contribute members: the capture work added `_command_execution_config.py`, `_command_finalization.py`, `_command_internals.py`, `_pipeline_config.py`, `_pipeline_finalize.py`, `_pipeline_records.py`, `_pipeline_results.py`, `_pipeline_stage_streams.py`, `_stream_config.py`, and `_subprocess_execution.py`; the bounded-delivery work added `_line_stream/spawn.py`, `_pipeline_spawn.py`, `_subprocess_stream_exit.py`, and `_subprocess_wait.py`. `_pipeline_internals.py` joins here with the capture work too: its own `TYPE_CHECKING` prologue repeats the same guard, but only a merged tree sees it in the same family as the modules both parents split out."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -748,10 +749,6 @@ reason = "One per-channel reporter body, over each channel's own event type. The
 [[tool.duplication_gate.allow]]
 unit = "cuprum/_capture_accumulators.py::cleanup"
 reason = "One key covers both of the full and bounded accumulators' `cleanup` methods, because the family is two methods of one module rather than two modules sharing an idiom. Each drops its retained bytes by rebinding the buffer, because a memory-backed policy owns nothing on disk to remove; the two classes are deliberately unrelated, the shared `CaptureSink` protocol is structural, and a common base would exist only to hold those two lines. The file-backed accumulator's cleanup is genuinely different — it awaits a spill handle — so there is no third body a shared method could cover."
-
-[[tool.duplication_gate.allow]]
-members = ["cuprum/_pipeline_results.py", "cuprum/_subprocess_execution.py"]
-reason = "Two modules importing the same four result-helper names. Import declarations cannot be factored into a shared helper, for the reason the import-family entries above record: each module binds the names it uses into its own namespace, and the overlap is the prologue, not an operation. `_subprocess_execution` assembles a single command's result, `_pipeline_results` a stage's; their bodies diverge immediately below the import."
 
 # --- Parallel structures -------------------------------------------------
 #
@@ -1037,21 +1034,17 @@ reason = "Two scope modules binding the same overlay names and carrying the same
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_bytes_run.py",
-    "cuprum/sh/__init__.py",
-]
-reason = "Two modules importing the same four result names. `_bytes_run` must take them from the results module directly rather than through the facade, because the facade imports it and reaching the facade would close an import cycle; the facade's own re-export is its documented purpose."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/adapters/control_metrics.py",
     "cuprum/adapters/stream_metrics.py",
 ]
 reason = "Two metric adapters whose import blocks and recorder-name lists overlap. Each adapter binds the names of its own event vocabulary and registers its own collector; the shared text is the import list, not a shared implementation."
 
 [[tool.duplication_gate.allow]]
-unit = "cuprum/sh/results.py"
-reason = "The buffered and bytes result records in one module: `CommandResult` and `BytesCommandResult`, whose field skeleton, keyword-only declarations and `ok` property are the same, with only the `stdout`/`stderr` element types differing. `_result_types.py` states that the bytes form deliberately does not subclass the buffered one, the public-API tests pin each type's `dc.fields()` order and positional slots, and the differing annotations are asserted. A shared base would re-order those fields and cap the annotations, and the only shared logic is a one-line `ok`."
+members = [
+    "cuprum/sh/results.py",
+    "cuprum/sh/byte_results.py",
+]
+reason = "The buffered and bytes result records, split across two modules when the text records outgrew the 400-line ceiling: `CommandResult ~ BytesCommandResult`, whose field skeleton, keyword-only declarations and `ok` property are the same with only the `stdout`/`stderr` element types differing, and `PipelineResult ~ BytesPipelineResult`, whose stage, failure and output properties differ only in the stage type they return. `_result_types.py` states that the bytes forms deliberately do not subclass the buffered ones, the public-API tests pin each type's `dc.fields()` order and positional slots, and the differing annotations are asserted. A shared base would re-order those fields and cap the annotations, and the only shared logic is a one-line `ok` and property bodies that already delegate to `self.final`; a generic base would replace two concrete public types with a parameterized one. This replaces the single-module `unit` entry that covered the same two families before `byte_results.py` was split out, so the entry is keyed by both modules rather than one path."
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_process_signal.py", "cuprum/adapters/_tracing_control_join.py"]
 reason = "A two-line `if <field> is None: return` guard in two unrelated modules: one declines to report a teardown for a run with no report to file, the other declines to record an event with no execution to attribute it to. The shared text is the None-tolerance guard this codebase uses at every optional-collaborator boundary — the same idiom the seven-module and two-module entries elsewhere in this list adjudicate — not a shared operation. Neither module has a collaborator to hand the guard, and collapsing them would mean one module importing the other only to restate two lines."
@@ -1065,10 +1058,6 @@ reason = "Two modules whose import prologue repeats: the same five-name `from cu
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_pipeline_finalize.py", "cuprum/_command_finalization.py"]
 reason = "The same prologue in the pipeline and command finalization modules: an `_observability` import of the two shutdown helpers (`_drain_tasks_during_cleanup`, `_wait_for_exec_hook_tasks`) that every finalizer needs to stop hook tasks, before each declares its `TYPE_CHECKING` block. Two modules, two different result families, one dependency surface; import declarations cannot be shared, for the reason the import-family entries above record. The finalization ordering below the imports is where the two deliberately part company."
-
-[[tool.duplication_gate.allow]]
-members = ["cuprum/_command_internals.py", "cuprum/_subprocess_execution.py"]
-reason = "Two `if typ.TYPE_CHECKING:` prologues that open with the same `import asyncio` line and then import `_StageObservation` and `_AnyCommandResult` in the same order, before each continues with its own type-only collaborators. The matched text is the guard plus the first imports a run-machinery module needs; import declarations cannot be factored into a shared helper, for the reason the import-family entries above record. The pair surfaced with this branch's module splits; the idiom is the one already recorded for the wider TYPE_CHECKING family."
 
 [[tool.duplication_gate.allow]]
 members = ["cuprum/sh/bytes_entry_points.py", "cuprum/sh/pipeline.py", "cuprum/sh/safe_cmd.py"]

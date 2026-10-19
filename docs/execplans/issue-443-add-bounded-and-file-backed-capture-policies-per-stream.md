@@ -2335,25 +2335,25 @@ conflicts kept both sides' entries, because each names a different family.
 **`_pipeline_config` split.** Both sides added to this module and the merge
 pushed it past the 400-line ceiling. The delivery-worker, idle-monitor, and
 failed-setup cleanup helpers moved to `cuprum/_pipeline_config_setup.py`; the
-result is 340 lines, and the four moved names were confirmed by grep to have
-no external references, so no import site changed.
+result is 340 lines, and the four moved names were confirmed by grep to have no
+external references, so no import site changed.
 
 **The line-path encoding guard.** Main made `SafeCmd.lines()` construct its
 execution lazily, inside the async generator, so the bounded-encoding guard in
 the execution bundle fires only once the caller starts iterating. The
-branch-authored contract (`test_bounded_encoding_guard.py`) pins the refusal
-to the call, before spawning and before consumption. The guard is therefore
-lifted into `_reject_unsupported_bounded_captures`, which takes the resolved
+branch-authored contract (`test_bounded_encoding_guard.py`) pins the refusal to
+the call, before spawning and before consumption. The guard is therefore lifted
+into `_reject_unsupported_bounded_captures`, which takes the resolved
 `(stdout, stderr)` pair; the execution bundle and `lines()` both call it, and
 `lines()` calls it with `capture_bytes=False` because line iteration always
-returns text. Weakening the test was not an option: it states a real
-pre-spawn guarantee.
+returns text. Weakening the test was not an option: it states a real pre-spawn
+guarantee.
 
 **Finalization.** `_reconcile_pipeline_run_failure` keeps main's
-`observers.pending_tasks` drain and composes it with the branch's
-capture-sink release in `finally`, so a failing drain still cannot strand a
-spill file. The two defects found while merging this path (a wrong argument
-and a leftover bare local name) were fixed before the first smoke run.
+`observers.pending_tasks` drain and composes it with the branch's capture-sink
+release in `finally`, so a failing drain still cannot strand a spill file. The
+two defects found while merging this path (a wrong argument and a leftover bare
+local name) were fixed before the first smoke run.
 
 Date/Author: 2026-10-19, implementation agent.
 
