@@ -2330,7 +2330,36 @@ an option: accepted ADRs in this repository are append-only.
 grew on both sides. The merged members are the true set union (41 modules),
 recomputed with `tomllib` across the two stages rather than taken from either
 side's list, and every member path was checked to exist on disk. Two further
-conflicts kept both sides' entries, because each names a different family.
+conflicts kept both sides' entries, because each names a different family. The
+union turned out to be one short: the detector's TYPE_CHECKING family has 42
+locations, and `cuprum/_pipeline_internals.py` was in neither parent's list.
+The entry now names 42.
+
+**First gate run at `6efc173b7`.** Three of the seven gates were red:
+`check-fmt` (mdtablefix rewrapped three execplan paragraphs), `duplication`
+(the three families above plus four stale entries), and `test` (one test
+patched a seam the merge moved). The test failure is the interesting one: the
+pipeline-config delivery test replaced `_build_idle_monitor` on
+`cuprum._pipeline_config`, but `_pipeline_config` now imports
+`_build_pipeline_idle_monitor` from `_pipeline_config_setup`, so the patch
+bound a name nothing called and the test failed with `AttributeError` rather
+than exercising the cleanup path. The patch now targets
+`_build_pipeline_idle_monitor`, which is the function
+`_prepare_pipeline_config` actually invokes, so the assertion still proves the
+worker and sink are released on a failed setup.
+
+The four stale entries were reconciled against source rather than deleted on
+the gate's word. `_pipeline_results.py ~ _subprocess_execution.py` genuinely no
+longer shares an import block;
+`_command_internals.py ~ _subprocess_execution.py` lost it when
+`_command_internals.py`'s TYPE_CHECKING prologue was rewritten (there is no
+`import asyncio` there any more); `_bytes_run.py ~ sh/__init__.py` already
+reported stale on `main` at `102951f48`, so it is pre-existing rather than
+merge damage; and the single-module `unit = "cuprum/sh/results.py"` entry
+covered the buffered/bytes record pair before `byte_results.py` was split out,
+so it becomes a two-member entry naming both modules. With those changes the
+gate reports `duplication gate passed; 69 allowed by reasoned exceptions` and
+no stale entries.
 
 **`_pipeline_config` split.** Both sides added to this module and the merge
 pushed it past the 400-line ceiling. The delivery-worker, idle-monitor, and
@@ -2354,6 +2383,15 @@ guarantee.
 release in `finally`, so a failing drain still cannot strand a spill file. The
 two defects found while merging this path (a wrong argument and a leftover bare
 local name) were fixed before the first smoke run.
+
+Date/Author: 2026-10-19, implementation agent.
+
+## Fourth integration: first gate run after the merge
+
+Commit `b85f36cdd` carries the three fixes above. The next step is a fresh,
+sequential run of all seven gates against that frozen head; the first run
+stopped at `make test`, so the `test-rust` stage that `make test` also drives
+has not yet been observed at this tree.
 
 Date/Author: 2026-10-19, implementation agent.
 
