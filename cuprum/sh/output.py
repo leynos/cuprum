@@ -114,7 +114,7 @@ class RunOutputOptions:
         multi-byte character's decoded form; they are not otherwise
         distinguished from complete lines. The bound is independent of
         ``capture`` and ``echo``: a run with capture disabled is bounded
-        exactly as a capturing one is, and ``echo_max_line_bytes`` bounds only
+        exactly as a capturing one is, and ``max_echo_line_bytes`` bounds only
         the mirrored copy in bytes. ``None`` disables the bound and restores
         unbounded retention for one line. The field is keyword-only because it
         was inserted mid-list: accepting it positionally would have taken

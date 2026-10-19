@@ -7,18 +7,19 @@ sink. This module owns the other half, the checks that a field carries the
 positive integer or ``None``, and flags that are real ``bool`` values rather
 than truthy objects.
 
-Every rule here reads one assembled options object, because that is the
-smallest thing able to hold the value under test, and none of them needs to
-know what any other field means. ``RunOutputOptions.__post_init__`` calls them
-before it spawns anything, so a malformed option fails at construction rather
-than at the first recorded line or the first framed run. Keeping them beside
-the options --- but out of ``output.py``, which is at the module ceiling --- is
-the same split ``stdio_rules`` makes for the stdio targets: the vocabulary
-stays in one module and the policing in a sibling.
+Each rule reads either one field value or the assembled options object, and
+none of them needs to know what any other field means.
+``RunOutputOptions.__post_init__`` calls them before it spawns anything, so a
+malformed option fails at construction rather than at the first recorded line
+or the first framed run. Keeping them beside the options --- but out of
+``output.py``, which is at the module ceiling --- is the same split
+``stdio_rules`` makes for the stdio targets: the vocabulary stays in one module
+and the policing in a sibling.
 
-``_validate_max_line_chars`` is re-exported by ``cuprum.sh.output`` under its
-old name, so both the construction path and the tests that import it by path
-keep resolving the same function object.
+Both rules are re-exported by ``cuprum.sh.output``.
+``_validate_convenience_flags`` moved from ``output.py`` and keeps its original
+name, so existing importers resolve the same function object;
+``_validate_max_line_chars`` is new in this module.
 """
 
 from __future__ import annotations
