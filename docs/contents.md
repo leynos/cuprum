@@ -37,6 +37,28 @@ open each document.
   timeouts a coverage run is bounded by, the value each holds, and why the
   compile-driven `trybuild` tests carry an allowance of their own.
 
+## Vendored upstream documentation
+
+These documents are imported from the `rstest-bdd` project and are not Cuprum's
+own guidance. The [users' guide](rstest-bdd-users-guide.md) applies only where
+a Cuprum change touches the Rust behaviour-testing integration that `AGENTS.md`
+names as the project's validation framework; consequently no dependency on
+`rstest-bdd` exists today. The
+[provenance record](rstest-bdd-v0-6-0-import-provenance.md) states the upstream
+commit, the checksums of both sides of the link rewriting, and the content
+boundary.
+
+- [`rstest-bdd` users' guide][rstest-bdd-guide] - upstream user-facing guide to
+  the behaviour-driven development framework.
+- [`rstest-bdd` 0.6.0 migration guide][rstest-bdd-migration-060] - the breaking
+  changes between 0.5.0 and 0.6.0, with per-change migration steps.
+- [`rstest-bdd` 0.5.0 migration guide][rstest-bdd-migration-050] - the
+  intervening guide, retained because the target release's guidance builds on
+  it.
+- [`rstest-bdd` import provenance][rstest-bdd-provenance] - where the imported
+  documents came from, how their cross-file links were rewritten, and what the
+  import deliberately excludes.
+
 ## Design and decisions
 
 - [Cuprum design](cuprum-design.md) - system architecture, command model,
@@ -168,6 +190,10 @@ open each document.
 [adr-025]: adr-025-bounded-output-delivery.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
+[rstest-bdd-guide]: rstest-bdd-users-guide.md
+[rstest-bdd-migration-050]: rstest-bdd-v0-5-0-migration-guide.md
+[rstest-bdd-migration-060]: rstest-bdd-v0-6-0-migration-guide.md
+[rstest-bdd-provenance]: rstest-bdd-v0-6-0-import-provenance.md
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
