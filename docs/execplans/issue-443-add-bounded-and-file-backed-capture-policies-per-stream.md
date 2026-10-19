@@ -747,6 +747,20 @@ Thresholds that trigger escalation when breached.
   where the child predicate was reconciled.
 
   Date/Author: 2026-10-19, implementation agent.
+- [x] (2026-10-19) Merged `origin/main` at `102951f48` (bounded output
+  delivery, PR #622) into the branch and reconciled the result. Sixteen paths
+  conflicted; the branch-authored ADR became ADR 026 so main's accepted ADR 025
+  kept its number, `_pipeline_config` was split at the 400-line ceiling, and
+  the four stale duplication entries were checked against source before
+  removal. See "Third integration" below.
+- [x] (2026-10-19) Ran the seven gates sequentially against the merged tree.
+  The first run stopped at `check-fmt`, `duplication`, and `test`; commit
+  `b85f36cdd` fixes all three, and the second run at frozen head
+  `7cbb726fdb0b30a4822be2eafa8f13bfde3df9be` passes all seven (5425 Python
+  tests, 167 nextest tests, three doctest binaries). See "Fourth integration"
+  below, which records each gate's elapsed time and closing evidence.
+
+  Date/Author: 2026-10-19, implementation agent.
 
 ## Surprises & discoveries
 
@@ -2392,6 +2406,61 @@ Commit `b85f36cdd` carries the three fixes above. The next step is a fresh,
 sequential run of all seven gates against that frozen head; the first run
 stopped at `make test`, so the `test-rust` stage that `make test` also drives
 has not yet been observed at this tree.
+
+**Second gate run, at `7cbb726fd`.** That run is now complete. The seven gates
+ran sequentially against frozen head `7cbb726fdb0b30a4822be2eafa8f13bfde3df9be`
+and every one exited 0. Each log is at
+`/tmp/<gate>-cuprum-rebase-issue443-onto-f359f2ec4.out` and records the head it
+certifies on its first line and its own exit status and elapsed time on its
+last:
+
+| Gate                | Elapsed | Closing evidence                                             |
+| ------------------- | ------- | ------------------------------------------------------------ |
+| `make check-fmt`    | 1s      | `98 files left unchanged.`                                   |
+| `make lint`         | 261s    | `actionlint ... -shellcheck=` clean, then `exit=0`           |
+| `make typecheck`    | 2s      | `All checks passed!`                                         |
+| `make markdownlint` | 34s     | `exit=0`                                                     |
+| `make nixie`        | 0s      | `All diagrams validated successfully!`                       |
+| `make duplication`  | 1s      | `duplication gate passed; 69 allowed by reasoned exceptions` |
+| `make test`         | 560s    | `exit=0`                                                     |
+
+`make test` drives both suites. The `test-selection` prerequisite ran first, as
+the recipe orders it, and reported `77 passed`. `test-python` then runs one
+pytest process per `PYTEST_TARGETS` glob or file, so the log holds 21 separate
+sessions. Reading each session's own summary line:
+
+| Selector member                                   | Modules | Result                    |
+| ------------------------------------------------- | ------- | ------------------------- |
+| `cuprum/unittests/test_*.py`                      | 405     | `4031 passed, 93 skipped` |
+| `tests/test_ci_*.py`                              | 58      | `843 passed`              |
+| the eleven named `tests/test_*.py` targets        | 11      | `92 passed`               |
+| `scripts/tests/test_boundary_*.py`                | 6       | `116 passed`              |
+| the three other `scripts/tests/test_*.py` targets | 3       | `12 passed`               |
+| `tests/behaviour/test_[a-h]*.py`                  | 20      | `171 passed`              |
+| `tests/behaviour/test_[i-r]*.py`                  | 11      | `30 passed, 7 skipped`    |
+| `tests/behaviour/test_[s-z]*.py`                  | 9       | `31 passed, 13 skipped`   |
+| `tests/integration/test_act_stream_parsing.py`    | 1       | `22 passed`               |
+
+The named-target row sums the eleven one-file sessions the recipe starts (14,
+19, 12, 10, 5, 4, 2, 11, 8, 4, and 3 tests); the `test_boundary_*.py` glob
+collected six modules in one process and reported 116; the remaining three
+script targets report 2, 5, and 5. Across all 21 sessions: 5425 passed, 0
+failed, 113 skipped. 29 + 7 + 3 + 2 snapshots passed, and no snapshot was
+written. The module counts come from the node IDs each session printed.
+
+The `test-rust` stage — the part the first run never reached — ran clean:
+nextest `167 tests run: 167 passed, 0 skipped` under run ID
+`89dfb70e-b213-4fef-bd17-91d87f1630bb`, then three doctest binaries reporting
+`ok` (`0 passed; 0 failed`, `0 passed; 0 failed`,
+`0 passed; 0 failed; 3 ignored`). The `test-selection` guard ran first, as the
+recipe orders it, so the selector loop above is known to have collected what
+the selector claims.
+
+The log also carries repeated
+`[build-limits] <crate>: the managed sccache server is unreachable; compiling
+without the cache`
+lines. Per the operating instructions that is an uncached compile, not a build
+failure; every crate compiled and the run finished.
 
 Date/Author: 2026-10-19, implementation agent.
 
