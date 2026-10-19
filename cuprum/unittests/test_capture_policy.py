@@ -91,7 +91,7 @@ def test_each_stream_resolves_from_its_own_field(
         match declared:
             case None:
                 return policy_kind(FullCapture()) if capture else None
-            case bool(enabled):
+            case bool() as enabled:
                 return policy_kind(FullCapture()) if enabled else None
             case _:
                 return policy_kind(declared)
@@ -138,7 +138,7 @@ def test_capture_resolution_matrix(
     # name from reaching the field as a string and being rejected there, where
     # it would fail for a reason the case did not mean to test.
     match declared:
-        case str(name):
+        case str() as name:
             assert name in named, f"unknown policy name {name!r}"
             policy: DeclaredCapture = named[name]
         case _:
