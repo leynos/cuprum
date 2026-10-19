@@ -39,31 +39,16 @@ def _stderr_config(config: _PipelineRunConfig) -> _StreamConfig:
 
 
 @pytest.mark.parametrize(
-    ("stream", "expected_echo", "sink_name", "accessor", "expected_policy"),
+    ("stream", "expected_echo", "accessor", "expected_policy"),
     [
-        pytest.param(
-            "stdout",
-            True,
-            "stdout",
-            _stdout_config,
-            _STDOUT_POLICY,
-            id="stdout",
-        ),
-        pytest.param(
-            "stderr",
-            False,
-            "stderr",
-            _stderr_config,
-            _STDERR_POLICY,
-            id="stderr",
-        ),
+        pytest.param("stdout", True, _stdout_config, _STDOUT_POLICY, id="stdout"),
+        pytest.param("stderr", False, _stderr_config, _STDERR_POLICY, id="stderr"),
     ],
 )
 def test_stream_config_uses_requested_stream_settings(
     *,
     stream: typ.Literal["stdout", "stderr"],
     expected_echo: bool,
-    sink_name: typ.Literal["stdout", "stderr"],
     accessor: cabc.Callable[[_PipelineRunConfig], _StreamConfig],
     expected_policy: CapturePolicy,
 ) -> None:
@@ -87,7 +72,9 @@ def test_stream_config_uses_requested_stream_settings(
     )
 
     stream_config = accessor(config)
-    expected_sink = stdout_sink if sink_name == "stdout" else stderr_sink
+    # The accessor and the expected sink are both chosen by the stream under
+    # test, so a table row cannot pair stdout's accessor with stderr's sink.
+    expected_sink = stdout_sink if stream == "stdout" else stderr_sink
 
     assert stream_config.echo_output is expected_echo, (
         f"{stream} must retain its configured echo setting"

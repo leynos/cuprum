@@ -215,28 +215,27 @@ def test_a_refusal_names_the_policy_alternatives_and_the_encoding() -> None:
         )
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
 def test_a_single_command_refuses_bounded_shift_jis_before_spawning(
     python_builder: cabc.Callable[..., SafeCmd],
+    stream: str,
 ) -> None:
-    """``run_sync`` reaches the guard through its own preparation seam."""
+    """``run_sync`` reaches the guard through its own preparation seam.
+
+    Both streams are checked: the guard is keyed on the resolved per-stream
+    policy, not on one of the two, so a config that named only stderr must be
+    refused exactly as a config that named only stdout is.
+    """
     command = python_builder("-c", "print('hi')")
+    output = (
+        RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=4))
+        if stream == "stdout"
+        else RunOutputOptions(capture_stderr=BoundedCapture(max_bytes=4))
+    )
 
     with pytest.raises(ValueError, match="BoundedCapture requires an encoding"):
         command.run_sync(
-            output=RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=4)),
-            context=ExecutionContext(encoding="shift_jis"),
-        )
-
-
-def test_the_refusal_covers_the_stderr_policy_too(
-    python_builder: cabc.Callable[..., SafeCmd],
-) -> None:
-    """The two streams are checked independently, so stderr is not missed."""
-    command = python_builder("-c", "print('hi')")
-
-    with pytest.raises(ValueError, match="BoundedCapture requires an encoding"):
-        command.run_sync(
-            output=RunOutputOptions(capture_stderr=BoundedCapture(max_bytes=4)),
+            output=output,
             context=ExecutionContext(encoding="shift_jis"),
         )
 

@@ -70,6 +70,7 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.capture_policy import CapturedStream
     from cuprum.echo_events import RelayFallback
+    from cuprum.program import Program
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -298,23 +299,17 @@ def _build_command_result(
         ``CapturedResult`` when both text streams are decoded text, or an
         ordinary ``CommandResult`` otherwise.
     """
-    captures = _recorded_captures(completion.captures)
     sh = _sh_module()
+    shared = _shared_result_fields(execution, completion, measurements)
     if execution.capture_bytes:
         return sh.BytesCommandResult(
-            program=execution.cmd.program,
-            argv=execution.cmd.argv,
-            exit_code=completion.exit_code,
+            **shared,
             stdout=_require_bytes(completion.stdout_text, "stdout"),
             stderr=_require_bytes(completion.stderr_text, "stderr"),
-            **measurements.as_kwargs(),
-            captures=captures,
         )
     if _is_captured_text_pair(completion.stdout_text, completion.stderr_text):
         return sh.CapturedResult(
-            program=execution.cmd.program,
-            argv=execution.cmd.argv,
-            exit_code=completion.exit_code,
+            **shared,
             stdout=_require_captured_text(
                 completion.stdout_text,
                 "stdout",
@@ -327,18 +322,56 @@ def _build_command_result(
                 program=execution.cmd.program,
                 exec_id=str(execution.observation.exec_id),
             ),
-            **measurements.as_kwargs(),
-            captures=captures,
         )
     return sh.CommandResult(
-        program=execution.cmd.program,
-        argv=execution.cmd.argv,
-        exit_code=completion.exit_code,
+        **shared,
         stdout=_require_text(completion.stdout_text, "stdout"),
         stderr=_require_text(completion.stderr_text, "stderr"),
-        **measurements.as_kwargs(),
-        captures=captures,
     )
+
+
+class _SharedResultFields(typ.TypedDict):
+    """The result fields every output mode of a settled run declares.
+
+    Declared rather than left as ``dict[str, object]`` so unpacking it into a
+    result constructor keeps each field's type: an opaque value type would
+    make the ``**`` argument unrepresentable to the type checker, and the
+    fields would stop being checked against the declarations they fill.
+    """
+
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    started_at: float
+    duration: float
+    max_rss_bytes: int | None
+    user_cpu_seconds: float | None
+    system_cpu_seconds: float | None
+    resolved_path: str | None
+    relay_fallbacks: tuple[RelayFallback, ...]
+    captures: tuple[CapturedStream, ...]
+
+
+def _shared_result_fields(
+    execution: _SubprocessExecution,
+    completion: _DirectCompletion,
+    measurements: _RunMeasurements,
+) -> _SharedResultFields:
+    """Build the fields every result class of a settled run declares.
+
+    Returns
+    -------
+    _SharedResultFields
+        The shared constructor fields, keyed by parameter name.
+    """
+    return {
+        "program": execution.cmd.program,
+        "argv": execution.cmd.argv,
+        "exit_code": completion.exit_code,
+        **measurements.as_kwargs(),
+        "captures": _recorded_captures(completion.captures),
+    }
 
 
 # The execution bundle, its spawn start, the spawn seam itself, and the
