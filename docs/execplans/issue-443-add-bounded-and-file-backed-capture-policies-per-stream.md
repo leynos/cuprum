@@ -2470,11 +2470,11 @@ The hosted CodeScene check was red at `7cbb726fd`, the last published head, and
 the local engine reproduced the same findings on the merged tree. Three
 production and test files carried the reported findings:
 
-| File                                       | Finding                                                        | Repair                                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `cuprum/_streams.py`                       | `_deliver_chunk` 48 lines, Bumpy Road                          | split into `_note_stream_activity`, `_absorb_into_capture`, `_fan_out_chunk`                  |
-| `cuprum/_subprocess_execution.py`          | `_build_command_result` 75 LoC, Large Method                   | extracted `_shared_result_fields` behind a `_SharedResultFields` TypedDict                    |
-| `cuprum/unittests/test_pipeline_config.py` | Over-arity, and a row pairing an accessor with the wrong sink  | dropped the redundant `sink_name` parameter; resolve the expected sink from the stream under test |
+| File                                       | Finding                                                       | Repair                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `cuprum/_streams.py`                       | `_deliver_chunk` 48 lines, Bumpy Road                         | split into `_note_stream_activity`, `_absorb_into_capture`, `_fan_out_chunk`                      |
+| `cuprum/_subprocess_execution.py`          | `_build_command_result` 75 LoC, Large Method                  | extracted `_shared_result_fields` behind a `_SharedResultFields` TypedDict                        |
+| `cuprum/unittests/test_pipeline_config.py` | Over-arity, and a row pairing an accessor with the wrong sink | dropped the redundant `sink_name` parameter; resolve the expected sink from the stream under test |
 
 Commit `f7d9e2066` carries those repairs. Three test files were also split to
 restore cohesion where a large unrelated test block had dragged `LCOM4` down:
@@ -2488,14 +2488,15 @@ restore cohesion where a large unrelated test block had dragged `LCOM4` down:
   `test_public_api.py` apart.
 
 Each extraction was confirmed by falsification rather than intuition: removing
-the candidate block and re-running `cs review` showed which one actually cleared
-the finding. `test_pipeline_stream_routing.py` was briefly created as a
+the candidate block and re-running `cs review` showed which one actually
+cleared the finding. `test_pipeline_stream_routing.py` was briefly created as a
 "duplicate" of `test_pipeline_config.py` and deleted again — the finding was on
 the existing file, so a new file would have changed nothing.
 
-`cs review` now reports 10.0 for every touched file. `test_bounded_encoding_guard.py`
-also collapsed two duplicated refusal tests into one parametrized case over
-`("stdout", "stderr")`, since both streams must be refused identically.
+`cs review` now reports 10.0 for every touched file.
+`test_bounded_encoding_guard.py` also collapsed two duplicated refusal tests
+into one parametrized case over `("stdout", "stderr")`, since both streams must
+be refused identically.
 
 **Seven-gate run at `f7d9e2066`.** All seven exited 0, sequentially, with a
 provenance header and trailer in each log:
@@ -2515,15 +2516,15 @@ hand-counted. The Rust stage reported nextest `167 tests run: 167 passed` and
 three doctest binaries all `ok` (`0 passed; 0 failed`, twice, and
 `0 passed; 0 failed; 3 ignored`).
 
-**Residual CodeScene findings, repaired after that run.** `cs delta 85f91f6ec
-f7d9e2066` still reported two advisory `Large Method` findings, both at 71
-lines against a threshold of 70:
+**Residual CodeScene findings, repaired after that run.**
+`cs delta 85f91f6ec f7d9e2066` still reported two advisory `Large Method`
+findings, both at 71 lines against a threshold of 70:
 
 - `SafeCmd.lines` in `cuprum/sh/safe_cmd.py` — the three pre-flight refusals
   (allowlist, redirected stdout, bounded encoding) moved into
   `_reject_line_iteration_conflicts` in `cuprum/sh/line_options.py`, which is
-  where the other line-iteration pre-flight rules already live. The moved helper
-  is re-exported through `safe_cmd` like its siblings.
+  where the other line-iteration pre-flight rules already live. The moved
+  helper is re-exported through `safe_cmd` like its siblings.
 - `_build_subprocess_execution` in `cuprum/_command_execution_config.py` — the
   bounded-encoding refusal moved into `_reject_contested_captures`, a named
   step rather than an anonymous block between two other refusals.
