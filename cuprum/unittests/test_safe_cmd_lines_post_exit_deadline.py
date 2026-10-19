@@ -57,6 +57,7 @@ from cuprum.unittests._post_exit_teardown_support import (
     recorded_descendant_or_fail,
     run_to_its_own_deadline,
 )
+from tests.helpers.execution import _RunKwargs
 from tests.helpers.timeouts import (
     descendant_then_exit_argv,
     pending_tasks,
@@ -97,14 +98,27 @@ _POLICIES = [ProcessGroupPolicy.OWN_GROUP, ProcessGroupPolicy.INHERIT]
 _POLICY_IDS = ["own-group", "inherit"]
 
 
-def _lines_kwargs(policy: ProcessGroupPolicy) -> dict[str, object]:
-    """Build the keyword arguments every line-stream invocation shares."""
-    return {
-        "output": RunOutputOptions(capture=True, echo=False),
-        "timeout": _DEADLINE_S,
-        "stdin": StdinInput(data=b"x" * _STDIN_BYTES),
-        "context": ExecutionContext(process_group=policy),
-    }
+def _lines_kwargs(policy: ProcessGroupPolicy) -> _RunKwargs:
+    """Build the keyword arguments every line-stream invocation shares.
+
+    The shape is the shared ``_RunKwargs`` record rather than a plain mapping,
+    because ``lines()`` accepts the same four keyword arguments ``run()`` does
+    and the two must not drift. A ``dict[str, object]`` here would erase each
+    value's type: the call below would still be checked property by property,
+    but only against ``object``, so a keyword that stopped accepting its value
+    would compile and fail at run time instead.
+
+    Returns
+    -------
+    _RunKwargs
+        The captured, time-bounded, stdin-fed invocation this module needs.
+    """
+    return _RunKwargs(
+        output=RunOutputOptions(capture=True, echo=False),
+        timeout=_DEADLINE_S,
+        stdin=StdinInput(data=b"x" * _STDIN_BYTES),
+        context=ExecutionContext(process_group=policy),
+    )
 
 
 class _DrainedLines:

@@ -411,7 +411,7 @@ async def assert_reclaimed(descendant_pid: int, message: str) -> None:
 
 
 async def run_to_its_own_deadline(
-    run: cabc.Coroutine[object, object, object],
+    run: cabc.Awaitable[object],
 ) -> TimeoutExpired:
     """Await *run*, requiring it to end on its own deadline and in time.
 
@@ -421,6 +421,13 @@ async def run_to_its_own_deadline(
     on the elapsed time is what shows the run ended because of *its* deadline
     rather than because the outer one gave up on it. Both are asserted here so
     a test cannot accidentally check one and read it as the other.
+
+    The parameter is any awaitable rather than a coroutine because both shapes
+    are real here: a test that drives a run inline hands over the coroutine the
+    entry point returned, and a test that has to keep working while the run is
+    live hands over the task it scheduled. Narrowing the annotation to the
+    coroutine would reject the second for being a task when the only thing this
+    helper does with it — hand it to ``asyncio.wait_for`` — accepts either.
 
     Returns
     -------
