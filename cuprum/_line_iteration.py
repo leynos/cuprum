@@ -129,9 +129,7 @@ async def _iter_line_events(
     ends nothing; ``async with`` or ``aclose()`` guarantees teardown.
 
     A generator body runs in the context of the task that pulls it, so this
-    function, not ``SafeCmd.lines()``, owns the authoritative checks:
-    re-authorize against the consuming scope and re-resolve the deadline
-    before a queue, a hook, or a task exists.
+    function owns the authoritative checks, not ``SafeCmd.lines()``.
 
     Yields
     ------
