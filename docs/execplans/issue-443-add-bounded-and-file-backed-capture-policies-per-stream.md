@@ -2535,6 +2535,50 @@ documentation was trimmed to game the metric.
 
 Date/Author: 2026-10-19, implementation agent.
 
+## Sixth integration: the merge of `origin/main` and the ENOSPC abort
+
+`origin/main` advanced twice while the CodeScene repairs were in flight
+(`85f91f6ec` → `87d38aff8` → `ed45afde4`). The final head, `ed45afde4`
+("Separate tar and rsync operands from options"), was merged cleanly into the
+candidate as `d6ef141de`; the upstream side touched only
+`cuprum/builders/{rsync,tar}.py`, builder tests and features, and three docs
+files, so the merge introduced no packaging or capture change.
+
+**Gate run at `d6ef141de`.** Six of the seven gates exited 0 sequentially
+against that frozen head — `check-fmt` 2s, `markdownlint` 30s, `nixie` 3s,
+`duplication` 0s, `typecheck` 2s, and `lint` 641s. `make test` was started
+immediately afterwards and did not finish.
+
+**What happened to `make test`.** The log holds 22 fully green pytest sessions
+and then stops mid-way through the 23rd. The last lines are not a pytest
+failure report: they are a traceback raised inside
+`config.hook.pytest_sessionfinish`, cut off mid-frame, and the recipe's own
+trailer line was never written, so the shell never regained control to record
+an exit status. The background task's output file was zero bytes. That shape —
+truncated log, no trailer, no task output — is a killed process tree rather
+than a test outcome.
+
+The host journal supplies the cause: at `2026-10-19T15:53:00` the `lody` daemon
+logged `ENOSPC: no space left on device, write`, and file logging did not
+resume until 15:55:01 (dropping 962 lines meanwhile). The truncated gate log's
+last write is stamped 15:53:21. At that moment `/` held roughly 37 GB free (98
+% used) with swap exhausted; by 16:06 the same filesystem held 193 GB free,
+which is other agents' builds releasing space. The abort was host disk
+exhaustion, not a defect in this branch.
+
+The truncated log is preserved as
+`/tmp/test-cuprum-rebase-issue443-onto-f359f2ec4.enospc-1553.out`. The four
+tests that had reported `FAILED`/`ERROR` before the traceback were all in
+`tests/test_py_typed_marker.py`, which builds real wheels and sdists via `uv`
+and `maturin`; the build inputs were untouched by the merge. Re-running that
+file alone at the same head after space returned gave `4 passed in 390.33s`.
+
+The lesson worth carrying: a gate that stops without writing its own trailer is
+not evidence of a pass or a fail. Check the trailer first, then the host
+journal, before reading any pytest line as a verdict.
+
+Date/Author: 2026-10-19, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
