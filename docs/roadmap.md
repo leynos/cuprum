@@ -1016,8 +1016,8 @@ capability.
   - Release: not yet scheduled.
   - Status: delivered by merged PR
     [#466](https://github.com/leynos/cuprum/pull/466).
-  - See 1.2.3. The delivered 0.2.0-beta1 environment policies are the base for
-    Lading's remaining migration work.
+  - See 1.2.3. The earlier 0.2.0-beta1 environment-overlay behaviour is the
+    base for Lading's remaining migration work.
 - [x] 12.1.2. Add an opt-in broken-pipe policy for echoed output
   ([#435](https://github.com/leynos/cuprum/issues/435)).
   - Release: not yet scheduled.
