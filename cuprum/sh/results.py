@@ -19,6 +19,7 @@ import dataclasses as dc
 from cuprum.capture_policy import CapturedStream
 from cuprum.echo_events import RelayFallback
 from cuprum.program import Program
+
 # Re-exported under the names they were defined with: the `as` form marks each
 # as an intentional re-export, so the import checker sees a used name while a
 # caller still reaches these classes through `cuprum.sh.results`.

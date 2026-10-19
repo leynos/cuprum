@@ -264,8 +264,8 @@ def _recorded_captures(
 
 
 __all__ = [
-    "_is_captured_text_pair",
     "_RunMeasurements",
+    "_is_captured_text_pair",
     "_recorded_captures",
     "_require_bytes",
     "_require_captured_text",
