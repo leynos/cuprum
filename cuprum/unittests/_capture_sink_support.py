@@ -12,6 +12,13 @@ are awaited by the *same* task in a run, so a helper that fed chunks on one
 not finish a stream for real. :func:`_drain_sink` keeps both phases on one loop
 for that reason, and :func:`_absorb` and :func:`_finalize` exist only for the
 cases that need to inspect the sink *between* those phases.
+
+The spill suites hand their accumulator a policy rather than a sink, so they
+get two more drivers shaped by the same loop boundary. :func:`_spilling_to`
+builds the one value the policy is, and :func:`_spill` absorbs and finalizes
+a file-backed accumulator on one loop. Both live here rather than in a spill
+test module so that the spill suite and its cancellation suite, which each
+drive a spill, cannot drift into configuring two different policies.
 """
 
 from __future__ import annotations
@@ -19,9 +26,14 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._capture_file import _FileAccumulator
+from cuprum.capture_policy import FileBackedCapture
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import pathlib
 
+    from cuprum._capture_decode import _DecodeSettings
     from cuprum._capture_types import CaptureFinal, CaptureSink
 
 
@@ -68,3 +80,53 @@ def _drain_sink(sink: CaptureSink, chunks: cabc.Iterable[bytes]) -> CaptureFinal
         return await sink.finalize()
 
     return asyncio.run(drain())
+
+
+def _spilling_to(
+    directory: pathlib.Path,
+    *,
+    threshold: int,
+    keep_file: bool = False,
+) -> FileBackedCapture:
+    """Return a file-backed policy spilling into *directory* at *threshold*."""
+    return FileBackedCapture(
+        spill_threshold_bytes=threshold,
+        directory=directory,
+        keep_file=keep_file,
+    )
+
+
+def _spill(
+    payload: bytes,
+    policy: FileBackedCapture,
+    *,
+    settings: _DecodeSettings,
+    chunks: int = 1,
+) -> CaptureFinal:
+    """Feed *payload* through *policy*'s accumulator in *chunks* pieces.
+
+    The policy is passed rather than its fields because the three of them are
+    one value — the library already models them as
+    :class:`~cuprum.capture_policy.FileBackedCapture`, and unpacking it here
+    only to repack it below would put a second copy of that shape in the test.
+
+    Returns
+    -------
+    CaptureFinal
+        The accumulator's finalized output, holding the file still on disk
+        because nothing here cleans it up.
+    """
+    accumulator = _FileAccumulator(
+        policy=policy,
+        stream="stdout",
+        settings=settings,
+    )
+    size = -(-len(payload) // chunks)
+
+    async def spill() -> CaptureFinal:
+        """Absorb the stream in order, then finalize it on the same loop."""
+        for start in range(0, len(payload), size):
+            await accumulator.absorb(payload[start : start + size])
+        return await accumulator.finalize()
+
+    return asyncio.run(spill())
