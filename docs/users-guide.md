@@ -768,9 +768,10 @@ together with `storage`, because the pair distinguishes the cases:
   stays `"memory"`, `path` is `None`, and the capture is _complete_ — the
   caller has the whole stream and only lost the spill.
 - An append failed after the spill began. `storage` is `"file"` and `path`
-  names the file, but the capture holds only whatever reached it before the
-  failure. That is what tells the difference between a short capture and an
-  incomplete one.
+  names the file; no further writes are accepted, but the bytes accepted before
+  the failure are flushed and kept, so a byte-mode read-back still returns them.
+  `storage_failed=True` is what tells the difference between a short capture
+  and an incomplete one.
 - Byte-mode read-back failed. `storage` is `"file"` but no text or bytes are
   reported, because the bytes could not be recovered. The file follows the
   policy rather than the failure: it is left in place only under

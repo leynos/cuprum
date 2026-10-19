@@ -1641,10 +1641,15 @@ a run that otherwise returns still hands the caller a result. On the timeout
 and cancellation routes there is no result to attach anything to; the storage
 failure is absorbed so that the run's own outcome stands. A failed *creation*
 leaves the stream on the heap, where it is still reported complete; a failed
-*append* stops writing, keeps the prefix that reached the file, and reports
-`storage_failed`. Both emit a `CaptureEvent` and name the error's class rather
-than its message, because the event channel's consumers treat fields as
-low-cardinality labels.
+*append* stops accepting new writes and reports `storage_failed`, but the
+prefix that reached the file is not truncated to the bytes the last flush
+carried: appends are buffered, so finalization flushes once before a byte-mode
+read-back even on the failed path, and the payload holds every byte the
+accumulator had accepted. That flush is reported as a flush failure only when
+no earlier failure already explains the capture, so the append's own event
+stays the one the caller reads. Both failures emit a `CaptureEvent` and name
+the error's class rather than its message, because the event channel's
+consumers treat fields as low-cardinality labels.
 
 A failed *read-back*, which only byte mode performs, reports `storage_failed`
 too, and the record's payload is absent. The file follows the policy rather
@@ -1668,13 +1673,18 @@ which is the only path that reaches a drain cancelled mid-await: such a drain
 re-raises without finalizing, so no result is built and the accumulator is the
 last reference to the file. `SpillHandle.close` is idempotent and both callers
 run it under `_shielded_cleanup`, so the two paths agree rather than racing.
-The handle's own close and unlink are blocking filesystem calls, so they too
-run on a worker rather than on the loop that is unwinding the run.
-`keep_file=True` is the sole exception: the descriptor is closed and the file
-is left for the caller. The one cancellation that still removes a kept file is
-the one landing before the initial spill's prefix is written: `_publish_spill`
-published the handle with `keep=False` and the accumulator promotes it only
-once the prefix has landed, so until then the file is the run's.
+That shield completes the release and then re-raises the caller's cancellation,
+so every pipeline finalizer reaches the capture release through a `finally`
+that encloses the delivery-worker close, the presentation-session close, and
+the terminal events: a cancellation, or a session close that raises, must not
+be the exit that leaves the run's spill files behind. The handle's own close
+and unlink are blocking filesystem calls, so they too run on a worker rather
+than on the loop that is unwinding the run. `keep_file=True` is the sole
+exception: the descriptor is closed and the file is left for the caller. The
+one cancellation that still removes a kept file is the one landing before the
+initial spill's prefix is written: `_publish_spill` published the handle with
+`keep=False` and the accumulator promotes it only once the prefix has landed,
+so until then the file is the run's.
 
 `RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
 default is 64 KiB, and the bound includes retained child bytes, the encoded

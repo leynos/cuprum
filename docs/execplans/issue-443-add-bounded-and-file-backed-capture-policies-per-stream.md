@@ -2579,6 +2579,91 @@ journal, before reading any pytest line as a verdict.
 
 Date/Author: 2026-10-19, implementation agent.
 
+## Completeness assessment on the published head
+
+The ExecPlan assessment for `pb635-20261019-completeness-01` was requested
+against base `ed45afde4` and head `219d6fa20`. CodeRabbit's substantive reply
+(`#issuecomment-6272028914`, updated 2026-10-19T16:29:21Z) begins:
+
+> Treat the implementation as substantially complete, but not fully correct
+> against the ExecPlan. Address the two failure-path defects below before
+> declaring O4 and O5 fully discharged. Also close the narrower O1 verification
+> gap.
+
+It raised two defects and one verification gap. Each was checked against the
+source before repair; all three were confirmed real.
+
+**Defect 1 — O5, a raising or cancelled session close strands spill files.**
+`_reconcile_pipeline_run_failure` guarded only the observe-task drain with
+`finally`; the delivery-worker close, the presentation-session close, and the
+terminal events ran in the `try` above it. `_shielded_cleanup` completes its
+operation and then *re-raises* the caller's cancellation, so a cancellation
+landing during a bounded session close aborted the teardown before
+`_cleanup_capture_sinks` ran. A session `close` that raised did the same. Both
+are exactly the paths where the run is already in trouble and its spill files
+have no result left to name them. The same shape was present in
+`_finalize_pipeline_timeout` and `_finalize_pipeline_stage_result_failure`:
+their existing `finally` enclosed only the drain, not the closes above it. All
+three finalizers now reach the capture release from a `finally` that encloses
+every preceding teardown step, preserving the order consumers-settle
+before-capture-files-close. `_finalize_timeout_cleanup` and
+`_finalize_result_failure_cleanup` were left as they were, so their tests keep
+describing the composition they were written for.
+
+**Defect 2 — O4, a failed append hides accepted-but-unflushed bytes.**
+`_append` deliberately does not flush per chunk; `_flush_before_reading` is the
+single flush before a byte-mode read-back, and `_read_back` opens the path on a
+separate descriptor, so buffered writes are invisible to it. The guard
+`if file is None or self._failed is not None: return` skipped that flush
+whenever *any* storage failure had been recorded — including a failed append,
+which leaves every previously accepted write sitting in the `BufferedWriter`.
+The retained capture therefore stopped at the last successful flush rather than
+at the last accepted write, while the module docstring and the users' guide
+promised the prefix "that reached the file". The early return is now only for
+`file is None`; a flush failure is reported under `storage_flush_failed` only
+when no earlier failure already explains the capture, so the append's own event
+stays the one the caller reads. The rewrite is net zero lines: the module sits
+at exactly the 400-line ceiling.
+
+**Gap — O1, byte mode lacked an arbitrary-binary property.** The retention
+properties generated text and fed it to the accumulator as one chunk. That can
+never witness two things the byte contract is about: that byte mode leaves
+arbitrary bytes untouched (a text property only ever produces UTF-8 a decoder
+would accept), and that the counts and the retained tail are measured against
+the concatenated stream rather than per read. A new property generates
+`st.binary` payloads and an arbitrary cut list, splits the stream at those
+cuts, and asserts the *exact* tail `payload[-max_bytes:]`,
+`total_bytes == len(payload)`, `dropped_bytes == max(0, len - bound)`, the
+`dropped + retained == total` lemma, and `truncated` as exactly the over-budget
+case. It publishes `over-budget`/`within-budget`, `binary`/`ascii`, and
+`chunked`/`single-read` through `hypothesis.event`. The byte-mode sink builder
+was promoted to `_bounded_capture_support._byte_sink` and the copy in
+`test_bounded_capture_edges.py` removed, so the two suites share one config.
+
+**Mutation probes.** Each new test was checked against a deliberate regression,
+then the file restored from a `cp` copy (never `git checkout --`):
+
+- Restoring `or self._failed is not None` in `_flush_before_reading` fails the
+  new spill test with `got b'buffered prefix '`.
+- Flattening the timeout and stage-result finalizers fails three cases (the
+  raising close on both paths, and the cancellation case).
+- Turning the run-failure outer `try/finally` into `if True:` fails the
+  run-failure raising-close case.
+
+**First-run failures in the new test code, and their lessons.** The property
+module first failed for two self-inflicted reasons, both caught before any gate
+ran. `_partition` paired boundaries with
+`zip(boundaries, boundaries[1:], strict=True)`; the two iterables are
+intentionally offset by one so `strict` can never hold — `itertools.pairwise`
+states the adjacency instead. And the decorator emitted before
+`test_no_bound_splits_a_code_point` named the binary strategy where the text
+one belongs, so a `str` parameter received `b''`. A third round found ruff's
+ASYNC240 on `tmp_path.iterdir()` inside an async test body; the read moved into
+a synchronous `_entries` helper rather than a suppression, because a test-owned
+temporary directory does not warrant an async path library.
+
+Date/Author: 2026-10-19, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
