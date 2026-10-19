@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import typing as typ
 
 from cuprum import sh
-from cuprum.builders.args import safe_path
+from cuprum.builders.args import SafePath, safe_path
 from cuprum.catalogue import RSYNC
 
 if typ.TYPE_CHECKING:
@@ -17,7 +18,15 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(frozen=True, slots=True)
 class RsyncOptions:
-    """Optional flags for the rsync builder."""
+    """Optional flags for the rsync builder.
+
+    Attributes
+    ----------
+    allow_relative
+        Accept relative local operands. This never permits remote syntax: both
+        operands must remain local paths, and ``host:path``, ``host::module``,
+        and ``rsync://`` spellings are rejected whether or not this is set.
+    """
 
     archive: bool = False
     delete: bool = False
@@ -36,6 +45,76 @@ _FLAG_ORDER: tuple[tuple[str, str], ...] = (
     ("verbose", "--verbose"),
     ("compress", "--compress"),
 )
+
+
+_REMOTE_SPELLING_HINT = (
+    "remote syntax such as host:path, host::module or rsync:// is not supported"
+)
+
+
+def _is_remote_rsync_operand(operand: str) -> bool:
+    """Report whether ``operand`` uses rsync's remote endpoint grammar.
+
+    Rsync reads a colon before the first path separator as a remote
+    specification. A later colon, as in ``dir/host:path``, is part of the local
+    name and stays local.
+
+    Parameters
+    ----------
+    operand:
+        Operand string to inspect.
+
+    Returns
+    -------
+    bool
+        ``True`` when rsync would treat the operand as a remote endpoint.
+    """
+    if operand.lower().startswith("rsync://"):
+        return True
+    colon = operand.find(":")
+    slash = operand.find("/")
+    return colon != -1 and (slash == -1 or colon < slash)
+
+
+def _local_rsync_operand(
+    value: str | Path,
+    *,
+    role: str,
+    allow_relative: bool,
+) -> SafePath:
+    """Validate one rsync operand as a local path and return its normalization.
+
+    ``safe_path`` supplies the generic checks. This helper then rejects remote
+    spelling in both the raw value and the normalized result, so neither
+    representation can smuggle a remote endpoint past the sink.
+
+    Parameters
+    ----------
+    value:
+        Operand to validate.
+    role:
+        Operand role, either ``"source"`` or ``"destination"``, used in the
+        rejection message.
+    allow_relative:
+        When True, relative local operands are permitted.
+
+    Returns
+    -------
+    SafePath
+        Normalized local operand.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a valid absolute local path (or a relative one
+        when ``allow_relative`` is set), or if it spells a remote endpoint.
+    """
+    checked = safe_path(value, allow_relative=allow_relative)
+    raw_value = os.fspath(value)
+    if _is_remote_rsync_operand(raw_value) or _is_remote_rsync_operand(checked):
+        msg = f"rsync {role} must be a local path; {_REMOTE_SPELLING_HINT}"
+        raise ValueError(msg)
+    return checked
 
 
 def _rsync_argv(
@@ -58,8 +137,20 @@ def _rsync_argv(
     """
     flags = tuple(flag for attr, flag in _FLAG_ORDER if getattr(options, attr))
     paths = (
-        str(safe_path(source, allow_relative=options.allow_relative)),
-        str(safe_path(destination, allow_relative=options.allow_relative)),
+        str(
+            _local_rsync_operand(
+                source,
+                role="source",
+                allow_relative=options.allow_relative,
+            )
+        ),
+        str(
+            _local_rsync_operand(
+                destination,
+                role="destination",
+                allow_relative=options.allow_relative,
+            )
+        ),
     )
     return (*flags, "--", *paths)
 
@@ -72,13 +163,18 @@ def rsync_sync(
 ) -> SafeCmd:
     """Build an ``rsync`` synchronization command.
 
+    Both operands are local paths. Remote rsync syntax is rejected for either
+    operand, including when ``RsyncOptions.allow_relative`` is set; a remote
+    transfer needs a custom builder.
+
     Parameters
     ----------
     source
-        Source path to synchronize from. It follows a ``--`` separator, so a
-        leading dash cannot turn it into an option.
+        Local source path to synchronize from. It follows a ``--`` separator,
+        so a leading dash cannot turn it into an option.
     destination
-        Destination path to synchronize to, likewise separated by ``--``.
+        Local destination path to synchronize to, likewise separated by
+        ``--``.
     options
         Optional rsync settings. When omitted, the command uses
         ``RsyncOptions()``.

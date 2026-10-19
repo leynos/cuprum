@@ -130,6 +130,28 @@ def when_build_rsync_command(rsync_paths: _RsyncPaths) -> _CommandResult:
     return _capture(command)
 
 
+def when_build_rsync_command_with_remote_operand(
+    rsync_paths: _RsyncPaths,
+    role: str,
+    operand: str,
+) -> _CommandResult:
+    """Attempt an rsync build whose named operand carries remote syntax."""
+    source, destination = (
+        (operand, rsync_paths.destination)
+        if role == "source"
+        else (rsync_paths.source, operand)
+    )
+    try:
+        command = rsync_sync(
+            source,
+            destination,
+            options=RsyncOptions(archive=True, allow_relative=True),
+        )
+    except ValueError as exc:
+        return _CommandResult(error=exc)
+    return _capture(command)
+
+
 def when_build_tar_command(tar_inputs: _TarInputs) -> _CommandResult:
     """Build a tar create command with gzip compression."""
     command = tar_create(
@@ -234,6 +256,19 @@ def then_tar_sources_follow_separator(
             relative_tar_inputs.archive,
             relative_tar_inputs.sources,
         ),
+    )
+
+
+def then_rsync_operand_error_raised(rsync_result: _CommandResult, role: str) -> None:
+    """Verify the remote operand was rejected before a command was built."""
+    assert isinstance(rsync_result.error, ValueError), (  # ruff: ignore[assert] - step assertions replace return values
+        f"the remote {role} operand must raise ValueError"
+    )
+    assert rsync_result.argv_with_program is None, (  # ruff: ignore[assert] - step assertions replace return values
+        "no command may be built from a rejected operand"
+    )
+    assert f"rsync {role} must be a local path" in str(rsync_result.error), (  # ruff: ignore[assert] - step assertions replace return values
+        "the rejection must name the offending operand role"
     )
 
 

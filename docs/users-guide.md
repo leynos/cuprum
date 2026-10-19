@@ -1201,11 +1201,25 @@ else:
 ```
 
 `safe_path()` rejects empty paths, NUL characters, and `..` segments, and
-requires an absolute path unless `allow_relative=True` is passed. It accepts
-names that begin with `-`; separating those names from options is the builder's
-job, not the validator's. `git_ref()` rejects whitespace, a leading `-`, `..`,
-`@{`, and other constructs that Git would interpret as options or revision
-syntax.
+requires a **host-native** absolute path unless `allow_relative=True` is
+passed. Absoluteness is decided by `pathlib` for the running host, so on POSIX
+a Windows drive spelling such as `C:/file` is a relative path and is rejected
+by default. It accepts names that begin with `-`; separating those names from
+options is the builder's job, not the validator's.
+
+`rsync_sync()` accepts local operands only. Both the source and the destination
+are rejected when they use rsync remote syntax — `host:path`,
+`host::module/path`, `user@host:path`, `[::1]:path`, or `rsync://host/module` —
+and that rejection applies even with `allow_relative=True`. To name a local
+file that contains a colon, put a directory separator first, as in
+`dir/name:part`; rsync reads a colon before the first `/` as a remote
+specification. Callers on Windows must spell operands the way their rsync port
+does, for example `/cygdrive/c/...` with `allow_relative=True`, because rsync
+itself interprets `C:/...` as a remote endpoint. Remote transfers are outside
+the core builder set and need a custom builder.
+
+`git_ref()` rejects whitespace, a leading `-`, `..`, `@{`, and other constructs
+that Git would interpret as options or revision syntax.
 
 The tar and rsync builders emit `--` before their positional path operands.
 `tar_create()` places it after the archive value, so a source named

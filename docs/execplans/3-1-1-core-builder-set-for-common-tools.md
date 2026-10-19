@@ -55,6 +55,10 @@ done.
 - Risk: Users may expect remote rsync targets, which SafePath should not
   accept. Severity: low. Likelihood: medium. Mitigation: document that remote
   targets are out of scope for the core builders and require custom builders.
+  Update (issue #531): the rsync builder now enforces this exclusion. Both
+  operands are checked for `host:path`, `host::module`, and `rsync://` spelling
+  after `safe_path()`, including when `allow_relative=True`; see
+  `docs/execplans/issue-531-rsync-local-path-validation-can-turn-path-operands-into-remote-transfers.md`.
 
 ## Progress
 
@@ -335,3 +339,5 @@ No new third-party dependencies are permitted without escalation.
   and documented the resulting discovery and decision.
 - 2026-01-16: Marked the plan COMPLETE after successful quality gates.
 - 2026-01-16: Updated plan references after renaming the behaviour test module.
+- 2026-10-19: Recorded that issue #531 adds an enforced local-only operand
+  policy for rsync; the risk entry above now names the mitigation that landed.

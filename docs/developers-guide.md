@@ -1115,6 +1115,48 @@ Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
 defaults to `False`, so `safe_path` rejects relative paths unless a caller
 explicitly opts in.
 
+`RsyncOptions.allow_relative` permits *local* relative operands only. It does
+not relax the rsync-specific operand policy described below.
+
+### Rsync local-only operand policy
+
+`safe_path` validates generic filesystem properties and decides absoluteness
+with `PurePath(...).is_absolute()`, which is host-native. A Windows drive
+prefix is therefore relative on POSIX and is rejected by default, even though
+rsync would read it as a remote specification.
+
+`_local_rsync_operand()` in `cuprum/builders/rsync.py` runs after `safe_path()`
+for each operand and enforces rsync's local-only grammar. It returns the
+normalized `SafePath` or raises `ValueError` naming the operand role (`source`
+or `destination`). The private predicate `_is_remote_rsync_operand()` reports
+remote spelling when the value starts with `rsync://` (case-insensitive) or
+contains `:` before the first `/`. A colon at or after the first separator, as
+in `dir/host:path`, stays local.
+
+The helper applies the predicate to both the raw value and the normalized
+`SafePath` string, so normalization cannot hide a remote endpoint.
+`_rsync_argv` calls it for the source and then the destination before
+`sh.make(RSYNC)` runs, and neither helper is exported. Remote transfers are
+intentionally unsupported by the core builder and need a custom builder;
+`safe_path` provides no remote-endpoint grammar.
+
+Because the generic policy runs first, the role-specific message is only
+reachable once `safe_path()` has accepted the value. Under default options a
+relative remote spelling such as `host:path` may instead fail earlier as
+`PathRejection.NOT_ABSOLUTE`; the role-specific message is what an
+`allow_relative=True` caller sees.
+
+The policy is covered in three layers. `cuprum/unittests/test_rsync_operand_policy.py`
+holds the parameterized unit tests and the direct helper test;
+`cuprum/unittests/test_builder_property_based.py` generates `host:path` and
+`host::module/path` operands for both roles, with a non-vacuity property
+asserting each generated example first passes `safe_path(allow_relative=True)`;
+and the `Rsync builder rejects remote operands` scenario in
+`tests/features/builder_library.feature` asserts that no command is built. The
+acceptance fixtures use `/cygdrive/c/...`, a spelling that is neutral between
+POSIX and Windows, so the tests exercise the policy rather than a host-specific
+absolute-path rule.
+
 ### End-of-options separators for positional operands
 
 `safe_path` accepts names beginning with `-`, so argv construction must stop

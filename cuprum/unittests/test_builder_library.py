@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import typing as typ
 from pathlib import Path
 
@@ -22,9 +23,18 @@ from cuprum.builders import (
     tar_create,
     tar_extract,
 )
+from cuprum.builders.args import PathRejection
+from cuprum.builders.rsync import _local_rsync_operand
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="host-native absolute semantics differ on Windows"
+)
+_WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows drive paths are absolute only on Windows"
+)
 
 
 def test_safe_path_requires_absolute_by_default(tmp_path: Path) -> None:
@@ -61,6 +71,30 @@ def test_safe_path_rejects_parent_segments(tmp_path: Path) -> None:
     parent_path = tmp_path / ".." / "var"
     with pytest.raises(ValueError, match="SafePath"):
         safe_path(parent_path)
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("value", ["C:/file", "C:\\file", "z:/data"])
+def test_safe_path_rejects_windows_drive_paths_on_posix(value: str) -> None:
+    """A Windows drive prefix is relative on POSIX and must be rejected.
+
+    Rsync reads a leading ``drive:`` as a remote specification, so accepting it
+    as an absolute local path would hand the sink a remote operand.
+    """
+    with pytest.raises(ValueError, match="SafePath") as exc_info:
+        safe_path(value)
+    assert str(exc_info.value) == PathRejection.NOT_ABSOLUTE.value, (
+        "a drive-prefixed value must be rejected as non-absolute on POSIX"
+    )
+
+
+@_WINDOWS_ONLY
+@pytest.mark.parametrize("value", ["C:/file", "C:\\file"])
+def test_safe_path_accepts_native_windows_drive_paths(value: str) -> None:
+    """Host-native absolute detection still accepts drive paths on Windows."""
+    assert safe_path(value) == Path(value).as_posix(), (
+        "a native Windows drive path must normalize as before"
+    )
 
 
 @pytest.mark.parametrize(
@@ -156,6 +190,107 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         source.as_posix(),
         destination.as_posix(),
     ), "rsync_sync argv mismatch"
+
+
+# Each spelling is a remote operand for rsync even though safe_path accepts
+# it once relative paths are enabled. The drive-prefixed rows are tagged
+# separately because default-absolute validation may reject them first.
+_REMOTE_OPERANDS = (
+    "host:path",
+    "host:/path",
+    "host::module/path",
+    "host::module",
+    "user@host:path",
+    "rsync://host/module/dir",
+    "RSYNC://host/module/dir",
+    "[::1]:path",
+    "./host:path",
+)
+_DRIVE_OPERANDS = ("C:/path", "C:\\path")
+
+
+@pytest.mark.parametrize("role", ["source", "destination"])
+@pytest.mark.parametrize("operand", _REMOTE_OPERANDS)
+def test_rsync_rejects_remote_operands_when_relative(
+    operand: str,
+    role: str,
+) -> None:
+    """With relative paths enabled, remote syntax must be named as such."""
+    local = "/srv/local"
+    source, destination = (operand, local) if role == "source" else (local, operand)
+    options = RsyncOptions(allow_relative=True)
+    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
+        rsync_sync(source, destination, options=options)
+
+
+@pytest.mark.parametrize("role", ["source", "destination"])
+@pytest.mark.parametrize("operand", _REMOTE_OPERANDS + _DRIVE_OPERANDS)
+def test_rsync_rejects_remote_operands_by_default(
+    operand: str,
+    role: str,
+) -> None:
+    """Default options reject every remote spelling, whatever layer reports it."""
+    local = "/srv/local"
+    source, destination = (operand, local) if role == "source" else (local, operand)
+    with pytest.raises(
+        ValueError, match=rf"SafePath|rsync {role} must be a local path"
+    ):
+        rsync_sync(source, destination)
+
+
+@pytest.mark.parametrize("role", ["source", "destination"])
+@pytest.mark.parametrize("operand", _DRIVE_OPERANDS)
+def test_rsync_rejects_drive_prefixed_operands_when_relative(
+    operand: str,
+    role: str,
+) -> None:
+    """A drive prefix stays a remote operand even with relative paths allowed."""
+    local = "/srv/local"
+    source, destination = (operand, local) if role == "source" else (local, operand)
+    options = RsyncOptions(allow_relative=True)
+    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
+        rsync_sync(source, destination, options=options)
+
+
+@pytest.mark.parametrize(
+    ("operand", "allow_relative"),
+    [
+        ("/srv/data", False),
+        ("/srv/data", True),
+        ("dir/file", True),
+        ("dir/host:path", True),
+        ("/abs/host:path", False),
+    ],
+)
+def test_rsync_accepts_local_operands_unchanged(
+    operand: str,
+    *,
+    allow_relative: bool,
+) -> None:
+    """Accepted local operands reach the argv as safe_path normalizes them."""
+    expected = str(safe_path(operand, allow_relative=allow_relative))
+    cmd = rsync_sync(
+        operand,
+        operand,
+        options=RsyncOptions(allow_relative=allow_relative),
+    )
+    assert cmd.argv == (expected, expected), (
+        "accepted local operands must be emitted in normalized form"
+    )
+
+
+@pytest.mark.parametrize("operand", ["host:path", "host::module", "host::module/path"])
+def test_rsync_local_operand_rejects_remote_syntax_directly(operand: str) -> None:
+    """The private operand check rejects remote syntax independent of _rsync_argv."""
+    with pytest.raises(ValueError, match="rsync source must be a local path"):
+        _local_rsync_operand(operand, role="source", allow_relative=True)
+
+
+@_POSIX_ONLY
+def test_rsync_rejects_drive_prefixed_destination_by_default() -> None:
+    """A Windows drive destination is not a local absolute path on POSIX."""
+    with pytest.raises(ValueError, match="SafePath"):
+        rsync_sync("/src", "C:/path")
 
 
 def test_tar_create_builder_outputs_args(tmp_path: Path) -> None:
