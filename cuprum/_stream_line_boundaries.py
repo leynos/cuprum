@@ -79,6 +79,18 @@ def _find_next_boundary(
     return _LINE_BOUNDARY_PATTERN.search(text, start)
 
 
+def _holds_carriage_return(text: str, index: int) -> bool:
+    """Report whether the CR at ``index`` may pair with a later chunk's LF."""
+    return text[index] == "\r" and index + 1 == len(text)
+
+
+def _boundary_width(text: str, index: int) -> int:
+    """Return how many characters the boundary at ``index`` occupies."""
+    if text[index] == "\r" and text[index + 1] == "\n":
+        return 2
+    return 1
+
+
 class _LineAccumulator:
     """Incrementally assemble lines from decoded chunks in linear time.
 
@@ -139,16 +151,7 @@ class _LineAccumulator:
             return []
 
         emitted: list[str] = []
-        start = 0
-        if self._skip_next_lf:
-            # The previous chunk ended in a lone carriage return. If this
-            # chunk starts with a line feed the two form one CRLF terminator,
-            # so the feed must be consumed before it is allowed to complete
-            # another (empty) line of its own.
-            if text[0] == "\n":
-                start = 1
-            self._skip_next_lf = False
-            emitted.extend(self._complete_line())
+        start = self._resume_held_carriage_return(text, emitted)
 
         while True:
             boundary = _find_next_boundary(text, start)
@@ -160,8 +163,7 @@ class _LineAccumulator:
                 return emitted
 
             index = boundary.start()
-            char = text[index]
-            if char == "\r" and index + 1 == len(text):
+            if _holds_carriage_return(text, index):
                 # The carriage return may pair with a line feed in the next
                 # chunk, so the line is not complete yet.
                 self._append(text[start:index])
@@ -169,10 +171,36 @@ class _LineAccumulator:
                 emitted.extend(self._split_overflow())
                 return emitted
 
-            width = 2 if char == "\r" and text[index + 1] == "\n" else 1
             self._append(text[start:index])
             emitted.extend(self._complete_line())
-            start = index + width
+            start = index + _boundary_width(text, index)
+
+    def _resume_held_carriage_return(self, text: str, emitted: list[str]) -> int:
+        """Consume a prior chunk's lone carriage return's continuation.
+
+        A previous chunk ended in a lone carriage return. If this chunk starts
+        with a line feed the two form one CRLF terminator, so the feed must be
+        consumed before it is allowed to complete another (empty) line of its
+        own.
+
+        Parameters
+        ----------
+        text : str
+            The newly decoded, non-empty chunk.
+        emitted : list[str]
+            The output list to extend with any line the held CR completed.
+
+        Returns
+        -------
+        int
+            The index at which ordinary boundary scanning may begin.
+        """
+        if not self._skip_next_lf:
+            return 0
+        start = 1 if text[0] == "\n" else 0
+        self._skip_next_lf = False
+        emitted.extend(self._complete_line())
+        return start
 
     def finish(self) -> str | None:
         """Return the trailing line once no more decoded text will arrive.

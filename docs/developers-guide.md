@@ -1348,10 +1348,13 @@ output to `_LineAccumulator` and publishes whatever `finish()` returns.
 individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does not
 normalize or edit interior text.
 
-`_LineAccumulator`, `_split_complete_lines`, and `_strip_line_ending` are
-re-exported from `cuprum/_testing.py` so tests can state the contract directly
-without driving subprocess I/O. Keep them private to the package: they are
-implementation seams, not public user API.
+`_split_complete_lines` and `_strip_line_ending` are re-exported from
+`cuprum/_testing.py` so `test_line_splitting.py` can state the
+`cuprum._stream_line_boundaries` contract directly without driving subprocess
+I/O. `_LineAccumulator` is imported from `cuprum._stream_line_boundaries`
+directly by `test_stream_line_boundaries.py`; it is not re-exported. Keep these
+helpers private to the package: they are implementation seams, not public user
+API.
 
 The `lines()` driver's queue is a separate bound from `max_line_chars`. The
 queue holds at most 256 events, which bounds how many *events* can be
@@ -1364,7 +1367,18 @@ is bounded by its characters.
 accumulator suite, including a Hypothesis property that compares the event
 sequence with a `splitlines()` oracle for any chunking of the same text and
 checks that no event exceeds the bound.
-`cuprum/unittests/test_line_splitting.py` keeps the property suite for
+`cuprum/unittests/test_stream_drain_line_observation.py` drives the drain
+itself with a chunked reader: bounded fragments from an unterminated run, a
+line exactly at the bound, the unbounded opt-out, and a spied boundary search
+that proves the per-chunk work is linear.
+`cuprum/unittests/test_safe_cmd_lines_line_bounds.py` covers the public
+`lines()` iterator under the bound, including a reader slower than the child,
+which only completes if the bounded queue's backpressure carries the events.
+`cuprum/unittests/test_output_option_line_bounds.py` owns the option's
+construction rules, and `cuprum/unittests/test_pipeline_line_bounds.py` owns
+the pipeline resolution. Those four modules were split out of the larger test
+suites so each stays within the 600-line advisory and keeps one cohesive
+subject. `cuprum/unittests/test_line_splitting.py` keeps the property suite for
 `_split_complete_lines` and `_strip_line_ending`. Hypothesis generates text
 with mixed recognized line endings and checks that normalized text is
 preserved, the final remainder is partial, and stripping is idempotent.
@@ -1385,7 +1399,8 @@ When changing `_LineAccumulator`, `_split_complete_lines`, or
 
 ```bash
 uv run pytest -q cuprum/unittests/test_stream_line_boundaries.py \
-  cuprum/unittests/test_line_splitting.py cuprum/unittests/test_stream_drain.py
+  cuprum/unittests/test_line_splitting.py cuprum/unittests/test_stream_drain.py \
+  cuprum/unittests/test_stream_drain_line_observation.py
 ```
 
 Run `make test` before committing so the stream behaviour and the pure helper

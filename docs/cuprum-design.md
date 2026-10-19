@@ -4054,14 +4054,18 @@ Both pathways are tested as first-class implementations:
   `cuprum/unittests/test_stream_line_boundaries.py` covers `_LineAccumulator`,
   all from `cuprum/_stream_line_boundaries.py`. The accumulator property
   compares its events with a `splitlines()` oracle for arbitrary chunkings and
-  asserts no event exceeds `max_line_chars`. Together they prove that
-  line-callback text is not dropped, that recognized line endings are stripped
-  consistently, that trailing partial lines remain buffered, and that an
-  unterminated line is retained only up to the bound. The rules live in
-  `_stream_line_boundaries.py` so both the drain loop and its tests can depend
-  on them without importing the loop; `cuprum/_streams.py` re-exports the pure
-  helpers, and `cuprum/_stream_line_consumer.py` owns the drain-side emission
-  that awaits each result;
+  asserts no event exceeds `max_line_chars`. Drain-level tests in
+  `cuprum/unittests/test_stream_drain_line_observation.py` pin fragment
+  delivery, the at-bound case, and the rate at which decoded characters are
+  scanned, while `cuprum/unittests/test_safe_cmd_lines_line_bounds.py` covers
+  the public iterator end to end. Together they prove that line-callback text
+  is not dropped, that recognized line endings are stripped consistently, that
+  trailing partial lines remain buffered, and that an unterminated line is
+  retained only up to the bound. The rules live in `_stream_line_boundaries.py`
+  so both the drain loop and its tests can depend on them without importing the
+  loop; `cuprum/_streams.py` re-exports the pure helpers, and
+  `cuprum/_stream_line_consumer.py` owns the drain-side emission that awaits
+  each result;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.

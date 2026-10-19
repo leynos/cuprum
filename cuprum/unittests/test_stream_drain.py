@@ -70,7 +70,6 @@ def _config(
     capture: bool = True,
     echo: bool = False,
     errors: str = "replace",
-    max_line_chars: int | None = 64 * 1024,
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
@@ -79,7 +78,6 @@ def _config(
         sink=sink,
         encoding="utf-8",
         errors=errors,
-        max_line_chars=max_line_chars,
     )
 
 
@@ -650,122 +648,3 @@ def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:
 
     assert captured == b"", f"an empty byte capture is b'', got {captured!r}"
     assert not lines, "an unattached stream publishes no lines"
-
-
-def test_line_observer_bounds_an_unterminated_run_as_it_arrives() -> None:
-    """A newline-free run is published in bounded fragments, not retained whole.
-
-    The child never terminates this line, so a drain that waited for a
-    boundary would hold the entire payload until EOF. The configured bound is
-    small enough that the fragments are visible in the event stream.
-    """
-    chunks = (b"a" * 10, b"b" * 10)
-    lines: list[str] = []
-
-    captured = asyncio.run(
-        _consume_stream(
-            _reader(chunks),
-            _config(io.StringIO(), max_line_chars=4),
-            on_line=lines.append,
-        )
-    )
-
-    assert captured == "a" * 10 + "b" * 10, (
-        f"capture must stay complete, got {captured!r}"
-    )
-    assert all(len(line) <= 4 for line in lines), (
-        f"every observed event must respect the bound, got {lines!r}"
-    )
-    assert "".join(lines) == "a" * 10 + "b" * 10, (
-        f"fragments must preserve the child's text, got {lines!r}"
-    )
-
-
-def test_line_observer_bounds_a_terminated_line_at_the_bound() -> None:
-    """A line of exactly the bound followed by a terminator yields one event."""
-    payload = b"x" * 8 + b"\n"
-    lines: list[str] = []
-
-    asyncio.run(
-        _consume_stream(
-            _reader((payload,)),
-            _config(io.StringIO(), max_line_chars=8),
-            on_line=lines.append,
-        )
-    )
-
-    assert lines == ["x" * 8], (
-        f"a line at the bound must not also emit an empty fragment, got {lines!r}"
-    )
-
-
-def test_line_observer_without_a_bound_keeps_the_whole_line() -> None:
-    """``max_line_chars=None`` restores one event for an unterminated line."""
-    payload = b"y" * 5000
-    lines: list[str] = []
-
-    asyncio.run(
-        _consume_stream(
-            _reader((payload,)),
-            _config(io.StringIO(), max_line_chars=None),
-            on_line=lines.append,
-        )
-    )
-
-    assert lines == ["y" * 5000], (
-        f"``None`` must not fragment the line, got {len(lines)} event(s)"
-    )
-
-
-def test_line_observer_scans_each_decoded_character_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The drain's work is linear in the decoded text, not quadratic.
-
-    A quadratic implementation rescans the retained prefix for every chunk, so
-    the number of characters visited grows with the square of the line length.
-    The spy counts the characters the boundary search is asked to cover; the
-    assertion is a ratio between two line lengths, which makes it independent
-    of the machine's speed. A wall-clock comparison would measure load instead.
-
-    Both lines arrive as single-character chunks, so the quadratic version
-    rescans a longer and longer prefix: doubling the line length quadruples the
-    work there but only doubles it for one-pass scanning. The bound is wider
-    than either line, so no fragment splits a read and the comparison measures
-    the scan rather than the number of emitted events.
-    """
-    from cuprum import _stream_line_boundaries
-
-    scanned: list[int] = []
-    original = _stream_line_boundaries._find_next_boundary
-
-    def counting_search(text: str, start: int) -> object:
-        """Record the characters a boundary search covers, then delegate."""
-        scanned.append(len(text) - start)
-        return original(text, start)
-
-    def total_scanned(chunk_count: int) -> int:
-        """Drain one unterminated line in single-character chunks."""
-        scanned.clear()
-        asyncio.run(
-            _consume_stream(
-                _reader(tuple(b"z" for _ in range(chunk_count))),
-                _config(io.StringIO(), max_line_chars=2 * chunk_count),
-                on_line=lambda _line: None,
-            )
-        )
-        return sum(scanned)
-
-    monkeypatch.setattr(
-        _stream_line_boundaries,
-        "_find_next_boundary",
-        counting_search,
-    )
-    short = total_scanned(8)
-    long = total_scanned(16)
-
-    assert short > 0, "the spy must observe the boundary search it measures"
-    assert long <= 3 * short, (
-        "a doubled line must not more than triple the scanned characters; "
-        f"short={short}, long={long} suggests rescanning retained text"
-    )
