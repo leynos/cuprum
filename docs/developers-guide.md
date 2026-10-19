@@ -22,6 +22,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
 - [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
 - [ADR-024: Type captured command output](adr-024-captured-command-output-types.md)
+- [ADR-025: Narrow captured results only for complete text](adr-025-narrowed-results-only-for-complete-text-capture.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -31,12 +32,18 @@ assumptions, and current proof status.
 ## Captured single-command result assembly
 
 `cuprum._subprocess_execution._build_command_result` selects the result class
-for a settled single command: text capture builds `CapturedResult`, while
-capture-off builds `CommandResult`. `_require_captured_text` in
-`cuprum._result_assembly` checks each decoded stream before the narrowed result
+for a settled single command: a text run builds `CapturedResult` when both
+settled payloads are decoded text, and `CommandResult` otherwise.
+`_is_captured_text_pair` in `cuprum._result_assembly` makes that decision from
+the payloads rather than from the capture configuration, so a run that captured
+one stream alone, or spilled one to a file, is not narrowed into a class whose
+streams are both `str`. The capture records are passed to both constructions.
+`_require_captured_text` checks each decoded stream before the narrowed result
 is constructed. A missing stream on this path logs the operation, text mode,
 stream, program, and execution ID without rendering command output, then raises
 the existing execution-invariant error.
+[ADR-025](adr-025-narrowed-results-only-for-complete-text-capture.md) records
+why the narrowed class is restricted this way.
 
 `SafeCmd.run` and `run_sync` mirror that runtime boundary in their overloads:
 omitted `output` and `output=None` return `CapturedResult`; an explicit

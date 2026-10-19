@@ -23,6 +23,7 @@ from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import (
+    _is_captured_text_pair,
     _recorded_captures,
     _require_bytes,
     _require_captured_text,
@@ -276,17 +277,28 @@ def _build_command_result(
     rules are read from :mod:`cuprum._result_assembly` rather than restated
     here.
 
-    Both classes carry ``captures``. A byte-exact run needs it most: a spilled
+    Every class carries ``captures``. A byte-exact run needs it most: a spilled
     stream is read back, so a failed write or a failed flush can shorten the
-    payload it hands over, and the payload alone cannot say so.
+    payload it hands over, and the payload alone cannot say so. The text run
+    needs it for the complementary reason: a ``FileBackedCapture`` that spilled
+    reports ``None`` rather than text, and the record is then the only thing
+    naming the file that holds the stream.
+
+    Text capture narrows to ``CapturedResult`` only when *both* settled
+    payloads are decoded text. That class promises two strings, and a run that
+    captured one stream alone, or spilled one to a file, settles the other as
+    ``None`` — a stream it did capture, which the narrowed class would have to
+    reject. Those runs report the payloads and their records as an ordinary
+    ``CommandResult``.
 
     Returns
     -------
     CommandResult | BytesCommandResult
         A ``BytesCommandResult`` when the run captured bytes, a
-        ``CapturedResult`` when it captured text, or an ordinary
-        ``CommandResult`` when capture was disabled.
+        ``CapturedResult`` when both text streams are decoded text, or an
+        ordinary ``CommandResult`` otherwise.
     """
+    captures = _recorded_captures(completion.captures)
     sh = _sh_module()
     if execution.capture_bytes:
         return sh.BytesCommandResult(
@@ -296,9 +308,9 @@ def _build_command_result(
             stdout=_require_bytes(completion.stdout_text, "stdout"),
             stderr=_require_bytes(completion.stderr_text, "stderr"),
             **measurements.as_kwargs(),
-            captures=_recorded_captures(completion.captures),
+            captures=captures,
         )
-    if execution.capture:
+    if _is_captured_text_pair(completion.stdout_text, completion.stderr_text):
         return sh.CapturedResult(
             program=execution.cmd.program,
             argv=execution.cmd.argv,
@@ -316,6 +328,7 @@ def _build_command_result(
                 exec_id=str(execution.observation.exec_id),
             ),
             **measurements.as_kwargs(),
+            captures=captures,
         )
     return sh.CommandResult(
         program=execution.cmd.program,
@@ -324,7 +337,7 @@ def _build_command_result(
         stdout=_require_text(completion.stdout_text, "stdout"),
         stderr=_require_text(completion.stderr_text, "stderr"),
         **measurements.as_kwargs(),
-        captures=_recorded_captures(completion.captures),
+        captures=captures,
     )
 
 

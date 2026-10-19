@@ -550,6 +550,16 @@ diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
 [ADR-024](adr-024-captured-command-output-types.md).
 
+`CapturedResult` is constructed only when both settled payloads are decoded
+text. A run that captures one stream and not the other, or whose
+`FileBackedCapture` spilled a stream to a file, reports those payloads and the
+capture records on an ordinary `CommandResult`: a spilled stream's text is at
+the record's `path` rather than in the payload, and the narrowed class cannot
+say so without inventing an empty string. A default `RunOutputOptions()` run
+captures both streams in full, so it is unaffected; the restriction and its
+consequences are recorded in
+[ADR-025](adr-025-narrowed-results-only-for-complete-text-capture.md).
+
 The `RunOutputOptions | None` overload accepts variables that may hold either
 explicit options or `None` and returns `CommandResult`. Its broader return type
 reflects that capture may be disabled by the options value.
@@ -1586,6 +1596,13 @@ describes the bytes the drain received rather than the bytes the child wrote.
 `storage` distinguishes memory from file, `path` names the spill, `owned` says
 whether the run still must remove it, and `storage_failed` says the file is
 incomplete rather than merely short.
+
+The records are the whole of what a text run reports for a stream it spilled:
+that stream's payload is `None`, and the file is the only place its text is
+kept. A single-command text run whose payloads are not both decoded text is
+therefore reported as a `CommandResult` rather than the narrowed
+`CapturedResult`, which promises two strings; see
+[ADR-025](adr-025-narrowed-results-only-for-complete-text-capture.md).
 
 The sink seam is asynchronous, `absorb` and `finalize` included, because
 retention is the child's output and a file-backed capture cannot retain a chunk

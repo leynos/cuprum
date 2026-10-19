@@ -353,6 +353,17 @@ was never captured.
 `isinstance(result, CommandResult)` for base-result checks and compare fields
 individually when comparing results across these types.
 
+The narrowed type is promised only when both streams are decoded text. A run
+that captures one stream and leaves the other uncaptured returns a
+`CommandResult` with `None` for the stream it did not capture. A run whose
+`FileBackedCapture` spilled a stream to a file also returns a `CommandResult`,
+and that stream's `stdout` or `stderr` is `None`: the text is in the file the
+stream's record names under `captures`, not in the payload.
+`require_captured()` raises `ValueError` naming such a stream rather than
+reporting an empty string, because an absent payload and an empty stream are
+different facts. See
+[ADR-025](adr-025-narrowed-results-only-for-complete-text-capture.md).
+
 <!-- tested-example: capture-and-echo -->
 
 ```python
