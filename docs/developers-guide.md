@@ -1105,6 +1105,46 @@ Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
 defaults to `False`, so `safe_path` rejects relative paths unless a caller
 explicitly opts in.
 
+### End-of-options separators for positional operands
+
+`safe_path` accepts names beginning with `-`, so argv construction must stop
+those names from reaching the tool as options. `tar_create` and `rsync_sync`
+emit `--` before their positional path operands:
+
+```plaintext
+tar_create:  -c [compression] -f ARCHIVE -- SOURCE...
+tar_extract: -x -f ARCHIVE [-C DESTINATION]
+rsync_sync:  [flags] -- SOURCE DESTINATION
+```
+
+`tar_extract` is deliberately unchanged. Its paths are the values of `-f` and
+`-C`, and an option's value is never reparsed as an option. A bare `-` remains
+special: `tar_extract()` reads the archive from standard input, and
+`tar_create()` writes it to standard output when its archive value is `-`.
+Inserting `--` before a value would instead make tar read that value as a file
+operand.
+
+The rule for future builders is therefore: every positional, user-supplied
+operand must follow `--`, or the builder must reject leading dashes at
+validation time, as `git_ref` does. A builder whose only user input is an
+option value needs neither.
+
+The separator is honoured by the implementations the builders target, but the
+evidence differs by tool. GNU tar's support is exercised directly: the
+real-tool regressions in `cuprum/unittests/test_builder_operand_separation.py`
+run the tar on `PATH`, and the checkpoint-action test skips unless
+`tar --version` reports GNU tar. libarchive `bsdtar` handles the bare `--`
+explicitly in its own option parser (`tar/cmdline.c` consumes it and returns
+end-of-options). BusyBox `tar` delegates option parsing to libc `getopt_long`,
+so it inherits the conventional bare-`--` behaviour. rsync parses options with
+popt, whose `poptGetNextOpt` sets `restLeftover` on a bare `--`, making every
+later argument an operand; the real-tool test also checks this when rsync is
+installed.
+
+CI on Linux installs GNU tar only, so that is the only implementation the suite
+verifies there. The rsync test runs on developer machines that have it and
+skips otherwise; the guide makes no stronger claim than that.
+
 ### Rejection classifiers for `safe_path` and `git_ref`
 
 `cuprum/builders/args.py` exposes `classify_path_string` and `classify_git_ref`

@@ -19,3 +19,13 @@ Feature: Core builder library
     Given a tar archive and source paths
     When I build a tar create command with gzip enabled
     Then the tar command argv includes "-z" and the paths
+
+  Scenario: Tar create separates option-shaped relative sources
+    Given a relative tar source beginning with --checkpoint
+    When I build a relative tar create command
+    Then the tar sources follow the end-of-options separator
+
+  Scenario: Rsync separates option-shaped relative operands
+    Given relative rsync paths beginning with --
+    When I build a relative rsync sync command
+    Then the rsync operands follow the end-of-options separator
