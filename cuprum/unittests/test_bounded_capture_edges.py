@@ -288,8 +288,9 @@ def test_a_fixed_width_encoding_realigns_the_retained_tail(encoding: str) -> Non
     by stream offset instead, so the decoded suffix is a suffix of the text.
 
     The payload is 10 bytes in both encodings and the bound leaves 7, so the
-    offset realignment drops one byte and keeps six: ``中`` and ``b`` and ``文``
-    give way to ``b文c``. The value is pinned exactly, because every string ends
+    cut starts at offset 3 — inside ``中`` — and realignment moves it one more
+    byte to offset 4. The dropped prefix is therefore ``a`` and ``中``, and
+    ``b文c`` survives. The value is pinned exactly, because every string ends
     with the empty string and a suffix assertion would pass had the whole tail
     been trimmed away.
     """

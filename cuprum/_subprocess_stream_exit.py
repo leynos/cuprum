@@ -1,10 +1,10 @@
 """Waiting for a streamed child's exit, and reconciling when that wait fails.
 
-Split from ``cuprum._subprocess_stream_run`` when the rebase onto ``main``
-pushed that module past the 400-line ceiling. The seam is the one the code
-already drew: this module owns the *exit wait* and the reconciliation that a
-failed wait owes, while ``_subprocess_stream_run`` owns the post-exit
-collection that follows it and both run loops that drive them.
+Split from ``cuprum._subprocess_stream_run``, which would otherwise exceed the
+repository's module-length ceiling. The seam is the one the code already drew:
+this module owns the *exit wait* and the reconciliation that a failed wait
+owes, while ``_subprocess_stream_run`` owns the post-exit collection that
+follows it and both run loops that drive them.
 
 The two helpers here share one rule that is easy to get wrong in isolation: a
 failure escaping the wait must reconcile **every** task the run owns before it

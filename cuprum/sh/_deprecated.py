@@ -11,9 +11,8 @@ spending its remaining lines on a spelling that is scheduled to disappear
 would leave no room for the live contract beside it.
 
 The deprecated flat ``capture=``/``echo=`` keywords of ``Pipeline.run`` and
-``Pipeline.run_sync`` are not here: ``main`` split them into
-:mod:`cuprum.sh.pipeline_output` first, so that module owns them and
-``cuprum.sh.pipeline`` re-exports them from there.
+``Pipeline.run_sync`` are not here: :mod:`cuprum.sh.pipeline_output` owns them,
+and ``cuprum.sh.pipeline`` re-exports them from there.
 """
 
 from __future__ import annotations

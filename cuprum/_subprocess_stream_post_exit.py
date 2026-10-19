@@ -15,10 +15,10 @@ repair it locally. Two of them are here:
 - :func:`_await_stdin_writer` waits for the writer that closes the child's
   stdin, which must finish before the consumers are gathered.
 
-The third, the exit wait itself, is ``main``'s: it moved to
-``cuprum._subprocess_stream_exit`` while this branch was in flight, and this
-module does not restate it. A second copy here would be a binding no call path
-resolves, and the run module imports the one from the exit module.
+The third, the exit wait itself, lives in
+``cuprum._subprocess_stream_exit`` and this module does not restate it. A
+second copy here would be a binding no call path resolves, and the run module
+imports the one from the exit module.
 
 ``cuprum._subprocess_stream_run`` re-imports both helpers, and that re-import is
 load-bearing rather than cosmetic: the callers of ``_await_stdin_writer`` and

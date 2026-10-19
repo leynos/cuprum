@@ -62,19 +62,10 @@ _BOM_MARKS: tuple[tuple[str, bytes, bytes], ...] = (
     ("utf-8-sig", codecs.BOM_UTF8, codecs.BOM_UTF8),
 )
 
-# Widest code point, in bytes, for each encoding the codec registry names.
-# Only the width is needed: it bounds how far a mid-stream cut can land inside
-# one code point, and so how many leading bytes of a tail may be its interior.
-_MAX_CODE_POINT_BYTES = {
-    "utf-8": 4,
-    "utf-16-be": 4,
-    "utf-16-le": 4,
-    "utf-32-be": 4,
-    "utf-32-le": 4,
-    "ascii": 1,
-    "latin-1": 1,
-}
-_DEFAULT_MAX_CODE_POINT_BYTES = 4
+# UTF-8's widest code point. A tail can begin at most three bytes inside one,
+# which is the limit the UTF-8 leading trim scans; the other encodings find
+# their boundaries by code-unit alignment rather than by scanning.
+_UTF8_MAX_CODE_POINT_BYTES = 4
 
 # A byte that is neither ASCII nor a UTF-8 lead byte continues the code point
 # the cut landed inside.
@@ -100,28 +91,11 @@ _UTF16_UNIT_BYTES = 2
 
 @dc.dataclass(frozen=True, slots=True)
 class _DecodeSettings:
-    """How a finalized capture becomes the value the caller reads.
-
-    ``max_code_point_bytes`` is derived from :attr:`encoding` rather than
-    declared, so a caller cannot pair an encoding with the wrong width.
-    """
+    """How a finalized capture becomes the value the caller reads."""
 
     encoding: str
     errors: str
     capture_bytes: bool
-    max_code_point_bytes: int = dc.field(init=False)
-
-    def __post_init__(self) -> None:
-        """Derive the code-point width of :attr:`encoding`."""
-        try:
-            canonical = codecs.lookup(self.encoding).name
-        except LookupError:
-            # An encoding the registry does not know is reported when the
-            # decode runs, exactly as it was before this module existed.
-            width = _DEFAULT_MAX_CODE_POINT_BYTES
-        else:
-            width = _MAX_CODE_POINT_BYTES.get(canonical, _DEFAULT_MAX_CODE_POINT_BYTES)
-        object.__setattr__(self, "max_code_point_bytes", width)
 
     @classmethod
     def from_config(cls, config: _StreamConfig) -> _DecodeSettings:
@@ -266,10 +240,13 @@ def _trim_to_code_point(
     Returns
     -------
     bytes
-        A suffix of *tail*, shortened by at most
-        ``max_code_point_bytes - 1`` bytes: never longer than the input, so the
-        byte bound still holds, and never shorter than a strict decoder could
-        have produced.
+        A suffix of *tail*, never longer than the input, so the byte bound
+        still holds. It loses at most one partial code point at each edge:
+        three bytes at most at the leading edge of a UTF-8 tail, and for a
+        fixed-width tail the fractional code unit plus, in UTF-16, any
+        low-surrogate half the alignment lands on. The trailing edge drops the
+        incomplete code point there, if any. Nothing is removed from the
+        middle.
 
     Examples
     --------
@@ -314,7 +291,7 @@ def _leading_trim(tail: bytes, canonical: str, stream_offset: int) -> int:
     if canonical != "utf-8":
         return 0
     cut = 0
-    limit = min(len(tail), _MAX_CODE_POINT_BYTES["utf-8"] - 1)
+    limit = min(len(tail), _UTF8_MAX_CODE_POINT_BYTES - 1)
     while cut < limit and tail[cut] & _CONTINUATION_MASK == _CONTINUATION_VALUE:
         cut += 1
     return cut

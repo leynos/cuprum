@@ -198,13 +198,14 @@ def test_no_bound_splits_a_code_point(payload: str, max_bytes: int) -> None:
 
 
 def test_the_corpus_reaches_every_class_the_properties_need() -> None:
-    """The properties above would be vacuous without these classes.
+    """The accumulator can reach every class the properties depend on.
 
-    Stated as its own test rather than as an assertion inside them, because
-    the counts are evidence about the *generator*: a future edit to the
-    alphabet or the bounds should fail here, naming which class went
-    unreached, rather than somewhere inside a property whose subject is the
-    accumulator.
+    This corpus is a fixed witness of the accumulator's reachability, not a
+    statement about the generator: it names its own payloads and bounds, so an
+    edit to ``_TEXT_ALPHABET`` or ``_BOUNDS`` cannot affect it. Whether the
+    *generated* examples cover these classes is what the properties publish
+    through ``hypothesis.event``; a missing class shows up in a run's
+    statistics rather than as a failure here.
     """
     stats = _Stats()
     for payload in ("", "a", "abc", "中", "中文中", "\U0001f600"):

@@ -3,9 +3,9 @@
 ``RunOutputOptions`` configures how a command or pipeline's stdout and stderr
 are captured, mirrored, and optionally reframed through a presentation sink.
 The ``cuprum.sh`` package re-exports the public name. The deprecated
-``IOOptions`` alias lives in :mod:`cuprum.sh._deprecated`; the flat
-``capture``/``echo`` keywords that still reach this vocabulary were split out
-of ``main`` into :mod:`cuprum.sh.pipeline_output`.
+``IOOptions`` alias lives in :mod:`cuprum.sh._deprecated`; the deprecated flat
+``capture``/``echo`` keywords that still reach this vocabulary are owned by
+:mod:`cuprum.sh.pipeline_output`.
 
 The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
 policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported

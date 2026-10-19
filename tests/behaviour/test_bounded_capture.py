@@ -125,8 +125,9 @@ def _run_pipeline(
 def _capture(result: PipelineResult, stream: str) -> CapturedStream:
     """Return the record *result* reports for *stream*, asserting there is one."""
     matching = [record for record in result.captures if record.stream == stream]
-    assert matching, (
-        f"the run must report a {stream} capture; got {list(result.captures)!r}"
+    assert len(matching) == 1, (
+        f"the run must report exactly one {stream} capture; "
+        f"got {list(result.captures)!r}"
     )
     return matching[0]
 

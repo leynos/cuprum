@@ -574,7 +574,7 @@ and `capture_stderr`:
 | `False`                       | Nothing: `None` for that stream, and no record.          |
 | `FullCapture()`               | The same as `True`, stated explicitly.                   |
 | `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
-| `FileBackedCapture(...)`      | A file, named by the record.                             |
+| `FileBackedCapture(...)`      | Text in memory until the threshold, then a named file.   |
 
 A per-stream field left at `None` inherits `capture`, and a per-stream value
 always wins for its own stream: `capture=True, capture_stderr=False` captures
