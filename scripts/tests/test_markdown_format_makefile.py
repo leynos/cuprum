@@ -55,7 +55,26 @@ def _add_symlink(repository: Path) -> Path:
     return alias
 
 
-def _markdown_make_contract(makefile: str) -> dict[str, object]:
+class _MarkdownLinterCommands(typ.TypedDict):
+    """Name the linter commands each Markdown target invokes."""
+
+    fix: str
+    check: str
+
+
+class _MarkdownMakeContract(typ.TypedDict):
+    """Describe the Markdown Makefile values the tests assert against."""
+
+    native_extensions: str
+    linter_extensions: tuple[str, ...]
+    selector_flags: tuple[str, ...]
+    regular_files_only: bool
+    symlinks_excluded: bool
+    leading_dash_safe: bool
+    linter_commands: _MarkdownLinterCommands
+
+
+def _markdown_make_contract(makefile: str) -> _MarkdownMakeContract:
     """Extract the stable Markdown selection contract from Make assignments."""
     assignments = dict(
         re.findall(
@@ -66,6 +85,10 @@ def _markdown_make_contract(makefile: str) -> dict[str, object]:
         )
     )
     selector = assignments["MDLINT_FILES_FIND"]
+    linter_commands: _MarkdownLinterCommands = {
+        "fix": assignments["MDLINT_FIX_COMMAND"],
+        "check": assignments["MDLINT_CHECK_COMMAND"],
+    }
     return {
         "native_extensions": assignments["MDTABLEFIX_EXTENSIONS"],
         "linter_extensions": tuple(
@@ -79,10 +102,7 @@ def _markdown_make_contract(makefile: str) -> dict[str, object]:
         "regular_files_only": '[ -f "$$markdown_file" ]' in selector,
         "symlinks_excluded": '[ ! -L "$$markdown_file" ]' in selector,
         "leading_dash_safe": 'printf "./%s\\0"' in selector,
-        "linter_commands": {
-            "fix": assignments["MDLINT_FIX_COMMAND"],
-            "check": assignments["MDLINT_CHECK_COMMAND"],
-        },
+        "linter_commands": linter_commands,
     }
 
 
@@ -315,8 +335,10 @@ def test_makefile_uses_local_tools_and_the_shared_linter_selector(
         "--others",
         "--exclude-standard",
     ), "the linter selector must include untracked but exclude ignored files"
-    assert all(
-        contract[key]
-        for key in ("regular_files_only", "symlinks_excluded", "leading_dash_safe")
-    ), "the linter selector must retain regular-file, symlink, and option safety"
+    selector_safety = (
+        "the linter selector must retain regular-file, symlink, and option safety"
+    )
+    assert contract["regular_files_only"], selector_safety
+    assert contract["symlinks_excluded"], selector_safety
+    assert contract["leading_dash_safe"], selector_safety
     assert contract == snapshot, "the Markdown Makefile contract snapshot drifted"
