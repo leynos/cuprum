@@ -103,6 +103,7 @@ _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
 })
 _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
+    "cuprum._bounded_delivery._DeliveryWorker.close",
     "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor.submit",
     "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._start_worker",
     "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._take_worker",

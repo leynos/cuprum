@@ -107,6 +107,7 @@ from cuprum.rust import is_rust_available
 from cuprum.sh import (
     ArgValue,
     BoundedCapture,
+    BoundedDelivery,
     BytesCommandResult,
     BytesPipelineResult,
     CapturedResult,
@@ -155,6 +156,7 @@ __all__ = [
     "ArgValue",
     "BeforeHook",
     "BoundedCapture",
+    "BoundedDelivery",
     "BrokenPipePolicy",
     "BytesCommandResult",
     "BytesPipelineResult",

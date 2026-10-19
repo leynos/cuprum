@@ -362,7 +362,7 @@ stream's record names under `captures`, not in the payload.
 `require_captured()` raises `ValueError` naming such a stream rather than
 reporting an empty string, because an absent payload and an empty stream are
 different facts. See
-[ADR-025](adr-025-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
 
 <!-- tested-example: capture-and-echo -->
 
@@ -500,9 +500,55 @@ assert result.ok
 assert heartbeats, "a silent child should produce at least one heartbeat"
 ```
 
-Keep the callback and sink writes prompt: they run on the command's event loop.
-A heartbeat reports silence, not a deadlock, and does not alter the deadline or
-exit status.
+Without bounded delivery, the renderer's sink write and flush run on the
+command's event loop; keep them prompt. `on_idle` is always called
+synchronously on that loop, even when bounded delivery is enabled, so the
+callback must also stay prompt. A heartbeat reports silence, not a deadlock,
+and does not alter the deadline or exit status.
+
+To move the built-in heartbeat write off the loop, opt in to bounded delivery
+through `RunOutputOptions`:
+
+<!-- tested-example: bounded-delivery-idle -->
+
+```python
+import io
+import sys
+
+from cuprum import (
+    BoundedDelivery,
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    sh,
+)
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="idle-delivery")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+heartbeat_log = io.StringIO()
+result = python("-c", "import time; time.sleep(0.08)").run_sync(
+    output=RunOutputOptions(
+        idle_after=0.02,
+        delivery=BoundedDelivery(max_queued_bytes=64 * 1024),
+    ),
+    context=ExecutionContext(stderr_sink=heartbeat_log),
+)
+
+assert result.ok
+assert heartbeat_log.getvalue().startswith("[cuprum] still running")
+```
+
+The same option moves echoed child output to one run-owned daemon worker. Its
+single FIFO preserves the order in which the loop enqueues stdout and stderr
+chunks, including in pipelines. `max_queued_bytes` bounds queued payload bytes,
+accounted from each original output chunk before decoding; one payload already
+being written can be in flight separately. If a chunk would exceed the bound,
+Cuprum drops that presentation chunk without blocking the loop and reports its
+byte count as `DROPPED`. Captured output remains complete.
+
+A single chunk larger than `max_queued_bytes` is dropped even when the queue is
+empty. Choose a bound at least as large as the largest expected output chunk.
 
 ### Send a stream to a file or the parent
 
@@ -1849,13 +1895,20 @@ Registrations are context-local, like the policy registrations in
 | Execution lifecycle   | `sh.observe(hook)`               | An `ExecEvent` per phase; see [Structured execution events](#structured-execution-events)                                                           | `MetricsHook` in `cuprum.adapters.metrics_adapter`                  |
 | Control operations    | `observe_control(hook)`          | A `ControlEvent` per `signal()`, `terminate()`, or `kill()` on a `RunningCommand`                                                                   | `control_metrics_hook` in `cuprum.adapters.control_metrics`         |
 | Capture outcomes      | `observe_capture(hook)`          | A `CaptureEvent` when a bound discards bytes or a spill file moves or fails; see [Bounded capture](#bounded-capture)                                | Not applicable                                                      |
-| Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line or a sink fails to encode or has closed                                                                   | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
+| Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line, a sink fails, or bounded delivery drops or abandons output                                               | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
 | Line-stream lifecycle | `observe_line_stream(hook)`      | A `LineStreamEvent` as a `SafeCmd.lines()` stream spawns, saturates, tears down, or ends                                                            | `line_stream_metrics_hook` in `cuprum.adapters.line_stream_metrics` |
 | Stream operations     | `observe_stream_operation(hook)` | A `StreamOperationEvent` per completed drain or transfer; see [Aggregate Python stream-operation events](#aggregate-python-stream-operation-events) | `stream_operation_metrics_hook` in `cuprum.adapters.stream_metrics` |
 | Rust-pump routing     | `observe_pump(hook)`             | A `PumpEvent` per routing decision; see [Counting pump routing decisions](#counting-pump-routing-decisions)                                         | `PumpMetricsHook` in `cuprum.adapters.pump_metrics`                 |
 | Rust-pump hop spans   | `observe_pump_span(tracer)`      | A span per native hop; see [Rust-pump executor-hop spans](#rust-pump-executor-hop-spans)                                                            | Not applicable                                                      |
 
 _Table 5: Observation channels and their metrics adapters._
+
+`EchoMetricsHook` counts bounded-delivery drops, sink write or flush failures,
+and undelivered groups in `cuprum_echo_delivery_events_total`, labelled only by
+the output stream and closed event category. It also adds dropped and
+undelivered source bytes to `cuprum_echo_delivery_bytes_total` with the same
+labels. The adapter never uses sink metadata or output content as a metric
+label.
 
 The `observe_*` functions are importable from `cuprum`, except
 `observe_capture` and `observe_stream_operation`. They live in
@@ -1999,6 +2052,74 @@ result = python("-c", "print('building')").run_sync(
 assert result.ok and result.stdout == "building\n"
 assert workflow_log.getvalue().startswith("::group::Build")
 ```
+
+#### Keep blocking writes off the run loop
+
+Sink writes and flushes are synchronous by default. A slow destination can
+therefore delay stream reads, timeouts, and cancellation. Select
+`BoundedDelivery` to move echoed output writes and flushes to a shared worker
+for the run:
+
+<!-- tested-example: bounded-delivery-sink -->
+
+```python
+import io
+import sys
+
+from cuprum import (
+    BoundedDelivery,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    sh,
+)
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="bounded-delivery")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+workflow_log = io.StringIO()
+sink = GitHubActionsSink(workflow_log, title="Build", force=True)
+
+result = python("-c", "print('building')").run_sync(
+    output=RunOutputOptions(
+        echo=True,
+        sink=sink,
+        delivery=BoundedDelivery(
+            max_queued_bytes=256 * 1024,
+            drain_grace_s=0.5,
+        ),
+    ),
+)
+assert result.ok and result.stdout == "building\n"
+assert workflow_log.getvalue().startswith("::group::Build")
+```
+
+When `delivery` is omitted, the current synchronous behaviour is unchanged. The
+queue drops and reports a chunk that cannot fit as `DROPPED`; capture and the
+command's exit status are unaffected. A worker `write` or `flush` exception
+disables further delivery and is reported as `DELIVERY_ERROR`, with the
+affected stream identified and no exception text included. The stdout and
+stderr chunks from a command or pipeline share one FIFO in the order the run
+loop enqueues them. Any queued output discarded after a worker failure is also
+reported as `UNDELIVERED`.
+
+The same guarantees apply to `SafeCmd.lines()`: delivery setup is deferred
+until iteration begins, and its worker closes before the final result is
+published or during stream cleanup.
+
+At shutdown, Cuprum lets the worker drain for 0.25 seconds by default. Set
+`drain_grace_s` to a finite, non-negative number to choose another bound. If a
+write is still blocked when that grace expires, Cuprum abandons the worker as a
+daemon thread and reports queued and in-flight bytes as `UNDELIVERED`. Python
+cannot forcibly stop a running worker thread, so it may remain alive until the
+destination returns. The run does not close caller-owned destinations; keep a
+destination valid if an abandoned write might later return.
+
+When a presentation sink is active, its closing frame is serialized behind the
+delivery worker's last active write and its close runs off the execution loop.
+The run waits only for the configured delivery grace. If a destination write
+never returns, the closing frame may remain unfinished rather than race that
+write; any background finalizer remains a daemon thread.
 
 ## Operational reference
 

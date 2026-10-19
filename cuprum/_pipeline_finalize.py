@@ -21,6 +21,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum._capture_cleanup import _cleanup_capture_sinks
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -37,9 +38,6 @@ from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 
 if typ.TYPE_CHECKING:
-    import asyncio
-    import collections.abc as cabc
-
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_records import (
         _PipelineObservers,
@@ -71,7 +69,7 @@ async def _finalize_pipeline_execution(
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
         outcome = _outcome_for_error(after_hook_error)
-        sink_bracket.close(outcome=outcome)
+        await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
         _emit_result_terminal_events(
             observations,
             stage_results,
@@ -84,7 +82,9 @@ async def _finalize_pipeline_execution(
             )
         )
         raise
-    sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
+    await _shielded_cleanup(
+        sink_bracket.aclose(outcome=_pipeline_result_outcome(stage_results))
+    )
     try:
         _emit_result_terminal_events(observations, stage_results)
     except BaseException as terminal_error:
@@ -111,17 +111,21 @@ def _run_pipeline_after_hooks(
 
 
 async def _reconcile_pipeline_run_failure(
+    config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
-    pending_tasks: list[asyncio.Task[None]],
+    observers: _PipelineObservers,
     run_error: BaseException,
-    after_process_cleanup: cabc.Callable[[], None],
 ) -> None:
     """Cancel the stream tasks and drain the observe tasks after a run failure.
 
     Kept as one coroutine so the caller can shield both halves together: the
     stream tasks and the observe-hook tasks are all owned by the pipeline, and
     a cancellation arriving between two separately shielded steps would leave
-    the second set pending.
+    the second set pending. The run-owned delivery worker closes before the
+    session does, so write failures and undelivered bytes it discovered are
+    already recorded when the terminal events are emitted; the session close
+    itself is the asynchronous one, because in bounded mode it waits for the
+    worker's queue to drain.
 
     The capture cleanup runs last, after the cancels have been awaited. A
     cancelled consumer is what this path exists for, and it never finalizes, so
@@ -131,11 +135,22 @@ async def _reconcile_pipeline_run_failure(
     task that fails during cleanup still must not strand the spill files, and
     the group the drain raises then propagates unchanged.
     """
+    outcome = _outcome_for_error(run_error)
     await _cancel_stream_tasks(spawn.stderr_tasks, spawn.stdout_task)
-    after_process_cleanup()
+    await _close_delivery_worker(
+        config.delivery_worker,
+        drain_grace_s=config.delivery_grace_s,
+    )
+    await _shielded_cleanup(config.sink_bracket.aclose(outcome=outcome))
+    _emit_terminal_events(
+        observers.observations,
+        outcome.outcome,
+        processes=spawn.processes,
+        started_at=spawn.stages.started_at,
+    )
     try:
         await _drain_tasks_during_cleanup(
-            pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
+            observers.pending_tasks, run_error, message=_PIPELINE_FINALIZATION_ERROR
         )
     finally:
         await _cleanup_capture_sinks(spawn.captures.sinks)
@@ -199,19 +214,12 @@ async def _finalize_pipeline_run_failure(
     run_error: BaseException,
 ) -> None:
     """Close the sink, settle spawned stages, and drain after run failure."""
-    outcome = _outcome_for_error(run_error)
-    config.sink_bracket.close(outcome=outcome)
     await _shielded_cleanup(
         _reconcile_pipeline_run_failure(
+            config,
             spawn,
-            observers.pending_tasks,
+            observers,
             run_error,
-            lambda: _emit_terminal_events(
-                observers.observations,
-                outcome.outcome,
-                processes=spawn.processes,
-                started_at=spawn.stages.started_at,
-            ),
         )
     )
 
@@ -224,7 +232,15 @@ async def _finalize_pipeline_timeout(
 ) -> None:
     """Report a pipeline timeout and finalize its sink and observe tasks."""
     observations = observers.observations
-    config.sink_bracket.close(outcome=_outcome_for_error(timeout_error))
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            config.delivery_worker,
+            drain_grace_s=config.delivery_grace_s,
+        ),
+    )
+    await _shielded_cleanup(
+        config.sink_bracket.aclose(outcome=_outcome_for_error(timeout_error))
+    )
     _report_pipeline_timeout_expiry(
         observations,
         spawn.processes,
@@ -248,7 +264,7 @@ async def _finalize_pipeline_stage_result_failure(
 ) -> None:
     """Settle stages and drain hooks after stage-result assembly fails."""
     outcome = _outcome_for_error(result_error)
-    sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(sink_bracket.aclose(outcome=outcome))
     _emit_terminal_events(
         observers.observations,
         outcome.outcome,

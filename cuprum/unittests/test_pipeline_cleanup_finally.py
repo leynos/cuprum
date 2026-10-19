@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import io
 
 import pytest
 
 from cuprum._capture_types import CaptureFinal, CaptureSinkRegistry
+from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._pipeline_finalize import (
     _finalize_result_failure_cleanup,
     _finalize_timeout_cleanup,
@@ -27,6 +29,8 @@ from cuprum._pipeline_records import (
     _PipelineSpawnResult,
     _StageWaitContext,
 )
+from cuprum._sink_lifecycle import _SinkBracket
+from cuprum.sh import ExecutionContext
 
 
 class _ObserveTaskError(Exception):
@@ -69,6 +73,21 @@ class _Scenario:
             captures=registry,
         )
         self.observers = _PipelineObservers(observations=(), pending_tasks=[])
+        # A run that captured nothing and opted into no delivery: this test
+        # exercises the teardown composition, and the reconcile path reads
+        # exactly these two fields off the config.
+        self.config = _PipelineRunConfig(
+            ctx=ExecutionContext(),
+            capture_stdout=None,
+            capture_stderr=None,
+            echo_stdout=False,
+            echo_stderr=False,
+            max_echo_line_bytes=None,
+            timeout=None,
+            stdout_sink=io.StringIO(),
+            stderr_sink=io.StringIO(),
+            sink_bracket=_SinkBracket(None),
+        )
 
     def fail_next_drain(self) -> None:
         """Schedule an observe task that raises when cleanup awaits it."""
@@ -134,10 +153,10 @@ def test_a_failing_drain_still_releases_the_sink_after_a_run_failure() -> None:
 
         with pytest.raises(BaseExceptionGroup) as exc_info:
             await _reconcile_pipeline_run_failure(
+                scenario.config,
                 scenario.spawn,
-                scenario.observers.pending_tasks,
+                scenario.observers,
                 RuntimeError("run failed"),
-                lambda: None,
             )
 
         _assert_drain_failure_preserved(exc_info.value)

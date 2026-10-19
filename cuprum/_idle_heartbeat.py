@@ -217,6 +217,14 @@ class _IdleMonitor:
             schedule.stop()
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _IdleSinkConfig:
+    """Resolved destination and optional non-blocking delivery route."""
+
+    sink: typ.IO[str] | None = None
+    delivery: cabc.Callable[[str], None] | None = None
+
+
 async def _stop_idle_monitor(monitor: _IdleMonitor | None) -> None:
     """Stop *monitor* and settle its driver exactly once; safe to repeat.
 
@@ -240,7 +248,7 @@ def _build_idle_monitor(
     interval: float | None,
     on_idle: cabc.Callable[[float, float], None] | None,
     subject: str,
-    sink: typ.IO[str] | None = None,
+    sink_config: _IdleSinkConfig | None = None,
 ) -> _IdleMonitor | None:
     """Build a run-owned heartbeat, or ``None`` when idle reporting is off.
 
@@ -256,6 +264,7 @@ def _build_idle_monitor(
     """
     if interval is None:
         return None
+    resolved_sink = sink_config or _IdleSinkConfig()
     mirror = _MirrorCursor()
     return _IdleMonitor(
         interval=interval,
@@ -263,10 +272,11 @@ def _build_idle_monitor(
             callback=on_idle,
             diagnostic=_IdleDiagnostic(
                 subject=subject,
-                destination=_LiveSink(sink),
+                destination=_LiveSink(resolved_sink.sink),
                 # Read at emission time, so the diagnostic sees where the echo
                 # sink is *now* rather than where it was when the run started.
                 is_line_open=lambda: mirror.is_mid_line,
+                delivery=resolved_sink.delivery,
             ),
         ),
         mirror=mirror,
@@ -382,6 +392,7 @@ __all__ = [
     "_IdleMonitor",
     "_IdleNotifier",
     "_IdleSchedule",
+    "_IdleSinkConfig",
     "_build_idle_monitor",
     "_stop_idle_monitor",
     "_validate_idle_options",

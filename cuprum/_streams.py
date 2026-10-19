@@ -102,7 +102,7 @@ class _DrainState:
 
     echo_guard: _EchoGuard
     # Caller-owned result diagnostics: the collector a command hands to this
-    # drain so a handled echo disablement can be surfaced on that command's
+    # drain so echo failures and delivery loss can appear in that command's
     # ``CommandResult.relay_fallbacks`` without touching the shared echo-hook
     # registry, which cannot attribute events to nested or concurrent runs.
     relay_diagnostics: _RelayDiagnostics

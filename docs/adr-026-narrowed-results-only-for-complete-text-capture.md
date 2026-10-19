@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 025: Narrow captured results only for complete text
+# Architectural decision record (ADR) 026: Narrow captured results only for complete text
 
 ## Status
 

@@ -17,11 +17,12 @@ are unchanged.
 from __future__ import annotations
 
 import dataclasses as dc
-import sys
 import time
 import typing as typ
 
-from cuprum._bounded_encoding import _reject_unsupported_bounded_encoding
+from cuprum._command_execution_config import (
+    _build_subprocess_execution as _build_subprocess_execution,
+)
 
 # The finalization helpers moved to ``cuprum._command_finalization`` when this
 # module outgrew the line ceiling. They stay in this module's namespace because
@@ -41,8 +42,6 @@ from cuprum._command_finalization import (
     _finalize_prepared_command_failure as _finalize_prepared_command_failure,
 )
 from cuprum._execution_tracking import _ExecutionTracking
-from cuprum._idle_diagnostic import _idle_subject
-from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
     _merge_tags,
@@ -53,18 +52,11 @@ from cuprum._observability import (
 from cuprum._pipeline_types import (
     _StageObservation,
 )
-from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_context import _event_cwd, _execution_cwd
-from cuprum._subprocess_execution import (
-    _SubprocessExecution,
-)
-from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode
 from cuprum.events import CaptureMode
-from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
-    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import (
         ExecutionContext,
@@ -72,7 +64,6 @@ if typ.TYPE_CHECKING:
         SafeCmd,
         StdinStream,
     )
-    from cuprum.sinks import base as sinks
 
 __all__ = [
     "_ExecutionState",
@@ -153,143 +144,6 @@ def _prepare_execution_observation(
         env_mode=env_mode,
         resolved_path=resolved_path,
         capture_mode=CaptureMode.BYTES if state.capture_bytes else CaptureMode.TEXT,
-    )
-
-
-def _build_subprocess_execution(
-    cmd: SafeCmd,
-    state: _ExecutionState,
-    *,
-    observation: _StageObservation,
-    sink_session: sinks.OutputSession | None = None,
-) -> _SubprocessExecution:
-    """Bundle everything one command's execution needs, before it spawns.
-
-    The run's already-resolved inputs arrive together as *state*, so this
-    helper stays a pure translation from what the run decided to what the
-    subprocess layer consumes; *observation* and *sink_session* stay separate
-    because they are the two products of the run's own preparation rather
-    than inputs it was handed.
-
-    The idle monitor is part of the bundle rather than an execution-time
-    argument because its presence is what decides whether the child's stdout
-    and stderr are piped for activity observation. Deferring it would leave
-    the spawn unable to make that choice. The sink session travels with it
-    for the same reason: stream wiring routes mirrored output through the
-    session's log, so it has to be part of the bundle before the consumers
-    are built. The process-group policy is read from the context into the
-    bundle for the complementary reason: the spawn and the teardown must
-    agree about whether the child's group belongs to this run, and a single
-    bundle field is what makes that agreement structural.
-
-    Stdio is resolved here rather than in the state, because this is the first
-    point at which the run's *output options* and its *stdin source* are both
-    in hand: ``_ExecutionState`` carries the source and the options but was
-    built by ``SafeCmd.run`` before the idle monitor and the sink session
-    existed, and a redirected stream has to be resolved against whether
-    anything still needs to read it.
-
-    Being the first point where both are in hand is also what makes this the
-    place to check that they agree. ``RunOutputOptions`` validates its own
-    targets when it is constructed, but whether the run *also* carries a stdin
-    source is not known there — the source arrives on the run call, which is
-    what built the state. Establishing that the two answer the same question
-    once is cheap; discovering it from a caller who watched their explicit
-    ``inherit()`` lose to a payload is not.
-
-    The capture policies are checked against the run's encoding for the same
-    reason. A bounded capture trimmed under an encoding the trim cannot repair
-    would decode an orphaned trail byte as a character of its own, and the
-    caller would read text the child never wrote. Both facts — the policy and
-    the encoding — are in hand here and nowhere earlier: the policy lives on
-    the options and the encoding on the context, and the two are only brought
-    together for the first time at this seam.
-
-    Returns
-    -------
-    _SubprocessExecution
-        The resolved execution bundle, ready for ``_execute_with_hooks``.
-
-    Raises
-    ------
-    ValueError
-        If the run's output options name an inherited stdin while its
-        ``stdin=`` argument supplies a source, so the two disagree about where
-        the child's input comes from; or if a bounded text capture names an
-        encoding whose code-point boundaries a truncated tail cannot repair.
-    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the stdio and encoding checkers.
-    _reject_contested_stdin(state.output.stdin, has_source=state.stdin_data is not None)
-    capture_stdout, capture_stderr = state.output.resolved_capture
-    for capture in (capture_stdout, capture_stderr):
-        _reject_unsupported_bounded_encoding(
-            capture,
-            encoding=state.context.encoding,
-            capture_bytes=state.capture_bytes,
-        )
-    return _SubprocessExecution(
-        cmd=cmd,
-        ctx=state.context,
-        capture_stdout=capture_stdout,
-        capture_stderr=capture_stderr,
-        echo_stdout=state.output.resolved_echo[0],
-        echo_stderr=state.output.resolved_echo[1],
-        max_echo_line_bytes=state.output.max_echo_line_bytes,
-        broken_pipe_policy=state.output.resolved_broken_pipe_policy,
-        sink_session=sink_session,
-        timeout=state.timeout,
-        observation=observation,
-        stdio=_resolve_stdio(state.stdin_data, state.output),
-        on_line=state.output.on_line,
-        capture_bytes=state.capture_bytes,
-        # Built here, during the parent's own preparation, but armed by the run
-        # itself, once the child is actually running: everything preceding the
-        # spawn is the parent's work, and must not read as the child's silence.
-        idle=_resolve_idle_monitor(cmd, state, sink_session),
-        # Read from the context here so the bundle's spawn and teardown stages
-        # share one decision instead of each consulting the context separately.
-        process_group=state.context.resolved_process_group,
-    )
-
-
-def _resolve_idle_monitor(
-    cmd: SafeCmd,
-    state: _ExecutionState,
-    sink_session: sinks.OutputSession | None,
-) -> _IdleMonitor | None:
-    """Build this run's idle monitor, resolved against the run's own streams.
-
-    The heartbeat's keepalive is written to the same place the stderr drain
-    writes: the sink session's log, then the context's stderr sink, then the
-    process's own stderr. That is not a stylistic choice — the keepalive
-    shares the drain's incomplete-line state, so writing it anywhere else
-    would land outside the group an active session claims.
-
-    Built during the parent's own preparation, before the child exists, so
-    that the run owns the monitor by the time it spawns; it is *armed* only
-    once the child is actually running, because everything preceding the spawn
-    is the parent's work and must not read as the child's silence.
-
-    Parameters
-    ----------
-    cmd : SafeCmd
-        The command whose program names the idle subject.
-    state : _ExecutionState
-        The run's already-resolved inputs, carrying the idle settings and the
-        context's stderr destination.
-    sink_session : sinks.OutputSession | None
-        The run's open sink session, or ``None`` when it has none.
-
-    Returns
-    -------
-    _IdleMonitor | None
-        The monitor to carry on the execution bundle, or ``None`` when the
-        caller asked for no idle reporting.
-    """
-    return _build_idle_monitor(
-        state.output.idle_after,
-        state.output.on_idle,
-        _idle_subject(str(cmd.program)),
-        _resolve_stream_sink(sink_session, state.context.stderr_sink, sys.stderr),
     )
 
 

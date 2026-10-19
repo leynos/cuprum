@@ -1,0 +1,369 @@
+"""Idle diagnostics share bounded delivery without blocking execution."""
+
+from __future__ import annotations
+
+import asyncio
+import io
+
+import pytest
+
+from cuprum import ScopeConfig, TimeoutExpired, scoped
+from cuprum.echo_events import (
+    EchoErrorCategory,
+    EchoEvent,
+    EchoStream,
+    RelayFallback,
+)
+from cuprum.echo_observation import observe_echo
+from cuprum.sh import (
+    BoundedDelivery,
+    CommandResult,
+    ExecutionContext,
+    Pipeline,
+    PipelineResult,
+    RunOutputOptions,
+    SafeCmd,
+)
+from cuprum.unittests._bounded_delivery_idle_support import (
+    _pipeline,
+    _record_accepted_idle_bytes,
+    _run_target,
+    _target_call,
+)
+from cuprum.unittests._sink_test_support import BlockedSink
+from tests.helpers.catalogue import PythonCatalogue, build_python_catalogue_env
+
+_IDLE_INTERVAL_S = 0.08
+
+
+class _RecordingBlockedSink(BlockedSink):
+    """Retain the exact active item before blocking its delivery worker."""
+
+    def __init__(self) -> None:
+        """Start a blocked sink with an empty active payload record."""
+        super().__init__(wait_timeout_s=3.0)
+        self.started_value: str | None = None
+
+    def write(self, text: str, /) -> int:
+        """Record the item before waiting on the inherited release event."""
+        self.started_value = text
+        return super().write(text)
+
+
+def _assert_idle_shutdown_loss(
+    events: list[EchoEvent],
+    sink: _RecordingBlockedSink,
+    accepted_idle_bytes: list[int],
+    run_kind: str,
+) -> None:
+    """Check shutdown loss includes the active and queued idle payloads."""
+    assert sink.started_value is not None, (
+        f"{run_kind} cancellation must start one idle diagnostic write"
+    )
+    assert len(events) == 1, (
+        f"{run_kind} cancellation must report one aggregated stderr loss"
+    )
+    event = events[0]
+    assert event.stream is EchoStream.STDERR, (
+        f"{run_kind} idle shutdown loss must identify stderr"
+    )
+    assert event.error_category is EchoErrorCategory.UNDELIVERED, (
+        f"{run_kind} cancellation must report queued diagnostics as undelivered"
+    )
+    assert event.dropped_bytes == sum(accepted_idle_bytes), (
+        f"{run_kind} shutdown loss must aggregate the active and queued payloads; "
+        f"accepted={accepted_idle_bytes!r}"
+    )
+
+
+def _assert_successful_idle_drop(
+    result: CommandResult | PipelineResult,
+    expected_fallback: RelayFallback,
+    run_kind: str,
+) -> None:
+    """Check successful execution and its recorded idle-drop fallback."""
+    if isinstance(result, CommandResult):
+        assert result.exit_code == 0, f"{run_kind} idle-drop run must succeed"
+        assert expected_fallback in result.relay_fallbacks, (
+            f"{run_kind} result must retain the stderr dropped record"
+        )
+    else:
+        assert [stage.exit_code for stage in result.stages] == [0, 0], (
+            f"{run_kind} idle-drop pipeline stages must succeed"
+        )
+        assert expected_fallback in result.stages[-1].relay_fallbacks, (
+            f"{run_kind} final stage must retain the stderr dropped record"
+        )
+
+
+def _assert_dropped_stderr_events(events: list[EchoEvent], run_kind: str) -> None:
+    """Check that each observed idle diagnostic was dropped on stderr."""
+    assert events, f"{run_kind} idle queue saturation must emit a drop event"
+    assert all(
+        event.stream is EchoStream.STDERR
+        and event.error_category is EchoErrorCategory.DROPPED
+        and event.dropped_bytes is not None
+        and event.dropped_bytes > 0
+        for event in events
+    ), f"{run_kind} idle drops must report positive stderr source-byte counts"
+
+
+def _assert_saturated_idle_drop_result(
+    result: CommandResult | PipelineResult,
+    sink: io.StringIO,
+    events: list[EchoEvent],
+    run_kind: str,
+) -> None:
+    """Check capture, fallback, and event records after idle drops."""
+    assert result.stdout == "captured\n", (
+        f"{run_kind} capture must preserve the child output"
+    )
+    captured_stderr = (
+        result.stderr if isinstance(result, CommandResult) else result.final.stderr
+    )
+    assert not captured_stderr, (
+        f"{run_kind} idle diagnostics must not enter captured stderr"
+    )
+    assert not sink.getvalue(), f"{run_kind} idle lines must be rejected"
+    expected_fallback = RelayFallback(
+        stream=EchoStream.STDERR,
+        error_category=EchoErrorCategory.DROPPED,
+    )
+    _assert_successful_idle_drop(result, expected_fallback, run_kind)
+    _assert_dropped_stderr_events(events, run_kind)
+
+
+def _echoing_idle_case(
+    run_kind: str,
+) -> tuple[
+    PythonCatalogue,
+    SafeCmd | Pipeline,
+    BlockedSink,
+    RunOutputOptions,
+    ExecutionContext,
+]:
+    """Build the blocked-sink case used to verify idle echo ordering."""
+    runtime = build_python_catalogue_env()
+    python = runtime.builder
+    script = (
+        "import time; print('first', flush=True); time.sleep(0.4); "
+        "print('last', flush=True)"
+    )
+    target: SafeCmd | Pipeline = python("-c", script)
+    if run_kind == "pipeline":
+        target = _pipeline(python, script)
+    sink = BlockedSink(wait_timeout_s=3.0)
+    output = RunOutputOptions(
+        capture=True,
+        echo_stdout=True,
+        echo_stderr=False,
+        idle_after=_IDLE_INTERVAL_S,
+        delivery=BoundedDelivery(max_queued_bytes=1024, drain_grace_s=1.0),
+    )
+    context = ExecutionContext(stdout_sink=sink, stderr_sink=sink)
+    return runtime, target, sink, output, context
+
+
+def _assert_echoing_idle_output(
+    sink: BlockedSink,
+    result: CommandResult | PipelineResult,
+    run_kind: str,
+) -> None:
+    """Check that keepalives are presented without entering capture."""
+    lines = sink.getvalue().splitlines()
+    heartbeat_index = next(
+        index for index, line in enumerate(lines) if line.startswith("[cuprum]")
+    )
+    assert lines.index("first") < lines.index("last"), (
+        f"{run_kind} child output must retain FIFO order"
+    )
+    assert heartbeat_index < lines.index("last"), (
+        f"{run_kind} idle diagnostic must remain between child chunks"
+    )
+    assert result.stdout == "first\nlast\n", (
+        f"{run_kind} capture must contain only child stdout"
+    )
+    assert "[cuprum]" not in result.stdout, (
+        f"{run_kind} idle diagnostics must stay out of capture"
+    )
+
+
+@pytest.mark.parametrize("run_kind", ["command", "pipeline"])
+def test_idle_output_uses_fifo_and_stays_out_of_capture(run_kind: str) -> None:
+    """Keepalives use the shared FIFO and preserve captured child output."""
+    runtime, target, sink, output, context = _echoing_idle_case(run_kind)
+
+    async def run_and_release() -> CommandResult | PipelineResult:
+        """Release the first blocked write after later output is queued."""
+        task = asyncio.ensure_future(
+            _target_call(target, output, context),
+        )
+        assert await asyncio.wait_for(
+            asyncio.to_thread(sink.started.wait, 3.0),
+            timeout=4.0,
+        ), "child output must enter the delivery worker"
+        await asyncio.sleep(0.7)
+        sink.release.set()
+        return await asyncio.wait_for(task, timeout=3.0)
+
+    with scoped(ScopeConfig(allowlist=frozenset([runtime.program]))):
+        try:
+            result = asyncio.run(run_and_release())
+        finally:
+            sink.release.set()
+
+    _assert_echoing_idle_output(sink, result, run_kind)
+
+
+@pytest.mark.parametrize(
+    ("run_kind", "synchronous"),
+    [
+        ("command", True),
+        ("command", False),
+        ("pipeline", True),
+        ("pipeline", False),
+    ],
+)
+def test_saturated_idle_delivery_preserves_successful_run_output(
+    run_kind: str,
+    synchronous: bool,
+) -> None:
+    """Sync and async command or pipeline drops preserve captured output."""
+    runtime = build_python_catalogue_env()
+    script = "import time; time.sleep(0.4); print('captured', flush=True)"
+    target = (
+        runtime.builder("-c", script)
+        if run_kind == "command"
+        else _pipeline(runtime.builder, script)
+    )
+    sink = io.StringIO()
+    events: list[EchoEvent] = []
+    output = RunOutputOptions(
+        capture=True,
+        echo=False,
+        idle_after=_IDLE_INTERVAL_S,
+        delivery=BoundedDelivery(max_queued_bytes=1),
+    )
+
+    with (
+        observe_echo(events.append),
+        scoped(ScopeConfig(allowlist=frozenset([runtime.program]))),
+    ):
+        context = ExecutionContext(stderr_sink=sink)
+        if synchronous:
+            result = target.run_sync(output=output, context=context)
+        else:
+            result = asyncio.run(_run_target(target, output, context))
+
+    _assert_saturated_idle_drop_result(result, sink, events, run_kind)
+
+
+@pytest.mark.parametrize("run_kind", ["command", "pipeline"])
+def test_abandoned_idle_delivery_reports_exact_shutdown_loss(
+    run_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocked idle write reports its exact bytes when cancellation closes it."""
+    runtime = build_python_catalogue_env()
+    python = runtime.builder
+    script = "import time; time.sleep(30)"
+    command = python("-c", script)
+    target = command if run_kind == "command" else _pipeline(python, script)
+    sink = _RecordingBlockedSink()
+    events: list[EchoEvent] = []
+    accepted_idle_bytes = _record_accepted_idle_bytes(monkeypatch)
+    output = RunOutputOptions(
+        capture=False,
+        echo=False,
+        idle_after=_IDLE_INTERVAL_S,
+        delivery=BoundedDelivery(max_queued_bytes=65536, drain_grace_s=0.02),
+    )
+
+    async def start_and_cancel() -> None:
+        """Cancel after the first generated diagnostic is inside the sink."""
+        task = asyncio.ensure_future(
+            _target_call(
+                target,
+                output,
+                ExecutionContext(stdout_sink=sink, stderr_sink=sink),
+            ),
+        )
+        assert await asyncio.wait_for(
+            asyncio.to_thread(sink.started.wait, 3.0),
+            timeout=4.0,
+        ), "idle output must reach the worker before cancellation"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2.0)
+
+    with (
+        observe_echo(events.append),
+        scoped(ScopeConfig(allowlist=frozenset([runtime.program]))),
+    ):
+        try:
+            asyncio.run(start_and_cancel())
+        finally:
+            sink.release.set()
+            assert sink.finished.wait(timeout=1.0), (
+                f"{run_kind} blocked idle writer must finish after release"
+            )
+
+    _assert_idle_shutdown_loss(events, sink, accepted_idle_bytes, run_kind)
+
+
+@pytest.mark.parametrize("run_kind", ["command", "pipeline"])
+@pytest.mark.parametrize("stop_kind", ["timeout", "cancellation"])
+def test_blocked_idle_delivery_does_not_delay_run_teardown(
+    run_kind: str,
+    stop_kind: str,
+) -> None:
+    """Timeout and cancellation settle while an idle keepalive is blocked."""
+    runtime = build_python_catalogue_env()
+    python = runtime.builder
+    script = "import time; time.sleep(30)"
+    command = python("-c", script)
+    pipeline = _pipeline(python, script)
+    sink = BlockedSink(wait_timeout_s=3.0)
+    output = RunOutputOptions(
+        capture=False,
+        echo=False,
+        idle_after=_IDLE_INTERVAL_S,
+        delivery=BoundedDelivery(max_queued_bytes=1024, drain_grace_s=0.02),
+    )
+    context = ExecutionContext(
+        stdout_sink=sink,
+        stderr_sink=sink,
+        cancel_grace=0.05,
+    )
+
+    async def start_and_stop() -> None:
+        """Wait for a blocked heartbeat, then exercise its terminal path."""
+        task = asyncio.ensure_future(
+            _target_call(
+                command if run_kind == "command" else pipeline,
+                output,
+                context,
+                timeout=0.3 if stop_kind == "timeout" else None,
+            ),
+        )
+        assert await asyncio.wait_for(
+            asyncio.to_thread(sink.started.wait, 3.0),
+            timeout=4.0,
+        ), "idle output must reach the worker while the child is quiet"
+        if stop_kind == "cancellation":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2.0)
+        else:
+            with pytest.raises(TimeoutExpired):
+                await asyncio.wait_for(task, timeout=2.0)
+
+    with scoped(ScopeConfig(allowlist=frozenset([runtime.program]))):
+        try:
+            asyncio.run(start_and_stop())
+        finally:
+            sink.release.set()
+            if sink.started.is_set():
+                assert sink.finished.wait(timeout=1.0), (
+                    f"{run_kind} blocked idle writer must be released after teardown"
+                )

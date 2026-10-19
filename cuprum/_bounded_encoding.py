@@ -38,7 +38,10 @@ import codecs
 
 from cuprum.capture_policy import BoundedCapture, CapturePolicy
 
-__all__ = ["_reject_unsupported_bounded_encoding"]
+__all__ = [
+    "_reject_unsupported_bounded_captures",
+    "_reject_unsupported_bounded_encoding",
+]
 
 # The codecs the trim can repair by name. UTF-8 is self-describing, and the
 # fixed-width names are realigned by stream offset; every other safe codec is
@@ -59,6 +62,44 @@ _REPAIRABLE_CODECS: frozenset[str] = frozenset({
 # The one family name that resolves to plain UTF-8 once the bound has dropped
 # the mark selecting it, and so needs no separate treatment here.
 _MARK_ONLY_FAMILY = "utf-8-sig"
+
+
+def _reject_unsupported_bounded_captures(
+    resolved_capture: tuple[CapturePolicy | None, CapturePolicy | None],
+    *,
+    encoding: str,
+    capture_bytes: bool,
+) -> None:
+    """Refuse an unrepairable bounded text capture on either stream.
+
+    Every pre-spawn entry point that resolves per-stream policies calls this
+    through :func:`_reject_unsupported_bounded_encoding`'s loop, so the two
+    streams a run always resolves together are checked together and no caller
+    can accidentally check only one.
+
+    Parameters
+    ----------
+    resolved_capture : tuple[CapturePolicy | None, CapturePolicy | None]
+        The run's ``(stdout, stderr)`` capture policies, as
+        ``RunOutputOptions.resolved_capture`` reports them.
+    encoding : str
+        The run's encoding, from its :class:`ExecutionContext`.
+    capture_bytes : bool
+        Whether the run returns raw bytes, in which case no trim happens and
+        every encoding is admissible.
+
+    The refusal itself is raised by
+    :func:`_reject_unsupported_bounded_encoding`, which carries the message
+    naming the policy alternatives and the offending encoding; this helper
+    only decides that both streams are checked.
+    """
+    capture_stdout, capture_stderr = resolved_capture
+    for capture in (capture_stdout, capture_stderr):
+        _reject_unsupported_bounded_encoding(
+            capture,
+            encoding=encoding,
+            capture_bytes=capture_bytes,
+        )
 
 
 def _reject_unsupported_bounded_encoding(

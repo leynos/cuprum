@@ -142,8 +142,8 @@ def _relay_fallbacks_for_result(
     Returns
     -------
     tuple[RelayFallback, ...]
-        The command's handled echo-disablement records, empty when its
-        diagnostics are absent or recorded nothing.
+        The command's categorical echo-failure and delivery-loss records,
+        empty when its diagnostics are absent or recorded nothing.
     """
     if relay_diagnostics is None:
         return ()

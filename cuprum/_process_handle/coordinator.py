@@ -43,6 +43,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum import _wait4_spawn
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
 from cuprum._result_assembly import _recorded_captures, _require_text
@@ -201,10 +202,15 @@ async def _settle_handle_run(run: _HandleRun) -> CommandResult:
         execution,
         preserve=True,
     )
-    # A handle always runs in text mode: ``start()`` forces capture on and never
-    # offers the byte-exact entry points, so the drain's widened payload is
-    # text here. Narrowing through ``_require_text`` re-establishes that
-    # guarantee and reports a contradiction rather than asserting it away.
+    # Handle results and after-hooks must see write failures and undelivered
+    # bytes discovered only when the shared delivery worker settles, so the
+    # worker closes before the outcome is built.
+    await _shielded_cleanup(
+        _close_delivery_worker(
+            execution.delivery_worker,
+            drain_grace_s=execution.delivery_grace_s,
+        ),
+    )
     return _build_handle_result(
         run,
         _HandleOutcome(

@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from cuprum._bounded_delivery import BoundedDelivery, _validate_delivery_options
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
@@ -59,6 +60,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sh._deprecated import IOOptions
 
 __all__ = [
+    "BoundedDelivery",
     "IOOptions",
     "RunOutputOptions",
     "StdioTarget",
@@ -183,6 +185,10 @@ class RunOutputOptions(_ResolvedOptionsMixin):
         ``StdinInput`` payload or a ``StdinStream`` producer --- and either
         form implies a pipe. A ``path`` or ``fd`` target is rejected here: an
         input descriptor belongs to the source, not to these options.
+    delivery : BoundedDelivery | None, keyword-only, default=None
+        Opt into one byte-bounded delivery worker per run. Sink writes happen
+        away from the execution loop; dropped output is reported while capture
+        remains complete.
     sink : sinks.OutputSink | None, default=None
         Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
         given, it may reframe the parent-facing output of this run (for
@@ -288,6 +294,7 @@ class RunOutputOptions(_ResolvedOptionsMixin):
     stdin: StdioTarget | None = None
     stdout: StdioTarget | None = None
     stderr: StdioTarget | None = None
+    delivery: BoundedDelivery | None = dc.field(default=None, kw_only=True)
     # `dataclasses.replace` forwards init fields. Keep the generated identity
     # separate so reusing its sink in a new options object remains explicit.
     _synthesized_sink: sinks.OutputSink | None = dc.field(
@@ -341,6 +348,11 @@ class RunOutputOptions(_ResolvedOptionsMixin):
             self,
             "broken_pipe_policy",
             _parse_broken_pipe_policy(self.broken_pipe_policy),
+        )
+        object.__setattr__(
+            self,
+            "delivery",
+            _validate_delivery_options(self.delivery),
         )
         _validate_convenience_flags(self)
         _validate_stdio_targets(self)

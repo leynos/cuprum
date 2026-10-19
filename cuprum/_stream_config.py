@@ -37,6 +37,7 @@ if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
 
+    from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_state import _MirrorCursor
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -133,6 +134,9 @@ class _StreamConfig:
     errors: str
     # Profiled private read size; production callers use the default.
     read_size: int = _READ_SIZE
+    # Optional run-owned writer shared across stdout/stderr drains; ``None``
+    # until the run opts into bounded off-loop delivery.
+    delivery: _DeliveryWorker | None = None
     # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
     # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
     # accepting a line past a size limit (GitHub Actions job logs end at a

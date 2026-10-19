@@ -1,7 +1,7 @@
 """The pre-flight rules a line iteration applies to one command's options.
 
 Split from ``cuprum.sh.safe_cmd`` when the rebase onto ``main`` pushed that
-module past the 400-line ceiling. Both helpers are about the same moment: the
+module past the 400-line ceiling. The helpers are about the same moment: the
 point *before* a line iteration is built, where the options are checked and the
 bookkeeping the iteration travels with is assembled. Neither touches the class,
 so keeping them beside it only made the module longer.
@@ -10,7 +10,7 @@ They live in the ``cuprum.sh`` package rather than with ``_line_iteration``
 because both are statements about this package's own option and hook types;
 the driver that consumes them stays in ``cuprum._line_iteration``.
 
-``cuprum.sh.safe_cmd`` re-exports both names. That keeps the module's globals
+``cuprum.sh.safe_cmd`` re-exports these names. That keeps the module's globals
 the ones a test monkeypatching or introspecting this path already reads, and
 keeps the facade's import list unchanged.
 
@@ -27,13 +27,17 @@ from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._pipeline_internals import _collect_hooks
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum.context import current_context
+from cuprum.sh.execution import _resolve_stdin_source
+from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
+    from cuprum.sh.execution import ExecutionContext, StdinSource, StdinStream
     from cuprum.sh.output import RunOutputOptions
 
 __all__ = [
     "_line_iteration_tracking",
     "_reject_redirected_lines_stdout",
+    "_resolve_line_stdin_source",
 ]
 
 
@@ -86,3 +90,14 @@ def _reject_redirected_lines_stdout(output: RunOutputOptions) -> None:
         f"Use SafeCmd.run when stdout is redirected to a file or descriptor."
     )
     raise ValueError(msg)
+
+
+def _resolve_line_stdin_source(
+    stdin: StdinSource | None,
+    context: ExecutionContext,
+    output: RunOutputOptions,
+) -> bytes | StdinStream | None:
+    """Resolve line stdin and reject two competing sources."""
+    resolved = _resolve_stdin_source(stdin, context)
+    _reject_contested_stdin(output.stdin, has_source=resolved is not None)
+    return resolved

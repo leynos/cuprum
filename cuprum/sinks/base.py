@@ -84,9 +84,10 @@ class OutputSession(typ.Protocol):
     """The write side of one active adapter run.
 
     Implementations keep their framing state here and remain safe for the
-    sequential single-writer use the execution layer guarantees: child-output
-    writes and control writes are issued from the run's own task context, not
-    from unrelated tasks.
+    serialized single-writer use the execution layer guarantees. Without
+    bounded delivery, child-output and control writes run from the run task.
+    With bounded delivery, child-output writes run on its worker and session
+    close runs on a daemon finalizer; a shared per-run lock keeps them ordered.
 
     An adapter emits its opening framing as the session is constructed, so it
     is already written when :meth:`OutputSink.open_session` returns; the
@@ -120,8 +121,10 @@ class OutputSession(typ.Protocol):
 
         Implementations must be idempotent: a second call with any outcome
         performs no further writes and swallows no error twice. This is the
-        only method that may emit failure annotations, and it runs during
-        shielded finalization so cancellation cannot abandon it part-way.
+        only method that may emit failure annotations. With bounded delivery,
+        the finalizer waits behind any active sink write and the run waits only
+        for the configured grace. If that write never returns, terminal
+        framing may remain unfinished rather than racing the active writer.
 
         Parameters
         ----------

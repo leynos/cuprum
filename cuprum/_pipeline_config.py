@@ -20,9 +20,12 @@ import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._bounded_encoding import _reject_unsupported_bounded_encoding
-from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
-from cuprum._idle_heartbeat import _build_idle_monitor
+from cuprum._bounded_encoding import _reject_unsupported_bounded_captures
+from cuprum._pipeline_config_setup import (
+    _build_pipeline_delivery_worker,
+    _build_pipeline_idle_monitor,
+    _cleanup_failed_pipeline_setup,
+)
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
@@ -30,7 +33,9 @@ from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
+    from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._stream_drain_state import _RelayDiagnostics
     from cuprum._streams import _MirrorCursor
     from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import _LineHookFn
@@ -82,6 +87,15 @@ class _PipelineRunConfig:
     capture_bytes: bool = False
 
     idle: _IdleMonitor | None = None
+
+    # The run-owned writer the stream tasks echo through, and the diagnostics
+    # its eventual close reports. ``None`` until the caller opts into bounded
+    # delivery, which is also what tells every stream config to write directly.
+    delivery_worker: _DeliveryWorker | None = None
+
+    delivery_grace_s: float | None = None
+
+    idle_delivery_diagnostics: _RelayDiagnostics | None = None
 
     # Built once, here, because each one owns the capture accumulator its
     # policy selected. A run whose consumers built their own would leave the
@@ -194,6 +208,7 @@ class _PipelineRunConfig:
             echo_max_line_bytes=self.max_echo_line_bytes,
             broken_pipe_policy=self.broken_pipe_policy,
             sink=framed,
+            delivery=self.delivery_worker,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             capture_bytes=self.capture_bytes,
@@ -240,6 +255,78 @@ def _prepare_pipeline_config(
     capture_bytes: bool = False,
 ) -> _PipelineRunConfig:
     """Normalize runtime options for pipeline execution from one options object."""
+    ctx, stdout_sink, stderr_sink = _resolve_pipeline_context(context)
+    # Keep ``RunOutputOptions`` as the only carrier for resolved output behaviour.
+    capture_stdout, capture_stderr = output.resolved_capture
+    # Rejected here, before any stage is spawned. The encoding is the run's,
+    # shared by every stage, so one refusal covers the whole pipeline; a
+    # bounded text capture that reached the drain under an unrepairable codec
+    # would decode an orphaned trail byte as a character the child never wrote.
+    _reject_unsupported_bounded_captures(
+        (capture_stdout, capture_stderr),
+        encoding=ctx.encoding,
+        capture_bytes=capture_bytes,
+    )
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
+        bounded_delivery=output.delivery is not None,
+        delivery_grace_s=(
+            None if output.delivery is None else output.delivery.drain_grace_s
+        ),
+    )
+    delivery_worker: _DeliveryWorker | None = None
+    try:
+        delivery_worker = _build_pipeline_delivery_worker(
+            output,
+            sink_bracket,
+            stdout_sink,
+            stderr_sink,
+        )
+        idle, idle_delivery_diagnostics = _build_pipeline_idle_monitor(
+            output,
+            sink_bracket,
+            stderr_sink,
+            delivery_worker,
+        )
+        return _PipelineRunConfig(
+            ctx=ctx,
+            capture_stdout=capture_stdout,
+            capture_stderr=capture_stderr,
+            echo_stdout=output.resolved_echo[0],
+            echo_stderr=output.resolved_echo[1],
+            max_echo_line_bytes=output.max_echo_line_bytes,
+            broken_pipe_policy=output.resolved_broken_pipe_policy,
+            timeout=timeout,
+            stdout_sink=stdout_sink,
+            stderr_sink=stderr_sink,
+            sink_bracket=sink_bracket,
+            capture_bytes=capture_bytes,
+            delivery_worker=delivery_worker,
+            delivery_grace_s=(
+                None if output.delivery is None else output.delivery.drain_grace_s
+            ),
+            idle_delivery_diagnostics=idle_delivery_diagnostics,
+            on_line=output.on_line,
+            # One aggregate heartbeat for the whole pipeline, labelled for what it
+            # actually observes: the parent-facing output, not the health of every
+            # stage. The clock starts when the first stage starts.
+            idle=idle,
+        )
+    except BaseException as run_error:
+        _cleanup_failed_pipeline_setup(
+            output,
+            delivery_worker,
+            sink_bracket,
+            run_error,
+        )
+        raise
+
+
+def _resolve_pipeline_context(
+    context: ExecutionContext | None,
+) -> tuple[ExecutionContext, typ.IO[str], typ.IO[str]]:
+    """Resolve the run context and its default stdout and stderr sinks."""
     # Deferred, unlike the module-scope import in ``_pipeline_results``: this
     # module is imported by ``_pipeline_streams``, which ``_pipeline_collect``
     # imports, so hoisting the import would close the cycle rather than avoid
@@ -250,52 +337,4 @@ def _prepare_pipeline_config(
     ctx = context or sh.ExecutionContext()
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
-    # ``RunOutputOptions`` is the canonical carrier for output behaviour, so
-    # the resolved gates are read straight off it rather than restated as
-    # separate arguments; the developer guide forbids parallel internal
-    # output-option objects.
-    echo_stdout, echo_stderr = output.resolved_echo
-    capture_stdout, capture_stderr = output.resolved_capture
-    # Rejected here, before any stage is spawned. The encoding is the run's,
-    # shared by every stage, so one refusal covers the whole pipeline; a
-    # bounded text capture that reached the drain under an unrepairable codec
-    # would decode an orphaned trail byte as a character the child never wrote.
-    for capture in (capture_stdout, capture_stderr):
-        _reject_unsupported_bounded_encoding(
-            capture,
-            encoding=ctx.encoding,
-            capture_bytes=capture_bytes,
-        )
-    sink_bracket = _SinkBracket.open(
-        output.sink,
-        sinks.SessionStart(label="pipeline", argv=()),
-    )
-    return _PipelineRunConfig(
-        ctx=ctx,
-        capture_stdout=capture_stdout,
-        capture_stderr=capture_stderr,
-        echo_stdout=echo_stdout,
-        echo_stderr=echo_stderr,
-        max_echo_line_bytes=output.max_echo_line_bytes,
-        broken_pipe_policy=output.resolved_broken_pipe_policy,
-        timeout=timeout,
-        stdout_sink=stdout_sink,
-        stderr_sink=stderr_sink,
-        sink_bracket=sink_bracket,
-        capture_bytes=capture_bytes,
-        on_line=output.on_line,
-        # One aggregate heartbeat for the whole pipeline, labelled for what it
-        # actually observes: the parent-facing output, not the health of every
-        # stage. The clock starts when the first stage starts.
-        idle=_build_idle_monitor(
-            output.idle_after,
-            output.on_idle,
-            _PIPELINE_IDLE_SUBJECT,
-            # The same resolution the mirrored streams use: an active session
-            # frames them, so a keepalive written anywhere else would land
-            # outside the group the run is claiming. One resolution, not two,
-            # because _echo_mirror recognizes the diagnostic by comparing the
-            # resolved destinations.
-            sink_bracket.resolve_destination(stderr_sink),
-        ),
-    )
+    return ctx, stdout_sink, stderr_sink

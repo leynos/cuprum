@@ -70,7 +70,13 @@ async def _prepare_owned_command(
     # hook, or anything else that raises before execution starts still
     # finalizes the adapter's framing rather than stranding an open group, and
     # the guard below closes exactly what those paths leave.
-    sink_bracket = _SinkBracket.open(output.sink, _command_session_start(cmd))
+    delivery = output.delivery
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        _command_session_start(cmd),
+        bounded_delivery=delivery is not None,
+        delivery_grace_s=None if delivery is None else delivery.drain_grace_s,
+    )
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
@@ -94,9 +100,13 @@ async def _prepare_owned_command(
             cmd,
             state,
             observation=observation,
-            sink_session=sink_bracket.session,
+            sink_bracket=sink_bracket,
         )
     except BaseException as run_error:
-        await _finalize_prepared_command_failure(tracking, observation, run_error)
+        await _finalize_prepared_command_failure(
+            tracking,
+            observation,
+            run_error,
+        )
         raise
     return _PreparedCommand(execution=execution, tracking=tracking)
