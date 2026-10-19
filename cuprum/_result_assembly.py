@@ -1,27 +1,27 @@
-"""The rules a finished execution applies when reporting its result.
+"""The rules for building text and byte results from completed executions.
 
-Two result classes exist, and both are built by these rules:
+Three result classes describe the output contract:
 
-- :class:`cuprum.sh.CommandResult` reports decoded text;
+- :class:`cuprum.sh.CommandResult` reports decoded text, with ``None`` for a
+  stream that was not captured.
+- :class:`cuprum.sh.CapturedResult` reports captured single-command text and
+  guarantees both streams are strings, including ``""`` for empty output.
 - :class:`cuprum.sh.BytesCommandResult` reports the child's bytes untouched.
 
-They differ only in their two captured-output fields, which leaves two seams
-worth naming rather than repeating at every construction site:
+The stream drain can widen payloads to ``str | bytes``, so
+:func:`_require_bytes` and :func:`_require_text` restore the type required by
+the selected mode. The single-command path uses
+:func:`_require_captured_text` when capture is enabled; it rejects a missing
+stream before a :class:`cuprum.sh.CapturedResult` can be built. Pipeline
+assembly uses the broader text and byte checks because an interior stage's
+stdout may be streamed to the next process instead of captured.
 
-- :func:`_require_bytes` and :func:`_require_text` narrow a drain's widened
-  ``str | bytes`` capture back to the type the chosen class declares. Sharing
-  one drain between the two modes costs that guarantee, and the result is the
-  one place a mode/type contradiction could otherwise escape unnoticed — so the
-  guarantee is re-established rather than asserted away.
-- :class:`_RunMeasurements` carries the fields every result declares
-  identically, so a figure added to one construction and forgotten in the other
-  cannot become a silent difference between a text run and a binary run of the
-  same command.
-
-Both the single-command path (``cuprum._subprocess_execution``) and the
-per-stage pipeline path (``cuprum._pipeline_results``) build results, so both
-read these rules from here; a stage and a direct run of the same command should
-differ only in what could actually be measured.
+:class:`_RunMeasurements` carries the fields all three result classes declare
+identically, so adding a measurement to one construction cannot silently
+change the result reported for another output mode. Both the single-command
+path (``cuprum._subprocess_execution``) and the per-stage pipeline path
+(``cuprum._pipeline_results``) use these rules; their stream fields differ
+only where the execution mode requires it.
 """
 
 from __future__ import annotations
