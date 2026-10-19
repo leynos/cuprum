@@ -44,8 +44,12 @@ if typ.TYPE_CHECKING:
     from cuprum._capture_types import CaptureFinal
 
 _TEXT = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=False)
+_BYTES = _DecodeSettings(encoding="utf-8", errors="strict", capture_bytes=True)
 _PAYLOAD = b"the child's output, in full\n"
 _PREFIX = b"buffered prefix "
+# Accepted by the buffered writer but not flushed when the next append fails;
+# a byte-mode read-back that skips the final flush cannot see it.
+_ACCEPTED = b"accepted but unflushed "
 _TAIL = b"tail"
 _FULL = _PREFIX + _TAIL
 # A message distinctive enough that any test leaking it into an event field
@@ -181,12 +185,13 @@ def _accumulator(
     directory: pathlib.Path,
     threshold: int = 1,
     stream: CaptureStreamName = "stderr",
+    settings: _DecodeSettings = _TEXT,
 ) -> _FileAccumulator:
     """Build a file-backed accumulator that spills into *directory*."""
     return _FileAccumulator(
         policy=FileBackedCapture(spill_threshold_bytes=threshold, directory=directory),
         stream=stream,
-        settings=_TEXT,
+        settings=settings,
     )
 
 
@@ -370,6 +375,61 @@ def test_a_failed_append_keeps_the_prefix_that_reached_the_file(
     assert final.capture.total_bytes == len(_FULL), (
         "the record must still count what the child wrote, not what was kept"
     )
+    _cleanup(accumulator)
+
+
+def test_a_failed_append_still_flushes_the_bytes_accepted_before_it(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Byte mode reports the appends the writer accepted before it failed.
+
+    ``_append`` leaves each successful write in the file object's buffer, and
+    the byte-mode read-back opens the path separately, so those bytes only
+    reach the returned payload if finalization flushes them first. A failed
+    append stops *new* writes; it does not undo the appends that succeeded,
+    and with ``keep_file=False`` the removal that follows would otherwise make
+    them unreadable everywhere. Skipping the flush because ``_failed`` is set
+    is the defect this pins: the payload would then stop at the spill prefix.
+    """
+    files = _SpillFiles(OSError(errno.ENOSPC, "No space left on device"))
+    files.fail_write = False
+    files.install(monkeypatch)
+    recorder: list[CaptureEvent] = []
+    expected = _PREFIX + _ACCEPTED
+
+    with observe_capture(recorder.append):
+        accumulator = _accumulator(directory=tmp_path, settings=_BYTES)
+
+        async def append_across_the_failure() -> CaptureFinal:
+            """Spill the prefix, buffer an append, then fail the next one."""
+            await accumulator.absorb(_PREFIX)
+            await accumulator.absorb(_ACCEPTED)
+            files.only.fail_write = True
+            await accumulator.absorb(_TAIL)
+            return await accumulator.finalize()
+
+        final = asyncio.run(append_across_the_failure())
+
+    assert final.payload == expected, (
+        "byte mode must return every byte the writer accepted, not only the "
+        f"flushed prefix; got {final.payload!r}"
+    )
+    assert final.capture.path is not None, "the record must still name the file"
+    assert final.capture.path.read_bytes() == expected, (
+        "the file must hold the appends accepted before the failure; "
+        f"got {final.capture.path.read_bytes()!r}"
+    )
+    assert final.capture.storage_failed is True, (
+        "the accepted bytes are complete but the capture is still incomplete"
+    )
+    assert final.capture.total_bytes == len(expected + _TAIL), (
+        "the record must count the refused chunk the child still wrote"
+    )
+    assert [event.category for event in recorder] == [
+        CaptureEventCategory.SPILLED_TO_FILE,
+        CaptureEventCategory.STORAGE_WRITE_FAILED,
+    ], f"only the write failure may be reported; got {recorder!r}"
     _cleanup(accumulator)
 
 

@@ -18,11 +18,11 @@ prefer keeping their data:
   Nothing was written anywhere else, so buffering continues in memory and the
   caller still reads complete text from ``stdout``/``stderr``; the record
   reports ``storage`` of ``"memory"`` beside ``storage_failed``.
-- A failure to *append* after the spill stops writing and marks the capture
-  failed. The file still holds whatever reached it before the failure and is
-  still removed by cleanup, so even a failed run leaves nothing in the
-  temporary directory; ``storage_failed`` on the record is what tells the
-  caller the retained capture is incomplete rather than merely short.
+- A failure to *append* after the spill stops accepting new writes and marks
+  the capture failed, but bytes accepted before it still reach the file:
+  finalization flushes them before a byte-mode read-back. Cleanup still removes
+  the file, and ``storage_failed`` tells the caller the retained capture is
+  incomplete rather than merely short.
 
 Every filesystem call is made on a worker thread through
 :mod:`cuprum._capture_spill_io`, and the calls for one accumulator are
@@ -356,24 +356,24 @@ class _FileAccumulator:
     async def _flush_before_reading(self) -> None:
         """Flush once, so a read-back sees every byte that was written.
 
-        ``_append`` deliberately does not flush per chunk, so this is the one
-        flush of the run's appended bytes, and it is ordered before the
-        read-back by the lock both calls take. A failure here is reported
-        exactly as a per-chunk flush failure was — under
+        ``_append`` does not flush per chunk, so this one flush must happen
+        even after a failed append: bytes accepted before that failure are
+        still buffered, and the byte-mode read-back opens the path separately,
+        so skipping it would hide them. A failure is still reported under
         :attr:`~cuprum.capture_events.CaptureEventCategory.STORAGE_FLUSH_FAILED`
-        — rather than becoming a failure of the command.
+        only when no earlier failure explains the capture, and is never raised.
         """
         file = self._file
-        if file is None or self._failed is not None:
+        if file is None:
             return
         try:
             await self._io.run(file.flush)
         except OSError as exc:
-            # The writes since the last flush are still in the file object's
-            # buffer, so they never reached the file. The event reports the
-            # count that did, not every byte handed to ``write``.
+            # The writes since the last flush never reached the file; report
+            # the count that did, not every byte handed to ``write``.
             self._spilled_bytes = self._flushed_bytes
-            self._fail_storage(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
+            if self._failed is None:
+                self._fail_storage(exc, CaptureEventCategory.STORAGE_FLUSH_FAILED)
             return
         self._flushed_bytes = self._spilled_bytes
 
