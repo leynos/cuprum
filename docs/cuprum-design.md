@@ -3521,15 +3521,15 @@ flowchart LR
 
 For screen readers: The following sequence diagram shows one full
 `SafeCmd.lines()` iteration. The caller receives a `LineStream` from
-`SafeCmd.lines()`, each `__anext__()` call drives a coordinator that re-checks
-the allowlist and re-resolves the deadline in the consuming task before
-spawning the subprocess and starting the stdout and stderr consumers, decoded
-`LineEvent` values are enqueued and yielded as they arrive, and after the
-process exits the consumers are drained, the `CommandResult` is published, and
-iteration ends with `StopAsyncIteration` before the caller reads the `result`
-attribute. The re-authorization step is what lets a scope entered after
-`lines()` returned still govern the run: a forbidden command ends iteration with
-`ForbiddenProgramError` before any process or task exists.
+`SafeCmd.lines()`, the first `__anext__()` call re-checks the allowlist and
+re-resolves the deadline in the consuming task and only then drives a
+coordinator that spawns the subprocess and starts the stdout and stderr
+consumers, decoded `LineEvent` values are enqueued and yielded as they arrive,
+and after the process exits the consumers are drained, the `CommandResult` is
+published, and iteration ends with `StopAsyncIteration` before the caller reads
+the `result` attribute. The re-authorization step is what lets a scope entered
+after `lines()` returned still govern the run: a forbidden command ends
+iteration with `ForbiddenProgramError` before any process or task exists.
 
 Figure 16: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
@@ -3547,7 +3547,8 @@ sequenceDiagram
     SafeCmd->>SafeCmd: provisional allowlist check, resolve timeout
     SafeCmd-->>Caller: LineStream
     Caller->>LineStream: __anext__()
-    LineStream->>Coordinator: re-authorize and resolve deadline
+    LineStream->>LineStream: re-authorize and resolve deadline
+    LineStream->>Coordinator: start line stream
     Coordinator->>Process: spawn subprocess
     Coordinator->>Consumers: consume stdout and stderr
     loop decoded lines
