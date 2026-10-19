@@ -195,6 +195,7 @@
       'cuprum/sh/_resolved_options.py',
       'cuprum/sh/argv.py',
       'cuprum/sh/builder.py',
+      'cuprum/sh/byte_results.py',
       'cuprum/sh/bytes_entry_points.py',
       'cuprum/sh/execution.py',
       'cuprum/sh/factory.py',
