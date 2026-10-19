@@ -95,6 +95,21 @@ jobs:
           # token must not stay in .git/config where that code could reach it.
           persist-credentials: false
 
+      # The preinstalled Android SDK and .NET are 16.9 GB on a 73 GB volume and
+      # nothing here uses them. A version bump misses every Rust compiler-cache
+      # entry, so the archive grows to about 3 GiB and, with 2 GB free, cannot
+      # be written next to the directory it packs (run 38987616012 onward). The
+      # step runs before the first cache restore; `rm -rf` of an absent path is
+      # a no-op, so an image without them still passes.
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
+
       - name: Start resource sampler
         uses: ./.github/actions/resource-sampler
         with:
@@ -504,6 +519,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # Frees the same 16.9 GB as in `lint-test`; see the comment there.
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux' && env.LEG_RUNS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
+
       # Started before the first cache restore, so the archive downloads and
       # every build below fall inside the measured window. `ubicloud-standard-2`
       # starts with about 31 GB free, and disk, not memory, is what kills a job
@@ -747,6 +772,16 @@ jobs:
           # This job compiles and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
           persist-credentials: false
+
+      # Frees the same 16.9 GB as in `lint-test`; see the comment there.
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
 
       # Started before the first cache restore, so the archive downloads and
       # every build below fall inside the measured window. `ubicloud-standard-2`
@@ -1647,6 +1682,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # Frees the same 16.9 GB as in `lint-test`; see the comment there.
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
 
       # No resource sampler here, deliberately. This job times commands that
       # each run for about half a second and compares the ratio of two of
