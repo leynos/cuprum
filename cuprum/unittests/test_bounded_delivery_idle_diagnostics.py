@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import typing as typ
 
 import pytest
 
@@ -19,11 +20,14 @@ from cuprum.sh import (
     ExecutionContext,
     RunOutputOptions,
 )
-from cuprum.unittests.test_bounded_delivery_idle import (
+from cuprum.unittests._bounded_delivery_idle_support import (
     _pipeline,
     _run_target,
 )
 from tests.helpers.catalogue import build_python_catalogue_env
+
+if typ.TYPE_CHECKING:
+    from cuprum.sh import PipelineResult
 
 _IDLE_INTERVAL_S = 0.08
 
@@ -48,6 +52,41 @@ class _FailingIdleSink(io.StringIO):
             raise OSError
 
 
+def _assert_idle_delivery_failure(
+    result: CommandResult | PipelineResult,
+    events: list[EchoEvent],
+    run_kind: str,
+    failure_site: str,
+) -> None:
+    """Check an idle sink error stays diagnostic and preserves command output."""
+    expected_fallback = RelayFallback(
+        stream=EchoStream.STDERR,
+        error_category=EchoErrorCategory.DELIVERY_ERROR,
+    )
+    run_context = f"{run_kind} idle {failure_site} failure"
+    if isinstance(result, CommandResult):
+        assert result.exit_code == 0, f"{run_context} must preserve command success"
+        assert expected_fallback in result.relay_fallbacks, (
+            f"{run_context} must retain its stderr delivery-error record"
+        )
+    else:
+        assert [stage.exit_code for stage in result.stages] == [0, 0], (
+            f"{run_context} must preserve both pipeline stage exits"
+        )
+        assert expected_fallback in result.stages[-1].relay_fallbacks, (
+            f"{run_context} must retain the final-stage delivery-error record"
+        )
+    assert result.stdout == "captured\n", f"{run_context} must preserve capture"
+    assert events, f"{run_context} must emit a delivery-error event"
+    assert events[0] == EchoEvent(
+        EchoStream.STDERR,
+        EchoErrorCategory.DELIVERY_ERROR,
+    ), f"{run_context} must attribute the failure to stderr"
+    assert all(event.stream is EchoStream.STDERR for event in events), (
+        f"{run_context} events must remain attributed to stderr"
+    )
+
+
 def test_queue_idle_diagnostic_reports_exact_stderr_source_bytes() -> None:
     """The shared idle route records its exact rejected stderr payload."""
     line = "idle line\n"
@@ -69,15 +108,19 @@ def test_queue_idle_diagnostic_reports_exact_stderr_source_bytes() -> None:
         stream=EchoStream.STDERR,
         error_category=EchoErrorCategory.DROPPED,
     )
-    assert worker.queued_bytes == 0
-    assert diagnostics.fallbacks == [expected_fallback]
+    assert worker.queued_bytes == 0, (
+        "the rejected idle diagnostic must not remain queued"
+    )
+    assert diagnostics.fallbacks == [expected_fallback], (
+        "queue saturation must record one stderr dropped fallback"
+    )
     assert events == [
         EchoEvent(
             stream=EchoStream.STDERR,
             error_category=EchoErrorCategory.DROPPED,
             dropped_bytes=10,
         ),
-    ]
+    ], "the dropped idle event must report exactly ten source bytes"
 
 
 @pytest.mark.parametrize("run_kind", ["command", "pipeline"])
@@ -109,20 +152,4 @@ def test_idle_delivery_failures_keep_successful_run_output(
             _run_target(target, output, ExecutionContext(stderr_sink=sink)),
         )
 
-    expected_fallback = RelayFallback(
-        stream=EchoStream.STDERR,
-        error_category=EchoErrorCategory.DELIVERY_ERROR,
-    )
-    if isinstance(result, CommandResult):
-        assert result.exit_code == 0
-        assert expected_fallback in result.relay_fallbacks
-    else:
-        assert [stage.exit_code for stage in result.stages] == [0, 0]
-        assert expected_fallback in result.stages[-1].relay_fallbacks
-    assert result.stdout == "captured\n"
-    assert events
-    assert events[0] == EchoEvent(
-        EchoStream.STDERR,
-        EchoErrorCategory.DELIVERY_ERROR,
-    )
-    assert all(event.stream is EchoStream.STDERR for event in events)
+    _assert_idle_delivery_failure(result, events, run_kind, failure_site)
