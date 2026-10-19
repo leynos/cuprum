@@ -705,7 +705,7 @@ members = [
     "cuprum/events.py",
 ]
 
-reason = "Thirty-five modules whose `if typ.TYPE_CHECKING:` block repeats. The membership is the rebased tree's, not either parent's: `main` had widened it to thirty while this branch was in flight, the branch's own splits added eight modules, and two modules `main` had carried stopped matching the span once the rebased imports changed their shape. The entry names what the detector reports here rather than what either history said. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry."
+reason = "Thirty-five modules whose `if typ.TYPE_CHECKING:` block repeats. The entry names the modules this tree's detector reports. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry."
 
 [[tool.duplication_gate.allow]]
 members = [
