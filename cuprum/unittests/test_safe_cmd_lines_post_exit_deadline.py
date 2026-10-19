@@ -41,6 +41,8 @@ import typing as typ
 
 import pytest
 
+from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
+from cuprum.line_stream_observation import observe_line_stream
 from cuprum.sh import (
     ExecutionContext,
     ProcessGroupPolicy,
@@ -96,6 +98,15 @@ _STDIN_BYTES = 64
 
 _POLICIES = [ProcessGroupPolicy.OWN_GROUP, ProcessGroupPolicy.INHERIT]
 _POLICY_IDS = ["own-group", "inherit"]
+
+# The bound these cases assert is the looser of the two, so a run bounded by
+# the test could never be read as one bounded by its own deadline. Checked
+# once, at collection, rather than inside a case that would otherwise compare
+# two constants and prove nothing about the run.
+assert RUN_BUDGET_S > _DEADLINE_S, (
+    "this module's own bound must be the looser of the two, or a run bounded "
+    "by the test would be indistinguishable from one bounded by its deadline"
+)
 
 
 def _lines_kwargs(policy: ProcessGroupPolicy) -> _RunKwargs:
@@ -301,44 +312,58 @@ def test_the_lines_deadline_settles_the_group_and_leaves_nothing_pending(
 
 
 @pytest.mark.parametrize("policy", _POLICIES, ids=_POLICY_IDS)
-def test_the_lines_deadline_expiry_is_the_public_timeout_expired(
+def test_the_lines_deadline_expiry_is_reported_as_a_timeout_phase(
     owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
     *,
     policy: ProcessGroupPolicy,
 ) -> None:
-    """The bounded drain is reached on the run's own path, not bypassed.
+    """The drain's expiry reaches observers as a timeout, before teardown.
 
     A bound that is never reached is indistinguishable from no bound at all
-    until the case that reaches it runs. This repeats the parked-consumer
-    scenario without instrumenting anything, so the path exercised is exactly
-    the one a caller takes, and asserts the failure arrives as the public
-    ``TimeoutExpired`` rather than as some internal timeout along the way.
+    until the case that reaches it runs. This drives the same parked-consumer
+    scenario a caller drives and reads the lifecycle events a real observer
+    receives, so it witnesses the published artefact rather than the internal
+    exception. The expiry route once settled the run and threw without emitting
+    ``TIMEOUT``, which left observers and metrics adapters seeing a run that
+    ended by timeout with no timeout phase recorded — and the two existing
+    cases above cannot see that, because they assert on the exception and the
+    descendant, not on what was published.
 
-    The case's own bound is asserted to be the looser of the two, so a run
-    bounded by the test could never be read as one bounded by its deadline.
+    ``TIMEOUT`` is asserted to precede ``TEARDOWN_STARTED``: an emission placed
+    after the settlement would describe a run already reclaimed as one that
+    timed out while still being torn down, which is the order the exit wait's
+    expiry already produces.
     """
     pid_file = tmp_path / f"lines-public-{policy.name}.pid"
     command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+    events: list[LineStreamEvent] = []
 
     async def run_case() -> TimeoutExpired:
         """Run to its own deadline and report the exception the caller met."""
         descendant_pid: int | None = None
         try:
-            drained = await _run_to_deadline(command, policy)
+            with observe_line_stream(events.append):
+                drained = await _run_to_deadline(command, policy)
             descendant_pid = recorded_descendant_or_fail(pid_file)
             return drained.expired
         finally:
             reap_descendant(pid_file, descendant_pid)
 
     expired = asyncio.run(run_case())
+    phases = [event.phase for event in events]
 
     assert isinstance(expired, TimeoutExpired), (
         "a line stream that reached its deadline must report the public "
         f"TimeoutExpired, got {type(expired).__name__}"
     )
-    assert RUN_BUDGET_S > _DEADLINE_S, (
-        "this module's own bound must be the looser of the two, or a run "
-        "bounded by the test would be indistinguishable from one bounded by "
-        "its own deadline"
+    assert LineStreamPhase.TIMEOUT in phases, (
+        "the post-exit drain reached its deadline but published no TIMEOUT "
+        f"phase, so observers saw an expiry they could not record; got {phases!r}"
+    )
+    assert phases.index(LineStreamPhase.TIMEOUT) < phases.index(
+        LineStreamPhase.TEARDOWN_STARTED
+    ), (
+        "the timeout phase must be published before the teardown begins, or "
+        f"the order describes a reclaimed run; got {phases!r}"
     )

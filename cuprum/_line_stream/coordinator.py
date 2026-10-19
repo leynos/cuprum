@@ -71,13 +71,18 @@ __all__ = [
 
 async def _wait_for_line_stream_exit(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
 ) -> tuple[int, float, _CapturedDrain, _CapturedDrain]:
     """Await process exit, reconciling every task when the wait fails.
 
     Mirrors ``_wait_for_streamed_process_exit`` so a ``lines()`` run applies
     its deadline, terminates the child, and drains its consumers exactly the
     way ``run()`` does.
+
+    The execution bundle is read from the run rather than accepted alongside
+    it. The spawn helper rebuilds that bundle with the run's monotonic start
+    reference stamped on, and the post-exit deadline is a remainder measured
+    from it, so a second bundle would let this function time the child from a
+    ``started_at`` other than the one the spawn actually recorded.
 
     Returns
     -------
@@ -92,6 +97,7 @@ async def _wait_for_line_stream_exit(
     asyncio.CancelledError
         If the caller cancels line iteration while the subprocess is running.
     """
+    execution = run.execution
     try:
         exit_code, exited_at = await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(run.process, execution),
@@ -232,7 +238,6 @@ async def _discard_drain(
 
 async def _coordinate_line_stream(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
     queue: asyncio.Queue[_LineQueueItem],
     result_future: asyncio.Future[CommandResult],
 ) -> None:
@@ -246,6 +251,10 @@ async def _coordinate_line_stream(
     is published, so a waiter that wins the race on the future can still read
     it off the queue.
 
+    The execution bundle is taken from the run, not accepted alongside it: see
+    :func:`_wait_for_line_stream_exit` for why a second source of that value is
+    the defect this module exists to avoid.
+
     Raises
     ------
     asyncio.CancelledError
@@ -254,7 +263,7 @@ async def _coordinate_line_stream(
         ``CancelledError`` they did not issue.
     """
     try:
-        result = await _run_to_command_result(run, execution)
+        result = await _run_to_command_result(run)
     except asyncio.CancelledError:
         # Teardown, never a caller-requested cancellation: the iterator cancels
         # this coordinator only after it has stopped consuming. Re-raised so the
@@ -301,7 +310,6 @@ async def _finalize_line_stream_captures(
 
 async def _run_to_command_result(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
 ) -> CommandResult:
     """Run to exit, assemble the ``CommandResult``, and emit the exit event.
 
@@ -315,10 +323,11 @@ async def _run_to_command_result(
     CommandResult
         The completed run's exit code, captured text, and relay diagnostics.
     """
-    # Read from the run's own bundle, not a caller-supplied one: this is the
-    # instant the duration and the exit event are measured from, and it only
-    # ever exists on the execution the spawn helper stamped.
-    started_at = run.execution.started_at
+    execution = run.execution
+    # The run's own bundle is also the instant the duration and the exit event
+    # are measured from, and it only ever exists on the execution the spawn
+    # helper stamped.
+    started_at = execution.started_at
     stdout_text: _StreamPayload | None = None
     stderr_text: _StreamPayload | None = None
     captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
@@ -328,7 +337,7 @@ async def _run_to_command_result(
             exited_at,
             stdout_drain,
             stderr_drain,
-        ) = await _wait_for_line_stream_exit(run, execution)
+        ) = await _wait_for_line_stream_exit(run)
         stdout_text = stdout_drain.payload
         stderr_text = stderr_drain.payload
         captures = (stdout_drain.capture, stderr_drain.capture)

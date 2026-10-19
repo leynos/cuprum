@@ -267,12 +267,12 @@ async def _drive_line_stream(
 
     try:
         run = await _start_line_stream_run(execution, queue)
-        # The run's own bundle, not the one this call was handed: the spawn
-        # helper rebuilt *its* copy with the run's monotonic start reference
-        # stamped on, and the post-exit deadline is a remainder from that
-        # reference. Continuing with the original would measure the child
-        # against the ``0.0`` default it still carries.
-        await _coordinate_line_stream(run, run.execution, queue, result_future)
+        # The coordinator reads the run's own bundle rather than the one this
+        # call was handed: the spawn helper rebuilt *its* copy with the run's
+        # monotonic start reference stamped on, and the post-exit deadline is a
+        # remainder from that reference. Continuing with the original would
+        # measure the child against the ``0.0`` default it still carries.
+        await _coordinate_line_stream(run, queue, result_future)
     except asyncio.CancelledError:
         raise
     except BaseException as error:  # ruff: ignore[blind-except] - any failure reaches the iterator

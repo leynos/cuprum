@@ -55,7 +55,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._line_stream import _LineStreamRun
-    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import _LineHookFn
 
 type _StreamName = typ.Literal["stdout", "stderr"]
@@ -95,7 +94,6 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         self._original_wait = coordinator._run_to_command_result
         coordinator._run_to_command_result = self._programmed_outcome  # ty: ignore[invalid-assignment] - a bound method stands in for the module function
 
-        self._execution_stub = typ.cast("_SubprocessExecution", types.SimpleNamespace())
         self._drive(self._build(1, "none"))
 
     # -- harness ---------------------------------------------------------
@@ -215,13 +213,9 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             if event.phase == LineStreamPhase.SINK_FAILED
         ]
 
-    async def _programmed_outcome(
-        self,
-        run: _LineStreamRun,
-        execution: _SubprocessExecution,
-    ) -> CommandResult:
+    async def _programmed_outcome(self, run: _LineStreamRun) -> CommandResult:
         """Return the programmed outcome instead of spawning a child."""
-        del run, execution
+        del run
         if self._gate_hold:
             await self._gate.wait()
         if self._programmed_error is not None:
@@ -462,7 +456,6 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         self._coordinator = asyncio.create_task(
             _coordinate_line_stream(
                 self._run_stub,
-                self._execution_stub,
                 self._queue,
                 self._future,
             )
@@ -490,7 +483,6 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         self._coordinator = asyncio.create_task(
             _coordinate_line_stream(
                 self._run_stub,
-                self._execution_stub,
                 self._queue,
                 self._future,
             )

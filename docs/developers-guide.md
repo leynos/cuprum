@@ -8502,10 +8502,11 @@ executes:
    an unexpected failure from either wait, `_cleanup_direct_run` cancels and
    drains the writer task via `_cancel_stdin_writer` and then settles the run's
    owned group, both under one shield, so a stdin drain blocked on an unread
-   pipe can neither delay the timeout's translation nor outlive the run. The
-   resulting failure is translated through `_handle_stream_timeout` with `None`
-   payloads, so a caller receives the same public `TimeoutExpired` whichever
-   route expired.
+   pipe can neither delay the timeout's translation nor outlive the run.
+   Cancellation and other failures are then re-raised unchanged; only the
+   writer-deadline expiry is translated through `_handle_stream_timeout` with
+   `None` payloads, so a caller receives the same public `TimeoutExpired`
+   whichever route expired.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload size

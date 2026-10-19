@@ -13,6 +13,7 @@ import asyncio
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._stream_drain import _decode_consumer_drains
 from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 from cuprum._subprocess_timeout import _handle_stream_timeout
@@ -23,6 +24,7 @@ from cuprum._subprocess_wait import (
     _reconcile_run_tasks,
     _settle_owned_group_before_draining,
 )
+from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineStreamRun
@@ -106,6 +108,14 @@ async def _collect_line_stream_after_exit(
                 _deadline_for_collection(execution),
             )
     except TimeoutError as exc:
+        # Before the settlement, so an observer sees the same order the exit
+        # wait's expiry produces: the deadline, then teardown started and
+        # completed. Emitting after it would describe a run that had already
+        # been reclaimed as one that timed out while still being torn down.
+        run.telemetry.emit(
+            LineStreamPhase.TIMEOUT,
+            _LineStreamEventDetails(error=exc),
+        )
         stdout_drain, stderr_drain = await _settle_and_reconcile(
             run,
             pid,

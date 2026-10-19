@@ -5,12 +5,13 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await) is
-implemented, tested Red-then-Green, its non-vacuity established by mutation,
-and its commit gates are being run. `check-fmt` passes; the compile-admission
-supervisor went down mid-session (blocking `lint`'s clippy leaf and `test`'s
-Rust arm) and has since recovered on its own, so those two gates are being
-re-run. EP-M2 to EP-M4 remain. The direct run has been split into
+Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await) and EP-M2
+(the `lines()` post-exit drain) are implemented, tested Red-then-Green, and
+committed with their commit gates green. EP-M2's CodeRabbit review returned ten
+findings: eight are applied, two are rejected as describing code that does not
+exist in this tree (see `Decision log`), and the gate for those changes is
+running. EP-M3 (the pipeline's post-exit collection) and EP-M4 (documentation
+and full validation) remain. The direct run was split into
 `cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
 
 ## Purpose / big picture
@@ -243,15 +244,15 @@ the issue was filed:
   `build-limits: the supervisor refused: unhealthy` — an admission outage, not
   a code defect. Independent confirmation: `build-limits-status` reports
   connection refused on `/run/user/1000/buildlimits/supervisor.sock`.
-- [x] (2026-10-16 19:35Z) Removed an orphaned duplication allow entry my own
+- [x] (2026-10-16 19:35Z) Removed an orphaned duplication allow entry the
   module split created
   (`cuprum/_subprocess_stream_run.py ~ cuprum/_process_handle/coordinator.py`).
   Verified against source, not merely by absence of a match; see `Decision log`.
-- [x] (2026-10-16 19:55Z) EP-M1 self-review caught a real defect in my own fix:
-  `_cleanup_direct_run` promised one shield over its two halves while the body
-  made two sequential shielded calls, the second unshielded entirely. Composed
-  into a single coroutine under one `_shielded_cleanup`. The property was
-  unpinned by any direct-path test, so
+- [x] (2026-10-16 19:55Z) EP-M1 self-review caught a real defect in the EP-M1
+  fix: `_cleanup_direct_run` promised one shield over its two halves while the
+  body made two sequential shielded calls, the second unshielded entirely.
+  Composed into a single coroutine under one `_shielded_cleanup`. The property
+  was unpinned by any direct-path test, so
   `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group` was
   added with a new `DirectCleanupWatch`; mutation back to the two-shields shape
   fails it on the settlement assertion. 11 passed in 20.62 s.
@@ -353,7 +354,23 @@ the issue was filed:
   (3), `test_line_stream_coordinator_stateful.py` (1),
   `test_subprocess_timeout.py` (4) — 36 collected, 36 passed, 2.32 s. Together
   with EP-M1's module the pair is 17 passed in 27.86 s. Milestone gate and
-  CodeRabbit review still outstanding.
+  CodeRabbit review outstanding at the time of writing; both are recorded below.
+
+- [x] EP-M2 milestone gate, and the review returned by
+  `coderabbit review --agent --committed --base-commit ed1d47e87`. Ten
+  findings. Eight were valid and are applied: the post-exit expiry now emits
+  `LineStreamPhase.TIMEOUT` before its settlement (with a new case,
+  `test_the_lines_deadline_expiry_is_reported_as_a_timeout_phase`, that fails
+  without the emission and passes with it); `_coordinate_line_stream`,
+  `_run_to_command_result` and `_wait_for_line_stream_exit` no longer accept an
+  execution bundle beside the run and read `run.execution` instead, which is
+  the single-source rule this plan's own decision log already required; the
+  direct run's `None`-deadline comment, two comments in the direct-run test
+  module, the developers' guide's translation sentence, the plan's status line,
+  and the plan's first-person pronouns were corrected. The vacuous third case
+  in the line-stream test module was deleted and its constant check hoisted to
+  module scope. Two findings were rejected as factually wrong for this tree —
+  see `Decision log`.
 - [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
   route.
 - [ ] EP-M4 — documentation and full validation.
@@ -494,7 +511,7 @@ the issue was filed:
   reads like "the new bound misfired" and is really "the reference it subtracts
   from was never set".
 
-  The interim guard I had added to `_await_consumers`
+  The interim guard added to `_await_consumers`
   (`if remaining is not None and remaining <= 0: raise TimeoutError`) was both
   out of plan and wrong in its own right, and was removed: `asyncio.wait`
   returns immediately for a non-positive timeout with every unfinished reader
@@ -554,6 +571,21 @@ the issue was filed:
   the bare `started_at` field and pass the stamped `execution` as an extra
   argument to `_coordinate_line_stream` (rejected: two sources for one value is
   the original defect, restated).
+
+- Decision (EP-M2 review, 2026-10-19): reject the review's two
+  `_spawn_stdin_writer` findings rather than applying them. Both assert a
+  four-argument contract `(process, plan, codec, observation)` with the plan
+  read from `execution.stdio.stdin` and the codec from
+  `cuprum._subprocess_stdin_stream._stdin_codec`. Neither exists in this tree:
+  the real signature is `_spawn_stdin_writer(process, stdin_data, observation)`,
+  `_SubprocessExecution` has no `stdio` field, and there is no
+  `_subprocess_stdin_stream` module. The direct run and the streamed path both
+  already call the three-argument form, and the direct run's `execution` is
+  where `stdin_data` lives. Applying the suggestion would replace working calls
+  with an import of a module that does not exist. The review appears to have
+  been written against a different revision. Rationale for recording rather
+  than silently skipping: a rejected finding is evidence about the review, not
+  about the code, and the next reader will meet the same comment.
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
