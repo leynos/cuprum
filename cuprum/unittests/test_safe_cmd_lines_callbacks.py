@@ -63,7 +63,9 @@ def test_lines_stamp_events_from_the_spawn_clock(
     from cuprum import _line_callbacks
     from cuprum._line_stream import spawn
 
-    # The spawn phase samples its own reference clock.
+    # The start reference is stamped in ``spawn``; the coordinator no longer
+    # reads that clock, so patching it there would leave the real reading in
+    # place and the timestamp assertion below would depend on the wall clock.
     monkeypatch.setattr(spawn, "perf_counter", lambda: 40.0)
     monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
     command = python_builder("-c", "print('clock')")

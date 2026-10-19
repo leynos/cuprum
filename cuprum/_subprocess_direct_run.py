@@ -97,10 +97,10 @@ async def _await_writer_within_deadline(
     # A remainder the exit wait already spent is passed through rather than
     # clamped: a non-positive delay schedules the scope's expiry for the next
     # loop iteration, which is the same "already elapsed" reading the exit wait
-    # gives a non-positive timeout. ``None`` cannot reach here — the caller
-    # awaits a writer only when one was spawned — but it is passed through
-    # unchanged rather than defaulted, so the scope owns the meaning of "no
-    # deadline" exactly as the streamed path's boundary does.
+    # gives a non-positive timeout. A run without ``timeout=`` yields ``None``,
+    # which is passed through unchanged rather than defaulted, so the scope
+    # owns the meaning of "no deadline" exactly as the streamed path's
+    # boundary does.
     try:
         async with asyncio.timeout(_deadline_for_collection(execution)):
             await asyncio.shield(stdin_task)

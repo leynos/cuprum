@@ -144,23 +144,15 @@ class _FailedExitTestDouble:
         monkeypatch.setattr(coordinator, "_shielded_cleanup", self.shield)
         monkeypatch.setattr(coordinator, "_handle_stream_timeout", self.handle_timeout)
 
-    def run_timeout_exit(
-        self,
-        run: _LineStreamRun,
-        execution: _SubprocessExecution,
-    ) -> None:
+    def run_timeout_exit(self, run: _LineStreamRun) -> None:
         """Drive the timeout path, which ends in the translator sentinel."""
         with pytest.raises(_TimeoutHandledError):
-            asyncio.run(coordinator._wait_for_line_stream_exit(run, execution))
+            asyncio.run(coordinator._wait_for_line_stream_exit(run))
 
-    def run_failed_exit(
-        self,
-        run: _LineStreamRun,
-        execution: _SubprocessExecution,
-    ) -> BaseException:
+    def run_failed_exit(self, run: _LineStreamRun) -> BaseException:
         """Drive a non-timeout failure and return the recorded exception."""
         with pytest.raises(type(self.error)) as caught:
-            asyncio.run(coordinator._wait_for_line_stream_exit(run, execution))
+            asyncio.run(coordinator._wait_for_line_stream_exit(run))
         return caught.value
 
     def assert_cleanup_contract(
@@ -193,7 +185,10 @@ class _FailedExitTestDouble:
         )
 
 
-def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
+def _failed_run(
+    double: _FailedExitTestDouble,
+    execution: _SubprocessExecution,
+) -> _LineStreamRun:
     """Build the smallest run shape the failed-exit cleanup needs.
 
     ``stdin_task`` is ``None`` so the exit race takes its no-writer branch and
@@ -201,16 +196,20 @@ def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
     *failed exit wait* does, not about the race, which
     ``test_safe_cmd_stdin_stream.py`` covers against a real child.
 
+    The execution bundle is carried on the run because that is the only place
+    the coordinator reads it from; handing it alongside the run is the second
+    source of one value the coordinator was changed to remove.
+
     Returns
     -------
     _LineStreamRun
-        The minimal run, cast from a namespace to the shape the noexcept
-        cleanup path reads.
+        The stand-in run carrying the supplied execution bundle.
     """
     run = types.SimpleNamespace(
         process=types.SimpleNamespace(pid=123),
         tasks=types.SimpleNamespace(discard_on_cancel=asyncio.Event(), stdin_task=None),
         telemetry=types.SimpleNamespace(emit=double.emit),
+        execution=execution,
     )
     return typ.cast("_LineStreamRun", run)
 
@@ -268,7 +267,6 @@ def test_failed_line_stream_exit_reconciles_with_the_outcome_capture_policy(
     could not satisfy the expectation.
     """
     double = _FailedExitTestDouble(error=error)
-    run = _failed_run(double)
     execution = typ.cast(
         "_SubprocessExecution",
         types.SimpleNamespace(
@@ -279,16 +277,17 @@ def test_failed_line_stream_exit_reconciles_with_the_outcome_capture_policy(
             timeout=0.5,
         ),
     )
+    run = _failed_run(double, execution)
     double.install(monkeypatch)
 
     if isinstance(error, TimeoutError):
-        double.run_timeout_exit(run, execution)
+        double.run_timeout_exit(run)
         assert double.timeout_calls == [("stdout text", "stderr text")], (
             "timeout translation must retain each reconciled drain's payload, "
             f"got {double.timeout_calls!r}"
         )
     else:
-        caught = double.run_failed_exit(run, execution)
+        caught = double.run_failed_exit(run)
         assert caught is error, (
             f"failed exit must preserve its original exception, got {caught!r}"
         )

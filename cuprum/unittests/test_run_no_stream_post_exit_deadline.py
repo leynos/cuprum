@@ -111,8 +111,9 @@ _DIRECT_OUTPUT = RunOutputOptions(capture=False, echo=False)
 _POLICIES = [ProcessGroupPolicy.OWN_GROUP, ProcessGroupPolicy.INHERIT]
 _POLICY_IDS = ["own-group", "inherit"]
 
-# What one entrypoint's invocation looks like to a test: hand it the command
-# and the policy, get back something ``run_to_its_own_deadline`` can await.
+# What one entrypoint's invocation looks like to a test: the policy is already
+# bound, so hand it the command and get back something
+# ``run_to_its_own_deadline`` can await.
 _Invoke = cabc.Callable[
     [SafeCmd],
     cabc.Coroutine[object, object, object],
@@ -183,7 +184,7 @@ def _invoke_sync(entrypoint: str, policy: ProcessGroupPolicy) -> _Invoke:
 # read a failing parametrization. They are built by attribute rather than
 # written out one call at a time so that adding an entrypoint is a row here
 # rather than a fifth near-identical function; a signature change to any of them
-# still fails at collection time, because the attribute is resolved as the case
+# still fails the affected case, because the attribute is resolved when the case
 # runs and the parametrization names all four.
 _ENTRYPOINTS: list[tuple[str, cabc.Callable[[ProcessGroupPolicy], _Invoke]]] = [
     ("run", lambda policy: _invoke_async("run", policy)),
