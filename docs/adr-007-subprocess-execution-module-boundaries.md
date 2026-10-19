@@ -1271,11 +1271,10 @@ flat `capture=`/`echo=` keyword shim behind `Pipeline.run` — describe how to
 _reach_ the options vocabulary rather than what the vocabulary means, and both
 are scheduled to disappear.
 
-Those two surfaces left `cuprum/sh/output.py`, but not for one home. `main` had
-already split the flat keyword shim into `cuprum/sh/pipeline_output.py` while
-this branch was in flight, so the merged tree keeps that module as the shim's
-owner and its existing re-export through `cuprum.sh.pipeline`;
-`cuprum/sh/_deprecated.py` takes only `IOOptions`:
+Those two surfaces left `cuprum/sh/output.py`, but not for one home.
+`cuprum/sh/pipeline_output.py` owns the flat keyword shim and its existing
+re-export through `cuprum.sh.pipeline`; `cuprum/sh/_deprecated.py` takes only
+`IOOptions`:
 
 - `IOOptions` — the deprecated alias, which resolves every field exactly as its
   base does and then warns, now in `cuprum/sh/_deprecated.py`.
