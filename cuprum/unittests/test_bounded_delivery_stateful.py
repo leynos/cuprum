@@ -163,7 +163,7 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
 
     @staticmethod
     def _payload(item: _Item) -> _DeliveryPayload:
-        """Convert one modeled item to the worker's prepared payload."""
+        """Convert one modelled item to the worker's prepared payload."""
         return _DeliveryPayload(value=item[1], source_bytes=item[2])
 
     def _current_worker(self) -> _DeliveryWorker:
@@ -214,13 +214,13 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
         )
         assert tuple(failure.stream for failure in worker.failures) == tuple(
             self._failures
-        ), "worker failure streams must match the modeled sink failure"
+        ), "worker failure streams must match the modelled sink failure"
         actual_undelivered = tuple(
             (entry.stream, entry.byte_count) for entry in worker.undelivered_bytes
         )
         expected_undelivered = tuple(self._undelivered.items())
         assert actual_undelivered == expected_undelivered, (
-            "shutdown byte totals must match the modeled per-stream groups: "
+            "shutdown byte totals must match the modelled per-stream groups: "
             f"expected={expected_undelivered!r}, actual={actual_undelivered!r}"
         )
 
@@ -271,7 +271,7 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
     )
     @rule()
     def complete_active_write(self) -> None:
-        """Complete the active write and advance the modeled FIFO once."""
+        """Complete the active write and advance the modelled FIFO once."""
         active = self._active
         assert active is not None, "the rule precondition requires an active item"
         index = self._active_index
@@ -330,7 +330,7 @@ class _DeliveryWorkerMachine(RuleBasedStateMachine):
         result = self._current_worker().close(grace=grace)
         assert tuple(failure.stream for failure in result.failures) == tuple(
             self._failures
-        ), "close must retain the modeled sink failure"
+        ), "close must retain the modelled sink failure"
         actual_undelivered = tuple(
             (entry.stream, entry.byte_count) for entry in result.undelivered_bytes
         )
