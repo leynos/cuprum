@@ -127,10 +127,10 @@ Thresholds that trigger escalation when breached.
       re-run and pass. Recorded both sides' checksums in the provenance record
       and superseded the no-link-rewriting constraint above.
 - [x] Commit the change.
-- [ ] (Optional, not started) Open a pull request.
+- [x] (2026-10-19) Opened the pull request as a draft.
 
-Remaining after the commit: the pull request, if the session's workflow asks
-for one. No implementation work remains.
+Remaining: review and merge, which this task explicitly excludes. No
+implementation work remains.
 
 ## Surprises & discoveries
 
