@@ -24,6 +24,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.ci_runners import (
+    AUTHOR_FIELD,
     CACHE_RESTORE,
     CREDENTIALS_ACTION,
     CREDENTIALS_STEP,
@@ -55,11 +56,12 @@ LOCAL_BACKEND_JOBS: typ.Final = tuple(
 #: fork's pull request runs on the GitHub-hosted fork arm, which has no proxy,
 #: so that arm takes the directory backend; the arms are read by position, as
 #: the runner's are, so swapping them fails.
-FORK_ARM_BACKEND: typ.Final = f"${{{{ {FORK_FIELD} && 'local' || 'gha' }}}}"
+HOSTED_CONDITION: typ.Final = f"({FORK_FIELD} || {AUTHOR_FIELD} == 'dependabot[bot]')"
+FORK_ARM_BACKEND: typ.Final = f"${{{{ {HOSTED_CONDITION} && 'local' || 'gha' }}}}"
 
 #: The guard that keeps the credentials step off the fork arm, where the action
 #: fails closed because there is no proxy to export.
-OWNED_ARM_ONLY: typ.Final = f"${{{{ !{FORK_FIELD} }}}}"
+OWNED_ARM_ONLY: typ.Final = f"${{{{ !{HOSTED_CONDITION} }}}}"
 
 
 def _normalized(value: object) -> str:

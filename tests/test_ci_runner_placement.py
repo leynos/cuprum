@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers.ci_runners import (
+    AUTHOR_FIELD,
     CONTINUE_ON_ERROR_JOBS,
     EXPERIMENTAL_LEG_KEY,
     FORK_FIELD,
@@ -80,8 +81,9 @@ def test_fork_reachable_lanes_fall_back_by_position(
         f"{workflow_name}:{job_name} must select its runner with the fork "
         f"fallback expression, got a {placed.kind} placement"
     )
-    assert placed.references == frozenset({FORK_FIELD}), (
-        f"{workflow_name}:{job_name} must branch on {FORK_FIELD}, "
+    assert placed.references == frozenset({FORK_FIELD, AUTHOR_FIELD}), (
+        f"{workflow_name}:{job_name} must branch on {FORK_FIELD} and "
+        f"{AUTHOR_FIELD}, "
         f"got {sorted(placed.references)}"
     )
     assert placed.fork == GITHUB_LABEL, (

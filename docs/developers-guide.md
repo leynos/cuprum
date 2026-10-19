@@ -181,13 +181,24 @@ change.
 ### The fork arm
 
 A pull request from a fork cannot obtain an Ubicloud runner, so every
-fork-reachable lane selects its runner by event:
+fork-reachable lane selects its runner by event. A pull request Dependabot
+opened takes the same hosted arm: hosted minutes cost nothing on a public
+repository, and Dependabot opens many pull requests, which therefore build
+cold. The expression tests the pull request's author, not `github.actor`,
+because the actor is whoever triggered the run, so a person pushing to a
+Dependabot branch would flip the runner:
 
 ```yaml
 runs-on: >-
-  ${{ github.event.pull_request.head.repo.fork
+  ${{ (github.event.pull_request.head.repo.fork
+  || github.event.pull_request.user.login == 'dependabot[bot]')
   && 'ubuntu-latest' || 'ubicloud-standard-2' }}
 ```
+
+The `coverage` lane's credentials-step guard and its sccache `backend` use the
+same condition, so a Dependabot pull request on the hosted arm skips the
+credentials action (which fails closed without a proxy) and compiles cold into
+a directory nothing saves.
 
 Keep the continuation at the same indent. A continuation indented one level
 deeper keeps its line break inside the folded scalar and puts a newline in the

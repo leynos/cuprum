@@ -47,6 +47,12 @@ if typ.TYPE_CHECKING:
 #: a conditional accepts it.
 FORK_FIELD = "github.event.pull_request.head.repo.fork"
 
+#: The pull request's author. Dependabot's pull requests take the fork arm too,
+#: because hosted minutes cost nothing on a public repository. The author is
+#: read, not ``github.actor``: the actor is whoever triggered the run, so a
+#: person pushing to a Dependabot branch would flip the runner.
+AUTHOR_FIELD = "github.event.pull_request.user.login"
+
 #: GitHub-hosted labels this repository is permitted to use. Named rather than
 #: derived from a vendor prefix: a ``ubicloud-`` prefix filter would silently
 #: exempt a second paid provider's labels from the registry question, which is
@@ -80,6 +86,14 @@ _FORKEXPRESSION = re.compile(
     # legitimate condition, and excluding `-` refused it as unmodellable. Found
     # by the generated property, not by any example anyone wrote down.
     r"\A\s*(?P<condition>[A-Za-z_][\w.-]*)"
+    r"\s*&&\s*'(?P<fork_arm>[^']+)'"
+    r"\s*\|\|\s*'(?P<owned_arm>[^']+)'\s*\Z"
+)
+#: The estate's hosted-arm expression: the fork test or the Dependabot author
+#: test, read by position like the fork-only form. The author literal is exact.
+_HOSTED_EXPRESSION = re.compile(
+    r"\A\s*\(\s*(?P<fork_ref>[A-Za-z_][\w.-]*)"
+    r"\s*\|\|\s*(?P<author_ref>[A-Za-z_][\w.-]*)\s*==\s*'dependabot\[bot\]'\s*\)"
     r"\s*&&\s*'(?P<fork_arm>[^']+)'"
     r"\s*\|\|\s*'(?P<owned_arm>[^']+)'\s*\Z"
 )
@@ -232,6 +246,29 @@ def _literal_labels(
     return frozenset(labels)
 
 
+def _conditional_placement(body: str) -> Placement | None:
+    """Read a fork-or-Dependabot or a fork-only conditional, else ``None``."""
+    hosted = _HOSTED_EXPRESSION.match(body)
+    if hosted is not None:
+        return Placement(
+            "fork",
+            hosted.group("owned_arm"),
+            hosted.group("fork_arm"),
+            frozenset({hosted.group("owned_arm"), hosted.group("fork_arm")}),
+            frozenset({hosted.group("fork_ref"), hosted.group("author_ref")}),
+        )
+    fork = _FORKEXPRESSION.match(body)
+    if fork is None:
+        return None
+    return Placement(
+        "fork",
+        fork.group("owned_arm"),
+        fork.group("fork_arm"),
+        frozenset({fork.group("owned_arm"), fork.group("fork_arm")}),
+        frozenset({fork.group("condition")}),
+    )
+
+
 def placement(workflow_name: str, job_name: str) -> Placement:
     """Model one job's runner selection, refusing any shape it cannot read.
 
@@ -291,15 +328,9 @@ def placement(workflow_name: str, job_name: str) -> Placement:
         )
         return Placement("literal", text, None, frozenset({text}), frozenset())
     body = match.group("body")
-    fork = _FORKEXPRESSION.match(body)
-    if fork is not None:
-        return Placement(
-            "fork",
-            fork.group("owned_arm"),
-            fork.group("fork_arm"),
-            frozenset({fork.group("owned_arm"), fork.group("fork_arm")}),
-            frozenset({fork.group("condition")}),
-        )
+    conditional = _conditional_placement(body)
+    if conditional is not None:
+        return conditional
     matrix = _MATRIX_EXPRESSION.match(body)
     if matrix is not None:
         key = matrix.group("key")
