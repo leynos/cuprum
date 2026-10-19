@@ -8,14 +8,16 @@ pure argv builders (``_tar_create_argv``, ``_tar_extract_argv``,
 The invariants checked here are:
 
 - ``tar_create`` argv is exactly ``-c``, at most one compression flag,
-  ``-f``, the archive, then the sources in order; the compression flag
-  matches the ``Compression`` member and never appears twice.
+  ``-f``, the archive, ``--``, then the sources in order; the compression
+  flag matches the ``Compression`` member and never appears twice, and every
+  source, including one beginning with ``-`` or ``--``, follows the
+  separator.
 - ``tar_create`` rejects empty source sequences (``ValueError``) and a
   bare string or ``Path`` passed instead of a sequence (``TypeError``).
 - ``tar_extract`` argv is ``-x -f <archive>`` with an optional trailing
   ``-C <destination>``.
 - ``rsync_sync`` emits exactly the flags enabled on ``RsyncOptions`` in
-  the documented fixed order, followed by source then destination.
+  the documented fixed order, then ``--``, then source and destination.
 - Path conversion is deterministic: equal inputs give equal argv, and a
   ``Path`` yields the same argv as the equivalent string.
 - The public wrappers attach the curated program and the argv produced
@@ -89,14 +91,14 @@ def test_tar_create_argv_shape_and_single_compression_flag(
     sources: list[str],
     compression: Compression,
 ) -> None:
-    """The argv is -c, one optional compression flag, -f, archive, sources."""
+    """The argv is -c, one optional compression flag, -f, archive, --, sources."""
     options = TarCreateOptions(compression=compression)
     argv = _tar_create_argv(archive, sources, options)
 
     flag = _COMPRESSION_BY_MEMBER[compression]
     expected_head = ("-c",) if flag is None else ("-c", flag)
-    assert argv == (*expected_head, "-f", archive, *sources), (
-        "argv must be the documented head followed by archive and sources"
+    assert argv == (*expected_head, "-f", archive, "--", *sources), (
+        "argv must be the documented head, archive, separator, then sources"
     )
     present = [entry for entry in argv if entry in _ALL_COMPRESSION_FLAGS]
     assert present == ([] if flag is None else [flag]), (
@@ -148,13 +150,13 @@ def test_rsync_argv_flags_match_options_in_fixed_order(
     destination: str,
     options: RsyncOptions,
 ) -> None:
-    """Exactly the enabled flags appear in expected order, then the paths."""
+    """Exactly the enabled flags, ``--``, then the paths appear in order."""
     argv = _rsync_argv(source, destination, options)
     expected_flags = tuple(
         flag for attr, flag in _EXPECTED_RSYNC_FLAG_ORDER if getattr(options, attr)
     )
-    assert argv == (*expected_flags, source, destination), (
-        "argv must be the enabled flags in fixed order, then source and destination"
+    assert argv == (*expected_flags, "--", source, destination), (
+        "argv must be the enabled flags in fixed order, then --, source, destination"
     )
 
 
@@ -287,4 +289,62 @@ def test_rsync_sync_rejects_relative_paths_unless_opted_in(
     command = rsync_sync(source, destination, options=options)
     assert command.argv == _rsync_argv(source, destination, options), (
         "rsync_sync must pass allow_relative through to its argv builder"
+    )
+
+
+_LEADING_DASH = st.sampled_from(("-", "--"))
+# A relative path shaped like a tool option: a "-" or "--" prefix joined
+# directly to one to three "/"-separated segments. The segments may contain
+# hyphens, so "--" and "---" are reachable and the separator assertions below
+# stay positional rather than searching for the first "--".
+_OPTION_SHAPED_RELATIVE = _LEADING_DASH.flatmap(
+    lambda dash: st.lists(_SEGMENTS, min_size=1, max_size=3).map(
+        lambda parts: dash + "/".join(parts)
+    )
+)
+
+
+@settings(max_examples=100)
+@given(
+    archive=st.lists(_SEGMENTS, min_size=1, max_size=3).map("/".join),
+    sources=st.lists(_OPTION_SHAPED_RELATIVE, min_size=1, max_size=4),
+)
+def test_tar_create_places_option_shaped_sources_after_separator(
+    archive: str,
+    sources: list[str],
+) -> None:
+    """Every ``-``/``--`` source follows ``--``, which follows the archive.
+
+    The checks are positional rather than a search for ``--``: a generated
+    archive name may itself be ``--``, so the first match need not be the
+    separator.
+    """
+    options = TarCreateOptions(allow_relative=True)
+    argv = _tar_create_argv(archive, sources, options)
+
+    assert argv == ("-c", "-f", archive, "--", *sources), (
+        "the separator must directly follow the archive, then the sources"
+    )
+    separator_index = 3
+    assert argv[separator_index] == "--", "the separator must occupy index three"
+    assert argv[separator_index + 1 :] == tuple(sources), (
+        "no source may appear before the separator"
+    )
+
+
+@settings(max_examples=100)
+@given(
+    source=_OPTION_SHAPED_RELATIVE,
+    destination=_OPTION_SHAPED_RELATIVE,
+)
+def test_rsync_places_option_shaped_operands_after_separator(
+    source: str,
+    destination: str,
+) -> None:
+    """Rsync source and destination beginning with ``-`` or ``--`` follow ``--``."""
+    options = RsyncOptions(archive=True, allow_relative=True)
+    argv = _rsync_argv(source, destination, options)
+
+    assert argv == ("--archive", "--", source, destination), (
+        "both operands must follow the separator verbatim"
     )

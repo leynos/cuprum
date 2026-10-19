@@ -80,7 +80,26 @@ def _tar_create_argv(
     sources: cabc.Sequence[str | Path],
     options: TarCreateOptions,
 ) -> tuple[str, ...]:
-    """Build the immutable argv for ``tar_create`` without a catalogue."""
+    """Build the immutable argv for ``tar_create`` without a catalogue.
+
+    The ``--`` separator is emitted after the archive value so that
+    leading-dash source names are file operands, never tar options. Without
+    it, GNU tar parses a source such as ``--checkpoint=1`` as an option and a
+    paired ``--checkpoint-action=exec=...`` as a command to run with the
+    caller's privileges.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The complete tar argument vector.
+
+    Raises
+    ------
+    TypeError
+        If ``sources`` is a single ``str`` or ``Path`` rather than a sequence.
+    ValueError
+        If ``sources`` is empty.
+    """
     match sources:
         case str() | Path():
             msg = "tar_create requires a sequence of source paths, not a single path"
@@ -97,6 +116,7 @@ def _tar_create_argv(
     args.extend([
         "-f",
         str(safe_path(archive, allow_relative=options.allow_relative)),
+        "--",
     ])
     args.extend(
         str(safe_path(source, allow_relative=options.allow_relative))
@@ -118,7 +138,9 @@ def tar_create(
     archive
         Archive path passed after ``-f``.
     sources
-        Source paths added to the archive, in order.
+        Source paths added to the archive, in order. They follow a ``--``
+        separator, so a name beginning with ``-`` stays a file operand and
+        cannot become a tar option.
     options
         Optional create settings. When omitted, the command uses
         ``TarCreateOptions()``.
@@ -139,7 +161,18 @@ def _tar_extract_argv(
     *,
     allow_relative: bool,
 ) -> tuple[str, ...]:
-    """Build the immutable argv for ``tar_extract`` without a catalogue."""
+    """Build the immutable argv for ``tar_extract`` without a catalogue.
+
+    No ``--`` separator is needed here: the archive and destination are
+    values of ``-f`` and ``-C``, so tar takes them literally even when they
+    begin with a dash. A ``--`` *before* an option's value would instead make
+    tar read the value as a file operand.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The complete tar argument vector.
+    """
     args: list[str] = [
         "-x",
         "-f",
@@ -161,9 +194,11 @@ def tar_extract(
     Parameters
     ----------
     archive
-        Archive path passed after ``-f``.
+        Archive path passed as the value of ``-f``. Leading dashes are not
+        re-read as options. A bare ``-`` is still special: tar reads the
+        archive from standard input.
     destination
-        Optional extraction directory passed after ``-C``.
+        Optional extraction directory passed as the value of ``-C``.
     allow_relative
         Allow ``archive`` and ``destination`` to be relative paths.
 
