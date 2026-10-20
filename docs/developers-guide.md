@@ -1149,21 +1149,22 @@ relative remote spelling such as `host:path` may instead fail earlier as
 `PathRejection.NOT_ABSOLUTE`; the role-specific message is what an
 `allow_relative=True` caller sees.
 
-The policy is covered in three layers. `cuprum/unittests/test_rsync_operand_policy.py`
-holds the parameterized unit tests and the direct helper test;
-`cuprum/unittests/test_builder_property_based.py` generates `host:path` and
-`host::module/path` operands for both roles, with a non-vacuity property
-asserting each generated example first passes `safe_path(allow_relative=True)`;
-and the `Rsync builder rejects remote operands` scenario in
-`tests/features/builder_library.feature` asserts that no command is built.
+The policy is covered in three layers.
+`cuprum/unittests/test_rsync_operand_policy.py` holds the parameterized
+examples, the direct helper test, and the Hypothesis properties. The properties
+generate `host:path` and `host::module/path` operands for both roles, and
+include a non-vacuity property asserting each generated example first passes
+`safe_path(allow_relative=True)`. The `Rsync builder rejects remote operands`
+scenario in `tests/features/builder_library.feature` asserts that no command is
+built.
 
-The unit tests live in their own module, kept separate from
-`test_builder_library.py` so the per-module line budget is not spent on one
-feature. They select neutral counterparts that stay local on both hosts: a
-native absolute path from `tmp_path` on POSIX, and the MSYS mount spelling
-`/cygdrive/c/data` under `allow_relative=True`. A Windows drive prefix is
-remote-ending syntax for rsync even where `PurePath` calls it absolute, so it
-can never serve as the neutral operand.
+That module is kept separate from `test_builder_library.py` so the per-module
+line budget is not spent on one feature. Its acceptance fixtures are neutral
+counterparts that stay local on both hosts: a native absolute path from
+`tmp_path` on POSIX, and the MSYS mount spelling `/cygdrive/c/data` under
+`allow_relative=True`. A Windows drive prefix is remote-ending syntax for rsync
+even where `PurePath` calls it absolute, so it can never serve as the neutral
+operand.
 
 ### End-of-options separators for positional operands
 
