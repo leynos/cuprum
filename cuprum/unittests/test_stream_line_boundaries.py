@@ -157,6 +157,18 @@ def test_accumulator_handles_every_boundary_char_for_char(
     assert lines == ["a", "b"], f"{boundary!r} must complete two lines, got {lines!r}"
 
 
+@pytest.mark.parametrize("chunks", [("\r\r",), ("a\r\r",), ("a\r\r", "\nb")])
+def test_accumulator_handles_chunks_ending_in_two_carriage_returns(
+    chunks: tuple[str, ...],
+) -> None:
+    """A held trailing CR does not invalidate lookahead for its predecessor."""
+    text = "".join(chunks)
+
+    lines = _drain(_LineAccumulator(1024), chunks)
+
+    assert lines == text.splitlines(), f"expected splitlines() for {chunks!r}"
+
+
 def test_accumulator_holds_a_lone_carriage_return_until_the_next_chunk() -> None:
     """A trailing CR is pending, and only a following LF is absorbed."""
     accumulator = _LineAccumulator(1024)

@@ -81,9 +81,7 @@ def _find_next_boundary(
 
 def _boundary_width(text: str, index: int) -> int:
     """Return how many characters the boundary at ``index`` occupies."""
-    if text[index] == "\r" and text[index + 1] == "\n":
-        return 2
-    return 1
+    return 2 if text.startswith("\r\n", index) else 1
 
 
 class _LineAccumulator:
