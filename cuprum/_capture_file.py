@@ -160,13 +160,12 @@ class _FileAccumulator:
 
     def _should_spill(self, buffered: int) -> bool:
         """Whether *buffered* bytes have outgrown the configured threshold."""
-        # A failed spill keeps the stream on the heap for good: retrying would
-        # cost a syscall and a storage-failure event per chunk, turning one
-        # broken directory into a metrics flood. This is safe here because
-        # ``_failed`` is set only by a failed *create* — the one failure after
-        # which there is no file to spill into. A failed append leaves
-        # ``_path`` set, so ``absorb`` takes the append branch and never asks
-        # this question again.
+        # A failed spill transition leaves ``_path`` unset, so keep the
+        # accumulator on the heap instead of retrying a broken directory on
+        # every chunk and emitting a storage-failure event each time. Once a
+        # spill succeeds, ``_path`` is set and ``absorb`` takes the append
+        # branch; later write, flush, or read-back failures never ask this
+        # predicate again.
         if self._failed is not None:
             return False
         threshold = self._policy.spill_threshold_bytes

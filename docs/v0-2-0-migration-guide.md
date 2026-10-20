@@ -1074,8 +1074,8 @@ working there.
 `StdioTarget`, `StdinStream`, `StdinSource`, and `StdinSourceError` are all
 exported from the package root, so an existing import line only needs the new
 name added to it. For the full contract, see
-[capture and echo](users-guide.md#capture-and-echo) for the target vocabulary
-and the rules policing it, and
+[send a stream to a file or the parent](users-guide.md#send-a-stream-to-a-file-or-the-parent)
+for the target vocabulary and the rules policing it, and
 [supply input, environment, and a deadline](users-guide.md#supply-input-environment-and-a-deadline)
 for the streaming source.
 

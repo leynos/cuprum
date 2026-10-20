@@ -2291,7 +2291,7 @@ its default is `_READ_SIZE`, currently 65536 bytes. The private
 relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
-read/echo/buffer loop behind both consume variants. It reads in that configured
+read-and-fan-out loop behind both consume variants. It reads in that configured
 size, awaits `CaptureSink.absorb` with the **raw** chunk when capturing, echoes
 each chunk to the configured sink when echoing, and hands the chunk to the
 optional `on_chunk` callback for variant-specific processing:
@@ -2300,6 +2300,15 @@ optional `on_chunk` callback for variant-specific processing:
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
   incremental decoder and emits completed lines, then flushes the decoder tail
   after the drain returns.
+
+`CaptureSink` in `cuprum._capture_types` is the drain's per-stream capture
+capability. The accumulator built from the resolved policy decides what it
+retains: all bytes received by the drain for full capture, a bounded tail for
+bounded capture, or memory followed by a spill file for file-backed capture.
+`finalize()` returns a `CaptureFinal` with the rendered payload,
+`CapturedStream` metadata, and an optional `SpillHandle`. `_finish_drain`
+carries those values together in `_CapturedDrain` so result assembly cannot
+separate a payload from the record or cleanup handle that describes it.
 
 Re-use policy: the public entry point remains `_consume_stream`, which
 dispatches between the two variants on whether an `on_line` callback was
@@ -2338,16 +2347,20 @@ configuration.
 The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
 runners. A byte run is an ordinary run carrying one extra fact,
 `capture_bytes`, on its resolved `_SubprocessExecution` state. That fact flows
-to `_StreamConfig.capture_bytes`, and the single payload renderer,
-`cuprum._stream_drain_finish._captured_payload`, decides at the end of the
-drain whether to return `bytes(buffer)` or
-`buffer.decode(config.encoding, errors=config.errors)`.
+to `_StreamConfig.capture_bytes`. Every capture accumulator retains raw bytes;
+`cuprum._capture_decode._render` is the single seam that returns those bytes
+unchanged for byte mode or decodes them with the configured encoding and error
+policy for text mode. A kept file-backed text capture leaves its bytes at the
+reported path; a spill the caller does not keep is removed during cleanup. Byte
+mode reads a spill back because the caller asked for the child's bytes as the
+result. That read-back means byte mode does not retain the bounded-memory
+guarantee of text mode.
 
 Capture and line emission are independent channels, which is what lets one
 drain serve both modes:
 
-- The drain's buffer always holds the child's raw bytes; it is never decoded in
-  place.
+- The per-stream capture accumulator receives raw chunks and applies its
+  retention policy without changing the bytes sent to the other consumers.
 - `_consume_stream_with_lines` decodes a *copy* through its own incremental
   decoder to find line boundaries and publish lines.
 - The two therefore compose. A byte-exact run with a registered `sh.observe()`
@@ -2447,26 +2460,26 @@ runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
 loop, while text runs keep `config.errors`, so a strict text run still raises
 from echo exactly as it did before byte mode existed. See
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md), and
-`cuprum._stream_drain_finish._captured_payload` renders the capture from the
-drain's own untouched buffer per its config: a text run decodes under
-`config.errors`, while a byte-exact run returns `bytes(buffer)` and never
-consults that policy.
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md). Capture receives
+each raw chunk independently of the echo decoder, and
+`cuprum._capture_decode._render` renders the accumulator's retained bytes as
+text or bytes at finalization.
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw
-read, before decoding, echoing, truncation, and line callbacks. This is the
-only activity signal the idle heartbeat sees, so a partial line, a multibyte
-sequence split across reads, discarded output, and a chunk that is never echoed
-all count as activity, while EOF and parent-generated diagnostics do not. The
-callback receives no child bytes: it exists to reset a timer, not to observe
-output.
+read, before capture retention, decoding, echoing, and line callbacks. This is
+the only activity signal the idle heartbeat sees, so a partial line, a
+multibyte sequence split across reads, discarded output, and a chunk that is
+never echoed all count as activity, while EOF and parent-generated diagnostics
+do not. The callback receives no child bytes: it exists to reset a timer, not
+to observe output.
 
-The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
-write and the incremental decoder and records where a mirrored sink ended up;
-the mirror cursor it records into is created and retained by the idle heartbeat
+The echo renderer lives in `cuprum/_stream_echo.py`, which owns the sink write
+and incremental decoder and records where a mirrored sink ended up; the mirror
+cursor it records into is created and retained by the idle heartbeat
 (`cuprum/_idle_heartbeat.py`) and reaches the renderer through `_StreamConfig`.
-The drain loop in `cuprum/_streams.py` only reads the bytes and owns the state
-it renders.
+The drain loop in `cuprum/_streams.py` reads the bytes and coordinates capture,
+echo, and line delivery; capture rendering remains in
+`cuprum._capture_decode._render`.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
@@ -2481,11 +2494,11 @@ of either kind disables echo for the rest of that drain, logs one `WARNING` on
 the `cuprum.stream` logger with structured `cuprum_*` extras, and lets every
 other error propagate unchanged. The two recoveries share `_disable_echo`, so
 the guard flip and its three bounded projections cannot drift apart; only the
-`cuprum_error_category` differs. Capture (`buffer.extend`) always runs before
-the echo step, so a rejected echo write never loses captured bytes, and the
-binary `.buffer` fast path inside `_write_chunk` is unchanged. The catch is by
-`BrokenPipeError` name rather than `OSError`, which is what keeps a genuinely
-unreachable device propagating under both policies.
+`cuprum_error_category` differs. `CaptureSink.absorb` always runs before the
+echo step, so a rejected echo write never loses bytes already accepted by the
+capture policy, and the binary `.buffer` fast path inside `_write_chunk` is
+unchanged. The catch is by `BrokenPipeError` name rather than `OSError`, which
+is what keeps a genuinely unreachable device propagating under both policies.
 
 The first failure is owned entirely by that one `_echo_write` transition: the
 `cuprum.stream` `WARNING`, the opt-in `cuprum.echo_observation.observe_echo`
@@ -2533,23 +2546,26 @@ The selection evidence and raw samples are recorded in
 
 ### Concurrency model
 
-Each `_drain()` invocation is self-contained. It owns its capture buffer
-(`bytearray`), the line-emitting variant's `codecs.IncrementalDecoder`, and any
-text-only echo decoder. The `on_chunk` callback closes over the line decoder
-and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
-therefore do not share mutable capture or decoder state.
+Each `_drain()` invocation is self-contained. It receives its own
+policy-specific `CaptureSink`, the line-emitting variant's
+`codecs.IncrementalDecoder`, and any text-only echo decoder. The `on_chunk`
+callback closes over the line decoder and acts only as the chunk delivery hook.
+Concurrent stdout and stderr drains therefore do not share mutable capture or
+decoder state; a file-backed accumulator serializes its disk operations through
+its spill I/O helper.
 
 The echo sink (`config.sink`) may be shared between concurrent drains when
 stdout and stderr are both echoed. Writes to that sink interleave only at
 `await` points: once a drain starts writing a single decoded chunk, there is no
 intermediate `await` before that chunk write finishes.
 
-Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
-cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
-`config.capture_output` is true and `config.discard_on_cancel` is unset, the
-bytes captured so far are rendered in the run's mode and returned — decoded for
-a text run, raw for a byte-exact one; when the discard event is set (or output
-is not being captured), those bytes are discarded and cancellation propagates.
+Cancellation preserves partial capture when the policy asks for it. If a read
+or a file-backed absorb is cancelled and the drain has a `CaptureSink`,
+`_finish_drain` finalizes the bytes already accepted under that stream's
+policy. Text mode returns decoded retained text or a spill path; byte mode
+returns the exact retained bytes, reading a spill back when needed. If
+`config.discard_on_cancel` is set, or no capture sink exists, cancellation
+propagates without a partial capture result.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.

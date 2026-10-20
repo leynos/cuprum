@@ -45,16 +45,36 @@ def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
     Capture is forced on for a handle because a handle exists so its caller can
     inspect the child after the fact, and a child whose streams were routed to
     ``DEVNULL`` cannot be asked what it said. The caller's own settings still
-    govern echo and every other presentation decision.
+    govern echo and every other presentation decision. A per-stream ``False``
+    value is reset to ``None`` so it inherits the forced-on shorthand, while
+    an explicit capture policy remains in force.
 
     Returns
     -------
     RunOutputOptions
-        The caller's settings with ``capture`` set, or the default settings
-        when none were given.
+        The caller's settings with ``capture`` set and per-stream opt-outs
+        removed, or the default settings when none were given. Explicit
+        per-stream capture policies remain unchanged.
     """
     resolved = output or RunOutputOptions()
-    return resolved if resolved.capture else dc.replace(resolved, capture=True)
+    capture_stdout = (
+        None if resolved.capture_stdout is False else resolved.capture_stdout
+    )
+    capture_stderr = (
+        None if resolved.capture_stderr is False else resolved.capture_stderr
+    )
+    capture_settings_unchanged = (
+        capture_stdout is resolved.capture_stdout
+        and capture_stderr is resolved.capture_stderr
+    )
+    if resolved.capture and capture_settings_unchanged:
+        return resolved
+    return dc.replace(
+        resolved,
+        capture=True,
+        capture_stdout=capture_stdout,
+        capture_stderr=capture_stderr,
+    )
 
 
 async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
@@ -126,8 +146,9 @@ class _OwnedStart:
         block settles the run on exit — a child still running is stopped down
         the same ``SIGTERM``, cancel-grace, ``SIGKILL`` path a cancelled
         ``run()`` takes — so a caller cannot leave a child behind by forgetting
-        about it. Output capture is always on, whatever *output* says, so a
-        stopped child still reports what the command wrote.
+        about it. Output capture is always on, whatever *output* says. A
+        per-stream ``False`` value inherits the forced-on shorthand, while an
+        explicit capture policy still controls that stream's retention.
 
         Unlike ``run()``, no deadline is enforced while the handle is merely
         held: the clock a timeout is measured against starts at the ``wait``
@@ -168,8 +189,9 @@ class _OwnedStart:
             context=ctx,
             # Capture is forced on: a handle exists so its caller can inspect
             # the child after the fact, and a child whose streams were routed
-            # to ``DEVNULL`` cannot be asked what it said. The caller's own
-            # settings still govern echo and every other presentation choice.
+            # to ``DEVNULL`` cannot be asked what it said. Explicit policies
+            # still govern each stream's retention; presentation stays with
+            # the caller.
             output=_with_capture(output),
             stdin_data=stdin.resolve(ctx) if stdin is not None else None,
             timeout=_resolve_timeout(timeout=timeout, context=context),

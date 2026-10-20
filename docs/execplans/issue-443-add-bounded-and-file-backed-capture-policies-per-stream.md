@@ -2671,6 +2671,36 @@ temporary directory does not warrant an async path library.
 
 Date/Author: 2026-10-19, implementation agent.
 
+## Review follow-up on the published head
+
+The candidate-bound assessment for repair head `7106bb525` confirmed the O4
+buffered-write flush repair, O5 capture release on teardown failures, and the
+O1 arbitrary-binary property. It identified one remaining overstatement: byte
+read-back includes previously accepted bytes only if final flush and read-back
+succeed. The users' guide and this design document now state that condition;
+the earlier write-failure event remains authoritative if the final flush also
+fails.
+
+The inline review findings on published head `f926d12c` were checked against
+the source and addressed. The changes correct three implementation comments and
+docstrings, make the successful test coroutine yield, fix the roadmap ordinal
+and migration link, clarify the resolved capture policy required for
+redirection, and preserve forced capture in `SafeCmd.start()` when a stream's
+field is `False`. New tests cover that handle contract, capture-observer scope
+and failure behaviour, and propagated spill-file read errors. The developers'
+guide now describes the accumulator and drain ownership that the code uses.
+
+The review also suggested a filesystem capability abstraction and a built-in
+metrics or tracing adapter. Neither is required by issue #443: its public
+contract deliberately accepts a directory and reports the spill path, while its
+opt-in `CaptureEvent` channel supplies the closed-set facts a caller can
+forward to a metrics backend. These broader design suggestions remain outside
+the delivered interface. The first fresh gate run passed six gates and found
+three lint issues; the next run caught one redundant import and one Oxford
+spelling error. Both were corrected before the final candidate certification.
+
+Date/Author: 2026-10-20, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed

@@ -72,10 +72,9 @@ def _reject_unsupported_bounded_captures(
 ) -> None:
     """Refuse an unrepairable bounded text capture on either stream.
 
-    Every pre-spawn entry point that resolves per-stream policies calls this
-    through :func:`_reject_unsupported_bounded_encoding`'s loop, so the two
-    streams a run always resolves together are checked together and no caller
-    can accidentally check only one.
+    Each pre-spawn entry point passes both resolved policies here. This helper
+    checks each stream by calling :func:`_reject_unsupported_bounded_encoding`,
+    so no entry point can accidentally check only one.
 
     Parameters
     ----------
@@ -110,10 +109,10 @@ def _reject_unsupported_bounded_encoding(
 ) -> None:
     """Reject a bounded text capture whose codec the trim cannot repair.
 
-    Called from the two seams every run passes through before it spawns — the
-    single-command bundle and the pipeline config — so the caller learns from
-    a ``ValueError`` rather than from a result that quietly contains a
-    character the child never wrote.
+    Called from each pre-spawn seam — the single-command bundle, pipeline
+    config, and line-iteration conflict check — so the caller learns from a
+    ``ValueError`` rather than from a result that quietly contains a character
+    the child never wrote.
 
     Parameters
     ----------

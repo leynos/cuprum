@@ -297,17 +297,14 @@ class CapturedStream:
     def read_text(self, *, encoding: str = "utf-8", errors: str = "replace") -> str:
         """Read a kept spill file back as text.
 
-        Only a spill the caller kept has a file to read. A run removes its own
-        spill before returning the result, so the default ``keep_file=False``
-        leaves a path that is already gone; read a spill by constructing the
-        policy with ``keep_file=True``. A memory-backed capture's text is on
-        the result's ``stdout``/``stderr`` field instead, and this raises
-        rather than returning something ambiguous — an empty string would be
-        indistinguishable from a spilled stream that held nothing.
+        Only a kept spill has a readable file: default ``keep_file=False``
+        removes it before return, so use ``keep_file=True`` to read it.
+        Memory-backed capture text is on the result's ``stdout``/``stderr``
+        field and raises here to distinguish it from an empty spill.
 
-        The decoding defaults differ from a run's capture defaults on purpose:
-        a spilled stream is the child's raw bytes, so ``errors="replace"``
-        keeps a read from raising on a payload that was never valid text.
+        The child's raw bytes may not be valid text. ``errors="replace"``
+        keeps that from raising by default.
+        Filesystem and codec errors from ``Path.read_text`` propagate unchanged.
 
         Parameters
         ----------
@@ -319,15 +316,13 @@ class CapturedStream:
         Returns
         -------
         str
-            The file's contents decoded, holding whatever reached the file —
-            which for a ``storage_failed`` capture is the prefix written
-            before the failure.
+            The decoded file contents, including a failed storage capture's
+            written prefix.
 
         Raises
         ------
         ValueError
             If this capture is memory-backed, and so has no file to read.
-
         """
         if self.path is None:
             msg = (

@@ -274,7 +274,8 @@ async def _failing(error: BaseException) -> None:  # ruff: ignore[unused-async]
 
 
 async def _succeeds() -> None:
-    """Complete as a pump does, standing in for one that relayed cleanly."""
+    """Yield once, standing in for a pump that relayed cleanly."""
+    await asyncio.sleep(0)
 
 
 def test_collect_returns_exceptions_in_task_order() -> None:

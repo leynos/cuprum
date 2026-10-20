@@ -4474,13 +4474,15 @@ decides what happens next. The handle owns everything that ownership implies:
 
 Output capture is forced on, because a handle exists so its caller can inspect
 the child after the fact and a child whose streams were routed to `DEVNULL`
-cannot be asked what it said. Echo and every other presentation decision remain
-the caller's. The handle runs the same sequence `run()` does — the `before`
-hooks, the presentation-sink session, and the `plan`/`start`/`settled` events —
-and runs the `after` hooks at settlement, because they take the result and
-there is no result until the run has one. `_prepare_owned_command` is the
-shared prefix for both, so the handle is a second way to own a `run()` rather
-than a second implementation of one.
+cannot be asked what it said. A per-stream `False` value inherits the forced-on
+shorthand, while an explicit capture policy still controls that stream's
+retention. Echo and every other presentation decision remain the caller's. The
+handle runs the same sequence `run()` does — the `before` hooks, the
+presentation-sink session, and the `plan`/`start`/`settled` events — and runs
+the `after` hooks at settlement, because they take the result and there is no
+result until the run has one. `_prepare_owned_command` is the shared prefix for
+both, so the handle is a second way to own a `run()` rather than a second
+implementation of one.
 
 There is deliberately one assembly path. `terminate()` and `kill()` do not
 build a result of their own: they stop the child, and the ordinary wait that

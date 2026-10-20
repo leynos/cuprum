@@ -1064,7 +1064,7 @@ capability.
 - [ ] 12.1.10. Add bounded and file-backed capture policies per stream
   ([#443](https://github.com/leynos/cuprum/issues/443)).
   - Release: not yet scheduled.
-  - Status: in progress — draft PR
+  - Status: in progress — PR
     [#635](https://github.com/leynos/cuprum/pull/635).
 - [x] 12.1.11. Provide a typed bytes-result mode for command output
   ([#444](https://github.com/leynos/cuprum/issues/444)).
@@ -1175,7 +1175,7 @@ implementation enforces them.
 [#440]: https://github.com/leynos/cuprum/issues/440
 [issue-379]: https://github.com/leynos/cuprum/issues/379
 
-## 13. Bounded and file-backed capture policies (issue `#443`)
+## 14. Bounded and file-backed capture policies (issue `#443`)
 
 Idea: capture was a single joint switch. `capture=True` retained both streams
 in full, in the parent's memory, for as long as the result lived;
@@ -1196,21 +1196,21 @@ accelerates echo without changing what is retained. Issue `#355` bounds echoed
 *lines* and merged `#365` bounds line-delivery *queues*; neither touches the
 result buffer this phase is about.
 
-### 13.1. Give a stream a policy, and give a result the metadata for it
+### 14.1. Give a stream a policy, and give a result the metadata for it
 
 This step answers whether the policy vocabulary can be added without changing
 what any existing caller receives. Its outcome is the names every later task
 depends on: three policy types, a per-stream field pair with an unchanged
 default, and a record that says what a policy actually did.
 
-- [x] 13.1.1. Add `FullCapture`, `BoundedCapture`, and `FileBackedCapture` to
+- [x] 14.1.1. Add `FullCapture`, `BoundedCapture`, and `FileBackedCapture` to
   `cuprum/capture_policy.py` with `CapturePolicyKind`, `CapturedStream`, and
   `CaptureStreamName`.
   - Success: the three policy names are exported, and `BoundedCapture` rejects
     a non-positive bound and `FileBackedCapture` a non-positive threshold, so a
     policy that could not retain anything is a construction error rather than a
     silently empty capture.
-- [x] 13.1.2. Add `capture_stdout` and `capture_stderr` to
+- [x] 14.1.2. Add `capture_stdout` and `capture_stderr` to
   `RunOutputOptions` beside the `capture` shorthand, and resolve them in
   `resolved_capture`.
   - Success: `RunOutputOptions()` resolves both streams to `FullCapture` and
@@ -1219,64 +1219,64 @@ default, and a record that says what a policy actually did.
     own stream, so `capture=True, capture_stderr=False` captures stdout in full
     and nothing on stderr. A value that is neither a policy nor a `bool` raises
     `ValueError` before the spawn rather than after a child has run.
-- [x] 13.1.3. Add `captures` to `CommandResult` and `PipelineResult`.
+- [x] 14.1.3. Add `captures` to `CommandResult` and `PipelineResult`.
   - Success: a captured stream contributes exactly one record, an uncaptured
     stream contributes none, and `captures` is trailing and `kw_only` so no
     existing positional slot moves.
 
-### 13.2. Retain through the drain, not beside it
+### 14.2. Retain through the drain, not beside it
 
 This step answers whether the existing consume path can carry the policies
 without a second reader. Its outcome is an accumulator seam the drain drives,
 which is what keeps capture, echo, line observation, and idle reporting on one
 pass over the child's stream.
 
-- [x] 13.2.1. Add the accumulator types and the spill mechanism.
+- [x] 14.2.1. Add the accumulator types and the spill mechanism.
   - Success: a bounded capture retains the last `max_bytes` bytes at the
     drain's chunk boundary and, in text capture, never splits a code point; a
     byte-exact capture returns the exact byte tail, which need not be
     independently decodable; a file-backed capture stays on the heap until it
     passes its threshold and then appends to a file, so retention stops
     tracking the child's output.
-- [x] 13.2.2. Drive the accumulator from `cuprum/_streams.py`.
+- [x] 14.2.2. Drive the accumulator from `cuprum/_streams.py`.
   - Success: capture, echo, and line observation still see every chunk, and a
     bounded or spilled stream is finalized on the raising route as well as the
     clean-EOF one, so a timeout reports the bytes that arrived before it.
 
-### 13.3. Thread the policies through both execution paths
+### 14.3. Thread the policies through both execution paths
 
 This step answers whether the single-command and pipeline paths can both
 materialize and clean up per-stream captures. Its outcome is the same
 guarantees on both, including the one the acceptance criteria single out: a
 bound must not shorten what a stage sends to the stage after it.
 
-- [x] 13.3.1. Resolve each stream's policy per command and per pipeline stage,
+- [x] 14.3.1. Resolve each stream's policy per command and per pipeline stage,
   and materialize the records on both result types.
   - Success: a pipeline's final stage stdout and every stage's stderr are
     reported independently, and a stage's bound leaves the relay untouched
     because interior stdout is the child's own pipe.
-- [x] 13.3.2. Remove every owned spill file, on every route a run can end.
+- [x] 14.3.2. Remove every owned spill file, on every route a run can end.
   - Success: success, non-zero exit, timeout, and cancellation each leave the
     directory the policy named as empty as they found it, and `keep_file=True`
     is the one case that inverts it.
-- [x] 13.3.3. Absorb a storage failure rather than raising it.
+- [x] 14.3.3. Absorb a storage failure rather than raising it.
   - Success: the child is still reaped and the caller still receives a result;
     a failed creation leaves the stream in memory and still reported complete,
     while a failed append reports `storage_failed` so an incomplete capture is
     distinguishable from a short one.
 
-### 13.4. Cover the guarantees, and say what they are
+### 14.4. Cover the guarantees, and say what they are
 
 This step answers whether the new behaviour is witnessed rather than merely
 implemented, and whether a caller can find out what it promises.
 
-- [x] 13.4.1. Unit and behavioural coverage for every policy and every route.
+- [x] 14.4.1. Unit and behavioural coverage for every policy and every route.
   - Success: a bound's byte-versus-character semantics, its non-splitting of
     code points, the spill threshold's boundary, both storage-failure routes,
     partial output on timeout, and spill removal on cancellation each have a
     case that fails when the behaviour is removed.
-- [x] 13.4.2. State the policies, the field list, and the migration path in the
-    users' guide and the migration guide.
+- [x] 14.4.2. State the policies, the field list, and the migration path in the
+  users' guide and the migration guide.
   - Success: every documented example is executable and is executed by the
     behavioural suite, and the guides state the unchanged default, the
     bounded-memory guarantee's byte-mode exception, and the file lifetime.

@@ -633,17 +633,22 @@ and `capture_stderr`:
 | `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
 | `FileBackedCapture(...)`      | Text in memory until the threshold, then a named file.   |
 
-A per-stream field left at `None` inherits `capture`, and a per-stream value
-always wins for its own stream: `capture=True, capture_stderr=False` captures
-stdout in full and nothing on stderr. Mixing `capture=` with `capture_stdout=`
-is allowed and well defined, not an error. A value that is neither a policy nor
-a `bool` is refused with `ValueError` before the child is spawned.
+For `run()` and pipelines, a per-stream field left at `None` inherits
+`capture`, and a per-stream value always wins for its own stream:
+`capture=True, capture_stderr=False` captures stdout in full and nothing on
+stderr. `SafeCmd.start()` is the handle-specific exception: it forces both
+streams on, while retaining any explicit capture policy. Mixing `capture=` with
+`capture_stdout=` is allowed and well defined, not an error. A value that is
+neither a policy nor a `bool` is refused with `ValueError` before the child is
+spawned.
 
-A policy decides what the run keeps and how it reports it; it does not decide
-whether a stream may be redirected. `capture` stays the whole-run switch, so a
-run that redirects a stream turns capture off for that stream too: use
-`capture=False` when both streams are redirected, or set the stream's own
-`capture_stdout`/`capture_stderr` to `False` when only one of them is.
+A stdout or stderr target other than `pipe` is refused while that stream's
+resolved capture policy or echo is enabled, because the parent has no pipe to
+read. Redirection never disables capture or echo automatically. Set the matching
+`capture_stdout`/`capture_stderr` field to `False` (or use `capture=False`
+while leaving that field unset), and set the matching
+`echo_stdout`/`echo_stderr` field to `False` (or use `echo=False` while leaving
+that field unset). An explicit per-stream field still overrides its shorthand.
 
 ### Bounded capture
 
@@ -1537,7 +1542,9 @@ re-raising an error about a child that is already gone. A `timeout` passed to
 `start()` is instead the default deadline for every `wait()` on that handle,
 because the clock a timeout is measured against starts at the wait that asks
 for one. Capture is always on for a handle, so a stopped child still reports
-its output on the result.
+its output on the result. A per-stream `False` value inherits the forced-on
+shorthand; an explicit capture policy still controls how that stream is
+retained.
 
 `terminate(grace=...)` overrides the cancel grace for one call. The example's
 exit code of `-15` is the POSIX convention for a child ended by `SIGTERM`; one
