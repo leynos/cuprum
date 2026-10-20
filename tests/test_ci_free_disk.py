@@ -28,23 +28,39 @@ CACHE_USES = (CACHE_RESTORE, CACHE_SAVE, CACHE_PLAIN)
 def _is_recursive_removal(tokens: list[str], paths: tuple[str, ...]) -> bool:
     """Return whether a command segment recursively removes every path."""
     command = tokens[1:] if tokens[:1] == ["sudo"] else tokens
-    if not command or command[0] != "rm":
-        return False
-
     arguments = command[1:]
-    end_options = arguments.index("--") if "--" in arguments else len(arguments)
-    options = arguments[:end_options]
-    operands = (
-        arguments[end_options + 1 :] if end_options < len(arguments) else arguments
+    options, operands = _split_rm_arguments(arguments)
+    return (
+        command[:1] == ["rm"]
+        and _has_recursive_option(options)
+        and all(path in operands for path in paths)
     )
-    is_recursive = any(
-        option == "--recursive"
-        or (
-            option.startswith("-") and not option.startswith("--") and "r" in option[1:]
+
+
+def _has_recursive_option(options: list[str]) -> bool:
+    """Return whether rm options request recursive removal."""
+    return any(_is_recursive_option(option) for option in options)
+
+
+def _is_recursive_option(option: str) -> bool:
+    """Recognize GNU rm's recursive long and short options."""
+    return option == "--recursive" or (
+        option.startswith("-")
+        and not option.startswith("--")
+        and any(flag in option[1:] for flag in "rR")
+    )
+
+
+def _split_rm_arguments(arguments: list[str]) -> tuple[list[str], list[str]]:
+    """Separate rm options and operands, respecting the option terminator."""
+    try:
+        end_options = arguments.index("--")
+    except ValueError:
+        return (
+            [argument for argument in arguments if argument.startswith("-")],
+            [argument for argument in arguments if not argument.startswith("-")],
         )
-        for option in options
-    )
-    return is_recursive and all(path in operands for path in paths)
+    return arguments[:end_options], arguments[end_options + 1 :]
 
 
 def _has_recursive_removal(command: str, paths: tuple[str, ...]) -> bool:
