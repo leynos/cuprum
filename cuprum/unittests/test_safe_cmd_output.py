@@ -350,6 +350,53 @@ def test_allows_disabling_capture(
     assert_capture_disabled(result)
 
 
+def test_run_on_line_bounds_newline_free_output_without_capture(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """``run()`` observes a long unterminated line as bounded fragments.
+
+    ``on_line`` is the only consumer here, with capture and echo off, so the
+    only thing retaining the child's output is line observation itself. The
+    child writes a megabyte with no newline: without the bound, every chunk
+    would be concatenated onto an ever-growing pending buffer and rescanned.
+    The callback must still see the whole payload, delivered in pieces no
+    longer than the requested bound.
+    """
+    _, execute = execution_strategy
+    line_bound = 1024
+    length = 1 << 20
+    command = python_builder("-c", f"import sys; sys.stdout.write('m' * {length})")
+    events: list[LineEvent] = []
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=False,
+                echo=False,
+                on_line=events.append,
+                max_line_chars=line_bound,
+            ),
+        },
+    )
+
+    stdout_events = [event for event in events if event.stream == "stdout"]
+    assert stdout_events, "on_line must observe the child's unterminated stdout"
+    too_long = [
+        len(event.text) for event in stdout_events if len(event.text) > line_bound
+    ]
+    assert not too_long, (
+        f"no observed event may exceed max_line_chars={line_bound}, "
+        f"got sizes {too_long!r}"
+    )
+    assert "".join(event.text for event in stdout_events) == "m" * length, (
+        "the fragments must reconstruct the child's complete output"
+    )
+    assert result.ok is True, f"the child must complete successfully, got {result!r}"
+    assert_capture_disabled(result)
+
+
 def test_strict_decoding_still_reaches_a_text_mode_view(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

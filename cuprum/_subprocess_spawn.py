@@ -31,6 +31,11 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum import _wait4_spawn
+
+# Imported at runtime, not under ``TYPE_CHECKING``: the two policies below are
+# the bundle's own default values, so the names must resolve when the class body
+# executes.
+from cuprum._constants import DEFAULT_MAX_LINE_CHARS
 from cuprum._context_policy import _merge_env
 from cuprum._pipeline_types import _EventDetails
 from cuprum._stdio_ownership import (
@@ -45,10 +50,6 @@ from cuprum._stdio_ownership import (
     _stdin_stdio,
 )
 from cuprum._subprocess_context import _cwd_arg, _ownership_spawn_kwargs
-
-# Imported at runtime, not under ``TYPE_CHECKING``: the two policies below are
-# the bundle's own default values, so the names must resolve when the class body
-# executes.
 from cuprum.echo_events import BrokenPipePolicy
 from cuprum.sh.execution import ProcessGroupPolicy
 
@@ -99,6 +100,10 @@ class _SubprocessExecution:
     # off it, so the two cannot disagree about which streams are cuprum's.
     stdio: _ResolvedStdio
     on_line: _LineHookFn | None = None
+    # Decoded-character bound for a line retained by observation; ``None``
+    # disables it. Defaulted for the tests that build this bundle directly, and
+    # always resolved from ``RunOutputOptions`` on the production path.
+    max_line_chars: int | None = DEFAULT_MAX_LINE_CHARS
     # Mirrors ``ExecutionContext.process_group``. Carried on the bundle so the
     # spawn and the teardown of the same run cannot disagree about whether the
     # child's group belongs to this run.

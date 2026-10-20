@@ -7,7 +7,9 @@ re-exports the public names.
 
 The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
 policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported
-here so ``cuprum.sh.output`` remains a usable import path for it.
+here so ``cuprum.sh.output`` remains a usable import path for it. The same
+applies to the field rules in :mod:`cuprum.sh.output_rules`, which are
+re-exported under their original names for existing importers.
 """
 
 from __future__ import annotations
@@ -17,9 +19,16 @@ import typing as typ
 import warnings
 
 from cuprum._bounded_delivery import BoundedDelivery, _validate_delivery_options
-from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES, DEFAULT_MAX_LINE_CHARS
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh.output_rules import (
+    _validate_convenience_flags as _validate_convenience_flags,
+)
+from cuprum.sh.output_rules import (
+    _validate_max_line_chars as _validate_max_line_chars,
+)
+from cuprum.sh.output_rules import _validate_positive_bound
 from cuprum.sh.stdio import (
     StdioTarget as StdioTarget,
 )
@@ -48,34 +57,6 @@ __all__ = [
 ]
 
 
-def _validate_convenience_flags(options: RunOutputOptions) -> None:
-    """Reject non-``bool`` values for the convenience opt-in flags.
-
-    Both flags gate whether workflow commands are written, so a value that
-    merely coerces to a truthy bool — the integer ``1``, say — would frame a
-    run on the strength of something the caller never documented as a flag.
-    ``max_echo_line_bytes`` draws the same line for the same reason.
-
-    Parameters
-    ----------
-    options : RunOutputOptions
-        The options whose ``group`` and ``annotate_failure`` are checked.
-
-    Raises
-    ------
-    ValueError
-        If either flag is not a ``bool``.
-    """
-    for name, value in (
-        ("group", options.group),
-        ("annotate_failure", options.annotate_failure),
-    ):
-        if not isinstance(value, bool):
-            msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
-            # Issue #375 expressly specifies ValueError for these flags.
-            raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
-
-
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
     """Configure captured and mirrored command output.
@@ -99,6 +80,8 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+        Non-integers, including ``bool``, raise ``TypeError``; zero and
+        negative integers raise ``ValueError``.
     broken_pipe_policy : BrokenPipePolicy | str, keyword-only, default=STRICT
         How echoing responds when a presentation sink reports
         ``BrokenPipeError``, which is what a destination that has closed under
@@ -121,7 +104,26 @@ class RunOutputOptions:
         since the command started, and the line text. Independent of
         ``capture`` and ``echo``; lines are delivered in arrival order per
         stream. Lines are observed on the Python pathway, so the Rust
-        fast-path dispatcher stays out of the way whenever this is set.
+        fast-path dispatcher stays out of the way whenever this is set. How
+        much of an unterminated line is retained before it is published in
+        pieces is governed by ``max_line_chars``.
+    max_line_chars : int | None, keyword-only, default=64 * 1024
+        Maximum number of decoded characters retained for one observed line.
+        The count covers line content only: terminators are held separately
+        and never counted. A line longer than this is published as fragments
+        of exactly this many characters through the same line sink, so the
+        ``lines()`` driver's backpressure still applies and no event ever
+        exceeds the bound. Fragments can split a grapheme cluster or a
+        multi-byte character's decoded form; they are not otherwise
+        distinguished from complete lines. The bound is independent of
+        ``capture`` and ``echo``: a run with capture disabled is bounded
+        exactly as a capturing one is, and ``max_echo_line_bytes`` bounds only
+        the mirrored copy in bytes. ``None`` disables the bound and restores
+        unbounded retention for one line. The field is keyword-only because it
+        was inserted mid-list: accepting it positionally would have taken
+        ``on_line``'s slot and shifted every field after it. Non-integers,
+        including ``bool``, raise ``TypeError``; zero and negative integers
+        raise ``ValueError``.
     idle_after : float | None, default=None
         Seconds of silence, measured across both streams, before the run
         reports that it is still running. ``None`` disables idle reporting and
@@ -228,6 +230,12 @@ class RunOutputOptions:
         default=BrokenPipePolicy.STRICT,
         kw_only=True,
     )
+    # Keyword-only for the same reason as ``broken_pipe_policy``: inserted
+    # mid-list, a positional field would take ``on_line``'s slot.
+    max_line_chars: int | None = dc.field(
+        default=DEFAULT_MAX_LINE_CHARS,
+        kw_only=True,
+    )
     on_line: LineHook | None = None
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
@@ -291,17 +299,8 @@ class RunOutputOptions:
         _validate_convenience_flags(self)
         _validate_stdio_targets(self)
         self._synthesize_sink_from_flags()
-
-        if self.max_echo_line_bytes is None:
-            return
-        bound = self.max_echo_line_bytes
-        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
-        if not is_positive_int or bound <= 0:
-            msg = (
-                "RunOutputOptions max_echo_line_bytes must be a positive "
-                f"integer or None, got {bound!r}"
-            )
-            raise ValueError(msg)
+        _validate_max_line_chars(self.max_line_chars)
+        _validate_positive_bound("max_echo_line_bytes", self.max_echo_line_bytes)
 
     def _synthesize_sink_from_flags(self) -> None:
         """Materialize the convenience flags as this run's presentation sink.
