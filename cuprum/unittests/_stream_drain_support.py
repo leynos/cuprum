@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import io
 import typing as typ
 
@@ -120,6 +121,18 @@ def _split_at(payload: bytes, cut_points: cabc.Sequence[int]) -> tuple[bytes, ..
         start = bound
     pieces.append(payload[start:])
     return tuple(piece for piece in pieces if piece)
+
+
+def _count_text_writes(chunks: tuple[bytes, ...]) -> int:
+    """Count the non-empty text writes the drain's echo decoder will make."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    writes = 0
+    for chunk in chunks:
+        if decoder.decode(chunk):
+            writes += 1
+    if decoder.decode(b"", final=True):
+        writes += 1
+    return writes
 
 
 @st.composite
