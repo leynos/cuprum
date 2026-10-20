@@ -148,7 +148,7 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
 - [x] (2026-10-20) Split the remote-operand properties out of
       `test_builder_property_based.py`, which the merge had pushed to 442
       lines, over pylint's `max-module-lines = 400`. They now sit beside the
-      named spellings they generalise in `test_rsync_operand_policy.py`.
+      named spellings they generalize in `test_rsync_operand_policy.py`.
 - [ ] (2026-10-20) Re-certify every gate at the rebased HEAD, push, and
       confirm CI runs on the now-buildable merge ref.
 
@@ -199,8 +199,7 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
 - Observation: a conflicting PR has no CI at all. Evidence: `gh pr checks 649`
   listed only external checks while `gh pr view --json mergeable` reported
   `CONFLICTING`; CI builds the merge ref, which upstream cannot construct.
-  Impact: the rebase was a precondition for observing CI, not merely a
-  nicety.
+  Impact: the rebase was a precondition for observing CI, not merely a nicety.
 
 ## Decision log
 
@@ -465,6 +464,6 @@ No new dependencies.
   discovery, the test-module split forced by the 400-line cap, and the
   re-certified gate evidence at `dca91e375`.
 - 2026-10-20: Recorded the rebase onto `5da6d68fb`, the five conflict
-  resolutions, the second 400-line split created by merging with #637, the
-  `--` separator's interaction with the operand policy, and the fact that a
+  resolutions, the second 400-line split created by merging with #637, the `--`
+  separator's interaction with the operand policy, and the fact that a
   conflicting PR receives no CI at all.
