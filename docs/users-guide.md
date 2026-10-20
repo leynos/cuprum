@@ -1544,7 +1544,10 @@ because the clock a timeout is measured against starts at the wait that asks
 for one. Capture is always on for a handle, so a stopped child still reports
 its output on the result. A per-stream `False` value inherits the forced-on
 shorthand; an explicit capture policy still controls how that stream is
-retained.
+retained. Because `start()` reads both streams through parent-side pipes, it
+raises `ValueError` for redirected stdout or stderr targets even when that
+stream's capture field is `False`. Use `run()` or `run_sync()` when redirecting
+output.
 
 `terminate(grace=...)` overrides the cancel grace for one call. The example's
 exit code of `-15` is the POSIX convention for a child ended by `SIGTERM`; one

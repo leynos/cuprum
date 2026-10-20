@@ -7,10 +7,12 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, ScopeConfig, scoped, sh
+from cuprum import RunOutputOptions, ScopeConfig, StdioTarget, scoped, sh
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum.sh import CommandResult
 
 
@@ -46,3 +48,46 @@ def test_start_captures_streams_with_per_stream_opt_outs(capture: bool) -> None:
         f"a started handle must retain stderr despite capture={capture}, "
         f"got {result.stderr!r}"
     )
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_start_rejects_redirected_streams_with_actionable_error(
+    stream: typ.Literal["stdout", "stderr"],
+    tmp_path: Path,
+) -> None:
+    """Forced capture refuses redirects with guidance that applies to start."""
+    catalogue, python_program = python_catalogue()
+    command = sh.make(python_program, catalogue=catalogue)("-c", "pass")
+    target = StdioTarget.path(tmp_path / f"{stream}.log")
+    match stream:
+        case "stdout":
+            output = RunOutputOptions(
+                capture=False,
+                capture_stdout=False,
+                stdout=target,
+            )
+        case "stderr":
+            output = RunOutputOptions(
+                capture=False,
+                capture_stderr=False,
+                stderr=target,
+            )
+
+    async def start() -> None:
+        """Run the pre-spawn check under the command's allowlist."""
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            await command.start(output=output)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"SafeCmd\.start\(\) always captures output, so {stream} "
+            r"cannot be redirected\."
+        ),
+    ) as error:
+        asyncio.run(start())
+
+    assert str(error.value) == (
+        f"SafeCmd.start() always captures output, so {stream} cannot be redirected. "
+        "Use run() or run_sync() to redirect streams."
+    ), f"the refusal must explain start's forced capture, got {error.value!r}"

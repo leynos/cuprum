@@ -49,14 +49,34 @@ def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
     value is reset to ``None`` so it inherits the forced-on shorthand, while
     an explicit capture policy remains in force.
 
+    Owned handles read both streams through parent-side pipes, so a non-pipe
+    target is refused before the capture fields are normalized.
+
     Returns
     -------
     RunOutputOptions
         The caller's settings with ``capture`` set and per-stream opt-outs
         removed, or the default settings when none were given. Explicit
         per-stream capture policies remain unchanged.
+
+    Raises
+    ------
+    ValueError
+        If stdout or stderr names a non-pipe target.
     """
     resolved = output or RunOutputOptions()
+    redirected = [
+        name
+        for name, target in (("stdout", resolved.stdout), ("stderr", resolved.stderr))
+        if target is not None and target.kind != "pipe"
+    ]
+    if redirected:
+        msg = (
+            "SafeCmd.start() always captures output, so "
+            f"{', '.join(redirected)} cannot be redirected. "
+            "Use run() or run_sync() to redirect streams."
+        )
+        raise ValueError(msg)
     capture_stdout = (
         None if resolved.capture_stdout is False else resolved.capture_stdout
     )
@@ -179,9 +199,11 @@ class _OwnedStart:
         ------
         PermissionError
             If the command is not allowed by the active scope.
+        ValueError
+            If stdout or stderr is redirected to a non-pipe target.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
-        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate from the allowlist and stdin resolution
+        """  # ruff: ignore[docstring-extraneous-exception] - exceptions propagate from allowlist, stdin, and owned-capture validation
         cmd = typ.cast("SafeCmd", self)
         _enforce_allowlist(cmd)
         ctx = context or ExecutionContext()
