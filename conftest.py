@@ -137,6 +137,10 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
+# Pytest 9 only accepts plugin declarations in the repository-root conftest.
+pytest_plugins = ("cuprum.unittests._safe_cmd_lines_support",)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Fail the run when the extension is required but absent.
 

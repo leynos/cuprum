@@ -22,8 +22,6 @@ from benchmarks.ratchet_history import BaselineHistory, HistorySample
 from cuprum import ECHO, Program, sh
 from tests.helpers.catalogue import python_catalogue
 
-pytest_plugins = ("cuprum.unittests._safe_cmd_lines_support",)
-
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
