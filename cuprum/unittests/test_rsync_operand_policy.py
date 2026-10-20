@@ -6,7 +6,7 @@ grammar check that runs after it. Fixtures are chosen so that each assertion
 fails for the layer it names, on both POSIX and Windows.
 
 The parameterized examples state the named spellings from the ticket. The
-property tests beside them generalise the same invariant over generated
+property tests beside them generalize the same invariant over generated
 ``host:path`` and ``host::module/path`` operands, and include a non-vacuity
 property so the rejection cannot pass for the wrong reason.
 """

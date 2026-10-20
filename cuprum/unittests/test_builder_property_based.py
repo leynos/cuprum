@@ -25,7 +25,7 @@ The invariants checked here are:
 
 The rsync local-only operand properties live in
 ``cuprum/unittests/test_rsync_operand_policy.py`` with the examples they
-generalise.
+generalize.
 """
 
 from __future__ import annotations
