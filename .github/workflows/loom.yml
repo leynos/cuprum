@@ -30,6 +30,21 @@ jobs:
         with:
           persist-credentials: false
 
+      # The preinstalled Android SDK and .NET are 16.9 GB on a 73 GB volume and
+      # nothing here uses them. A version bump misses every Rust compiler-cache
+      # entry, so the archive grows to about 3 GiB and, with 2 GB free, cannot
+      # be written next to the directory it packs (run 38987616012 onward). The
+      # step runs before the first cache restore; `rm -rf` of an absent path is
+      # a no-op, so an image without them still passes.
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
+
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:

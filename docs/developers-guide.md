@@ -307,6 +307,16 @@ miss can be explained from the run alone.
 | `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test` (3.12, 3.14, 3.15a), `extension-tests` (3.13) |
 | `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs    |
 
+Compiler-cache writers remove the unused preinstalled Android SDK and .NET
+installation before their first cache operation. The cleanup step in
+`.github/workflows/ci.yml` and `.github/workflows/loom.yml` is guarded by
+`runner.os == 'Linux'` and removes `/usr/local/lib/android` and
+`/usr/share/dotnet`. It runs in `lint-test`, `typecheck-test`,
+`extension-tests`, `benchmark-ratchet`, and `loom`, without changing runner
+selection. The `typecheck-test` condition also requires `LEG_RUNS == 'true'`.
+`tests/test_ci_free_disk.py` enforces one cleanup step per writer, both removal
+paths, the Linux guard, and placement before the first cache operation.
+
 Four rules hold that table together, each with a contract test:
 
 - **One owner per path.** No two cache steps in a job list the same path.
