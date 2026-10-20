@@ -95,7 +95,7 @@ def test_run_reader_timeout_is_not_reported_as_the_run_deadline(
     command = python_builder("-c", "print('reader')")
     sentinel = _ReaderTimeoutError("reader timed out")
 
-    def fail_reader(_line: str) -> None:
+    def fail_reader(_event: LineEvent) -> None:
         """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
         raise sentinel
 
