@@ -138,6 +138,19 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `test_builder_library.py` stays under the line cap. Second pass over the
       committed range (`--committed --base main`) reviewed all eleven changed
       files and returned zero findings.
+- [x] (2026-10-20) Rebase onto `5da6d68fb` after upstream #637 added the
+      end-of-options separator and split the behaviour steps. PR #649 was
+      `CONFLICTING`, so its merge ref was unbuildable and CI never ran. Five
+      conflicts were resolved by keeping both sides; the remote-operand steps
+      moved into `tests/behaviour/_builder_library_steps.py` to match the new
+      binding-only structure. Focused suite after the rebase: 128 passed, 2
+      skipped.
+- [x] (2026-10-20) Split the remote-operand properties out of
+      `test_builder_property_based.py`, which the merge had pushed to 442
+      lines, over pylint's `max-module-lines = 400`. They now sit beside the
+      named spellings they generalise in `test_rsync_operand_policy.py`.
+- [ ] (2026-10-20) Re-certify every gate at the rebased HEAD, push, and
+      confirm CI runs on the now-buildable merge ref.
 
 ## Surprises & discoveries
 
@@ -174,6 +187,20 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
   the module reached 407 lines mid-edit. Impact: the policy tests were moved to
   a dedicated `test_rsync_operand_policy.py`, which also groups them with the
   contract they pin.
+- Observation: merging upstream #637 does not leave the two features
+  independent. Evidence: upstream's `_rsync_argv` now returns
+  `(*flags, "--", *paths)`, so the acceptance tests written before it failed on
+  the extra separator element, and the merged property module reached 442
+  lines. Impact: the rebase had to reconcile the argv assertions, and the
+  properties moved beside the named spellings in
+  `test_rsync_operand_policy.py`. The `--` separator does not weaken the
+  policy: it only stops option parsing, while a colon operand is still rsync's
+  remote grammar.
+- Observation: a conflicting PR has no CI at all. Evidence: `gh pr checks 649`
+  listed only external checks while `gh pr view --json mergeable` reported
+  `CONFLICTING`; CI builds the merge ref, which upstream cannot construct.
+  Impact: the rebase was a precondition for observing CI, not merely a
+  nicety.
 
 ## Decision log
 
@@ -231,6 +258,12 @@ Lesson: the first green attempt asserted the role-specific message for every
 default-policy row and failed 18 tests. The fix was to assert each layer's own
 contract rather than collapsing both into one expected string.
 
+The rebase onto upstream #637 added a `--` separator to the rsync argv. That
+separator and this policy are complementary, not competing: `--` stops option
+parsing, while a colon before the first separator is rsync's own remote
+grammar, which `--` does not change. The acceptance tests now assert the full
+argv including the separator, so the two contracts are pinned together.
+
 ## Conformance basis
 
 Upstream artefacts:
@@ -279,19 +312,20 @@ Obligations, methods, and evidence:
    direct test on `_local_rsync_operand` pins the helper's own behaviour
    independently of `_rsync_argv`.
 4. Invariant: accepted local operands are emitted exactly as `safe_path()`
-   normalizes them. Method: named acceptance test over absolute paths and
-   relative `dir/file` and `dir/host:path` with `allow_relative=True`.
-   Non-vacuity: `dir/host:path` specifically pins that the predicate does not
-   over-reject.
+   normalizes them, after the `--` separator. Method: named acceptance test
+   over absolute paths and relative `dir/file` and `dir/host:path` with
+   `allow_relative=True`. Non-vacuity: `dir/host:path` specifically pins that
+   the predicate does not over-reject.
 5. Invariant: no emitted operand can start with `rsync://` or contain `:`
    before the first `/`. Method: Hypothesis property over generated
    `<host><: or ::><path>` strings, asserting rejection; plus an invariant
    property over accepted operands asserting the sink condition. Non-vacuity
-   evidence (`--hypothesis-show-statistics`): the rejection property ran 200
-   passing examples with both separators and both roles; the acceptance
-   property ran 200 passing examples mixing rejected and accepted candidates;
-   the sink-check witness property ran 100 passing examples, each asserting that
-   `safe_path(allow_relative=True)` accepts the generated operand first.
+   evidence (`--hypothesis-show-statistics`, rerun after the properties moved
+   modules): the rejection property ran 200 passing examples with both
+   separators and both roles; the acceptance property ran 200 passing examples
+   mixing rejected and accepted candidates; the sink-check witness property ran
+   100 passing examples, each asserting that `safe_path(allow_relative=True)`
+   accepts the generated operand first.
 6. Invariant: ordinary local relative paths continue to be accepted with
    `allow_relative=True` and unchanged in the argv. Method: property test over
    colon-free segment lists; the existing
@@ -321,12 +355,14 @@ is static, and the security scan did not run a live exploit.
 `_rsync_argv()`, and `rsync_sync()`. `_rsync_argv()` is the pure argv builder;
 `rsync_sync()` wraps its result with `sh.make(RSYNC)`.
 
-Tests live in three layers: unit
-(`cuprum/unittests/test_rsync_operand_policy.py` for the rsync operand policy,
-`cuprum/unittests/test_builder_library.py` for the rest of the builder
-surface), property (`cuprum/unittests/test_builder_property_based.py`), and
-behaviour (`tests/features/builder_library.feature` plus
-`tests/behaviour/test_builder_library_behaviour.py`).
+Tests live in three layers: unit and property
+(`cuprum/unittests/test_rsync_operand_policy.py` for the rsync operand policy
+and its generated cases, `cuprum/unittests/test_builder_library.py` for the
+rest of the builder surface, and
+`cuprum/unittests/test_builder_property_based.py` for the shared argv
+properties), and behaviour (`tests/features/builder_library.feature`, whose
+steps are bound in `tests/behaviour/test_builder_library_behaviour.py` and
+implemented in `tests/behaviour/_builder_library_steps.py`).
 
 ## Plan of work
 
@@ -428,3 +464,7 @@ No new dependencies.
 - 2026-10-20: Recorded the CodeRabbit disposition, the host-neutral fixture
   discovery, the test-module split forced by the 400-line cap, and the
   re-certified gate evidence at `dca91e375`.
+- 2026-10-20: Recorded the rebase onto `5da6d68fb`, the five conflict
+  resolutions, the second 400-line split created by merging with #637, the
+  `--` separator's interaction with the operand policy, and the fact that a
+  conflicting PR receives no CI at all.
