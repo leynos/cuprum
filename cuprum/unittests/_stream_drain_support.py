@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import dataclasses
 import io
 import typing as typ
 
@@ -101,12 +102,8 @@ def _byte_config(
     errors: str = "replace",
 ) -> _StreamConfig:
     """Build a byte-exact UTF-8 stream config for direct drain tests."""
-    return _StreamConfig(
-        capture_output=capture,
-        echo_output=echo,
-        sink=sink,
-        encoding="utf-8",
-        errors=errors,
+    return dataclasses.replace(
+        _config(sink, capture=capture, echo=echo, errors=errors),
         capture_bytes=True,
     )
 
