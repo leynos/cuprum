@@ -428,6 +428,8 @@ cluster, and the same fragmenting applies to `SafeCmd.lines()` and pipeline
 with capture off retains no more than a capturing one — and it is distinct from
 `max_echo_line_bytes`, which bounds the mirrored copy in bytes only. Set
 `max_line_chars=None` only when retaining one unbounded line is appropriate.
+Both bounds accept a positive integer or `None`. A non-integer, including
+`bool`, raises `TypeError`; zero or a negative integer raises `ValueError`.
 
 For async consumers needing backpressure, `SafeCmd.lines()` returns a
 `LineStream`: an async iterator of `LineEvent(stream, at, text)` whose `result`

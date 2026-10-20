@@ -1,4 +1,10 @@
-"""Shared helpers for tests that drive the stream drains."""
+"""Test doubles and models for direct subprocess stream-drain tests.
+
+This module groups queued-reader doubles, ``_StreamConfig`` builders, Hypothesis
+payload and chunk strategies, and expected line-emission models. The helpers let
+tests exercise ``cuprum._streams`` directly without invoking command or
+pipeline runners.
+"""
 
 from __future__ import annotations
 

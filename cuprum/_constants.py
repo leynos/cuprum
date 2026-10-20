@@ -1,4 +1,9 @@
-"""Internal constants for the cuprum package."""
+"""Shared stream names and defaults for subprocess and output handling.
+
+Keeping child-stream names here lets process reaping wire descriptors before
+the higher-level stdio resolver imports them. Output bounds and decoding
+defaults keep command and pipeline observers consistent.
+"""
 
 from __future__ import annotations
 

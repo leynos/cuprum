@@ -19,21 +19,25 @@ if typ.TYPE_CHECKING:
     from cuprum.lines import LineEvent
 
 
-@pytest.mark.parametrize("invalid_bound", [0, -1, True, 1.5, "8"])
-def test_run_output_options_rejects_invalid_line_bound(
-    invalid_bound: object,
+@pytest.mark.parametrize("invalid_bound", [0, -1])
+def test_run_output_options_rejects_non_positive_line_bound(
+    invalid_bound: int,
 ) -> None:
-    """Invalid ``max_line_chars`` values are rejected at construction.
-
-    ``True`` is the interesting case: as an ``int`` subclass it would pass a
-    bare ``isinstance(value, int)`` check, yet a bool is not the size the
-    caller meant, so it is refused exactly as ``max_echo_line_bytes`` refuses
-    it. A float and a numeric string are refused for the same reason: the
-    field types a decoded-character count, not something coercible to one.
-    """
+    """Zero and negative integer line bounds raise ``ValueError``."""
     with pytest.raises(ValueError, match="max_line_chars must be a positive integer"):
         RunOutputOptions(
-            max_line_chars=typ.cast("int | None", invalid_bound),
+            max_line_chars=invalid_bound,
+        )
+
+
+@pytest.mark.parametrize("invalid_type", [True, 1.5, "8"])
+def test_run_output_options_rejects_non_integer_line_bound(
+    invalid_type: object,
+) -> None:
+    """Non-integer line bounds raise ``TypeError`` with field context."""
+    with pytest.raises(TypeError, match="max_line_chars must be a positive integer"):
+        RunOutputOptions(
+            max_line_chars=typ.cast("int | None", invalid_type),
         )
 
 

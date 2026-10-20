@@ -80,6 +80,8 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+        Non-integers, including ``bool``, raise ``TypeError``; zero and
+        negative integers raise ``ValueError``.
     broken_pipe_policy : BrokenPipePolicy | str, keyword-only, default=STRICT
         How echoing responds when a presentation sink reports
         ``BrokenPipeError``, which is what a destination that has closed under
@@ -119,7 +121,9 @@ class RunOutputOptions:
         the mirrored copy in bytes. ``None`` disables the bound and restores
         unbounded retention for one line. The field is keyword-only because it
         was inserted mid-list: accepting it positionally would have taken
-        ``on_line``'s slot and shifted every field after it.
+        ``on_line``'s slot and shifted every field after it. Non-integers,
+        including ``bool``, raise ``TypeError``; zero and negative integers
+        raise ``ValueError``.
     idle_after : float | None, default=None
         Seconds of silence, measured across both streams, before the run
         reports that it is still running. ``None`` disables idle reporting and

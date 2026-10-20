@@ -52,24 +52,31 @@ def _validate_positive_bound(field: str, value: int | None) -> None:
 
     Raises
     ------
+    TypeError
+        If a non-``None`` value is not an integer or is a ``bool``.
     ValueError
-        If a non-``None`` value is not a positive non-boolean integer.
+        If an integer value is not positive.
     """
-    is_positive_int = isinstance(value, int) and not isinstance(value, bool)
-    if value is not None and not (is_positive_int and value > 0):
-        msg = (
-            f"RunOutputOptions {field} must be a positive integer or None, "
-            f"got {value!r}"
-        )
-        raise ValueError(msg)
+    msg = f"RunOutputOptions {field} must be a positive integer or None, got {value!r}"
+    match value:
+        case None:
+            return
+        case bool():
+            raise TypeError(msg)
+        case int() if value <= 0:
+            raise ValueError(msg)
+        case int():
+            return
+        case _:
+            raise TypeError(msg)
 
 
 def _validate_max_line_chars(value: int | None) -> None:
     """Reject a line-retention bound that is not a positive integer or ``None``.
 
     ``bool`` is an ``int`` to ``isinstance``, so ``True`` would otherwise pass
-    as a bound of one character; it is rejected here exactly as it is for
-    ``max_echo_line_bytes``.
+    as a bound of one character; it is rejected here with ``TypeError``, as it
+    is for ``max_echo_line_bytes``.
 
     Parameters
     ----------

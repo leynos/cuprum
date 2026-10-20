@@ -21,16 +21,28 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
-@pytest.mark.parametrize("invalid_bound", [0, -1, True])
-def test_run_output_options_rejects_invalid_echo_bound(
-    invalid_bound: int | bool,
+@pytest.mark.parametrize("invalid_bound", [0, -1])
+def test_run_output_options_rejects_non_positive_echo_bound(
+    invalid_bound: int,
 ) -> None:
-    """Invalid ``max_echo_line_bytes`` values are rejected at construction."""
+    """Zero and negative integer echo bounds raise ``ValueError``."""
     with pytest.raises(
         ValueError,
         match="max_echo_line_bytes must be a positive integer or None",
     ):
         RunOutputOptions(max_echo_line_bytes=invalid_bound)
+
+
+@pytest.mark.parametrize("invalid_type", [True, 1.5, "8"])
+def test_run_output_options_rejects_non_integer_echo_bound(
+    invalid_type: object,
+) -> None:
+    """Non-integer echo bounds raise ``TypeError`` with field context."""
+    with pytest.raises(
+        TypeError,
+        match="max_echo_line_bytes must be a positive integer or None",
+    ):
+        RunOutputOptions(max_echo_line_bytes=typ.cast("int | None", invalid_type))
 
 
 def test_group_and_annotate_failure_default_off() -> None:
