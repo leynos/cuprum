@@ -28,6 +28,7 @@ from cuprum.capture_policy import BoundedCapture, FullCapture
 from cuprum.echo_events import EchoStream
 from cuprum.unittests._bounded_capture_support import _config
 from cuprum.unittests._capture_sink_support import _absorb, _finalize
+from cuprum.unittests._stream_drain_support import _reader
 
 if typ.TYPE_CHECKING:
     from cuprum._stream_drain_finish import _CapturedDrain
@@ -199,6 +200,44 @@ def test_the_drain_retains_a_bounded_tail_not_the_whole_stream() -> None:
         f"the retained text must be the stream's tail; got {result.payload!r}"
     )
     assert result.handle is None, "a memory-backed bound owns no file"
+
+
+def test_bounded_capture_does_not_shorten_chunks_sent_to_on_chunk() -> None:
+    """Capture retains a tail while the chunk consumer receives full reads."""
+    chunks = (b"01234567", b"89abcdef")
+    payload = b"".join(chunks)
+    relayed_chunks: list[bytes] = []
+
+    async def drain() -> _CapturedDrain:
+        """Run the bounded drain and collect its separate raw chunk tap."""
+        return await _drain(
+            _reader(chunks),
+            _config(BoundedCapture(max_bytes=8)),
+            on_chunk=relayed_chunks.append,
+        )
+
+    result = asyncio.run(drain())
+
+    assert relayed_chunks == list(chunks), (
+        "the chunk consumer must receive each raw read before capture retention "
+        f"is considered; got {relayed_chunks!r}"
+    )
+    assert b"".join(relayed_chunks) == payload, (
+        "the chunk consumer must receive the full payload; "
+        f"got {b''.join(relayed_chunks)!r}"
+    )
+    assert result.payload == payload[-8:].decode("utf-8"), (
+        "the capture tap must independently retain only the bounded tail; "
+        f"got {result.payload!r}"
+    )
+    assert result.capture is not None, "a bounded drain must report capture metadata"
+    assert result.capture.total_bytes == len(payload), (
+        "capture metadata must count the full drain while retention is bounded"
+    )
+    assert result.capture.dropped_bytes == len(payload) - 8, (
+        "only the capture tap may drop the prefix; "
+        f"got {result.capture.dropped_bytes} dropped"
+    )
 
 
 @pytest.mark.parametrize("max_bytes", [1, 3, 8])

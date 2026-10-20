@@ -86,6 +86,12 @@ def _directory_is_clean(directory: pathlib.Path, *, outcome: str) -> None:
     )
 
 
+def _cleanup_kept_spill(path: pathlib.Path) -> None:
+    """Remove a kept spill as its test caller, then verify the hand-back."""
+    path.unlink(missing_ok=True)
+    assert not path.exists(), f"the test caller must remove its kept spill at {path}"
+
+
 async def _await_witness(witness: _SpillWitness) -> None:
     """Fail unless *witness* sees a spill before the give-up deadline."""
     loop = asyncio.get_running_loop()
