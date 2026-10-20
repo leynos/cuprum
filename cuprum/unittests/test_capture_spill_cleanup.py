@@ -14,9 +14,8 @@ covered too, as the negative control, because a witness that fired on every
 run would witness nothing.
 
 The invariant is the same on all four routes: a run with ``keep_file=False``
-leaves nothing behind in the directory its policy named. ``keep_file=True`` is
-the one case that inverts it, and is stated as what the caller receives — a
-path that still reads back the bytes.
+leaves nothing behind in the directory its policy named. Kept-file outcomes
+are exercised separately, including success, timeout, and cancellation.
 """
 
 from __future__ import annotations
@@ -28,95 +27,22 @@ import pytest
 
 from cuprum import TimeoutExpired
 from cuprum.capture_observation import observe_capture
-from cuprum.capture_policy import CapturedStream, FileBackedCapture
-from cuprum.sh import RunOutputOptions
+from cuprum.unittests._capture_spill_run_support import (
+    _RUN_TIMEOUT_S,
+    _SPILL_THEN_BLOCK,
+    _SPILL_THEN_EXIT,
+    _UNDER_THRESHOLD,
+    _await_witness,
+    _builder,
+    _directory_is_clean,
+    _only_spill,
+    _options,
+    _reported_path,
+)
 from cuprum.unittests._capture_witness_support import _SpillWitness
-from tests.helpers.catalogue import build_python_catalogue_env
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import pathlib
-
-    from cuprum.sh import SafeCmd
-
-# Longer than the spill threshold below, so a run that reaches the child's
-# first flush has guaranteed the accumulator something to spill.
-_PAYLOAD_BYTES = 512
-_THRESHOLD = 8
-
-_SPILL_THEN_EXIT = (
-    f"import sys; sys.stdout.write('z' * {_PAYLOAD_BYTES}); "
-    "sys.stdout.flush(); sys.exit({code})"
-)
-_SPILL_THEN_BLOCK = (
-    f"import sys, time; sys.stdout.write('z' * {_PAYLOAD_BYTES}); "
-    "sys.stdout.flush(); time.sleep(300)"
-)
-_UNDER_THRESHOLD = "import sys; sys.stdout.write('tiny'); sys.stdout.flush()"
-
-# Generous next to the ~20 ms a bare interpreter takes to start on this host,
-# and short enough that the child cannot finish its 300-second sleep: the
-# deadline has to fire while the child is still holding the pipe, or the run
-# would take the success route and test something else.
-_RUN_TIMEOUT_S = 5.0
-
-# How long to wait for the spill witness before giving up on it. The child's
-# first flush is the only thing this waits on, which is milliseconds; the cap
-# exists so a child that dies without spilling fails the case rather than
-# hanging the session.
-_WITNESS_TIMEOUT_S = 10.0
-
-
-def _builder() -> cabc.Callable[..., SafeCmd]:
-    """Return a builder for the current interpreter, allowlisted."""
-    return build_python_catalogue_env().builder
-
-
-def _options(directory: pathlib.Path, *, keep_file: bool = False) -> RunOutputOptions:
-    """Capture stdout into *directory*'s spill files, and stderr not at all.
-
-    stderr is left uncaptured so the record tuple holds the stdout entry alone,
-    which keeps ``captures[0]`` the spill's record rather than one a policy
-    choice could reorder.
-
-    Returns
-    -------
-    RunOutputOptions
-        Output options whose stdout policy spills into *directory*.
-    """
-    return RunOutputOptions(
-        capture_stdout=FileBackedCapture(
-            spill_threshold_bytes=_THRESHOLD,
-            directory=directory,
-            keep_file=keep_file,
-        ),
-        capture_stderr=False,
-    )
-
-
-def _only_spill(captures: tuple[CapturedStream, ...]) -> CapturedStream:
-    """Return the single capture record, asserting there is exactly one."""
-    assert len(captures) == 1, (
-        f"this case expects one captured stream, set by _options; got {captures!r}"
-    )
-    return captures[0]
-
-
-def _reported_path(record: CapturedStream) -> pathlib.Path:
-    """Return the path *record* names, asserting it names one at all."""
-    assert record.storage == "file", (
-        f"the record must report the stream as spilled; got {record.storage!r}"
-    )
-    assert record.path is not None, "a spilled record must name its file"
-    return record.path
-
-
-def _directory_is_clean(directory: pathlib.Path, *, outcome: str) -> None:
-    """Assert *outcome* left no spill file behind."""
-    remaining = list(directory.iterdir())
-    assert not remaining, (
-        f"{outcome} must leave no spill file behind; found {remaining}"
-    )
 
 
 def test_a_successful_run_removes_its_spill_file_before_returning_the_result(
@@ -214,25 +140,6 @@ def test_a_timed_out_run_removes_the_spill_file_it_never_reported(
     _directory_is_clean(tmp_path, outcome="a timed-out run")
 
 
-async def _await_witness(witness: _SpillWitness) -> None:
-    """Fail unless *witness* sees a spill before the give-up deadline.
-
-    The readiness signal is a file another process wrote, which no asyncio
-    primitive can observe, so polling is the coordination — and polling a
-    directory is the one thing this module cannot avoid.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _WITNESS_TIMEOUT_S
-    while loop.time() < deadline:
-        if witness.snapshots:
-            return
-        await asyncio.sleep(0.01)
-    pytest.fail(
-        f"the child never spilled before {_WITNESS_TIMEOUT_S}s; "
-        f"events seen: {witness.categories}"
-    )
-
-
 def test_an_externally_cancelled_run_removes_the_spill_file(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -291,71 +198,6 @@ def test_a_stream_under_its_threshold_is_not_a_witnessed_spill(
         "the captured byte count must match the child output"
     )
     _directory_is_clean(tmp_path, outcome="a run under its spill threshold")
-
-
-def test_a_kept_spill_file_survives_completed_runs_whole(
-    tmp_path: pathlib.Path,
-) -> None:
-    """``keep_file`` hands the file over instead of removing it.
-
-    The caller asked for the file, so the run's obligation shrinks to closing
-    it. The bytes are asserted as well as the path: a run that removed nothing
-    but truncated what it wrote would pass an existence check alone.
-    """
-    witness = _SpillWitness(tmp_path)
-    with observe_capture(witness):
-        result = _builder()("-c", _SPILL_THEN_EXIT.format(code=0)).run_sync(
-            output=_options(tmp_path, keep_file=True)
-        )
-    witness.awaited()
-
-    record = _only_spill(result.captures)
-    path = _reported_path(record)
-    assert path.exists(), "a kept spill file must outlive the run that made it"
-    assert path.read_bytes() == b"z" * _PAYLOAD_BYTES, (
-        "a kept file must hold the child's whole stream; "
-        f"got {len(path.read_bytes())} of {_PAYLOAD_BYTES} bytes"
-    )
-    assert record.owned is False, (
-        "a handed-over file reports unowned: this run is not the one to remove it"
-    )
-
-
-def test_a_kept_spill_file_survives_a_timed_out_run_whole(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The keep exemption holds on the raising route, not just the returning one.
-
-    The file still has to be complete, and the timeout path is where the run
-    has the least state left to reason about: it tears down the child, the
-    readers, and the group, and must still stop short of the file it was told
-    to hand over.
-    """
-    witness = _SpillWitness(tmp_path)
-
-    # The observer is entered first, for the same reason as the removing route:
-    # its window must cover the child's whole life. The observer records one
-    # file per run, so asserting the count here makes the unpacking index below
-    # a statement about a clean witness rather than a guess.
-    with observe_capture(witness), pytest.raises(TimeoutExpired):
-        _builder()("-c", _SPILL_THEN_BLOCK).run_sync(
-            timeout=_RUN_TIMEOUT_S,
-            output=_options(tmp_path, keep_file=True),
-        )
-
-    witnessed = witness.awaited()
-    assert witnessed, "the spill must have been seen before the deadline fired"
-    assert len(witnessed) == 1, (
-        "one run must leave exactly one spill file to hand over; "
-        f"the witness saw {witnessed!r}"
-    )
-    name = witnessed[0]
-    path = tmp_path / name
-    assert path.exists(), "a kept spill file must survive the timeout's teardown"
-    assert path.read_bytes() == b"z" * _PAYLOAD_BYTES, (
-        "a kept file must hold the flushed prefix in full; "
-        f"got {len(path.read_bytes())} bytes"
-    )
 
 
 def test_two_runs_into_one_directory_leave_nothing_behind(

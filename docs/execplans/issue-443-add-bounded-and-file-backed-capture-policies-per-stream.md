@@ -761,6 +761,15 @@ Thresholds that trigger escalation when breached.
   below, which records each gate's elapsed time and closing evidence.
 
   Date/Author: 2026-10-19, implementation agent.
+- [x] (2026-10-20) Close the O5 kept-file coverage gap from the candidate
+  completeness review. Add run-level tests for a kept spill after successful
+  and non-zero completion, timeout, and external cancellation after promotion;
+  assert the retained bytes at the public `SafeCmd.run()` boundary. The two
+  spill suites share `_capture_spill_run_support.py`. The focused suites report
+  `12 passed`; two lint findings in the new test code were corrected. Rerun the
+  full gate sequence after this plan update.
+
+  Date/Author: 2026-10-20, implementation agent.
 
 ## Surprises & discoveries
 
@@ -2744,6 +2753,27 @@ Rust nextest tests, and three ignored doctests with none failed.
 
 Date/Author: 2026-10-20, implementation agent.
 
+## Review follow-up on the O5 retention tests
+
+The candidate completeness assessment found that the kept-spill tests did not
+pin a completed run's full contents for both success and non-zero exit, or
+external cancellation after ownership promotion. The new
+`test_capture_spill_retention.py` covers those routes, and also keeps the
+timeout prefix case beside them. Its cancellation case waits for the
+`SPILLED_TO_FILE` event before cancelling, then checks that the public run
+raises `CancelledError` and that the caller-owned file contains exactly the
+bytes reported at promotion. The cleanup suite continues to cover
+`keep_file=False` removal and provisional-spill cancellation.
+
+The focused cleanup and retention suites passed 12 tests. The first fresh gate
+sequence found two test-only lint issues: `_SpillWitness` was imported at
+runtime despite being annotation-only, and the spill-byte guard combined two
+assertions. The import now lives in `TYPE_CHECKING`, and the byte-count checks
+are separate. This changes test coverage only; it changes no runtime behaviour
+or public API. The full gates must pass on the combined tree before commit.
+
+Date/Author: 2026-10-20, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
@@ -2885,12 +2915,15 @@ the initial spill's prefix is written: the handle is still the provisional one
 that `_publish_spill` created with `keep=False`, so cleanup removes the file
 even under `keep_file=True`. That is deliberate — until the prefix lands there
 is no caller-owned file — and it is recorded in the ADR addendum. Method:
-parameterized end-to-end test over the four outcomes, asserting `Path.exists()`
-afterwards. Artefact: `cuprum/unittests/test_capture_spill_cleanup.py`.
-Evidence: the timeout and cancellation cases fail before the cleanup is
-registered through `_shielded_cleanup`. Non-vacuity: each case first asserts
-the file *existed* during the run (via the reported metadata path), so "not
-there afterwards" cannot be satisfied by never having written it.
+end-to-end cleanup tests over the four outcomes, asserting `Path.exists()`
+afterwards, plus retained-file tests for completed, timeout, and post-promotion
+cancellation routes. Artefacts:
+`cuprum/unittests/test_capture_spill_cleanup.py` and
+`cuprum/unittests/test_capture_spill_retention.py`. Evidence: the timeout and
+cancellation cases fail before the cleanup is registered through
+`_shielded_cleanup`. Non-vacuity: each case first asserts the file *existed*
+during the run (via the reported metadata path), so "not there afterwards"
+cannot be satisfied by never having written it.
 
 **O6 — A bound never reaches the relay.** Invariant: in a pipeline where the
 final stage's stdout is bounded, the stage after the producer reads the
@@ -3319,3 +3352,10 @@ class CaptureEvent:
 In `cuprum/capture_observation.py`, mirror `cuprum/echo_observation.py`:
 `observe_capture(hook) -> CaptureHookRegistration`, `current_capture_hooks()`
 and a private `_emit_capture_event(event)`.
+
+## Revision note (2026-10-20)
+
+Record the O5 kept-file end-to-end coverage added after review, point its
+verification artefact at the new retention suite, and document the two
+test-only lint fixes. The runtime contract, public API, and remaining feature
+milestones are unchanged.
