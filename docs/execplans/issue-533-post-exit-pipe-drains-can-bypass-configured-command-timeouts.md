@@ -8,11 +8,14 @@ be kept up to date as work proceeds.
 Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await) and EP-M2
 (the `lines()` post-exit drain) are implemented, tested Red-then-Green, and
 committed with their commit gates green. EP-M2's CodeRabbit review returned ten
-findings: eight are applied, two are rejected as describing code that does not
-exist in this tree (see `Decision log`), and the gate for those changes is
-running. EP-M3 (the pipeline's post-exit collection) and EP-M4 (documentation
-and full validation) remain. The direct run was split into
-`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
+findings: eight were applied and two are rejected as describing code that does
+not exist in this tree (see `Decision log`). Applying the first finding exposed
+the same `TimeoutError` misclassification at three further layers on the
+streamed `run()` path; all four fixes are in the working tree with their own
+regression module, and their commit gate is outstanding. EP-M3 (the pipeline's
+post-exit collection) and EP-M4 (documentation and full validation) remain. The
+direct run was split into `cuprum/_subprocess_direct_run.py` to stay inside the
+400-line module cap.
 
 ## Purpose / big picture
 
@@ -104,9 +107,10 @@ the issue was filed:
 - Cleanup that must not be abandoned runs under `_shielded_cleanup`, and
   sequential cleanup steps compose into *one* shielded coroutine — two
   sequential shielded calls are not one shielded sequence.
-- Consume fallible fixtures; keep `expect_used` strict. New tests raise through
-  `Result`/`?`-style helpers rather than `assert`-and-continue where the
-  repository's lint policy requires it.
+- Tests fail through pytest's own assertions and `pytest.raises`. The
+  `expect_used` lint and the `Result`/`?` helper convention are Rust-only and
+  do not apply to this Python change; `assert` is permitted in test modules by
+  the repository's ruff per-file ignores.
 - POSIX-only tests are marked, not silently skipped. The Windows CI leg must
   stay green.
 - Every new file stays under 400 lines, keeps en-GB-oxendict spelling, and
@@ -118,11 +122,17 @@ the issue was filed:
 
 ## Tolerances (exception triggers)
 
-- Scope: stop and escalate if a fourth production module must change beyond
-  `cuprum/_subprocess_stream_run.py`, `cuprum/_line_stream/`,
-  `cuprum/_pipeline_collect.py` and `cuprum/_pipeline_stream_results.py`. The
-  four-file shape is what the defect map supports; a fifth site means the
-  defect is broader than measured and the plan needs re-cutting.
+- Scope: the original trigger named four modules and required escalation
+  beyond them. The measured change set is larger, and the trigger is retained
+  in its measured form rather than deleted: `cuprum/_subprocess_stream_run.py`,
+  `cuprum/_subprocess_direct_run.py` (created by the EP-M1 split),
+  `cuprum/_subprocess_wait.py`, `cuprum/_subprocess_execution.py`,
+  `cuprum/_line_iteration.py`, the whole of `cuprum/_line_stream/`, and — for
+  EP-M3 — `cuprum/_pipeline_collect.py` and
+  `cuprum/_pipeline_stream_results.py`. Every one of these is a private module;
+  the escalation is about breadth, not about interface. The breach itself is
+  recorded in `Decision log` with the alternatives. A file outside this list,
+  or any change to a public signature, is still a stop-and-escalate event.
 - Interface: stop and escalate if any public signature, exception type, or
   result field must change. In particular, if a route can only be bounded by
   changing `RunOutputOptions`, `ExecutionContext`, or `PipelineResult`, that is
@@ -338,7 +348,7 @@ the issue was filed:
   warranted by evidence that points at the environment.
 - [x] EP-M2 — `SafeCmd.lines()`'s post-exit drain. Core bound written in
   `cuprum/_line_stream/drain.py` (`_collect_line_stream_after_exit` plus
-  `_await_writer_within_scope`, `_await_consumers`, `_raise_reader_failure`,
+  `_await_writer_within_scope`, `_await_consumers`, `_first_reader_failure`,
   `_settle_and_reconcile`), coordinator rewired, and an unstamped-`started_at`
   defect found and fixed in the same path — see `Surprises & discoveries`. New
   module `cuprum/unittests/test_safe_cmd_lines_post_exit_deadline.py` collects
@@ -371,6 +381,20 @@ the issue was filed:
   in the line-stream test module was deleted and its constant check hoisted to
   module scope. Two findings were rejected as factually wrong for this tree —
   see `Decision log`.
+- [x] (2026-10-19) EP-M2 follow-up: the review's *first* finding was applied
+  to the drain, and the regression test written for it exposed the same
+  misclassification at three further layers — `_run_to_command_result`,
+  `_collect_stream_output`, and `_await_direct_completion`. All four are fixed,
+  each with a red-then-green observation, and the invariant they rest on
+  (`_SubprocessTimeoutError` is disjoint from `TimeoutError` by design) is
+  recorded in `Surprises & discoveries`. New module
+  `cuprum/unittests/test_line_stream_reader_failure.py`, 2 tests: the `lines()`
+  case and the streamed `run()` case. Focused runs: the new module 2 passed;
+  the line-stream neighbours 17 passed; the post-exit deadline modules 40
+  passed; the streamed-path and timeout modules 32 passed. Genuine expiries
+  were re-verified on both paths at `timeout=0.2` and `timeout=0` and still
+  produce `TimeoutExpired` carrying the configured timeout, so narrowing the
+  catches did not unbound the real deadline.
 - [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
   route.
 - [ ] EP-M4 — documentation and full validation.
@@ -525,6 +549,55 @@ the issue was filed:
   coordinator's exit-event/`duration_s` reading and `_run_to_command_result`'s
   `started_at` read come from it. There is now one bundle, so the two cannot
   drift again.
+
+- **A reader's own `TimeoutError` was misclassified at three layers, not one,
+  and the reviewer's finding named only the first.** CodeRabbit's finding said
+  a reader failure shaped like a `TimeoutError` would be reported as the run's
+  deadline. The regression test confirmed it and then found the same
+  misclassification twice more on the streamed `run()` path, at layers that had
+  been introduced by earlier milestones rather than by EP-M2. The four sites,
+  in the order a streamed `run()` reaches them:
+
+  | Layer                | Site                                             | Fix                                                                      |
+  | -------------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
+  | line-stream drain    | `drain._collect_line_stream_after_exit`          | return the failure from `_await_consumers`, raise after the scope closes |
+  | line-stream boundary | `coordinator._run_to_command_result`             | catch `_SubprocessTimeoutError` only                                     |
+  | streamed collect     | `_subprocess_stream_run._collect_stream_output`  | gate on the scope's `expired()`                                          |
+  | streamed boundary    | `_subprocess_execution._await_direct_completion` | catch `_SubprocessTimeoutError` only                                     |
+
+  The invariant that makes the two catch-narrowing fixes safe is worth stating
+  because it is not local to the code: **every genuine expiry on these paths
+  has already been translated to `_SubprocessTimeoutError` before the wider
+  frame sees it** — the exit-wait routes call `_handle_stream_timeout`, which
+  raises that wrapper. A bare `TimeoutError` escaping those frames is therefore
+  always somebody else's failure. That invariant holds because
+  `_SubprocessTimeoutError` deliberately does *not* subclass `TimeoutError`;
+  the two types are disjoint on purpose.
+
+  The collect layer could not use the same narrowing: its scope is the thing
+  that raises on expiry, so the exception type is identical either way. It uses
+  `asyncio.timeout(...).expired()` instead. That discriminator was probed
+  rather than assumed, because the plan's earlier EP-M1 decision had rejected
+  `expired()` for a different question: an inner `raise TimeoutError` inside
+  the scope leaves `expired()` **False**, and a genuine timer expiry leaves it
+  **True**. The two questions are different — EP-M1 asked "was this expiry or a
+  caller's cancellation?" (where `expired()` conflates the two), and this one
+  asks "did this scope's timer fire?" (which is exactly what `expired()`
+  answers). Both decisions stand, each for its own question.
+
+  `_await_direct_completion` distinguishes the two paths by
+  `execution.consumes_stdout or execution.consumes_stderr`, which is the same
+  test that selected the streamed run in the first place; on the streamed path
+  the bare exception is therefore a reader failure, and on the direct path it
+  can only come from the already-elapsed-deadline route of the exit wait.
+
+  Non-vacuity: with all four fixes reverted, both new tests fail —
+  `test_lines_reader_timeout_is_not_reported_as_the_run_deadline` raises the
+  invariant failure rather than the sentinel, and the `run()` sibling loses the
+  sentinel the same way. Restored, both pass. The line-stream test also asserts
+  the `LineStreamPhase.TIMEOUT` phase is *absent* and the teardown phases are
+  *present*, so it pins what the caller observes, not merely which exception
+  object comes back.
 
 - **The same doctest test has a third failure mode, and it must not be
   mistaken for the two already recorded.** `Progress` records two independent
@@ -749,6 +822,38 @@ the issue was filed:
   it. `start_owned_run` grew a `capture` parameter to select the direct shape;
   no production behaviour changed beyond the shield composition.
 
+- Decision (EP-M2 review finding, 2026-10-19): treat a reader's `TimeoutError`
+  as the reader's failure on every path, and narrow the catches that had been
+  translating it. The alternative — threading a private wrapper through the
+  reader contract so callers can tell the two apart — was rejected because it
+  changes the exception a public hook may observe and puts library knowledge
+  into user code. Date: 2026-10-19.
+
+  The decision has two halves, and they use different mechanisms on purpose.
+  Where a genuine expiry has already been translated before the frame runs, the
+  frame catches `_SubprocessTimeoutError` alone; where the frame *owns* the
+  timer, it asks the scope whether its own clock fired. Fixing only the
+  reviewer's site would have left the streamed `run()` defect in place, and a
+  reader failure there is worse than a hang: it is reported as a timeout the
+  caller never configured. The four sites and the probe that settled
+  `expired()`'s behaviour are recorded in `Surprises & discoveries`.
+
+- Decision (2026-10-19): record the scope-tolerance breach rather than
+  re-cutting the plan. The trigger allowed four modules; the delivered change
+  touches `cuprum/_subprocess_direct_run.py`, `cuprum/_subprocess_wait.py`,
+  `cuprum/_subprocess_execution.py`, `cuprum/_line_iteration.py` and three of
+  the four `cuprum/_line_stream/` modules as well, all of them private.
+  Rationale for continuing rather than stopping: every additional file was
+  reached by a *single* invariant — the post-exit deadline — and splitting the
+  work into more commits would not have reduced the file count, only hidden it.
+  The public surface is unchanged, which is the tolerance that protects
+  callers. The measured shape is now written into `Tolerances` so the next
+  reader sees the real boundary rather than the predicted one.
+
+  Impact: none on behaviour. The plan's earlier "four-file shape" sentence was
+  a prediction made before EP-M1's module split; it has been replaced with the
+  measured list rather than quietly exceeded.
+
 ## Milestones
 
 Each milestone ends in a state that is coherent on its own: the repository
@@ -808,9 +913,10 @@ settlement is removed. Mutation evidence in `Verification plan`.
 Requirement: `ISS533`. Deliverables, in `cuprum/_line_stream/drain.py` and the
 post-exit branch of `cuprum/_line_stream/coordinator.py`:
 
-1. Give `_drain_after_exit` the remaining `_deadline_for_collection(execution)`
-   budget, covering three things under one bound: stopping the idle monitor,
-   the shielded stdin await, and consumer completion.
+1. Give `_collect_line_stream_after_exit` the remaining
+   `_deadline_for_collection(execution)` budget, covering three things under
+   one bound: stopping the idle monitor, the shielded stdin await, and consumer
+   completion.
 2. Use `asyncio.wait(consumers, timeout=remaining)` for consumer completion
    rather than cancelling through `gather()` inside `asyncio.timeout`. A
    trailing line already sitting in a full queue must still be published, and
@@ -866,6 +972,24 @@ never returned at all, and the reconciliation that reclaims the descendant was
 what the hang prevented. An arm that only bounded the wait without settling
 would still have stranded the descendant, which is why the second test asserts
 reclamation rather than merely completion.
+
+Follow-up within EP-M2, from the milestone review. Finding 1 said a reader's own
+`TimeoutError` would be reported as the run's deadline. The regression module
+written for it, `cuprum/unittests/test_line_stream_reader_failure.py`, holds
+two tests — one for `lines()`, one for the streamed `run()` — and it showed the
+defect at four layers rather than one. The line-stream drain returns a reader's
+failure to its caller for re-raising after the scope closes; the coordinator
+and the streamed boundary catch `_SubprocessTimeoutError` alone; the streamed
+collect step consults its own scope's `expired()`. The invariant that makes the
+two catch-narrowings safe, and the probe that established `expired()`'s
+behaviour when inner code raises, are recorded in `Surprises & discoveries`.
+
+Acceptance evidence for the follow-up: with all four fixes reverted, the
+`lines()` test fails on exception identity (it receives
+`_SubprocessInvariantError`) and the `run()` test loses its sentinel; restored,
+both pass. Genuine deadlines were re-checked at `timeout=0.2` and `timeout=0`
+on both routes and still raise `TimeoutExpired` with the configured timeout, so
+the narrowing removed a false positive without removing the real bound.
 
 ### EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout route
 
@@ -992,6 +1116,13 @@ Lemmas:
   `cuprum.sh.TimeoutExpired` subclasses the builtin `TimeoutError` *and*
   `_SubprocessTimeoutError` does not, the exception *type* alone still cannot
   answer I4; the scope's accounting is what makes the type meaningful.
+- **L4b (for I4, added EP-M2):** on a frame that *owns* the timeout scope, a
+  bare `TimeoutError` is the scope's own expiry exactly when `scope.expired()`
+  is true; an exception raised by code inside the scope leaves it false. Probed
+  directly: `raise TimeoutError` inside `asyncio.timeout(None)` and inside an
+  armed scope both leave `expired()` false, and only the timer firing sets it
+  true. Unlike L4 this does not have to separate a caller's cancellation,
+  because `CancelledError` never reaches an `except TimeoutError` arm.
 - **L5 (for I6):** `_teardown_policy` yields `owns_group=False` for every stage
   under `INHERIT`, and the new call sites pass the policy through unchanged.
 
@@ -1041,6 +1172,16 @@ Methods, artefacts and discharge conditions:
   existing `test_stream_run_owned_group_post_exit.py` covers the cancellation
   arm for the streamed boundary, and the direct route's cancellation arms are
   added with EP-M2's shared support if they are not already exercised.
+- **I4, L4b (EP-M2 follow-up):**
+  `cuprum/unittests/test_line_stream_reader_failure.py` raises a `TimeoutError`
+  subclass from an `on_line` hook and asserts the same object reaches the
+  caller on both the `lines()` and streamed `run()` routes. Discharged as a
+  negative control: with the four catch/scope fixes reverted, the `lines()`
+  case reports `_SubprocessInvariantError` and the `run()` case loses the
+  sentinel; restored, both pass and the genuine-deadline runs still raise
+  `TimeoutExpired`. The `lines()` case additionally asserts the absence of the
+  `TIMEOUT` phase and the presence of both teardown phases, so it pins
+  telemetry as well as the exception identity.
 - **I5:** a case with no `timeout=` that completes normally against a
   descendant that does eventually exit.
 - **I6, L5:** a unit assertion on `_teardown_policy`'s ownership for each

@@ -52,11 +52,11 @@ from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_reclaim import _cancel_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
+from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
     _deadline_for_collection,
-    _settle_owned_group_before_draining,
     _wait_for_exit_code_within_timeout,
 )
 

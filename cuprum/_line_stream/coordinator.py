@@ -342,7 +342,13 @@ async def _run_to_command_result(
         stderr_text = stderr_drain.payload
         captures = (stdout_drain.capture, stderr_drain.capture)
         await _finalize_line_stream_captures(run, stdout_drain, stderr_drain)
-    except (TimeoutError, _SubprocessTimeoutError) as exc:
+    except _SubprocessTimeoutError as exc:
+        # Only the internal wrapper is translated here. Every genuine expiry in
+        # the exit helper has already been through ``_handle_stream_timeout``,
+        # which raises that wrapper; a bare ``TimeoutError`` escaping it is a
+        # reader's own failure — an ``on_line`` hook using ``asyncio.timeout``
+        # internally, say — and must reach the caller unchanged rather than be
+        # reported as this run's deadline.
         _handle_subprocess_timeout(
             _SubprocessTimeoutContext(
                 execution=execution,

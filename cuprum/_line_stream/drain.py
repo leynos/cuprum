@@ -16,13 +16,13 @@ from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._stream_drain import _decode_consumer_drains
 from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
+from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
     _reconcile_run_tasks,
-    _settle_owned_group_before_draining,
 )
 from cuprum.line_stream_events import LineStreamPhase
 
@@ -33,6 +33,7 @@ if typ.TYPE_CHECKING:
         _Consumer,
         _DrainContext,
         _DrainPair,
+        _StreamConsumerTask,
     )
 
 __all__ = ["_collect_line_stream_after_exit"]
@@ -74,10 +75,12 @@ async def _collect_line_stream_after_exit(
     left. The enclosing scope is the outer backstop for the two awaits that have
     no bound of their own — the heartbeat stop and the writer.
 
-    The writer is settled rather than merely awaited, so a producer parked in
-    ``anext`` is reclaimed inside the scope instead of being left for the
-    expiry. The settle window is bounded and ends in a cancel; an ``INHERIT``
-    run has no group signal to release the writer and depends on it entirely.
+    The writer is awaited under the same scope, but a settled writer is what
+    makes its wait terminate here rather than at the deadline: a producer
+    parked in ``anext`` would otherwise hold the line until the enclosing scope
+    expired, spending the whole remaining budget on a task the settle window
+    reclaims in a fraction of it. An ``INHERIT`` run has no group signal to
+    release the writer, so it depends on that reclaim entirely.
 
     Expiry and cancellation are handled apart, and deliberately. Only the run's
     own budget expiring becomes the translated ``TimeoutExpired`` its caller is
@@ -99,11 +102,12 @@ async def _collect_line_stream_after_exit(
     A reader's own failure, and a caller's cancellation, propagate unchanged
     once the run's tasks have been reconciled.
     """
+    reader_failure: BaseException | None = None
     try:
         async with asyncio.timeout(_deadline_for_collection(execution)):
             await _stop_idle_monitor(execution.idle)
-            await _settle_stdin_writer(run.tasks.stdin_task)
-            await _await_consumers(
+            await _await_writer_within_scope(run)
+            reader_failure = await _await_consumers(
                 run.tasks.consumers,
                 _deadline_for_collection(execution),
             )
@@ -131,10 +135,19 @@ async def _collect_line_stream_after_exit(
     except BaseException:
         await _settle_and_reconcile(run, pid, execution, preserve=False)
         raise
-    # Every consumer is done by the time the block above returns, so this
-    # resolves immediately. It is kept as the single route the drains travel to
-    # their caller, rather than a second one that could drift from the path a
-    # streamed run uses.
+    if reader_failure is not None:
+        # Raised only after the timeout scope has closed, so a reader whose own
+        # failure happens to be a ``TimeoutError`` — an ``on_line`` hook using
+        # ``asyncio.timeout`` internally, say — is never mistaken for this
+        # run's deadline. Reporting it as one would emit the TIMEOUT phase,
+        # reconcile in capture mode, and, with no ``timeout=`` configured,
+        # replace the caller's real error with an invariant failure.
+        await _settle_and_reconcile(run, pid, execution, preserve=False)
+        raise reader_failure
+    # Every consumer is done by the time the block above returns a payload, so
+    # this resolves immediately. It is kept as the single route the drains
+    # travel to their caller, rather than a second one that could drift from
+    # the path a streamed run uses.
     stdout_drain, stderr_drain = await _consumer_drains(
         run.tasks.consumers,
         _drain_context(execution, run.tasks, pid, preserve=True),
@@ -147,6 +160,36 @@ async def _collect_line_stream_after_exit(
     for diagnostics in run.tasks.relay_diagnostics:
         diagnostics.settle()
     return stdout_drain, stderr_drain
+
+
+async def _await_writer_within_scope(run: _LineStreamRun) -> None:
+    """Let the stdin writer finish, under the scope the caller already opened.
+
+    Shielded for latency rather than correctness. Awaiting the writer task makes
+    it this await's ``_fut_waiter``, and ``Task.cancel()`` forwards, so without
+    the shield the deadline would be noticed only once the writer had finished
+    dying — including the close grace it bounds. The shield returns at once and
+    leaves reclaiming the writer to the expiry route, which is where the group
+    teardown runs too.
+
+    The shielded await is a settle rather than a bare await of the task, and it
+    is the settle that supplies the bound the shield only protects. A bare await
+    of a lone task has the *caller's* expiry as its only limit, so a producer
+    parked in ``anext`` would hold this line until the run's deadline and then
+    be reclaimed by the expiry route — correct, but only after spending the
+    whole budget on a writer that could have been reclaimed one grace window
+    after exit. The settle window plus the cancel it falls back to reclaims the
+    task inside the scope, which is what an ``INHERIT`` run depends on: it has
+    no group signal to release the writer.
+
+    A shielded await is only safe while the writer stays owned by the run's
+    task bundle, which it is: the reconciliation this route falls back to
+    cancels it through ``_cancel_stdin_writer``. Nothing here cancels it, so
+    there is no window in which the shield's inner task is left unowned.
+    """
+    if run.tasks.stdin_task is None:
+        return
+    await asyncio.shield(_settle_stdin_writer(run.tasks.stdin_task))
 
 
 async def _consumer_drains(
@@ -172,13 +215,19 @@ async def _consumer_drains(
 async def _await_consumers(
     consumers: tuple[_Consumer, _Consumer],
     remaining: float | None,
-) -> None:
-    """Wait for both readers, re-raising a reader's own failure at once.
+) -> BaseException | None:
+    """Wait for both readers, returning a reader's own failure to the caller.
 
     Returns when both readers have finished normally, and raises ``TimeoutError``
     when *remaining* elapses with a reader still running — the same exception the
     enclosing scope raises for the awaits that have no bound of their own, so the
     caller has one expiry route rather than two.
+
+    A reader that failed returns its exception instead of raising it. Raising
+    inside the caller's deadline scope would hand that exception to the scope's
+    ``except TimeoutError`` arm, which cannot tell a reader failure that happens
+    to be a ``TimeoutError`` from the run's own expiry; the caller re-raises it
+    only after the scope has closed.
 
     Observing the readers rather than gathering them is what protects a trailing
     line: a reader parked in ``queue.put`` on a full queue is left for the
@@ -200,6 +249,13 @@ async def _await_consumers(
     :func:`_consumer_drains`, which is the only place the positional pair is
     assembled.
 
+    Returns
+    -------
+    BaseException | None
+        The first non-cancellation failure among the readers that finished, or
+        ``None`` when they all completed. It is the caller's to re-raise, after
+        its deadline scope has closed.
+
     Raises
     ------
     TimeoutError
@@ -216,7 +272,9 @@ async def _await_consumers(
         timeout=remaining,
         return_when=asyncio.FIRST_EXCEPTION,
     )
-    _raise_reader_failure(finished)
+    failure = _first_reader_failure(finished)
+    if failure is not None:
+        return failure
     if pending:
         # No reader failed, so what is left is an unfinished reader and a
         # budget that ran out waiting for it — possibly before the wait began,
@@ -229,10 +287,13 @@ async def _await_consumers(
     # route a completed run takes to its caller. What this call is for is the
     # remaining re-raise — a reader that ended by its own cancellation.
     await asyncio.gather(*finished)
+    return None
 
 
-def _raise_reader_failure(finished: set[asyncio.Task[object]]) -> None:
-    """Re-raise a reader's own failure, before any expiry can be reported.
+def _first_reader_failure(
+    finished: set[_StreamConsumerTask],
+) -> BaseException | None:
+    """Return a reader's own failure, preferring it to any expiry report.
 
     The order matters: ``asyncio.wait`` reports readers that finished *and* a
     wait that timed out through the same call, so a sibling's failure and the
@@ -241,15 +302,22 @@ def _raise_reader_failure(finished: set[asyncio.Task[object]]) -> None:
     the error that actually caused it.
 
     A reader that ended by its own cancellation is skipped rather than
-    re-raised: cancelling a reader *is* the run ending, and the reconciliation
-    this route falls back to is what settles it.
+    returned: cancelling a reader *is* the run ending, and the reconciliation
+    the caller falls back to is what settles it.
+
+    Returns
+    -------
+    BaseException | None
+        The first non-cancellation failure among the readers, or ``None`` when
+        every reader completed or was cancelled.
     """
     for task in finished:
         if task.cancelled():
             continue
         error = task.exception()
         if error is not None:
-            raise error
+            return error
+    return None
 
 
 async def _settle_and_reconcile(
@@ -265,9 +333,9 @@ async def _settle_and_reconcile(
     descendant still holding the pipes is what stops a consumer reaching
     end-of-file, so no drain can succeed until it is gone. An inherited group
     has nothing to settle and
-    :func:`~cuprum._subprocess_wait._settle_owned_group_before_draining` returns
-    without signalling anything, so a run that does not own its group is never
-    signalled — the rule ADR 021 sets for every other exit path.
+    :func:`~cuprum._subprocess_stream_post_exit._settle_owned_group_before_draining`
+    returns without signalling anything, so a run that does not own its group
+    is never signalled — the rule ADR 021 sets for every other exit path.
 
     *preserve* selects the run's capture policies for the drain, exactly as the
     streamed path's reconciliation does: the expiry route keeps the partial

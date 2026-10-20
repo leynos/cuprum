@@ -57,6 +57,17 @@ from cuprum._subprocess_stream_exit import (
     # second binding here would be one no call path resolves.
     _wait_for_streamed_process_exit as _wait_for_streamed_process_exit,
 )
+from cuprum._subprocess_stream_post_exit import (
+    # Re-imported, not moved outright: ``_await_stdin_writer`` and
+    # ``_settle_owned_group_before_draining`` are still called from this
+    # module's own helpers below, and those calls resolve the names from *this*
+    # module's globals. Keeping them bound here is what lets the teardown
+    # tests go on patching them where the production call path reads them.
+    _await_stdin_writer as _await_stdin_writer,
+)
+from cuprum._subprocess_stream_post_exit import (
+    _settle_owned_group_before_draining as _settle_owned_group_before_draining,
+)
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _consumer_awaitable,
@@ -148,17 +159,32 @@ async def _collect_stream_output(
     a hang the gather's own bound would never reach.
 
     Expiry and cancellation are handled apart deliberately. Only the timer's
-    own expiry is a ``TimeoutError``; a cancellation still arrives as
+    own expiry becomes the translated timeout; a cancellation still arrives as
     ``CancelledError`` and takes the re-raising route, which keeps a caller's
     cancellation distinguishable from the run's own deadline.
+
+    A bare ``TimeoutError`` is not proof of expiry: a consumer can fail with
+    one of its own — an ``on_line`` hook using ``asyncio.timeout`` internally,
+    say — and reporting that as this run's deadline would reconcile in capture
+    mode and, with no ``timeout=`` configured, replace the reader's real error
+    with an invariant failure. The scope's ``expired()`` distinguishes the two,
+    so only its own expiry takes the timeout route and every other failure is
+    re-raised after the discard reconciliation.
 
     Returns
     -------
     _DrainPair
         The stdout and stderr results of the completed gather.
+
+    Raises
+    ------
+    TimeoutError
+        When a consumer fails with its own ``TimeoutError``; re-raised
+        unchanged after a discard reconciliation.
     """
+    deadline = asyncio.timeout(_deadline_for_collection(execution))
     try:
-        async with asyncio.timeout(_deadline_for_collection(execution)):
+        async with deadline:
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
             # The awaitables, not the tasks: a stream cuprum holds no pipe for
@@ -174,6 +200,17 @@ async def _collect_stream_output(
                 context=_drain_context(execution, tasks, pid, preserve=True),
             )
     except TimeoutError as exc:
+        if not deadline.expired():
+            # Not this scope's expiry, so an ordinary failure wearing a
+            # ``TimeoutError``. Reconcile without capturing, then re-raise it
+            # unchanged for the same reason every other failure route does.
+            await _settle_group_and_reconcile_consumers(
+                process,
+                execution,
+                tasks,
+                _drain_context(execution, tasks, pid, preserve=False),
+            )
+            raise
         # Capture-aware, matching the exit-wait route: a capturing run's text
         # is what the resulting ``TimeoutExpired`` reports, so discarding it
         # here would lose output the caller was explicitly promised.

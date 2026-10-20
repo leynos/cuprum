@@ -187,7 +187,26 @@ async def _await_direct_completion(
                 process,
                 execution,
             )
-    except (TimeoutError, _SubprocessTimeoutError) as exc:
+    except _SubprocessTimeoutError as exc:
+        _handle_subprocess_timeout(
+            _SubprocessTimeoutContext(
+                execution=execution,
+                process=process,
+                started_at=started_at,
+                stdout_text=stdout_text,
+                stderr_text=stderr_text,
+            ),
+            exc,
+        )
+    except TimeoutError as exc:
+        if execution.consumes_stdout or execution.consumes_stderr:
+            # The streamed path translates every expiry of its own before this
+            # frame sees it, so a bare ``TimeoutError`` escaping it is a
+            # reader's own failure — an ``on_line`` hook using
+            # ``asyncio.timeout`` internally, say — and must reach the caller
+            # unchanged. Only the direct path can still raise one here, from
+            # the already-elapsed-deadline route of its exit wait.
+            raise
         _handle_subprocess_timeout(
             _SubprocessTimeoutContext(
                 execution=execution,
