@@ -79,11 +79,6 @@ def _find_next_boundary(
     return _LINE_BOUNDARY_PATTERN.search(text, start)
 
 
-def _holds_carriage_return(text: str, index: int) -> bool:
-    """Report whether the CR at ``index`` may pair with a later chunk's LF."""
-    return text[index] == "\r" and index + 1 == len(text)
-
-
 def _boundary_width(text: str, index: int) -> int:
     """Return how many characters the boundary at ``index`` occupies."""
     if text[index] == "\r" and text[index + 1] == "\n":
@@ -153,27 +148,24 @@ class _LineAccumulator:
         emitted: list[str] = []
         start = self._resume_held_carriage_return(text, emitted)
 
-        while True:
-            boundary = _find_next_boundary(text, start)
-            if boundary is None:
-                self._append(text[start:])
-                # A long newline-free run must not wait for its terminator to
-                # be bounded: emit fragments as they fill.
-                emitted.extend(self._split_overflow())
-                return emitted
+        # A trailing CR may pair with an LF in the next chunk. Excluding it
+        # leaves the boundary loop with only complete boundaries to consume.
+        holds_carriage_return = text.endswith("\r")
+        scan_text = text[:-1] if holds_carriage_return else text
 
+        while (boundary := _find_next_boundary(scan_text, start)) is not None:
             index = boundary.start()
-            if _holds_carriage_return(text, index):
-                # The carriage return may pair with a line feed in the next
-                # chunk, so the line is not complete yet.
-                self._append(text[start:index])
-                self._skip_next_lf = True
-                emitted.extend(self._split_overflow())
-                return emitted
-
-            self._append(text[start:index])
+            self._append(scan_text[start:index])
             emitted.extend(self._complete_line())
-            start = index + _boundary_width(text, index)
+            start = index + _boundary_width(scan_text, index)
+
+        self._append(scan_text[start:])
+        if holds_carriage_return:
+            self._skip_next_lf = True
+        # A long newline-free run must not wait for its terminator to be
+        # bounded: emit fragments as they fill.
+        emitted.extend(self._split_overflow())
+        return emitted
 
     def _resume_held_carriage_return(self, text: str, emitted: list[str]) -> int:
         """Consume a prior chunk's lone carriage return's continuation.

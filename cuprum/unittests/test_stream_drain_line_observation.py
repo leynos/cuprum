@@ -11,48 +11,15 @@ cost without a real child process.
 from __future__ import annotations
 
 import asyncio
-import io
 import typing as typ
 
-from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams import _consume_stream
+from cuprum.unittests._stream_drain_support import _bounded_config, _reader
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import re
 
     import pytest
-
-
-class _ChunkedReader:
-    """Stub stream reader yielding queued chunks before EOF."""
-
-    def __init__(self, chunks: cabc.Sequence[bytes]) -> None:
-        """Store chunks for sequential ``read`` calls."""
-        self._chunks = list(chunks)
-
-    async def read(self, _size: int) -> bytes:
-        """Return the next queued chunk, or empty bytes at EOF."""
-        await asyncio.sleep(0)
-        if not self._chunks:
-            return b""
-        return self._chunks.pop(0)
-
-
-def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
-    """Build a stream-reader-shaped stub for the given chunks."""
-    return typ.cast("asyncio.StreamReader", _ChunkedReader(chunks))
-
-
-def _config(max_line_chars: int | None) -> _StreamConfig:
-    """Build a capturing UTF-8 stream config with the given line bound."""
-    return _StreamConfig(
-        capture_output=True,
-        echo_output=False,
-        sink=io.StringIO(),
-        encoding="utf-8",
-        errors="replace",
-        max_line_chars=max_line_chars,
-    )
 
 
 def test_line_observer_bounds_an_unterminated_run_as_it_arrives() -> None:
@@ -68,7 +35,7 @@ def test_line_observer_bounds_an_unterminated_run_as_it_arrives() -> None:
     captured = asyncio.run(
         _consume_stream(
             _reader(chunks),
-            _config(max_line_chars=4),
+            _bounded_config(max_line_chars=4),
             on_line=lines.append,
         )
     )
@@ -92,7 +59,7 @@ def test_line_observer_bounds_a_terminated_line_at_the_bound() -> None:
     asyncio.run(
         _consume_stream(
             _reader((payload,)),
-            _config(max_line_chars=8),
+            _bounded_config(max_line_chars=8),
             on_line=lines.append,
         )
     )
@@ -110,7 +77,7 @@ def test_line_observer_without_a_bound_keeps_the_whole_line() -> None:
     asyncio.run(
         _consume_stream(
             _reader((payload,)),
-            _config(max_line_chars=None),
+            _bounded_config(max_line_chars=None),
             on_line=lines.append,
         )
     )
@@ -153,7 +120,7 @@ def test_line_observer_scans_each_decoded_character_once(
         asyncio.run(
             _consume_stream(
                 _reader(tuple(b"z" for _ in range(chunk_count))),
-                _config(max_line_chars=2 * chunk_count),
+                _bounded_config(max_line_chars=2 * chunk_count),
                 on_line=lambda _line: None,
             )
         )

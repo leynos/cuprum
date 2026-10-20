@@ -1367,6 +1367,8 @@ is bounded by its characters.
 accumulator suite, including a Hypothesis property that compares the event
 sequence with a `splitlines()` oracle for any chunking of the same text and
 checks that no event exceeds the bound.
+`cuprum/unittests/test_stream_drain_line_emission.py` checks chunk-independent
+line emission against the `splitlines()` oracle at the stream-drain boundary.
 `cuprum/unittests/test_stream_drain_line_observation.py` drives the drain
 itself with a chunked reader: bounded fragments from an unterminated run, a
 line exactly at the bound, the unbounded opt-out, and a spied boundary search
@@ -1376,8 +1378,8 @@ that proves the per-chunk work is linear.
 which only completes if the bounded queue's backpressure carries the events.
 `cuprum/unittests/test_output_option_line_bounds.py` owns the option's
 construction rules, and `cuprum/unittests/test_pipeline_line_bounds.py` owns
-the pipeline resolution. Those four modules were split out of the larger test
-suites so each stays within the 600-line advisory and keeps one cohesive
+the pipeline resolution. These focused modules were split out of larger test
+suites so each stays below the 400-line file limit and keeps one cohesive
 subject. `cuprum/unittests/test_line_splitting.py` keeps the property suite for
 `_split_complete_lines` and `_strip_line_ending`. Hypothesis generates text
 with mixed recognized line endings and checks that normalized text is
@@ -1399,7 +1401,8 @@ When changing `_LineAccumulator`, `_split_complete_lines`, or
 
 ```bash
 uv run pytest -q cuprum/unittests/test_stream_line_boundaries.py \
-  cuprum/unittests/test_line_splitting.py cuprum/unittests/test_stream_drain.py \
+  cuprum/unittests/test_line_splitting.py \
+  cuprum/unittests/test_stream_drain_line_emission.py \
   cuprum/unittests/test_stream_drain_line_observation.py
 ```
 
