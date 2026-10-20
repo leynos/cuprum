@@ -120,12 +120,24 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `/tmp/nixie-issue-531.out`, `/tmp/duplication-issue-531.out`.
 - [x] (2026-10-19) Commit, push, and open a draft PR with `Closes #531`.
       Evidence: commit `af8798eaa`, draft PR #649.
-- [ ] (2026-10-19) CodeRabbit review and concern disposition. First pass
+- [x] (2026-10-20) Re-run every deterministic gate at the fix commit. All
+      gates exited 0 with `HEAD=dca91e3758b82c1db815e1788793fdb6035b30fc`
+      recorded in each log. Evidence: `make test` reported 3770 passed, 95
+      skipped (Python; one fewer than the first run because a redundant
+      drive-prefix destination test was folded into the parametrized matrix)
+      and 167 of 167 passed (Rust nextest). Logs:
+      `/tmp/check-fmt-issue-531.out`, `/tmp/lint-issue-531.out`,
+      `/tmp/typecheck-issue-531.out`, `/tmp/test-issue-531.out`,
+      `/tmp/markdownlint-issue-531.out`, `/tmp/nixie-issue-531.out`,
+      `/tmp/duplication-issue-531.out`.
+- [x] (2026-10-20) CodeRabbit review and concern disposition. First pass
       produced three findings, all addressed: neutral test operands no longer
       assume POSIX absoluteness; the role-message claim is qualified in the
       guides; platform-specific cases are scoped by marker. The rsync operand
       tests now live in `cuprum/unittests/test_rsync_operand_policy.py` so
-      `test_builder_library.py` stays under the line cap.
+      `test_builder_library.py` stays under the line cap. Second pass over the
+      committed range (`--committed --base main`) reviewed all eleven changed
+      files and returned zero findings.
 
 ## Surprises & discoveries
 
@@ -413,3 +425,6 @@ No new dependencies.
   ordering discovery, the `DOC`-rule finding, the property non-vacuity
   statistics, and the final outcomes. Updated the trace chain to the test names
   that actually exist.
+- 2026-10-20: Recorded the CodeRabbit disposition, the host-neutral fixture
+  discovery, the test-module split forced by the 400-line cap, and the
+  re-certified gate evidence at `dca91e375`.
