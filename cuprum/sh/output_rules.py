@@ -16,10 +16,12 @@ or the first framed run. Keeping them beside the options --- but out of
 ``stdio_rules`` makes for the stdio targets: the vocabulary stays in one module
 and the policing in a sibling.
 
-Both rules are re-exported by ``cuprum.sh.output``.
+The option validators are re-exported by ``cuprum.sh.output``.
 ``_validate_convenience_flags`` moved from ``output.py`` and keeps its original
 name, so existing importers resolve the same function object;
-``_validate_max_line_chars`` is new in this module.
+``_validate_max_line_chars`` is new in this module. The private
+``_validate_positive_bound`` helper shares the positive-bound contract without
+adding another option-specific export.
 """
 
 from __future__ import annotations
@@ -35,6 +37,33 @@ __all__ = [
 ]
 
 
+def _validate_positive_bound(field: str, value: int | None) -> None:
+    """Reject values outside the positive-bound contract for an output option.
+
+    ``None`` is the unbounded sentinel. A bool is rejected even though it is an
+    ``int`` subclass; ``field`` keeps the error tied to its option name.
+
+    Parameters
+    ----------
+    field : str
+        The ``RunOutputOptions`` field name used in the error message.
+    value : int | None
+        The configured positive integer bound or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If a non-``None`` value is not a positive non-boolean integer.
+    """
+    is_positive_int = isinstance(value, int) and not isinstance(value, bool)
+    if value is not None and not (is_positive_int and value > 0):
+        msg = (
+            f"RunOutputOptions {field} must be a positive integer or None, "
+            f"got {value!r}"
+        )
+        raise ValueError(msg)
+
+
 def _validate_max_line_chars(value: int | None) -> None:
     """Reject a line-retention bound that is not a positive integer or ``None``.
 
@@ -46,22 +75,8 @@ def _validate_max_line_chars(value: int | None) -> None:
     ----------
     value : int | None
         The configured ``max_line_chars`` bound.
-
-    Raises
-    ------
-    ValueError
-        If the value is neither a positive integer nor ``None``.
     """
-    if value is None:
-        return
-    is_positive_int = isinstance(value, int) and not isinstance(value, bool)
-    if is_positive_int and value > 0:
-        return
-    msg = (
-        "RunOutputOptions max_line_chars must be a positive integer or None, "
-        f"got {value!r}"
-    )
-    raise ValueError(msg)
+    _validate_positive_bound("max_line_chars", value)
 
 
 def _validate_convenience_flags(options: RunOutputOptions) -> None:

@@ -28,6 +28,7 @@ from cuprum.sh.output_rules import (
 from cuprum.sh.output_rules import (
     _validate_max_line_chars as _validate_max_line_chars,
 )
+from cuprum.sh.output_rules import _validate_positive_bound
 from cuprum.sh.stdio import (
     StdioTarget as StdioTarget,
 )
@@ -295,17 +296,7 @@ class RunOutputOptions:
         _validate_stdio_targets(self)
         self._synthesize_sink_from_flags()
         _validate_max_line_chars(self.max_line_chars)
-
-        if self.max_echo_line_bytes is None:
-            return
-        bound = self.max_echo_line_bytes
-        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
-        if not is_positive_int or bound <= 0:
-            msg = (
-                "RunOutputOptions max_echo_line_bytes must be a positive "
-                f"integer or None, got {bound!r}"
-            )
-            raise ValueError(msg)
+        _validate_positive_bound("max_echo_line_bytes", self.max_echo_line_bytes)
 
     def _synthesize_sink_from_flags(self) -> None:
         """Materialize the convenience flags as this run's presentation sink.

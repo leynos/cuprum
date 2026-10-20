@@ -26,7 +26,10 @@ def test_run_output_options_rejects_invalid_echo_bound(
     invalid_bound: int | bool,
 ) -> None:
     """Invalid ``max_echo_line_bytes`` values are rejected at construction."""
-    with pytest.raises(ValueError, match="must be a positive integer"):
+    with pytest.raises(
+        ValueError,
+        match="max_echo_line_bytes must be a positive integer or None",
+    ):
         RunOutputOptions(max_echo_line_bytes=invalid_bound)
 
 

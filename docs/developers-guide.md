@@ -7048,6 +7048,12 @@ must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
 
+`cuprum.sh.output_rules._validate_positive_bound` is scoped to output-option
+bounds whose shared contract is a positive, non-boolean integer or `None`.
+Callers pass the field name so errors retain their `RunOutputOptions` context.
+Reuse the helper only when acceptance and error semantics match; bounds with
+different sentinels or coercion rules need their own validator.
+
 ### Per-stream echo mechanics
 
 `RunOutputOptions.__post_init__` resolves the `echo` shorthand into
