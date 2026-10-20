@@ -812,6 +812,12 @@ stream, or that the payload is a file rather than text:
 | `storage_failed` | Whether the spill failed, as above.           |
 | `truncated`      | Derived: `dropped_bytes > 0`.                 |
 
+For a kept spill, `record.read_text()` reads the path synchronously and may
+block. A memory-backed record raises `ValueError`; a missing or unreadable path
+raises `OSError`. Unknown encodings or error handlers raise `LookupError`, and
+strict decoding can raise `UnicodeError`. Callers that need to avoid blocking
+can offload the read to a worker thread.
+
 `truncated` is derived rather than stored, so it cannot disagree with the count
 beside it. Spill transitions and storage failures are also published as
 `CaptureEvent`s; see [Observe production runs](#observe-production-runs).

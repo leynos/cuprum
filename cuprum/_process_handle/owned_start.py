@@ -36,7 +36,56 @@ from cuprum.sh.execution import ExecutionContext, StdinInput
 from cuprum.sh.output import RunOutputOptions
 
 if typ.TYPE_CHECKING:
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.sh import SafeCmd
+
+
+def _reject_redirected_handle_streams(output: RunOutputOptions) -> None:
+    """Reject streams a running handle cannot read from parent-side pipes.
+
+    Raises
+    ------
+    ValueError
+        If stdout or stderr names a non-pipe target.
+    """
+    redirected = [
+        name
+        for name, target in (("stdout", output.stdout), ("stderr", output.stderr))
+        if target is not None and target.kind != "pipe"
+    ]
+    if redirected:
+        msg = (
+            "SafeCmd.start() always captures output, so "
+            f"{', '.join(redirected)} cannot be redirected. "
+            "Use run() or run_sync() to redirect streams."
+        )
+        raise ValueError(msg)
+
+
+def _handle_capture_setting(
+    *,
+    setting: CapturePolicy | bool | None,
+) -> CapturePolicy | bool | None:
+    """Make an explicit false inherit the handle's forced-on capture flag."""
+    return None if setting is False else setting
+
+
+def _handle_capture_options(output: RunOutputOptions) -> RunOutputOptions:
+    """Enable handle capture while retaining each explicit capture policy."""
+    capture_stdout = _handle_capture_setting(setting=output.capture_stdout)
+    capture_stderr = _handle_capture_setting(setting=output.capture_stderr)
+    capture_settings_unchanged = (
+        capture_stdout is output.capture_stdout
+        and capture_stderr is output.capture_stderr
+    )
+    if output.capture and capture_settings_unchanged:
+        return output
+    return dc.replace(
+        output,
+        capture=True,
+        capture_stdout=capture_stdout,
+        capture_stderr=capture_stderr,
+    )
 
 
 def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
@@ -59,42 +108,10 @@ def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
         removed, or the default settings when none were given. Explicit
         per-stream capture policies remain unchanged.
 
-    Raises
-    ------
-    ValueError
-        If stdout or stderr names a non-pipe target.
     """
     resolved = output or RunOutputOptions()
-    redirected = [
-        name
-        for name, target in (("stdout", resolved.stdout), ("stderr", resolved.stderr))
-        if target is not None and target.kind != "pipe"
-    ]
-    if redirected:
-        msg = (
-            "SafeCmd.start() always captures output, so "
-            f"{', '.join(redirected)} cannot be redirected. "
-            "Use run() or run_sync() to redirect streams."
-        )
-        raise ValueError(msg)
-    capture_stdout = (
-        None if resolved.capture_stdout is False else resolved.capture_stdout
-    )
-    capture_stderr = (
-        None if resolved.capture_stderr is False else resolved.capture_stderr
-    )
-    capture_settings_unchanged = (
-        capture_stdout is resolved.capture_stdout
-        and capture_stderr is resolved.capture_stderr
-    )
-    if resolved.capture and capture_settings_unchanged:
-        return resolved
-    return dc.replace(
-        resolved,
-        capture=True,
-        capture_stdout=capture_stdout,
-        capture_stderr=capture_stderr,
-    )
+    _reject_redirected_handle_streams(resolved)
+    return _handle_capture_options(resolved)
 
 
 async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:

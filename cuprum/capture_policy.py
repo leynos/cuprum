@@ -304,7 +304,11 @@ class CapturedStream:
 
         The child's raw bytes may not be valid text. ``errors="replace"``
         keeps that from raising by default.
-        Filesystem and codec errors from ``Path.read_text`` propagate unchanged.
+        The read is synchronous and may block. Filesystem and codec errors
+        from ``Path.read_text`` propagate unchanged, including ``OSError`` for
+        missing or unreadable paths, ``LookupError`` for unknown encodings or
+        error handlers, and ``UnicodeError`` when strict decoding rejects the
+        bytes.
 
         Parameters
         ----------

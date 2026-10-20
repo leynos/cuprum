@@ -3251,12 +3251,16 @@ under `cuprum._constants.OBSERVER_ERROR_POLICY` and replace undecodable input.
 A text run is untouched — its views and its capture both decode under
 `config.errors`, so a strict text run raises from the read loop exactly as it
 did before byte mode existed. `cuprum._streams._StreamConfig.view_errors`
-derives that choice once for both view decoders.
-`cuprum._stream_drain_finish._captured_payload` is the single place a capture
-becomes the run's payload: a text run decodes the buffer under `config.errors`,
-while a byte-exact run returns its bytes untouched and never consults that
-policy. New consume variants should reuse `_drain()` unless they deliberately
-replace the whole stream-consumption contract.
+derives that choice once for both view decoders. Capture retention is provided
+by `CaptureSink`; `_drain()` gives each raw chunk to that sink, then
+`_finish_drain()` awaits its finalization. The sink returns a `CaptureFinal`,
+and `_CapturedDrain` carries its payload, `CapturedStream` metadata, and
+optional `SpillHandle` together into result assembly and cleanup. For in-memory
+captures, `_capture_decode._render` decodes text under the stream's configured
+encoding and error policy, or preserves the exact bytes in byte mode. A
+file-backed text capture reports its spill path without reading the file back.
+New consume variants should reuse `_drain()` unless they deliberately replace
+the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw

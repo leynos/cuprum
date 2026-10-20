@@ -2701,6 +2701,49 @@ spelling error. Both were corrected before the final candidate certification.
 
 Date/Author: 2026-10-20, implementation agent.
 
+## Review follow-up on the published head `67c106e`
+
+The focused CodeRabbit assessment at `6ee5a4b` accepted all five pre-merge rows
+as closed, distinguishing implemented repairs from withdrawn interface and
+telemetry requirements. It also noted that its assessment did not update the
+displayed walkthrough table. The current API keeps the intended boundary:
+`CapturedStream.read_text()` is a synchronous convenience read, documents its
+blocking behaviour and propagated filesystem and codec errors, and does not add
+a storage adapter or a `Result` wrapper. The design document now describes the
+current `CaptureSink` and `_CapturedDrain` lifecycle rather than the removed
+buffer-based path.
+
+The hosted CodeScene check at `67c106e` reported `_with_capture` at the
+complex-method threshold. The setup now delegates redirection refusal,
+per-stream setting normalization and capture-option assembly to focused helpers.
+`cs review` scored the touched file 10.0, and `cs delta` found no new health
+issue. The initial gate run for that refactor caught a return annotation that
+omitted the accepted `True` setting and lint findings from the helper's Boolean
+parameter and relocated exception documentation. The setting now preserves the
+declared `CapturePolicy | bool | None` type, is keyword-only, and the
+`ValueError` contract belongs to the helper that raises it. The existing
+read-back suite already covers both missing and unreadable files, so no
+duplicate missing-file case was retained.
+
+The corrected four-file candidate passed all seven local gates sequentially
+with base `ed45afde4bde458da0677e635186b385570bcde2`, HEAD
+`67c106e40fbaf750fed778a7a373ee7c021b027b`, and binary diff SHA-256
+`b3c2c3ee3879c80c273e72c26394fdc457c8ba348c3dbd1c4e92dadb563c4334`. Logs are
+under `/tmp/` with the `repair-b3c2c3ee` suffix. This evidence applies to that
+candidate content. At the time this record was written, the final ExecPlan edit
+still required its Markdown gates.
+
+The five-file snapshot before this certification note passed all seven local
+gates sequentially. It used HEAD `67c106e40fbaf750fed778a7a373ee7c021b027b`,
+base `ed45afde4bde458da0677e635186b385570bcde2`, and diff SHA-256
+`4fc2dd7d480e58eddb12d08174eafc55027e6d318365dbc38667d722cf64d782`. The
+candidate-bound logs are under `/tmp/` with the `frozen-4fc2dd7d` suffix. Its
+test gate reported 4,063 passed and 93 skipped in the main suite, 843 CI tests,
+116 boundary tests plus the boundary shards, 173 behaviour tests, 167 passing
+Rust nextest tests, and three ignored doctests with none failed.
+
+Date/Author: 2026-10-20, implementation agent.
+
 ## Context and orientation
 
 Cuprum is a Python subprocess-orchestration library. A caller builds a typed
