@@ -206,6 +206,7 @@
       'cuprum/sh/factory.py',
       'cuprum/sh/line_options.py',
       'cuprum/sh/output.py',
+      'cuprum/sh/output_rules.py',
       'cuprum/sh/pipeline.py',
       'cuprum/sh/pipeline_output.py',
       'cuprum/sh/results.py',

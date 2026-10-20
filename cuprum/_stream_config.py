@@ -29,7 +29,7 @@ import typing as typ
 
 from cuprum._capture_accumulators import build_accumulator
 from cuprum._capture_decode import _DecodeSettings
-from cuprum._constants import OBSERVER_ERROR_POLICY
+from cuprum._constants import DEFAULT_MAX_LINE_CHARS, OBSERVER_ERROR_POLICY
 from cuprum._streams_pump import _READ_SIZE
 from cuprum.echo_events import BrokenPipePolicy, EchoStream
 
@@ -142,6 +142,11 @@ class _StreamConfig:
     # accepting a line past a size limit (GitHub Actions job logs end at a
     # 64 KiB line) while capture stays byte-for-byte complete.
     echo_max_line_bytes: int | None = None
+    # Decoded-character bound for one line retained by line observation;
+    # ``None`` disables it. Independent of the echo bound above: this one
+    # bounds how much an incomplete line holds in memory and how long the line
+    # event carries, while ``echo_max_line_bytes`` bounds the mirrored copy.
+    max_line_chars: int | None = DEFAULT_MAX_LINE_CHARS
     discard_on_cancel: asyncio.Event | None = None
     # How a broken pipe on this stream's sink is handled. Defaults to strict
     # propagation, so a config built without naming a policy keeps the

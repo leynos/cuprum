@@ -34,8 +34,8 @@ open each document.
   benchmark-gate JSONL artefact schema, retention, retrieval, analysis recipe,
   and fail-open delivery contract.
 - [Coverage timeout tiers](coverage-timeout-tiers.md) - the four nested
-  timeouts a coverage run is bounded by, the value each holds, and why the
-  compile-driven `trybuild` tests carry an allowance of their own.
+  timeouts that bound a coverage run, plus the separate boundary-harness
+  compile tier and its per-test allowance.
 
 ## Design and decisions
 

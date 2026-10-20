@@ -470,6 +470,15 @@ therefore not emitted as a line event. See the
 [line-level output section in the users' guide](users-guide.md#line-level-output)
 for ordering, timestamps, teardown, and capture/echo details.
 
+Line observation now retains at most 64 Ki decoded characters for an
+unterminated line by default. Longer lines are delivered as bounded fragments to
+`SafeCmd.lines()`, `RunOutputOptions.on_line`, and pipeline line callbacks;
+captured output remains complete. `RunOutputOptions.max_line_chars` is a
+keyword-only positive integer option for choosing another limit. Pass
+`max_line_chars=None` to restore unbounded retention. Both `max_line_chars` and
+`max_echo_line_bytes` also accept `None`. A non-integer, including `bool`,
+raises `TypeError`; zero or a negative integer raises `ValueError`.
+
 ### Owned running-command handle
 
 `SafeCmd.start()` returns a `RunningCommand` handle rather than a

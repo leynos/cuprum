@@ -1,31 +1,16 @@
-"""Text-level line splitting shared by the stream-drain loop.
+"""Superseded text-level line splitting retained as a small pure helper.
 
-The drain loop emits decoded text to line observers in complete lines and
-mirrors each line's terminator handling, so the rules for recognizing and
-stripping line endings live in one pure module both the loop and its tests
-can depend on.
+The stream drain no longer calls this module. Decoded chunks now travel
+through :class:`cuprum._stream_line_boundaries._LineAccumulator`, which scans
+each chunk once and bounds the text retained for an unterminated line; the
+pure splitting below could only be used by first concatenating every pending
+chunk onto the text being split, which is the quadratic, unbounded behaviour
+issue #532 removed. The rules here are kept as the readable statement of the
+CR, LF, and CRLF contract, and to avoid a module deletion mixed into a
+behavioural fix.
 """
 
 from __future__ import annotations
-
-import typing as typ
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-
-def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
-
-    for line in lines:
-        on_line(line)
-
-    return remainder
 
 
 def _split_complete_lines(text: str) -> tuple[list[str], str]:

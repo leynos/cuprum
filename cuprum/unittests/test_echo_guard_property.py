@@ -21,7 +21,6 @@ differ in the condition that arms them and in nothing else.
 from __future__ import annotations
 
 import asyncio
-import codecs
 import logging
 import typing as typ
 
@@ -36,6 +35,11 @@ from cuprum.echo_events import (
     EchoErrorCategory,
     EchoStream,
     RelayFallback,
+)
+from cuprum.unittests._stream_drain_support import (
+    _count_text_writes,
+    _reader,
+    _split_at,
 )
 
 if typ.TYPE_CHECKING:
@@ -60,30 +64,6 @@ _LOGGER_NAME = "cuprum.stream"
 # generated case all agree on it.
 _FailingCall = typ.Literal["write", "flush"]
 _FAILING_CALLS: tuple[_FailingCall, ...] = ("write", "flush")
-
-
-def _split_at(payload: bytes, cut_points: cabc.Sequence[int]) -> tuple[bytes, ...]:
-    """Split a payload at sorted, deduplicated cut points."""
-    bounds = sorted({point for point in cut_points if 0 < point < len(payload)})
-    pieces: list[bytes] = []
-    start = 0
-    for bound in bounds:
-        pieces.append(payload[start:bound])
-        start = bound
-    pieces.append(payload[start:])
-    return tuple(piece for piece in pieces if piece)
-
-
-def _count_text_writes(chunks: tuple[bytes, ...]) -> int:
-    """Count the non-empty text writes the drain's echo decoder will make."""
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    writes = 0
-    for chunk in chunks:
-        if decoder.decode(chunk):
-            writes += 1
-    if decoder.decode(b"", final=True):
-        writes += 1
-    return writes
 
 
 def _assert_one_transition_recorded(
@@ -176,21 +156,6 @@ def _write_counting_case(
     )
 
 
-class _ChunkedReader:
-    """Stub stream reader yielding queued chunks before EOF."""
-
-    def __init__(self, chunks: cabc.Sequence[bytes]) -> None:
-        """Store chunks for sequential ``read`` calls."""
-        self._chunks = list(chunks)
-
-    async def read(self, _size: int) -> bytes:
-        """Return the next queued chunk, or empty bytes at EOF."""
-        await asyncio.sleep(0)
-        if not self._chunks:
-            return b""
-        return self._chunks.pop(0)
-
-
 class _FailingWriteSink:
     """Recording sink failing at one chosen echo attempt.
 
@@ -280,7 +245,7 @@ async def _drain_case(
     sink = _FailingWriteSink(failing_write, error, mode)
     relay_diagnostics = _RelayDiagnostics()
     captured = await _drain(
-        typ.cast("asyncio.StreamReader", _ChunkedReader(chunks)),
+        _reader(chunks),
         _config(typ.cast("typ.IO[str]", sink), policy),
         relay_diagnostics=relay_diagnostics,
     )

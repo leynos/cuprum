@@ -9,7 +9,8 @@ The ``cuprum.sh`` package re-exports the public name. The deprecated
 
 The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
 policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported
-here so ``cuprum.sh.output`` remains a usable import path for it.
+here so ``cuprum.sh.output`` remains a usable import path for it. Field rules
+from :mod:`cuprum.sh.output_rules` are re-exported under their original names.
 """
 
 from __future__ import annotations
@@ -18,16 +19,20 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._bounded_delivery import BoundedDelivery, _validate_delivery_options
-from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES, DEFAULT_MAX_LINE_CHARS
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
 from cuprum.sh._capture_options import _resolved_capture as _resolved_capture
-from cuprum.sh._convenience_sink import (
-    _validate_convenience_flags,
-    synthesize_sink,
-)
+from cuprum.sh._convenience_sink import synthesize_sink
 from cuprum.sh._resolved_options import _ResolvedOptionsMixin
+from cuprum.sh.output_rules import (
+    _validate_convenience_flags as _validate_convenience_flags,
+)
+from cuprum.sh.output_rules import (
+    _validate_max_line_chars as _validate_max_line_chars,
+)
+from cuprum.sh.output_rules import _validate_positive_bound
 from cuprum.sh.stdio import (
     StdioTarget as StdioTarget,
 )
@@ -162,7 +167,23 @@ class RunOutputOptions(_ResolvedOptionsMixin):
         since the command started, and the line text. Independent of
         ``capture`` and ``echo``; lines are delivered in arrival order per
         stream. Lines are observed on the Python pathway, so the Rust
-        fast-path dispatcher stays out of the way whenever this is set.
+        fast-path dispatcher stays out of the way whenever this is set. How
+        much of an unterminated line is retained before it is published in
+        pieces is governed by ``max_line_chars``.
+    max_line_chars : int | None, keyword-only, default=64 * 1024
+        Maximum number of decoded characters retained for one observed line.
+        The count covers line content only: terminators are held separately
+        and never counted. A longer line is published as fragments of exactly
+        this many characters through the same line sink, so the ``lines()``
+        driver's backpressure still applies and no event exceeds the bound.
+        Fragments can split a grapheme cluster or a multi-byte character's
+        decoded form; they are not otherwise distinguished from complete
+        lines. The bound is independent of ``capture`` and ``echo``:
+        ``max_echo_line_bytes`` bounds only the mirrored copy in bytes.
+        ``None`` disables bounded retention. This field is keyword-only
+        because a positional value would take ``on_line``'s slot and shift
+        every field after it. Non-integers, including ``bool``, raise
+        ``TypeError``; zero and negative integers raise ``ValueError``.
     idle_after : float | None, default=None
         Seconds of silence, measured across both streams, before the run
         reports that it is still running. ``None`` disables idle reporting and
@@ -276,6 +297,10 @@ class RunOutputOptions(_ResolvedOptionsMixin):
         default=BrokenPipePolicy.STRICT,
         kw_only=True,
     )
+    max_line_chars: int | None = dc.field(
+        default=DEFAULT_MAX_LINE_CHARS,
+        kw_only=True,
+    )
     on_line: LineHook | None = None
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
@@ -358,16 +383,8 @@ class RunOutputOptions(_ResolvedOptionsMixin):
         _validate_stdio_targets(self)
         synthesize_sink(self)
 
-        if self.max_echo_line_bytes is None:
-            return
-        bound = self.max_echo_line_bytes
-        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
-        if not is_positive_int or bound <= 0:
-            msg = (
-                "RunOutputOptions max_echo_line_bytes must be a positive "
-                f"integer or None, got {bound!r}"
-            )
-            raise ValueError(msg)
+        _validate_max_line_chars(self.max_line_chars)
+        _validate_positive_bound("max_echo_line_bytes", self.max_echo_line_bytes)
 
     # The resolved views -- ``resolved_capture``, ``captures_any_stream``,
     # ``resolved_echo``, and ``resolved_broken_pipe_policy`` -- are contributed

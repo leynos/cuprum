@@ -55,6 +55,7 @@ class _LyingFile:
     """
 
     def __init__(self, descriptor: int) -> None:
+        """Record the descriptor ``fileno`` will report."""
         self._descriptor = descriptor
 
     def fileno(self) -> int:

@@ -302,6 +302,7 @@ def _build_stream_config(
         capture=execution.capture_stdout,
         echo_output=execution.echo_stdout,
         echo_max_line_bytes=execution.max_echo_line_bytes,
+        max_line_chars=execution.max_line_chars,
         capture_bytes=execution.capture_bytes,
         broken_pipe_policy=execution.broken_pipe_policy,
         sink=stdout_sink,

@@ -1,4 +1,9 @@
-"""Internal constants for the cuprum package."""
+"""Shared stream names and defaults for subprocess and output handling.
+
+Keeping child-stream names here lets process reaping wire descriptors before
+the higher-level stdio resolver imports them. Output bounds and decoding
+defaults keep command and pipeline observers consistent.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,10 @@ PACKAGE_NAME = "cuprum"
 # CI job log (GitHub Actions stops at a 64 KiB line) while capture stays
 # complete.
 DEFAULT_ECHO_MAX_LINE_BYTES = 64 * 1024
+
+# Line observation retains an incomplete line until its terminator arrives.
+# Bound that retention in decoded characters, independently of echoed bytes.
+DEFAULT_MAX_LINE_CHARS = 64 * 1024
 
 # Bytes a ``FileBackedCapture`` holds on the heap before it spills the stream to
 # a temporary file. One mebibyte is enough to keep a chatty-but-finite command's

@@ -1,4 +1,4 @@
-"""Convenience-flag validation and sink synthesis for run output options.
+"""Synthesize presentation sinks from run-output convenience flags.
 
 ``RunOutputOptions`` exposes two opt-in booleans — ``group`` and
 ``annotate_failure`` — that are not destinations of their own but spellings of
@@ -7,12 +7,9 @@ its half of the framing, so the workflow-command syntax, the stop-commands
 lease, and the environment gate all stay inside the adapter and the execution
 layer learns nothing new.
 
-Both pieces live here rather than beside the dataclass because they describe
-what the flags *produce* rather than what the options *are*, and because the
-options module sits against the repository's module-length ceiling. The
-dataclass keeps its fields, its resolution, and its properties;
-:func:`_validate_convenience_flags` and :func:`synthesize_sink` are called from
-its ``__post_init__``.
+Sink synthesis lives here rather than beside the dataclass because it describes
+what the flags *produce* rather than what the options *are*. Validation lives
+with the other output-field rules in ``cuprum.sh.output_rules``.
 
 The identity metadata that ties a synthesized sink back to the options object
 that made it — and so lets :func:`dataclasses.replace` resynthesize the sink
@@ -35,37 +32,8 @@ if typ.TYPE_CHECKING:
     from cuprum.sh.output import RunOutputOptions
 
 __all__ = [
-    "_validate_convenience_flags",
     "synthesize_sink",
 ]
-
-
-def _validate_convenience_flags(options: RunOutputOptions) -> None:
-    """Reject non-``bool`` values for the convenience opt-in flags.
-
-    Both flags gate whether workflow commands are written, so a value that
-    merely coerces to a truthy bool — the integer ``1``, say — would frame a
-    run on the strength of something the caller never documented as a flag.
-    ``max_echo_line_bytes`` draws the same line for the same reason.
-
-    Parameters
-    ----------
-    options : RunOutputOptions
-        The options whose ``group`` and ``annotate_failure`` are checked.
-
-    Raises
-    ------
-    ValueError
-        If either flag is not a ``bool``.
-    """
-    for name, value in (
-        ("group", options.group),
-        ("annotate_failure", options.annotate_failure),
-    ):
-        if not isinstance(value, bool):
-            msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
-            # Issue #375 expressly specifies ValueError for these flags.
-            raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 def synthesize_sink(options: RunOutputOptions) -> None:

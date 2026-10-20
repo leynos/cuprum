@@ -1,11 +1,19 @@
-"""Split decoded stream text without breaking CRLF pairs across reads."""
+"""Split decoded stream text into lines without rescanning retained text.
+
+:func:`_split_complete_lines` serves callers that already hold a complete
+string: it is a pure function over the whole text. The stream drain cannot use
+it, because it sees the text one chunk at a time: concatenating each chunk onto
+a growing pending string and rescanning it copies and searches everything
+before it on every read, so a single newline-free line costs quadratic work and
+retains the whole line in memory. :class:`_LineAccumulator` replaces that with
+one linear pass over each chunk and a bounded pending buffer, which is what
+keeps an attacker-influenced child from exhausting the parent.
+"""
 
 from __future__ import annotations
 
-import typing as typ
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+import collections as co
+import re
 
 _LINE_BOUNDARY_CHARACTERS = (
     "\n",
@@ -18,6 +26,13 @@ _LINE_BOUNDARY_CHARACTERS = (
     "\x85",
     "\u2028",
     "\u2029",
+)
+
+# One alternation-free character class, compiled once. The order of the class
+# mirrors ``_LINE_BOUNDARY_CHARACTERS`` for readability only; a character class
+# has no alternation semantics to get wrong.
+_LINE_BOUNDARY_PATTERN = re.compile(
+    "[" + "".join(re.escape(char) for char in _LINE_BOUNDARY_CHARACTERS) + "]",
 )
 
 
@@ -55,16 +70,202 @@ def _split_complete_lines(
     return [_strip_line_ending(line) for line in lines], remainder
 
 
-def _emit_completed_lines(
+def _find_next_boundary(
     text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines and return the trailing incomplete fragment."""
-    lines, remainder = _split_complete_lines(text, final=False)
-    for line in lines:
-        on_line(line)
-    return remainder
+    start: int,
+    /,
+) -> re.Match[str] | None:
+    """Return the first line boundary at or after ``start``, if any."""
+    return _LINE_BOUNDARY_PATTERN.search(text, start)
+
+
+def _boundary_width(text: str, index: int) -> int:
+    """Return how many characters the boundary at ``index`` occupies."""
+    return 2 if text.startswith("\r\n", index) else 1
+
+
+class _LineAccumulator:
+    """Incrementally assemble lines from decoded chunks in linear time.
+
+    The accumulator keeps pending content as the list of chunks it arrived in,
+    so appending a chunk never copies the text already retained. A search for
+    the next boundary only ever covers the new chunk, and once a boundary is
+    found the completed line is assembled once. Total work is therefore linear
+    in the decoded text rather than quadratic in the length of the longest
+    line.
+
+    ``max_line_chars`` bounds how much *content* may be retained for one
+    incomplete line. While the pending count exceeds the bound, the leading
+    ``max_line_chars`` characters are emitted as a fragment and the rest is
+    kept. A fragment is an ordinary emitted line as far as the sink is
+    concerned: it travels through the same awaited sink, so a fragmenting run
+    still honours backpressure. Line terminators are never counted or
+    retained, so a line of exactly ``max_line_chars`` characters followed by a
+    terminator emits one event, not a fragment plus an empty one. ``None``
+    disables the bound and restores unbounded retention for callers who have
+    made their own arrangement.
+
+    Parameters
+    ----------
+    max_line_chars : int | None
+        Maximum number of decoded characters to retain for one line or
+        fragment, or ``None`` for no bound.
+    """
+
+    def __init__(self, max_line_chars: int | None) -> None:
+        """Start with no pending text and no held boundary."""
+        self._parts: co.deque[str] = co.deque()
+        self._pending_chars = 0
+        self._skip_next_lf = False
+        self._max_line_chars = max_line_chars
+        self._has_emitted_fragment = False
+
+    @property
+    def pending_chars(self) -> int:
+        """How many decoded characters await a line boundary."""
+        return self._pending_chars
+
+    @property
+    def has_emitted_fragment(self) -> bool:
+        """Whether this accumulator has emitted a bounded fragment."""
+        return self._has_emitted_fragment
+
+    def feed(self, text: str) -> list[str]:
+        """Consume decoded text and return the lines and fragments it completes.
+
+        Parameters
+        ----------
+        text : str
+            Newly decoded text. It may end mid-line or mid-CRLF; both are
+            carried into the next call.
+
+        Returns
+        -------
+        list[str]
+            Completed lines and overflow fragments, in stream order. A line
+            may be empty, because ``str.splitlines()`` treats a bare boundary
+            as one empty line.
+        """
+        if not text:
+            return []
+
+        emitted: list[str] = []
+        start = self._resume_held_carriage_return(text, emitted)
+
+        # A trailing CR may pair with an LF in the next chunk. Excluding it
+        # leaves the boundary loop with only complete boundaries to consume.
+        holds_carriage_return = text.endswith("\r")
+        scan_text = text[:-1] if holds_carriage_return else text
+
+        while (boundary := _find_next_boundary(scan_text, start)) is not None:
+            index = boundary.start()
+            self._append(scan_text[start:index])
+            emitted.extend(self._complete_line())
+            start = index + _boundary_width(scan_text, index)
+
+        self._append(scan_text[start:])
+        if holds_carriage_return:
+            self._skip_next_lf = True
+        # A long newline-free run must not wait for its terminator to be
+        # bounded: emit fragments as they fill.
+        emitted.extend(self._split_overflow())
+        return emitted
+
+    def _resume_held_carriage_return(self, text: str, emitted: list[str]) -> int:
+        """Consume a prior chunk's lone carriage return's continuation.
+
+        A previous chunk ended in a lone carriage return. If this chunk starts
+        with a line feed the two form one CRLF terminator, so the feed must be
+        consumed before it is allowed to complete another (empty) line of its
+        own.
+
+        Parameters
+        ----------
+        text : str
+            The newly decoded, non-empty chunk.
+        emitted : list[str]
+            The output list to extend with any line the held CR completed.
+
+        Returns
+        -------
+        int
+            The index at which ordinary boundary scanning may begin.
+        """
+        if not self._skip_next_lf:
+            return 0
+        start = 1 if text[0] == "\n" else 0
+        self._skip_next_lf = False
+        emitted.extend(self._complete_line())
+        return start
+
+    def finish(self) -> str | None:
+        """Return the trailing line once no more decoded text will arrive.
+
+        Returns
+        -------
+        str | None
+            The final line or fragment, which may be empty when the stream
+            ended in a terminator that completed an empty line. ``None`` when
+            the stream ended on a boundary with nothing pending.
+        """
+        held_boundary = self._skip_next_lf
+        self._skip_next_lf = False
+        if not held_boundary and not self._parts:
+            return None
+        return self._take(self._pending_chars)
+
+    def _append(self, text: str) -> None:
+        """Add text to the pending line without copying what is retained."""
+        if text:
+            self._parts.append(text)
+            self._pending_chars += len(text)
+
+    def _split_overflow(self) -> list[str]:
+        """Return fragments that keep the pending line within the bound."""
+        bound = self._max_line_chars
+        if bound is None or self._pending_chars <= bound:
+            return []
+
+        # Join once and slice once. Taking each fragment with _take would copy
+        # the remaining head again for every fragment, which is quadratic in a
+        # single large chunk when the bound is small. The retained text is at
+        # most one bound plus the newest chunk, so this stays linear.
+        pending = "".join(self._parts)
+        fragment_count = (len(pending) - 1) // bound
+        fragments = [
+            pending[index * bound : (index + 1) * bound]
+            for index in range(fragment_count)
+        ]
+        self._has_emitted_fragment = True
+        remainder = pending[fragment_count * bound :]
+        self._parts.clear()
+        if remainder:
+            self._parts.append(remainder)
+        self._pending_chars = len(remainder)
+        return fragments
+
+    def _complete_line(self) -> list[str]:
+        """Return any overflow fragments, then the completed line itself."""
+        fragments = self._split_overflow()
+        fragments.append(self._take(self._pending_chars))
+        return fragments
+
+    def _take(self, count: int) -> str:
+        """Remove and return the leading ``count`` pending characters."""
+        taken: list[str] = []
+        remaining = count
+        while remaining and self._parts:
+            part = self._parts[0]
+            if len(part) <= remaining:
+                taken.append(self._parts.popleft())
+                remaining -= len(part)
+            else:
+                taken.append(part[:remaining])
+                self._parts[0] = part[remaining:]
+                remaining = 0
+        text = "".join(taken)
+        self._pending_chars -= len(text)
+        return text
 
 
 def _should_hold_trailing_line(line: str, *, final: bool) -> bool:
@@ -88,4 +289,4 @@ def _strip_line_ending(line: str) -> str:
     return line
 
 
-__all__ = ["_emit_completed_lines", "_split_complete_lines", "_strip_line_ending"]
+__all__ = ["_LineAccumulator", "_split_complete_lines", "_strip_line_ending"]
