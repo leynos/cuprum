@@ -118,11 +118,17 @@ class _LineAccumulator:
         self._pending_chars = 0
         self._skip_next_lf = False
         self._max_line_chars = max_line_chars
+        self._has_emitted_fragment = False
 
     @property
     def pending_chars(self) -> int:
         """How many decoded characters await a line boundary."""
         return self._pending_chars
+
+    @property
+    def has_emitted_fragment(self) -> bool:
+        """Whether this accumulator has emitted a bounded fragment."""
+        return self._has_emitted_fragment
 
     def feed(self, text: str) -> list[str]:
         """Consume decoded text and return the lines and fragments it completes.
@@ -230,6 +236,7 @@ class _LineAccumulator:
             pending[index * bound : (index + 1) * bound]
             for index in range(fragment_count)
         ]
+        self._has_emitted_fragment = True
         remainder = pending[fragment_count * bound :]
         self._parts.clear()
         if remainder:

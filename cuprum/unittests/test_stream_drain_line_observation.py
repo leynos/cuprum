@@ -11,6 +11,7 @@ cost without a real child process.
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 from cuprum._streams import _consume_stream
@@ -48,6 +49,44 @@ def test_line_observer_bounds_an_unterminated_run_as_it_arrives() -> None:
     )
     assert "".join(lines) == "a" * 10 + "b" * 10, (
         f"fragments must preserve the child's text, got {lines!r}"
+    )
+
+
+def test_line_observer_logs_first_fragment_with_bounded_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The first overflow records only fixed categories, once per stream."""
+    lines: list[str] = []
+    with caplog.at_level(logging.DEBUG, logger="cuprum._stream_line_consumer"):
+        asyncio.run(
+            _consume_stream(
+                _reader((b"a" * 10, b"b" * 10)),
+                _bounded_config(max_line_chars=4),
+                on_line=lines.append,
+            )
+        )
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "cuprum_event", None) == "line_observation_fragmented"
+    ]
+    assert len(records) == 1, f"expected one diagnostic, got {len(records)}"
+    record = records[0]
+    stream_name = getattr(record, "cuprum_stream", None)
+    assert stream_name == "stdout", (
+        f"diagnostic stream must be bounded, got {stream_name!r}"
+    )
+    outcome = getattr(record, "cuprum_outcome", None)
+    assert outcome == "bounded_fragments_emitted", (
+        f"diagnostic outcome must name fragmentation, got {outcome!r}"
+    )
+    bound_bucket = getattr(record, "cuprum_max_line_chars_bucket", None)
+    assert bound_bucket == "le_1k", (
+        f"diagnostic bound must use a fixed bucket, got {bound_bucket!r}"
+    )
+    assert "a" * 10 not in record.getMessage(), (
+        "diagnostic must not include child output"
     )
 
 

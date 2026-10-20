@@ -1550,6 +1550,12 @@ remain the responsibility of observe-hook adapters such as `MetricsHook` and
 `TracingHook`, which consume `ExecEvent` values without coupling core execution
 to a telemetry vendor.
 
+Line observation emits at most one debug record per output stream when its
+configured character bound first produces fragments. The record uses fixed
+`stdout`/`stderr` stream names, the `bounded_fragments_emitted` outcome, and a
+bucket for the configured limit. It contains no child output or exact limit,
+and does not alter the public `LineEvent` shape.
+
 `MetricsHook` keeps that consumption in two halves. The pure
 `_metric_operations` reducer maps an `ExecEvent` to a tuple of `_CounterOp` and
 `_HistogramOp` records, and `_apply` is the only step that reaches the

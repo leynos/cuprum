@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import codecs
 import dataclasses as dc
+import logging
 import typing as typ
 
 from cuprum._result_assembly import _require_bytes, _require_text
@@ -28,6 +29,15 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_wait_types import _StreamPayload
 
 
+_LOGGER = logging.getLogger(__name__)
+_LINE_BOUND_BUCKETS = (
+    (1_024, "le_1k"),
+    (4_096, "1k_4k"),
+    (16_384, "4k_16k"),
+    (65_536, "16k_64k"),
+)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _LineConsumption:
     """Inputs for draining a stream while publishing decoded lines."""
@@ -36,6 +46,39 @@ class _LineConsumption:
     on_line: _LineSink
     drain: cabc.Callable[..., cabc.Awaitable[_StreamPayload | None]]
     relay_diagnostics: _RelayDiagnostics | None
+
+
+@dc.dataclass(slots=True)
+class _LinePublisher:
+    """Decode and publish one observed stream's line batches."""
+
+    consumption: _LineConsumption
+    decoder: codecs.IncrementalDecoder
+    accumulator: _LineAccumulator
+
+    async def publish(self, lines: list[str]) -> None:
+        """Send each completed line or fragment through the awaited sink."""
+        for line in lines:
+            await _emit_line(self.consumption.on_line, line)
+
+    async def publish_decoded(self, text: str) -> None:
+        """Publish one decoded batch and report its first overflow."""
+        had_emitted_fragment = self.accumulator.has_emitted_fragment
+        lines = self.accumulator.feed(text)
+        if self.accumulator.has_emitted_fragment and not had_emitted_fragment:
+            _report_line_fragmentation(self.consumption.config)
+        await self.publish(lines)
+
+    async def feed_decoder(self, chunk: bytes) -> None:
+        """Decode one chunk and emit only lines whose boundary is complete."""
+        await self.publish_decoded(self.decoder.decode(chunk))
+
+    async def finish(self) -> None:
+        """Flush decoder state and publish the final unterminated line."""
+        await self.publish_decoded(self.decoder.decode(b"", final=True))
+        trailing = self.accumulator.finish()
+        if trailing is not None:
+            await _emit_line(self.consumption.on_line, trailing)
 
 
 async def _emit_line(sink: _LineSink, line: str) -> None:
@@ -67,31 +110,45 @@ async def _consume_stream_with_lines(
     if stream is None:
         return _empty_capture(consumption.config)
 
-    decoder = _incremental_decoder(consumption.config)
-    accumulator = _LineAccumulator(consumption.config.max_line_chars)
-
-    async def publish(lines: list[str]) -> None:
-        """Send each completed line or fragment through the awaited sink."""
-        for line in lines:
-            await _emit_line(consumption.on_line, line)
-
-    async def feed_decoder(chunk: bytes) -> None:
-        """Decode one chunk and emit only lines whose boundary is complete."""
-        await publish(accumulator.feed(decoder.decode(chunk)))
+    publisher = _LinePublisher(
+        consumption,
+        _incremental_decoder(consumption.config),
+        _LineAccumulator(consumption.config.max_line_chars),
+    )
 
     captured = await consumption.drain(
         stream,
         consumption.config,
-        on_chunk=feed_decoder,
+        on_chunk=publisher.feed_decoder,
         relay_diagnostics=consumption.relay_diagnostics,
     )
-    await publish(accumulator.feed(decoder.decode(b"", final=True)))
-    trailing = accumulator.finish()
-    if trailing is not None:
-        await _emit_line(consumption.on_line, trailing)
+    await publisher.finish()
     if consumption.config.capture_bytes:
         return _require_bytes(captured, "line-observed stream")
     return _require_text(captured, "line-observed stream")
+
+
+def _report_line_fragmentation(config: _StreamConfig) -> None:
+    """Log the first bounded-fragment outcome with fixed categories."""
+    _LOGGER.debug(
+        "Line observation emitted bounded fragments",
+        extra={
+            "cuprum_event": "line_observation_fragmented",
+            "cuprum_stream": config.stream.value,
+            "cuprum_outcome": "bounded_fragments_emitted",
+            "cuprum_max_line_chars_bucket": _line_bound_bucket(config.max_line_chars),
+        },
+    )
+
+
+def _line_bound_bucket(max_line_chars: int | None) -> str:
+    """Map a configured line bound into a fixed diagnostic category."""
+    if max_line_chars is None:
+        return "unbounded"
+    for limit, bucket in _LINE_BOUND_BUCKETS:
+        if max_line_chars <= limit:
+            return bucket
+    return "gt_64k"
 
 
 def _empty_capture(config: _StreamConfig) -> str | bytes | None:
