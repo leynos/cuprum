@@ -401,25 +401,31 @@ def test_uncaptured_success_route_does_not_wait_on_the_descendant(
     pid_file = tmp_path / "uncaptured-descendant.pid"
     pipeline = _pipeline(python, pid_file, blocks=False)
 
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = asyncio.run(
-            asyncio.wait_for(
-                pipeline.run(
-                    timeout=DEADLINE_S,
-                    output=RunOutputOptions(capture=False),
-                    context=_context(ProcessGroupPolicy.OWN_GROUP),
-                ),
-                _HARNESS_BUDGET_S,
-            ),
-        )
-        descendant = wait_for_pid_file(
-            pid_file,
-            context="the uncaptured success route",
-        )
-
+    descendant: int | None = None
     try:
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            result = asyncio.run(
+                asyncio.wait_for(
+                    pipeline.run(
+                        timeout=DEADLINE_S,
+                        output=RunOutputOptions(capture=False),
+                        context=_context(ProcessGroupPolicy.OWN_GROUP),
+                    ),
+                    _HARNESS_BUDGET_S,
+                ),
+            )
+            descendant = wait_for_pid_file(
+                pid_file,
+                context="the uncaptured success route",
+            )
+
         assert [stage.exit_code for stage in result.stages] == [0, 0], (
             f"both stages must report a normal exit, got {result.stages!r}"
         )
     finally:
+        # Inside the ``finally`` from the start: a run that raises, or a pid
+        # file that never appears, must not leave a ``SIGTERM``-immune
+        # descendant on the shared host. ``None`` makes the reaper read the pid
+        # file itself, so a run that failed before recording a descendant still
+        # exits through one path.
         reap_descendant(pid_file, descendant)

@@ -25,8 +25,8 @@ streamed boundary does, stated for the one await it has:
 *The configured timeout covers every await a run performs after its child
 exits, not only the wait for the exit itself.*
 
-The writer is deliberately awaited under the run's *remaining* deadline rather
-than being reclaimed through
+Where the run *has* a configured deadline, the writer is deliberately awaited
+under the remainder of it rather than being reclaimed through
 :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`. The settle
 window is the right bound for a streamed run, whose consumers may still reach
 end-of-file once the writer lets go; it is the wrong one here, because the
@@ -36,6 +36,14 @@ truncating input the caller asked cuprum to deliver, and — for an owning run �
 would leave the descendant holding the pipe unsignalled. Waiting out the
 deadline and then reporting ``TimeoutExpired`` is the run saying what actually
 happened: the input was not delivered, and the configured budget ran out.
+
+A run with no ``timeout=`` has no remainder to wait out and no expiry to
+report, so that argument does not reach it: an await bounded by ``None`` is
+not bounded at all, and the run would hang for ever instead of saying
+anything. There the shared settle window is the fallback, which is exactly
+what ``main`` did before this path had a deadline at all — the choice above is
+about which bound a *deadlined* run should use, not a licence to drop the
+bound entirely when there is no deadline to take a remainder from.
 
 ``ADR021`` records why the group settlement matters here as much as the
 cancellation does: a cancelled writer is reclaimed, but a descendant holding the
@@ -50,7 +58,10 @@ import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_reclaim import _cancel_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _cancel_stdin_writer,
+    _settle_stdin_writer,
+)
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
@@ -93,16 +104,26 @@ async def _await_writer_within_deadline(
     second, less careful copy of the same judgement: it cannot tell its own
     timer from a caller's ``cancel()`` arriving after the timer fired, so that
     caller's cancellation would be reported as a timeout.
+
+    A run with no ``timeout=`` has no remainder to spend and no expiry to
+    report, so it takes the settle window instead. Passing ``None`` to
+    ``asyncio.timeout`` does not mean "no bound here"; it means no bound
+    anywhere, and the same parked writer then holds the run for ever with no
+    deadline to translate. The settle window is what bounds that run in
+    ``main``, and dropping it for this path would trade one hang for another:
+    the deadline fix is about which bound a deadlined run gets, not about
+    whether an undeadlined one is bounded at all.
     """
     # A remainder the exit wait already spent is passed through rather than
     # clamped: a non-positive delay schedules the scope's expiry for the next
     # loop iteration, which is the same "already elapsed" reading the exit wait
-    # gives a non-positive timeout. A run without ``timeout=`` yields ``None``,
-    # which is passed through unchanged rather than defaulted, so the scope
-    # owns the meaning of "no deadline" exactly as the streamed path's
-    # boundary does.
+    # gives a non-positive timeout.
+    remaining = _deadline_for_collection(execution)
+    if remaining is None:
+        await _settle_stdin_writer(stdin_task)
+        return
     try:
-        async with asyncio.timeout(_deadline_for_collection(execution)):
+        async with asyncio.timeout(remaining):
             await asyncio.shield(stdin_task)
     except TimeoutError as exc:
         # The direct path captures nothing, so both payloads are ``None``. The
