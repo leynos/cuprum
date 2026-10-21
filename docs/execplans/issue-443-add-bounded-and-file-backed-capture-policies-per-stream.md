@@ -804,19 +804,24 @@ Thresholds that trigger escalation when breached.
 
   Date/Author: 2026-10-20, implementation agent.
 
-- [x] (2026-10-21) Re-ran the documentation gates against this plan revision
-  so the plan update itself carries current evidence, rather than relying on a
-  source-certification run whose tree differed. The dirty-diff SHA-256
+- [x] (2026-10-21) Re-ran the two Markdown gates against the plan revision
+  that records the evidence above, so the documentation row of the pre-merge
+  checks has a gate record of its own instead of resting on the
+  source-certification run. `make markdownlint` (18 s) and `make nixie` (1 s)
+  both exit zero, and the dirty-diff SHA-256
   `161442e406e05ce4b5af004b179c9b2da382bd94ef0d81246c8c9c5c2f848f97` is
-  unchanged across `make markdownlint` (18 s) and `make nixie` (1 s); both exit
-  zero. That same content already passed `make check-fmt`, `make lint`, and
-  `make typecheck` in the `doc-corrected-final` run at the same SHA, so all five
-  gates applicable to a plan-only change hold for one exact tree. The source
-  certification above remains the test evidence; this run adds none and does
-  not supersede it. Logs:
+  identical before and after, so neither gate straddled a content change. That
+  content had already passed `make check-fmt`, `make lint`, and
+  `make typecheck` in the `doc-corrected-final` run at the same SHA, so all
+  five gates applicable to a plan-only change hold for one exact tree.
+
+  Recording this paragraph changes the content again, so the five results
+  certify the revision *before* this bullet, not the commit that contains it.
+  That is the same limitation as any plan that documents its own verification:
+  the source certification above remains the test evidence, and this run adds
+  no test evidence and supersedes none. Logs:
   `/tmp/markdownlint-cuprum-rebase-issue443-onto-f359f2ec4-docfinal-20261021.out`
-  and
-  `/tmp/nixie-cuprum-rebase-issue443-onto-f359f2ec4-docfinal-20261021.out`.
+  and `/tmp/nixie-cuprum-rebase-issue443-onto-f359f2ec4-docfinal-20261021.out`.
 
   Date/Author: 2026-10-21, implementation agent.
 
