@@ -93,12 +93,16 @@ async def _start_line_stream_run(
     # the iterator.
     execution = _with_line_sink_hooks(execution, queue, telemetry)
     # Sampled *before* the spawn await, matching ``_sample_run_start`` on the
-    # direct path. ``started_at`` is the reference ``duration_s`` and every
-    # per-line ``at`` stamp are measured against, and the exit event's
-    # ``started_at`` is published from it, so a reading taken afterwards would
-    # report a run shorter than the time it actually took — by however long the
-    # spawn blocked. Stamping the bundle reads no clock, so doing it first does
-    # not disturb the ordering this reference exists to establish.
+    # direct path. ``started_at`` is the reference every per-line ``at`` stamp
+    # is measured against and the exit event's ``started_at`` is published
+    # from, so a reading taken afterwards would report a run shorter than the
+    # time it actually took — by however long the spawn blocked. Stamping the
+    # bundle reads no clock, so doing it first does not disturb the ordering
+    # this reference exists to establish.
+    # Read from the observation rather than a module-level clock, because the
+    # post-exit deadline subtracts it from that same injectable reading: a
+    # start taken from a different clock would make the subtraction the
+    # difference between two clocks rather than a duration.
     # Rebuilt, not mutated: the stream consumers read ``started_at`` off the
     # execution when stamping each ``LineEvent``. Left at its ``0.0`` default,
     # every ``at`` would be the machine's monotonic uptime rather than seconds

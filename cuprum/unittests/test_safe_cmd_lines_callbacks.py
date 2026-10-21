@@ -59,25 +59,53 @@ def test_lines_stamp_events_from_the_spawn_clock(
     monkeypatch: pytest.MonkeyPatch,
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """The line event clock subtracts the reference stamped after spawning."""
-    from cuprum import _line_callbacks
-    from cuprum._line_stream import spawn
+    """Line stamps and the post-exit deadline read one and the same clock.
 
-    # The start reference is stamped in ``spawn``; the coordinator no longer
-    # reads that clock, so patching it there would leave the real reading in
-    # place and the timestamp assertion below would depend on the wall clock.
-    monkeypatch.setattr(spawn, "perf_counter", lambda: 40.0)
-    monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
+    The start reference is sampled from the observation's injectable clock —
+    the callable ``_deadline_for_collection`` later subtracts it from — rather
+    than from a module-level ``perf_counter``. Two things are asserted, and
+    neither is reachable by a coincidence of the machine's own uptime:
+
+    * the stamp is the difference between the injected "now" and the injected
+      start, which can only hold if the start came from the injected clock;
+    * a short run completes inside its deadline. The injected origin sits far
+      above the machine's uptime, so a start taken from the real clock would
+      sit far below "now" and compute an elapsed time larger than the whole
+      timeout, which the post-exit drain reports as ``TimeoutExpired``.
+
+    The line clock is injected in ``_line_callbacks``, where the stamping read
+    lives. The start clock is injected in ``_command_internals``: both clocks
+    are resolved at the observation's construction site, so patching that
+    module's ``time`` is what reaches the run; the ``_StageObservation`` field
+    default binds at class creation and would ignore the patch.
+    """
+    from cuprum import _command_internals, _line_callbacks
+
+    # Deliberately above any real ``perf_counter`` reading (the machine's
+    # uptime, in seconds). A start taken from the real clock would then sit far
+    # *below* "now", making elapsed time enormous rather than merely wrong.
+    clock_origin = 1e12
+    monkeypatch.setattr(
+        _command_internals.time, "perf_counter", lambda: clock_origin
+    )
+    monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: clock_origin + 3.25)
     command = python_builder("-c", "print('clock')")
 
-    async def collect() -> list[LineEvent]:
-        """Iterate the command and retain its one clock-stamped event."""
-        return [event async for event in command.lines()]
+    async def collect() -> tuple[list[LineEvent], object]:
+        """Iterate the command, reporting its events and its result."""
+        stream = command.lines(timeout=30.0)
+        events = [event async for event in stream]
+        return events, stream.result
 
-    events = asyncio.run(collect())
+    events, result = asyncio.run(collect())
 
     assert [event.at for event in events] == [3.25], (
-        f"line timestamps must use the injected spawn reference, got {events!r}"
+        "line timestamps must be measured from the start reference the spawn "
+        f"sampled from the observation clock, got {events!r}"
+    )
+    assert result is not None, (
+        "a run whose post-exit drain stays inside its deadline must complete "
+        "rather than report an expiry"
     )
 
 
