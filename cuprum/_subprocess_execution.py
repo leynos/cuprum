@@ -166,8 +166,11 @@ async def _await_direct_completion(
     stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
+    # Read once: the same fact chooses the run shape and decides, below, whether
+    # a bare ``TimeoutError`` is the run's expiry or a reader's own failure.
+    has_consumers = execution.consumes_stdout or execution.consumes_stderr
     try:
-        if execution.consumes_stdout or execution.consumes_stderr:
+        if has_consumers:
             (
                 exit_code,
                 exited_at,
@@ -199,7 +202,7 @@ async def _await_direct_completion(
             exc,
         )
     except TimeoutError as exc:
-        if execution.consumes_stdout or execution.consumes_stderr:
+        if has_consumers:
             # The streamed path translates every expiry of its own before this
             # frame sees it, so a bare ``TimeoutError`` escaping it is a
             # reader's own failure — an ``on_line`` hook using

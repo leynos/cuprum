@@ -508,6 +508,39 @@ async def reach_gate_and_cancel(
     await settle(run_task)
 
 
+async def cancel_twice_across_direct_cleanup(
+    run_task: asyncio.Task[object],
+    watch: DirectCleanupWatch,
+) -> None:
+    """Cancel once to enter the direct cleanup, then again inside its first half.
+
+    Both arrivals are aimed rather than timed. The first cancellation is
+    delivered while the post-exit writer wait is parked on its gate, which is
+    the only way into the cleanup from a run that configures no deadline. The
+    second is delivered while the writer's reclamation is parked, so it lands on
+    that half instead of on whatever the scheduler happened to be doing.
+
+    The ``sleep(0)`` between the second cancellation and the release is what
+    lets the loop deliver it: a cancellation scheduled but not yet delivered
+    would be reported by :func:`settle` as the run ending, and the cleanup would
+    be released by the ``finally`` of the test rather than by this helper.
+    """
+    await await_within(
+        watch.writer_gate.reached.wait(),
+        context="the direct run's post-exit writer wait",
+    )
+    run_task.cancel()
+    watch.writer_gate.released.set()
+    await await_within(
+        watch.cleanup_gate.reached.wait(),
+        context="the writer's reclamation",
+    )
+    run_task.cancel()  # second cancellation, delivered mid-cleanup
+    await asyncio.sleep(0)
+    watch.cleanup_gate.released.set()
+    await settle(run_task)
+
+
 @pytest.fixture
 def owned_builder() -> cabc.Iterator[cabc.Callable[..., SafeCmd]]:
     """Allowlist the interpreter and yield a builder for it, for one test.

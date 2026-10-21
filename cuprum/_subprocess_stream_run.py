@@ -152,24 +152,9 @@ async def _collect_stream_output(
     """Collect the stream consumers, settling the run's group if that fails.
 
     The three awaits below form one boundary *and* share one deadline; the
-    module docstring records why both matter. The deadline is read as the
-    argument to ``asyncio.timeout`` so it is measured immediately before the
-    scope it bounds, and it covers the heartbeat stop and the writer await as
-    well as the gather — a writer parked on a pipe a descendant never reads is
-    a hang the gather's own bound would never reach.
-
-    Expiry and cancellation are handled apart deliberately. Only the timer's
-    own expiry becomes the translated timeout; a cancellation still arrives as
-    ``CancelledError`` and takes the re-raising route, which keeps a caller's
-    cancellation distinguishable from the run's own deadline.
-
-    A bare ``TimeoutError`` is not proof of expiry: a consumer can fail with
-    one of its own — an ``on_line`` hook using ``asyncio.timeout`` internally,
-    say — and reporting that as this run's deadline would reconcile in capture
-    mode and, with no ``timeout=`` configured, replace the reader's real error
-    with an invariant failure. The scope's ``expired()`` distinguishes the two,
-    so only its own expiry takes the timeout route and every other failure is
-    re-raised after the discard reconciliation.
+    module docstring records why both matter. Expiry and cancellation are
+    handled apart for the reason given there, and the scope's ``expired()`` is
+    what tells this run's deadline from a consumer's own ``TimeoutError``.
 
     Returns
     -------

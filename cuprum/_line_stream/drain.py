@@ -62,33 +62,16 @@ async def _collect_line_stream_after_exit(
     and because the hang is what prevents the reconciliation below, the
     descendant outlives the run that spawned it.
 
-    The consumers are observed with ``asyncio.wait`` rather than gathered, and
-    that choice is what protects a trailing line. A child that published a final
-    line and exited can leave that line sitting in a full queue with its
-    consumer parked in ``queue.put``; cancelling a gathered consumer there would
-    lose it, whereas ``asyncio.wait`` reports which readers finished and leaves
-    the cancellation rule to the reconciliation, which already knows it — cancel
-    only what is unfinished, gather with ``return_exceptions=True``, and keep
-    every prefix already captured. The wait carries the consumers' own
-    remainder, measured at the point of use: the writer await above may already
-    have spent part of the budget, so the remainder read there is the one truly
-    left. The enclosing scope is the outer backstop for the two awaits that have
-    no bound of their own — the heartbeat stop and the writer.
+    The consumers are observed with ``asyncio.wait`` rather than gathered, so a
+    reader parked in ``queue.put`` on a full queue is cancelled by the
+    reconciliation — which keeps every prefix already captured — rather than
+    gathered, which would lose a trailing line. The writer is awaited under the
+    same scope but settles inside it, so an ``INHERIT`` run, which has no group
+    signal to release the writer, does not spend the whole budget on it.
 
-    The writer is awaited under the same scope, but a settled writer is what
-    makes its wait terminate here rather than at the deadline: a producer
-    parked in ``anext`` would otherwise hold the line until the enclosing scope
-    expired, spending the whole remaining budget on a task the settle window
-    reclaims in a fraction of it. An ``INHERIT`` run has no group signal to
-    release the writer, so it depends on that reclaim entirely.
-
-    Expiry and cancellation are handled apart, and deliberately. Only the run's
-    own budget expiring becomes the translated ``TimeoutExpired`` its caller is
-    owed, reconciling with the run's capture policies preserved so the text that
-    exception reports is the text the run had already collected. A caller's
-    cancellation, a reader's own failure, or any other post-exit error — an
-    ``aclose()`` after the child exited, say — discards instead, settling
-    promptly rather than spending the capture grace on text nobody will read.
+    Only the run's own budget expiring becomes the translated ``TimeoutExpired``
+    its caller is owed; a caller's cancellation, a reader's own failure, or any
+    other post-exit error discards instead.
 
     Returns
     -------
@@ -112,26 +95,7 @@ async def _collect_line_stream_after_exit(
                 _deadline_for_collection(execution),
             )
     except TimeoutError as exc:
-        # Before the settlement, so an observer sees the same order the exit
-        # wait's expiry produces: the deadline, then teardown started and
-        # completed. Emitting after it would describe a run that had already
-        # been reclaimed as one that timed out while still being torn down.
-        run.telemetry.emit(
-            LineStreamPhase.TIMEOUT,
-            _LineStreamEventDetails(error=exc),
-        )
-        stdout_drain, stderr_drain = await _settle_and_reconcile(
-            run,
-            pid,
-            execution,
-            preserve=True,
-        )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_drain.payload,
-            stderr_text=stderr_drain.payload,
-            timeout=execution.timeout,
-        )
+        await _expire_line_stream(run, pid, execution, exc)
     except BaseException:
         await _settle_and_reconcile(run, pid, execution, preserve=False)
         raise
@@ -154,12 +118,47 @@ async def _collect_line_stream_after_exit(
     )
     # Settled here, on the one path that read every consumer to completion: the
     # caller assembles its result from these collectors once this returns, and
-    # ``snapshot()`` reports ``()`` until a settle marks the drain done. The
-    # failure paths above re-raise, so no result is assembled after them and the
-    # collectors they leave unsettled are read by nobody.
+    # ``snapshot()`` reports ``()`` until a settle marks the drain done.
     for diagnostics in run.tasks.relay_diagnostics:
         diagnostics.settle()
     return stdout_drain, stderr_drain
+
+
+async def _expire_line_stream(
+    run: _LineStreamRun,
+    pid: int | None,
+    execution: _SubprocessExecution,
+    exc: TimeoutError,
+) -> typ.NoReturn:
+    """Settle and report a line stream whose post-exit budget expired.
+
+    The phase is emitted before the settlement, so an observer sees the order
+    the exit wait's expiry produces: the deadline, then teardown started and
+    completed. Emitting after it would describe a run that had already been
+    reclaimed as one that timed out while still being torn down.
+
+    Raises
+    ------
+    _SubprocessTimeoutError
+        Carrying the *captured* text, because a capturing run's output is what
+        the resulting ``TimeoutExpired`` reports to its caller.
+    """  # ruff: ignore[docstring-extraneous-exception] - _SubprocessTimeoutError propagates from _handle_stream_timeout
+    run.telemetry.emit(
+        LineStreamPhase.TIMEOUT,
+        _LineStreamEventDetails(error=exc),
+    )
+    stdout_drain, stderr_drain = await _settle_and_reconcile(
+        run,
+        pid,
+        execution,
+        preserve=True,
+    )
+    _handle_stream_timeout(
+        exc,
+        stdout_text=stdout_drain.payload,
+        stderr_text=stderr_drain.payload,
+        timeout=execution.timeout,
+    )
 
 
 async def _await_writer_within_scope(run: _LineStreamRun) -> None:
