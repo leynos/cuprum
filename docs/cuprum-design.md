@@ -550,6 +550,16 @@ diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
 [ADR-024](adr-024-captured-command-output-types.md).
 
+`CapturedResult` is constructed only when both settled payloads are decoded
+text. A run that captures one stream and not the other, or whose
+`FileBackedCapture` spilled a stream to a file, reports those payloads and the
+capture records on an ordinary `CommandResult`: a spilled stream's text is at
+the record's `path` rather than in the payload, and the narrowed class cannot
+say so without inventing an empty string. A default `RunOutputOptions()` run
+captures both streams in full, so it is unaffected; the restriction and its
+consequences are recorded in
+[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+
 The `RunOutputOptions | None` overload accepts variables that may hold either
 explicit options or `None` and returns `CommandResult`. Its broader return type
 reflects that capture may be disabled by the options value.
@@ -606,6 +616,9 @@ class PipelineResult:
     failure_index: int | None
 
     @property
+    def captures(self) -> tuple[CapturedStream, ...]: ...  # final stage only
+
+    @property
     def failure(self) -> CommandResult | None: ...
 
     @property
@@ -625,6 +638,15 @@ Contract notes:
   `ValueError` for an interior stage.
 - When capture is disabled (`RunOutputOptions(capture=False)`),
   `PipelineResult.stdout` is `None`.
+- `captures` reports the final stage's records: its stdout and its stderr.
+  Interior stdout is relayed to the next stage rather than captured, so it has
+  no record anywhere; an interior stage's stderr, when that stage captures it,
+  is reported on the stage's own `stages[i].captures`, which is where a caller
+  inspecting every stage's stderr reads it. An uncaptured stream contributes no
+  record at all, so `stages[i].captures` is empty for a stage that captured
+  neither stream. A caller reading only `PipelineResult.captures` sees the
+  final stage alone. The policy for a stream therefore bounds what the *result*
+  keeps and never what a stage hands downstream.
 - When a stage exits non-zero, Cuprum terminates the remaining pipeline stages
   and sets `PipelineResult.failure_index` to the stage that triggered
   termination.
@@ -1485,8 +1507,186 @@ Users should be able to choose:
 
 Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
 shorthand independently, so a command can capture stdout silently while stderr
-still mirrors to the log. Capture stays a single joint switch — `capture=True`
-keeps both streams captured even when neither echoes.
+still mirrors to the log. Capture is per stream in the same way:
+`capture_stdout` and `capture_stderr` each take a policy, and the `capture`
+shorthand sets both. A per-stream field left at `None` inherits the shorthand
+and an explicit per-stream value wins for its own stream, which is exactly how
+`echo_stdout` and `echo_stderr` already resolve from `echo` — one rule for both
+options, so a caller who has learnt one has learnt the other. A value that is
+neither a policy nor a `bool` is rejected with `ValueError` before the spawn
+rather than at the drain, so a caller learns of a typo before a child runs
+rather than after it has captured something unintended.
+
+Three policies exist. `FullCapture` retains the stream completely in the
+parent's memory and is what `capture=True` and the default resolve to.
+`BoundedCapture(max_bytes=N)` retains the last `N` bytes in memory.
+`FileBackedCapture(spill_threshold_bytes=…, directory=…, keep_file=…)` retains
+the stream on the heap until it passes the threshold, then moves it to a file
+and appends there, so retention stops tracking the child's output.
+
+The bound is a **byte** count on the raw stream: the accumulator discards the
+oldest buffered bytes as new ones arrive, so retention is bounded by
+construction and a caller reasoning about memory pays for bytes. Discarding raw
+means the *kept* buffer can begin inside a code point, so a text capture needs
+one repair at its *leading* edge when it is finalized. This is a different
+operation from the echoed copy's bound: `max_echo_line_bytes` walks an
+incremental decoder and encoder pair over each line, which keeps the copy's own
+ending intact, whereas a capture bound has already thrown the beginning away
+and can only trim what survived.
+
+The repair runs only when the bound actually discarded bytes. The leading edge
+is moved forwards to a code-point boundary — for UTF-8, past any leading
+continuation byte; for the fixed-width encodings, by realigning against the
+stream offset the retained tail starts at, dropping a leading low surrogate
+half-pair as well — and any *incomplete* trailing code point is then dropped.
+Both edges need a step: a buffer cut arbitrarily can be damaged at either one,
+and a strict decoder raises on both. When the stream was not truncated there is
+no damaged edge, and the raw bytes are decoded exactly as a full capture of the
+same stream would decode them. A byte-exact capture likewise skips the repair:
+its tail is the child's own bytes, and a binary stream ending in a
+continuation-shaped byte is data, not a broken character.
+
+Resolving the codec is part of the same repair, because a bound can discard the
+mark that selected it. A `utf-8-sig` stream whose head is gone is plain UTF-8,
+and the surviving tail must be trimmed under that name: the trim does not
+recognize `utf-8-sig` as UTF-8, so a cut inside a multi-byte character would
+survive at the tail's leading edge. A `utf-16` or `utf-32` family name carries
+the loss of the mark into the decode: a tail cut from a stream whose mark
+announced the order other than the platform's decodes in native order and
+produces wrong text. The tail is therefore resolved to a concrete codec. The
+stream's own opening bytes settle that whenever the mark was really there: the
+accumulator keeps the first few bytes of the stream beside the retained tail,
+so a mark a bound has since discarded still selects the byte order it
+announced. Only a stream that carried no mark at all — one written under a
+concrete `utf-16-le`/`utf-32-be` codec, or cut before any mark arrived — falls
+back to the platform's native order, which is the rule a whole-stream decode of
+that stream would have applied too. Only a truncated capture resolves this way:
+while the mark survives it stays part of the retained bytes and the family
+codec strips it, so the caller is never handed a leading U+FEFF that a full
+capture does not report. The bytes the repair costs are counted as dropped, so
+the reported drop count stays exact.
+
+The repair covers exactly two families, so a bounded *text* capture is accepted
+only where one of them applies. UTF-8 announces its own continuation bytes and
+the fixed-width codecs can be realigned by offset; a single-byte encoding has
+no interior boundary to repair at all, and the classifier establishes that
+property by probing rather than by naming codecs, so the registry's full
+breadth is covered without a list that could go stale. Everything else —
+Shift-JIS, EUC, GBK, Big5, the ISO-2022 escape families — can leave a trail
+byte that is an ordinary byte value, which a decoder handed the headless tail
+would read as a character of its own. A Shift-JIS slice cut between `b"\x81"`
+and `b"a"` decodes the orphaned `b"a"` and reports text the child never wrote,
+so the run is refused with `ValueError` before the child is spawned. The
+refusal is the honest answer to a request whose result cannot be correct: the
+alternatives are a truncation that invents a character, or silently ignoring
+the bound, and neither is one a caller could want. A byte-exact capture is
+never restricted, because it is never decoded; a caller needing those encodings
+as text can use `FullCapture` or `FileBackedCapture`, which do not truncate the
+leading edge. Both the single-command and the pipeline paths consult the same
+check before spawning, so no entry point can reach the drain with a policy the
+other refuses.
+
+A capture policy governs what the *result* retains. It does not govern what a
+pipeline stage hands to the next stage: an interior stage's stdout is the
+child's own pipe, and the parent never reads it, which is why the relay's
+fidelity is a structural property rather than a property of the bound. Nor does
+a bound shorten the mirrored copy an echo sink receives, which
+`max_echo_line_bytes` bounds separately and on its own path.
+
+Every captured stream contributes one `CapturedStream` record, in
+stdout-then-stderr order, and an uncaptured stream contributes none — so a
+record's presence is itself the statement that the stream was captured. For a
+single command the records are on `CommandResult.captures`. For a pipeline,
+`PipelineResult.captures` carries the final stage's records, and each interior
+stage's stderr records are on that stage's own `stages[i].captures`; interior
+stdout is relayed rather than captured, so it has no record. The record carries
+`total_bytes` (what the drain received) beside `dropped_bytes` (what the bound
+discarded) and a `truncated` property derived from the two, so a caller can
+always tell a short stream from a shortened one and the two counts cannot
+disagree. A run whose reader stopped early — a timeout, say — has no way to
+count bytes the child wrote after the parent stopped reading, so the record
+describes the bytes the drain received rather than the bytes the child wrote.
+`storage` distinguishes memory from file, `path` names the spill, `owned` says
+whether the run still must remove it, and `storage_failed` says the file is
+incomplete rather than merely short.
+
+The records are the whole of what a text run reports for a stream it spilled:
+that stream's payload is `None`, and the file is the only place its text is
+kept. A single-command text run whose payloads are not both decoded text is
+therefore reported as a `CommandResult` rather than the narrowed
+`CapturedResult`, which promises two strings; see
+[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+
+The sink seam is asynchronous, `absorb` and `finalize` included, because
+retention is the child's output and a file-backed capture cannot retain a chunk
+without writing to disk. A synchronous seam would force that write onto the
+run's event loop, where it delays the child's other stream, the deadline, and
+cancellation for as long as the filesystem takes. File-backed storage therefore
+runs every blocking call on a worker thread through `cuprum._capture_spill_io`,
+which serializes one accumulator's calls with a lock: `asyncio.to_thread` alone
+starts a separate worker per call, so the buffered prefix, the appends, the
+flush, and the byte-mode read-back could otherwise reach the file in
+executor-scheduling order rather than the order the child wrote. Each call is
+shielded, so a drain cancelled while a worker write is in flight waits for that
+write before teardown closes and unlinks the file underneath it. The two
+in-memory policies answer without suspending, which costs a coroutine step per
+chunk and keeps one protocol for the drain rather than a policy test between
+two. The leaf module and the protocol change it serves are recorded in the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-10-18.
+
+A storage failure is absorbed rather than raised: a failure to retain output is
+not a failure of the command that produced it, so the child is still reaped and
+a run that otherwise returns still hands the caller a result. On the timeout
+and cancellation routes there is no result to attach anything to; the storage
+failure is absorbed so that the run's own outcome stands. A failed *creation*
+leaves the stream on the heap, where it is still reported complete; a failed
+*append* stops accepting new writes and reports `storage_failed`, but the
+prefix that reached the file is not truncated to the bytes the last flush
+carried: appends are buffered, so finalization attempts one flush before a
+byte-mode read-back even on the failed path. If that flush and the read-back
+succeed, the payload includes every byte the accumulator had accepted. If the
+flush also fails, buffered bytes are not guaranteed in the payload, and the
+earlier append-failure event remains authoritative. A flush failure is reported
+separately only when no earlier failure already explains the capture. Both
+failures emit a `CaptureEvent` and name the error's class rather than its
+message, because the event channel's consumers treat fields as low-cardinality
+labels.
+
+A failed *read-back*, which only byte mode performs, reports `storage_failed`
+too, and the record's payload is absent. The file follows the policy rather
+than the failure: it is left in place only under `keep_file=True`, which is the
+one setting that hands it to the caller, and is otherwise removed by the same
+cleanup every settled run performs — so the record's path records where the
+spill went, not a location the caller can still read. A failed *removal* is the
+one route that sets no flag. Cleanup runs on the way out of every run,
+including ones already carrying the caller's own timeout or cancellation, and a
+failure to delete a temporary file must not replace either, so the unlinking
+call absorbs its own error. The three retention routes report
+`storage_write_failed`, `storage_flush_failed`, and `storage_read_failed`; the
+removal route is silent because its failure changes nothing the caller can
+observe but the presence of the file.
+
+Spill cleanup is a pair of steps with one owner. The run's result-construction
+site closes the handle every settled drain reports, which removes the file
+before the result is returned — so a long-lived process cannot accumulate spill
+files across runs. Teardown reconciles the accumulators themselves as well,
+which is the only path that reaches a drain cancelled mid-await: such a drain
+re-raises without finalizing, so no result is built and the accumulator is the
+last reference to the file. `SpillHandle.close` is idempotent and both callers
+run it under `_shielded_cleanup`, so the two paths agree rather than racing.
+That shield completes the release and then re-raises the caller's cancellation,
+so every pipeline finalizer reaches the capture release through a `finally`
+that encloses the delivery-worker close, the presentation-session close, and
+the terminal events: a cancellation, or a session close that raises, must not
+be the exit that leaves the run's spill files behind. The handle's own close
+and unlink are blocking filesystem calls, so they too run on a worker rather
+than on the loop that is unwinding the run. `keep_file=True` is the sole
+exception: the descriptor is closed and the file is left for the caller. The
+one cancellation that still removes a kept file is the one landing before the
+initial spill's prefix is written: `_publish_spill` published the handle with
+`keep=False` and the accumulator promotes it only once the prefix has landed,
+so until then the file is the run's.
 
 `RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
 default is 64 KiB, and the bound includes retained child bytes, the encoded
@@ -1534,10 +1734,11 @@ both streams remain `PIPE` for line delivery even when `capture=False` and echo
 is disabled; the resulting `CommandResult` still has `None` for both captured
 fields. For a pipeline, the stdout of a non-final stage is always a `PIPE` so
 that it can relay into the next stage, while the stdout of the final stage and
-the stderr of every stage follow their own independent gates. `capture` remains
-a single joint switch, so both streams are still captured when `capture=True`
-even if neither echoes. The flow ends at the stream consumers:
-`_spawn_stream_consumers` for a single command and
+the stderr of every stage follow their own independent gates. Capture is
+resolved per stream by the same rule as echo — an explicit per-stream policy
+wins, and a stream left at `None` inherits the `capture` shorthand — so a run
+may bound one stream while leaving the other complete. The flow ends at the
+stream consumers: `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 
 ```mermaid
@@ -1555,8 +1756,6 @@ flowchart TD
     E --> K[final stdout and every stderr use independent consumption gates]
     J --> L[_create_stage_capture_tasks]
     K --> L
-    I --> M[Capture remains joint when capture is true]
-    L --> M
 ```
 
 Beyond the tee sinks above, a run may opt into a *presentation sink* through
@@ -3052,12 +3251,16 @@ under `cuprum._constants.OBSERVER_ERROR_POLICY` and replace undecodable input.
 A text run is untouched — its views and its capture both decode under
 `config.errors`, so a strict text run raises from the read loop exactly as it
 did before byte mode existed. `cuprum._streams._StreamConfig.view_errors`
-derives that choice once for both view decoders.
-`cuprum._stream_drain_finish._captured_payload` is the single place a capture
-becomes the run's payload: a text run decodes the buffer under `config.errors`,
-while a byte-exact run returns its bytes untouched and never consults that
-policy. New consume variants should reuse `_drain()` unless they deliberately
-replace the whole stream-consumption contract.
+derives that choice once for both view decoders. Capture retention is provided
+by `CaptureSink`; `_drain()` gives each raw chunk to that sink, then
+`_finish_drain()` awaits its finalization. The sink returns a `CaptureFinal`,
+and `_CapturedDrain` carries its payload, `CapturedStream` metadata, and
+optional `SpillHandle` together into result assembly and cleanup. For in-memory
+captures, `_capture_decode._render` decodes text under the stream's configured
+encoding and error policy, or preserves the exact bytes in byte mode. A
+file-backed text capture reports its spill path without reading the file back.
+New consume variants should reuse `_drain()` unless they deliberately replace
+the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
 `RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw
@@ -4300,13 +4503,15 @@ decides what happens next. The handle owns everything that ownership implies:
 
 Output capture is forced on, because a handle exists so its caller can inspect
 the child after the fact and a child whose streams were routed to `DEVNULL`
-cannot be asked what it said. Echo and every other presentation decision remain
-the caller's. The handle runs the same sequence `run()` does — the `before`
-hooks, the presentation-sink session, and the `plan`/`start`/`settled` events —
-and runs the `after` hooks at settlement, because they take the result and
-there is no result until the run has one. `_prepare_owned_command` is the
-shared prefix for both, so the handle is a second way to own a `run()` rather
-than a second implementation of one.
+cannot be asked what it said. A per-stream `False` value inherits the forced-on
+shorthand, while an explicit capture policy still controls that stream's
+retention. Echo and every other presentation decision remain the caller's. The
+handle runs the same sequence `run()` does — the `before` hooks, the
+presentation-sink session, and the `plan`/`start`/`settled` events — and runs
+the `after` hooks at settlement, because they take the result and there is no
+result until the run has one. `_prepare_owned_command` is the shared prefix for
+both, so the handle is a second way to own a `run()` rather than a second
+implementation of one.
 
 There is deliberately one assembly path. `terminate()` and `kill()` do not
 build a result of their own: they stop the child, and the ordinary wait that

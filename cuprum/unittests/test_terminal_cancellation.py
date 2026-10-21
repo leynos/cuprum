@@ -16,8 +16,8 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_wait_types import (
+        _DrainPair,
         _StreamConsumerTask,
-        _StreamPayloadPair,
     )
     from cuprum.program import Program
 
@@ -166,7 +166,7 @@ def test_repeated_cancellation_settles_one_command_once(
     async def gated_drain(
         consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
         context: _subprocess_wait._DrainContext,
-    ) -> _StreamPayloadPair:
+    ) -> _DrainPair:
         """Hold reconciliation open while repeated cancellation arrives."""
         gate.entered.set()
         await gate.release.wait()

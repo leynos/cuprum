@@ -59,6 +59,41 @@ def child_argv(marker: Path) -> tuple[str, str, str]:
     return ("-c", _CHILD_SOURCE, str(marker))
 
 
+# A bare interpreter importing only stdlib modules was measured at 17 ms
+# (19 ms worst of five) on this host. Two seconds is over a hundred times that,
+# so the cap only bites if start-up has gone pathological, and it is a cap
+# rather than a wait: the marker lands in milliseconds and the run deadline the
+# caller sets is what the test actually spends its time on.
+MARKER_STARTUP_GRACE_S = 2.0
+
+
+async def wait_for_marker(marker: Path, *, deadline: float) -> None:
+    """Fail unless the child writes its readiness marker before ``deadline``.
+
+    ``deadline`` is a loop time rather than a duration, so a caller can derive
+    it from the same instant as its run deadline and reason about both at once.
+
+    Parameters
+    ----------
+    marker : Path
+        The file the child writes once its payload has been flushed.
+    deadline : float
+        Loop time by which the marker must appear.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        async with asyncio.timeout_at(deadline):
+            while loop.time() < deadline:
+                # ASYNC240: a child process writes this file, so no asyncio
+                # primitive can observe it directly.
+                if marker.exists():  # ruff: ignore[blocking-path-method-in-async-function]
+                    return
+                await asyncio.sleep(0.01)
+    except TimeoutError:
+        pass
+    pytest.fail(f"the child did not write {marker} before its deadline")
+
+
 # Installs a SIGTERM handler that ignores it, so only the SIGKILL escalation
 # can end this child. That makes the grace-period window observable: a teardown
 # interrupted before escalation leaves the child running.

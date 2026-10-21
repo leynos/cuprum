@@ -30,7 +30,9 @@ import typing as typ
 
 import pytest
 
+from cuprum._capture_types import CaptureSinkRegistry
 from cuprum._streams import _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import EchoStream
 from cuprum.unittests.test_line_event_emission_support import (
     _CountingCmd,
@@ -65,21 +67,27 @@ class _StageRequestStub:
     ``consumes_stdout`` and ``consumes_stderr`` must both be true for the
     factory to create the consumers that own the composed callbacks; the
     config stub below makes them so without an execution context.
+
+    ``captures`` is the production registry rather than a spy, because the
+    factory registers each consumer's accumulator with it as it spawns. A
+    stand-in that accepted ``register`` and discarded it would let a stage's
+    spill file go unowned on this path without any test noticing.
     """
 
     def __init__(self, observation: _StageObservation, *, is_last_stage: bool) -> None:
-        """Bind the observation and stage position."""
+        """Bind the observation, stage position, and capture registry."""
         self.process = _PipelineProcessStub()
         self.config = _PipelineConfigStub()
         self.observation = observation
         self.is_last_stage = is_last_stage
         self.started_at = 0.0
+        self.captures = CaptureSinkRegistry()
 
 
 def _minimal_stream_config(stream: EchoStream = EchoStream.STDOUT) -> _StreamConfig:
     """Build a minimal captured stream config for one output stream."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -89,22 +97,25 @@ def _minimal_stream_config(stream: EchoStream = EchoStream.STDOUT) -> _StreamCon
 
 
 class _PipelineConfigStub:
-    """The config surface the pipeline capture task builder touches."""
+    """The config surface the pipeline capture task builder touches.
+
+    Both stream configs are built once and retained, mirroring the production
+    ``_PipelineRunConfig``, whose ``stream_config`` and ``stderr_stream_config``
+    are ``init=False`` fields rather than properties. Rebuilding one on each
+    access would hand the factory a different accumulator every time, so the
+    sink it registers would not be the one the consumer reads into — the
+    divergence that leaves a cancellable drain's spill file unowned.
+    """
 
     on_line = None
     capture = True
     consumes_stdout = True
     consumes_stderr = True
 
-    @property
-    def stream_config(self) -> _StreamConfig:
-        """A minimal stdout stream config for the consumer."""
-        return _minimal_stream_config()
-
-    @property
-    def stderr_stream_config(self) -> _StreamConfig:
-        """A minimal stderr stream config for the consumer."""
-        return _minimal_stream_config(EchoStream.STDERR)
+    def __init__(self) -> None:
+        """Build each stream's config once, as the production config does."""
+        self.stream_config = _minimal_stream_config()
+        self.stderr_stream_config = _minimal_stream_config(EchoStream.STDERR)
 
 
 class _StageRig:
@@ -119,13 +130,26 @@ class _StageRig:
         The ``on_line`` each consumer was handed, per stream, in the same
         order, so the rig can prove the consumer uses the composed callable
         rather than an equivalent one.
+    consumed_configs:
+        The whole config each consumer was handed, per stream, in the same
+        order. Kept beside ``consumed`` rather than folded into it, because
+        the callback cases compare callbacks and the accumulator case needs
+        the sink off the config the consumer actually read into.
+    request:
+        The stage request the factory was driven with, so a case can read the
+        capture registry the factory filled. Held as the request rather than
+        as a copy of its sink list, because the claim being pinned is that
+        the factory put each consumer's sink into *that* registry — a copy
+        taken at a different moment would not witness it.
 
     """
 
     def __init__(self) -> None:
-        """Start with no recorded streams."""
+        """Start with no recorded streams and no stage request yet."""
         self.composed: list[tuple[LineStreamName, object]] = []
         self.consumed: list[tuple[LineStreamName, object]] = []
+        self.consumed_configs: list[tuple[LineStreamName, _StreamConfig]] = []
+        self.request: _StageRequestStub | None = None
 
 
 class TestPipelinePreparationCost:
@@ -178,6 +202,7 @@ class TestPipelinePreparationCost:
             """Record the ``on_line`` the consumer would use, then drain nothing."""
             _ = (stream, relay_diagnostics)
             rig.consumed.append((config.stream.value, on_line))
+            rig.consumed_configs.append((config.stream.value, config))
             # The real consumer suspends on its first read; yielding once keeps
             # this stand-in a genuine coroutine and lets the stage's tasks
             # settle through the ordinary await below.
@@ -192,6 +217,7 @@ class TestPipelinePreparationCost:
                 _make_observation((lambda event: None,)),
                 is_last_stage=is_last_stage,
             )
+            rig.request = request
             created = stage_streams._create_stage_capture_tasks(
                 typ.cast("typ.Any", request)
             )
@@ -222,6 +248,31 @@ class TestPipelinePreparationCost:
         )
         assert all(callback is not None for callback in composed.values()), (
             "an observe hook must produce a callback for every stream"
+        )
+
+    def test_every_stage_consumer_claims_its_accumulator_for_teardown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The factory registers each accepted stream's sink with the run.
+
+        A consumer the run created reads into an accumulator that owns a spill
+        file. Only the registry reaches that file when the consumer is
+        cancelled before it can finalize, so a stage whose sink went
+        unregistered leaks it — and nothing else in this module would notice,
+        because the payloads still arrive.
+        """
+        rig = _StageRig()
+        self._drive_stage(monkeypatch, rig, is_last_stage=True)
+
+        assert rig.request is not None, "the drive must have built a request"
+        registered = rig.request.captures.sinks
+        consumed = [config for _, config in rig.consumed_configs]
+        assert len(registered) == len(consumed) == 2, (
+            "both accepted streams must be registered exactly once; "
+            f"registered={len(registered)}, consumed={len(consumed)}"
+        )
+        assert registered == [config.capture_sink for config in consumed], (
+            "each registered sink must be the accumulator its consumer reads into"
         )
 
     def test_pipeline_preparation_constructs_no_event_details(

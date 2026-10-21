@@ -536,7 +536,10 @@ output fields are `bytes | None` rather than `str | None`. Each stage of a
 `BytesPipelineResult` is a `BytesCommandResult`. All measurement fields — `pid`,
 `started_at`, `duration`, `max_rss_bytes`, `user_cpu_seconds`,
 `system_cpu_seconds`, and `relay_fallbacks` — are unchanged, so nothing is lost
-by capturing exactly.
+by capturing exactly. `BytesCommandResult` carries the same `captures` records
+as `CommandResult`, and `BytesPipelineResult.captures` reads the final stage's,
+because a byte payload alone cannot show that a policy bounded, spilled, or
+failed to retain it.
 
 Two behaviours are worth noting before adopting it:
 
@@ -1029,6 +1032,185 @@ works as before.
 exported from the package root. Exhaustive observe hooks also see the new
 `stdio_error` phase; see
 [Observe hooks see new event phases](#observe-hooks-see-new-event-phases).
+
+`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget`, which names
+where one of the child's standard streams is bound. Its four variants differ in
+_ownership_, which is the contract:
+
+- `StdioTarget.pipe()` — a library-owned pipe cuprum creates, consumes or
+  writes, and closes.
+- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
+- `StdioTarget.path(path)` — a file **cuprum owns**. Cuprum opens it
+  immediately before the spawn and closes its copy in a `finally` immediately
+  after, so the descriptor never outlives the run. The caller names a path and
+  never manages a descriptor.
+- `StdioTarget.fd(fd)` — a **borrowed** descriptor or open file object the
+  caller owns. Cuprum never closes it, and a borrowed file object is flushed
+  immediately before the spawn so buffered caller-side bytes reach the child.
+
+The lifetime contract follows from that split. Cuprum closes only what it
+opened: a `path` target's file is opened before the spawn and closed right
+after it, while a borrowed descriptor or file object is only flushed by cuprum.
+A caller who reuses one borrowed descriptor across two runs shares a single
+file offset, so the second run writes wherever the first left off.
+
+Contradictory combinations are rejected. `RunOutputOptions` refuses the
+combinations whose contradiction is visible once its three targets are
+assembled; the inherited-stdin rule is checked when the run is prepared,
+because whether a source was also supplied is not known when the options are
+built:
+
+- A stream that capture or echo must read cannot be redirected: there is no
+  parent-side pipe to read.
+- One path cannot be named for both stdout and stderr: each open starts at
+  offset 0, so the two streams would interleave unpredictably.
+- `RunOutputOptions.stdin` accepts only `StdioTarget.pipe()` and
+  `StdioTarget.inherit()`. A `path` or `fd` target is refused, because the
+  input itself arrives on the run call's `stdin=` argument.
+- An inherited stdin alongside a stdin source is refused: both answer where
+  the child's input comes from, and honouring one would silently discard the
+  other. An explicit stdin pipe alongside a source is accepted, because the
+  source is written through the pipe the target names.
+- `Pipeline` rejects explicit standard-stream targets on all three streams;
+  redirect a single `SafeCmd` instead.
+
+Redirection through a `path` or `fd` target needs POSIX descriptor semantics:
+on a platform without them, cuprum refuses the descriptor arms rather than
+opening a stream and failing to hand it over. Inheriting a stream and a
+library-owned pipe are not platform-limited, so a supported combination keeps
+working there.
+
+`StdioTarget`, `StdinStream`, `StdinSource`, and `StdinSourceError` are all
+exported from the package root, so an existing import line only needs the new
+name added to it. For the full contract, see
+[send a stream to a file or the parent](users-guide.md#send-a-stream-to-a-file-or-the-parent)
+for the target vocabulary and the rules policing it, and
+[supply input, environment, and a deadline](users-guide.md#supply-input-environment-and-a-deadline)
+for the streaming source.
+
+### Per-stream capture policies
+
+Capture was a single joint switch. `capture=True` retained both streams
+completely, in the parent's memory, for as long as the result was alive, and
+`capture=False` retained nothing. A command that produced more output than the
+caller wanted to hold had to choose between an unbounded result and no result
+at all.
+
+Cuprum 0.2.0 adds a per-stream policy. `capture_stdout` and `capture_stderr`
+accept a policy, and the `capture` shorthand still sets both at once, so
+existing applications need no change and a run that says nothing behaves as
+before:
+
+<!-- tested-example: migration-per-stream-capture -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="capture-policy")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij'); sys.stderr.write('kept')"
+)
+bounded = RunOutputOptions(
+    capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=True
+)
+result = command.run_sync(output=bounded)
+# stdout is the retained tail; stderr is untouched by the other stream's bound.
+assert result.stdout == "ghij"
+assert result.stderr == "kept"
+
+# Each stream is bounded on its own, so the two policies coexist in one run.
+by_stream = {record.stream: record for record in result.captures}
+assert by_stream["stdout"].policy == "bounded"
+assert by_stream["stdout"].dropped_bytes == 6
+assert by_stream["stderr"].policy == "full"
+assert by_stream["stderr"].dropped_bytes == 0
+
+# The default is unchanged: both streams are captured in full.
+default = command.run_sync(output=RunOutputOptions())
+assert default.stdout == "abcdefghij"
+assert default.stderr == "kept"
+```
+
+`BoundedCapture(max_bytes=N)` keeps the last `N` **bytes** in memory. The bound
+is a byte count rather than a character count, so it is what a caller can
+reason about without knowing the encoding. The retained tail can therefore
+begin inside a code point, and it is trimmed forwards to a boundary when the
+capture is finalized; the leading bytes that trim costs are counted as dropped,
+so the count stays exact.
+
+That repair is only possible for encodings whose boundaries survive the loss of
+the head: UTF-8, fixed-width UTF-16 and UTF-32, and single-byte codecs. A
+multi-byte East Asian codec — Shift-JIS, EUC, GBK, Big5, the ISO-2022 families
+— is refused with `ValueError` before the spawn when the capture is text, since
+a trail byte separated from its lead would otherwise decode as a character the
+child never wrote. Byte captures are never restricted. Use `FullCapture` or
+`FileBackedCapture` if such an encoding must be read as text.
+
+The run also reports what it dropped, on the new `captures` field of
+`CommandResult` and `PipelineResult` (and of their byte-exact counterparts):
+
+<!-- tested-example: migration-capture-metadata -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="capture-metadata")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij')"
+)
+result = command.run_sync(
+    output=RunOutputOptions(
+        capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=False
+    )
+)
+(record,) = result.captures
+assert (record.stream, record.policy, record.storage) == ("stdout", "bounded", "memory")
+assert (record.total_bytes, record.dropped_bytes, record.truncated) == (10, 6, True)
+# An uncaptured stream contributes no record at all, rather than an empty one.
+assert [entry.stream for entry in result.captures] == ["stdout"]
+```
+
+A bound applies to what the result keeps. It does not shorten a pipeline
+stage's output on its way to the next stage — the relay is the child's own
+pipe, which the parent never reads — and it does not shorten the mirrored copy
+an echo sink receives. `max_echo_line_bytes` and a capture bound are separate
+limits on separate paths.
+
+`FileBackedCapture` is the policy for a stream too large to hold: it keeps the
+stream on the heap until `spill_threshold_bytes`, then moves it to a file. In
+text mode the payload for a spilled stream is `None` and the record names the
+file, because reading the file back would defeat the point of spilling it; in
+byte mode the file is read back, so byte mode does not carry the bounded-memory
+guarantee. The file is removed by the run before it returns unless
+`keep_file=True` is passed, on every exit route including a timeout and a
+cancellation. Set `keep_file=True` if the caller wants the file, and read
+`record.owned` to know which case applies. One cancellation is the exception:
+if the run stops before the initial spill's prefix is written, the file is not
+the caller's yet and cleanup removes it even under `keep_file=True`.
+
+A failure to create, write, flush, or read back the spill file does not fail
+the run: it is reported on the record as `storage_failed=True` and through a
+`CaptureEvent`, because a failure to _retain_ output is not a failure of the
+command that produced it. If the file could not be created the stream stays in
+memory and is still reported complete; if an append failed the record holds
+what reached the file before the failure; if a byte-mode read-back failed the
+file remains in place only when the policy sets `keep_file=True`, since the
+default cleanup removes it before the run returns. A failure to remove the file
+at the end of the run is absorbed silently, so that cleanup cannot replace the
+caller's own timeout or cancellation.
+
+`BoundedCapture`, `FileBackedCapture`, `FullCapture`, `CapturedStream`, and
+`CapturePolicyKind` are exported from the package root and from `cuprum.sh`, as
+well as from `cuprum.capture_policy`. The full field list of a capture record
+is in [Control output](users-guide.md#control-output).
 
 ## For contributors: benchmark and profiling changes
 

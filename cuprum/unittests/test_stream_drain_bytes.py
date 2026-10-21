@@ -30,7 +30,9 @@ def test_byte_exact_echo_survives_a_strict_capture_policy() -> None:
         )
     )
 
-    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
+    assert captured.payload == payload, (
+        f"byte-exact echo capture mismatch: {captured!r}"
+    )
     assert sink.getvalue() == "first\nsecond�\nthird", (
         "the mirror must render the replacement view rather than raise, got "
         f"{sink.getvalue()!r}"
@@ -84,7 +86,9 @@ def test_byte_exact_capture_still_observes_decoded_lines() -> None:
         )
     )
 
-    assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
+    assert captured.payload == payload, (
+        f"line-observed byte capture mismatch: {captured!r}"
+    )
     assert lines == ["first", "second�", "third"], (
         f"the observer must receive the decoded lines, got {lines!r}"
     )
@@ -107,7 +111,7 @@ def test_byte_exact_capture_observes_lines_across_chunk_boundaries() -> None:
         )
     )
 
-    assert captured == b"a\xc3\xa9b\n", (
+    assert captured.payload == b"a\xc3\xa9b\n", (
         f"the split sequence must survive intact, got {captured!r}"
     )
     assert lines == ["aéb"], f"the joined sequence must decode once, got {lines!r}"
@@ -126,5 +130,5 @@ def test_byte_exact_unattached_stream_reports_empty_bytes() -> None:
         _consume_stream(None, _byte_config(io.StringIO()), on_line=lines.append)
     )
 
-    assert captured == b"", f"an empty byte capture is b'', got {captured!r}"
+    assert captured.payload == b"", f"an empty byte capture is b'', got {captured!r}"
     assert not lines, "an unattached stream publishes no lines"

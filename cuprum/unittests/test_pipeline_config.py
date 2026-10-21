@@ -9,12 +9,23 @@ import pytest
 
 from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._sink_lifecycle import _SinkBracket
+from cuprum.capture_policy import BoundedCapture, FullCapture
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._streams import _StreamConfig
+    from cuprum.capture_policy import CapturePolicy
+
+
+# Deliberately different policies, and deliberately discriminating values: two
+# ``FullCapture()`` instances compare equal, so a config that handed both
+# streams the same policy could not be told apart from one that kept them
+# apart. A bounded policy differs in type from the full one, so a swap between
+# the streams is visible in either direction.
+_STDOUT_POLICY: CapturePolicy = FullCapture()
+_STDERR_POLICY: CapturePolicy = BoundedCapture(max_bytes=64)
 
 
 def _stdout_config(config: _PipelineRunConfig) -> _StreamConfig:
@@ -28,17 +39,18 @@ def _stderr_config(config: _PipelineRunConfig) -> _StreamConfig:
 
 
 @pytest.mark.parametrize(
-    ("stream", "expected_echo", "sink_name", "accessor"),
+    ("stream", "expected_echo", "accessor", "expected_policy"),
     [
-        pytest.param("stdout", True, "stdout", _stdout_config, id="stdout"),
-        pytest.param("stderr", False, "stderr", _stderr_config, id="stderr"),
+        pytest.param("stdout", True, _stdout_config, _STDOUT_POLICY, id="stdout"),
+        pytest.param("stderr", False, _stderr_config, _STDERR_POLICY, id="stderr"),
     ],
 )
 def test_stream_config_uses_requested_stream_settings(
+    *,
     stream: typ.Literal["stdout", "stderr"],
     expected_echo: bool,
-    sink_name: typ.Literal["stdout", "stderr"],
     accessor: cabc.Callable[[_PipelineRunConfig], _StreamConfig],
+    expected_policy: CapturePolicy,
 ) -> None:
     """Each stream keeps its own echo route while sharing decode settings."""
     stdout_sink = io.StringIO()
@@ -46,7 +58,8 @@ def test_stream_config_uses_requested_stream_settings(
     context = ExecutionContext(encoding="latin-1", errors="ignore")
     config = _PipelineRunConfig(
         ctx=context,
-        capture=True,
+        capture_stdout=_STDOUT_POLICY,
+        capture_stderr=_STDERR_POLICY,
         echo_stdout=True,
         echo_stderr=False,
         max_echo_line_bytes=123,
@@ -59,7 +72,9 @@ def test_stream_config_uses_requested_stream_settings(
     )
 
     stream_config = accessor(config)
-    expected_sink = stdout_sink if sink_name == "stdout" else stderr_sink
+    # The accessor and the expected sink are both chosen by the stream under
+    # test, so a table row cannot pair stdout's accessor with stderr's sink.
+    expected_sink = stdout_sink if stream == "stdout" else stderr_sink
 
     assert stream_config.echo_output is expected_echo, (
         f"{stream} must retain its configured echo setting"
@@ -67,8 +82,8 @@ def test_stream_config_uses_requested_stream_settings(
     assert stream_config.sink is expected_sink, (
         f"{stream} must retain its configured output sink"
     )
-    assert stream_config.capture_output is True, (
-        "capture must be shared by both streams"
+    assert stream_config.capture == expected_policy, (
+        f"{stream} must keep its own capture policy, not the other stream's"
     )
     assert stream_config.echo_max_line_bytes == 123, (
         "the echo line bound must be shared by both streams"

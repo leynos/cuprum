@@ -3,7 +3,8 @@
 This module groups queued-reader doubles, ``_StreamConfig`` builders, Hypothesis
 payload and chunk strategies, and expected line-emission models. The helpers let
 tests exercise ``cuprum._streams`` directly without invoking command or
-pipeline runners.
+pipeline runners. It also names the complete drain result used by consumer
+doubles, so payloads cannot silently stand in for capture records.
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ import typing as typ
 
 from hypothesis import strategies as st
 
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._streams import _StreamConfig
 from cuprum._subprocess_wait_types import _StreamConsumerTask
+from cuprum.capture_policy import CapturePolicy, FullCapture
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -29,10 +32,28 @@ type CapturedPayload = str | bytes
 type CapturedOrNone = CapturedPayload | None
 # One stream's payload paired with another value the helper also reports.
 type CapturedPair[T] = tuple[CapturedOrNone, T]
+# The whole value returned by a settled drain, including its capture record.
+type CapturedDrain = _CapturedDrain
+# A settled drain paired with another value the helper also reports.
+type CapturedDrainPair[T] = tuple[CapturedDrain, T]
 # A reader the drain owns, named for test doubles that follow its task shape.
 type ConsumerTask = _StreamConsumerTask
 
-__all__ = ["CapturedOrNone", "CapturedPair", "CapturedPayload", "ConsumerTask"]
+_FULL_CAPTURE = FullCapture()
+_BOTH_CAPTURED: tuple[FullCapture, FullCapture] = (FullCapture(), FullCapture())
+_NONE_CAPTURED: tuple[None, None] = (None, None)
+
+__all__ = [
+    "_BOTH_CAPTURED",
+    "_NONE_CAPTURED",
+    "CapturedDrain",
+    "CapturedDrainPair",
+    "CapturedOrNone",
+    "CapturedPair",
+    "CapturedPayload",
+    "ConsumerTask",
+    "captured",
+]
 
 _LINE_BOUNDARY_CHARACTERS = (
     "\n",
@@ -74,13 +95,13 @@ def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
 def _config(
     sink: typ.IO[str],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = False,
     errors: str = "replace",
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -91,7 +112,7 @@ def _config(
 def _bounded_config(max_line_chars: int | None) -> _StreamConfig:
     """Build a capturing config with an explicit line-retention bound."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -103,7 +124,7 @@ def _bounded_config(max_line_chars: int | None) -> _StreamConfig:
 def _byte_config(
     sink: typ.IO[str],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = False,
     errors: str = "replace",
 ) -> _StreamConfig:
@@ -112,6 +133,11 @@ def _byte_config(
         _config(sink, capture=capture, echo=echo, errors=errors),
         capture_bytes=True,
     )
+
+
+def captured(payload: CapturedPayload | None) -> _CapturedDrain:
+    """Report a consumer's payload without inventing a capture record."""
+    return _CapturedDrain(payload=payload)
 
 
 def _split_at(payload: bytes, cut_points: cabc.Sequence[int]) -> tuple[bytes, ...]:

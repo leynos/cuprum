@@ -206,11 +206,14 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
     only the writer's head start is arranged.
 
     The settle is patched where the name is *resolved*, not where it is
-    defined: ``_subprocess_stream_run`` imports it, so that module's global is
-    what both of its run loops call. Both paths are covered by the one patch —
-    the direct path settles from ``_run_subprocess_without_streams`` and the
-    streamed path from ``_settle_group_and_reconcile_consumers``, and the two
-    live in the same module. ``_line_stream.drain`` resolves the name too, but
+    defined, and there are two such sites because the post-exit phase has its
+    own module. The direct path settles from
+    ``_run_subprocess_without_streams`` in ``_subprocess_stream_run``, so that
+    module's global covers it. The streamed path settles from
+    ``_await_stdin_writer`` in ``_subprocess_stream_post_exit``, which resolves
+    the name from its own globals; patching only the run module would leave
+    that path settling for real with the probe never signalled. Both are
+    patched for that reason. ``_line_stream.drain`` resolves the name too, but
     only for ``lines()``, which no caller here uses; patching it would add a
     binding no exercised call path reads.
 
@@ -220,6 +223,7 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
         The events, records, and handles the patched seams fill in.
     """
     import cuprum._subprocess_stdin_stream as stream_module
+    import cuprum._subprocess_stream_post_exit as post_exit_module
     import cuprum._subprocess_stream_run as stream_run_module
     from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 
@@ -247,7 +251,11 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
         probe.settling.set()
         await _settle_stdin_writer(stdin_task)
 
+    # Both resolution sites. A run takes one path or the other, so only one of
+    # the two wrappers is ever entered per test; patching both is what makes
+    # the probe independent of which path the case exercises.
     monkeypatch.setattr(stream_run_module, "_settle_stdin_writer", tracked_settle)
+    monkeypatch.setattr(post_exit_module, "_settle_stdin_writer", tracked_settle)
     return probe
 
 

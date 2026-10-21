@@ -14,6 +14,8 @@ Example:
 from __future__ import annotations
 
 from cuprum._constants import PACKAGE_NAME
+from cuprum.capture_events import CaptureEvent, CaptureEventCategory
+from cuprum.capture_observation import CaptureHookRegistration, observe_capture
 from cuprum.catalogue import (
     CORE_OPS_PROJECT,
     DEFAULT_CATALOGUE,
@@ -104,12 +106,18 @@ from cuprum.pump_span_observation import PumpHopSpanRegistration, observe_pump_s
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
     ArgValue,
+    BoundedCapture,
     BoundedDelivery,
     BytesCommandResult,
     BytesPipelineResult,
     CapturedResult,
+    CapturedStream,
+    CapturePolicy,
+    CapturePolicyKind,
     CommandResult,
     ExecutionContext,
+    FileBackedCapture,
+    FullCapture,
     IOOptions,
     LineStream,
     Pipeline,
@@ -147,11 +155,18 @@ __all__ = [
     "AllowRegistration",
     "ArgValue",
     "BeforeHook",
+    "BoundedCapture",
     "BoundedDelivery",
     "BrokenPipePolicy",
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CaptureEvent",
+    "CaptureEventCategory",
+    "CaptureHookRegistration",
+    "CapturePolicy",
+    "CapturePolicyKind",
     "CapturedResult",
+    "CapturedStream",
     "CommandResult",
     "ConcurrentConfig",
     "ConcurrentResult",
@@ -171,7 +186,9 @@ __all__ = [
     "ExecHook",
     "ExecutableBindingRegistration",
     "ExecutionContext",
+    "FileBackedCapture",
     "ForbiddenProgramError",
+    "FullCapture",
     "HookRegistration",
     "IOOptions",
     "LineEvent",
@@ -226,6 +243,7 @@ __all__ = [
     "merge_env_overlays",
     "merge_executable_bindings",
     "observe",
+    "observe_capture",
     "observe_control",
     "observe_echo",
     "observe_line_stream",

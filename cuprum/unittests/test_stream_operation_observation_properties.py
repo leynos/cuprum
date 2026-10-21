@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._streams_pump import _pump_stream
+from cuprum.capture_policy import FullCapture
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import observe_stream_operation
 
@@ -54,7 +55,7 @@ class _Writer:
 def _drain_config() -> _StreamConfig:
     """Build a capture-only configuration for generated drain cases."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",

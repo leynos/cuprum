@@ -61,9 +61,10 @@ def test_lines_stamp_events_from_the_spawn_clock(
 ) -> None:
     """The line event clock subtracts the reference stamped after spawning."""
     from cuprum import _line_callbacks
-    from cuprum._line_stream import coordinator
+    from cuprum._line_stream import spawn
 
-    monkeypatch.setattr(coordinator, "perf_counter", lambda: 40.0)
+    # The spawn phase samples its own reference clock.
+    monkeypatch.setattr(spawn, "perf_counter", lambda: 40.0)
     monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
     command = python_builder("-c", "print('clock')")
 

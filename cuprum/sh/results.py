@@ -1,13 +1,14 @@
-"""Structured result types returned by ``cuprum.sh`` execution.
+"""Structured text result types returned by ``cuprum.sh`` execution.
 
 ``CommandResult`` and ``PipelineResult`` describe the outcome of running a
 single command or a pipeline of commands whose streams are decoded as text.
 ``CapturedResult`` narrows the text streams for a single command whose output
 was captured.
-``BytesCommandResult`` and ``BytesPipelineResult`` are their byte-exact
-counterparts, returned by the ``run_bytes()`` entry points so that captured
-output survives a round trip through values that are not valid UTF-8. The
-``cuprum.sh`` package re-exports all five.
+
+The byte-exact counterparts live in :mod:`cuprum.sh.byte_results`, which this
+module re-exports so that ``cuprum.sh.results`` remains a complete import path
+for the result vocabulary. They are re-exported rather than redefined because a
+second definition would be a second identity for the same public classes.
 """
 
 # No ``from __future__ import annotations`` here: the result fields are public
@@ -15,8 +16,19 @@ output survives a round trip through values that are not valid UTF-8. The
 # eagerly and ``Program`` and ``RelayFallback`` are genuine runtime imports.
 import dataclasses as dc
 
+from cuprum.capture_policy import CapturedStream
 from cuprum.echo_events import RelayFallback
 from cuprum.program import Program
+
+# Re-exported under the names they were defined with: the `as` form marks each
+# as an intentional re-export, so the import checker sees a used name while a
+# caller still reaches these classes through `cuprum.sh.results`.
+from cuprum.sh.byte_results import (
+    BytesCommandResult as BytesCommandResult,
+)
+from cuprum.sh.byte_results import (
+    BytesPipelineResult as BytesPipelineResult,
+)
 
 __all__ = [
     "BytesCommandResult",
@@ -94,6 +106,16 @@ class CommandResult:
         not reconstruct chronological interleaving between streams. Empty
         when no output was lost or handled as an echo failure; these diagnostic
         records do not alter captured output or the child's exit status.
+    captures:
+        One record per captured stream, in stdout-then-stderr order, saying
+        which policy the run applied, how many bytes the drain received, how
+        many the policy discarded, and where the retained bytes are. Empty
+        when the run captured nothing. A file-backed record reports
+        ``storage`` of ``"file"``: its text is at ``path`` rather than on
+        ``stdout``/``stderr``, which are ``None`` for that stream. The run
+        removes the file before returning it unless the policy was built with
+        ``keep_file=True``, so ``path`` is a locator for a kept spill and a
+        record of what happened for one the run cleaned up.
 
     """
 
@@ -123,6 +145,12 @@ class CommandResult:
     # the same ordering the generated signature uses.
     resolved_path: str | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
+    # ``kw_only`` for the same reason every field after ``stderr`` is: the
+    # seventh positional slot belongs to ``relay_fallbacks``, which main
+    # established and ``test_public_api`` pins. Declared *after* it rather than
+    # before it, because a trailing declaration reads as the additive tail
+    # this is; ``relay_fallbacks`` keeps the positional slot either way.
+    captures: tuple[CapturedStream, ...] = dc.field(default=(), kw_only=True)
 
     @property
     def ok(self) -> bool:
@@ -279,119 +307,18 @@ class PipelineResult:
         """
         return self.final.stdout
 
-
-@dc.dataclass(frozen=True, slots=True)
-class BytesCommandResult:
-    """Byte-exact result returned by the binary-output command entry points.
-
-    Fields and defaults mirror :class:`CommandResult`, but
-    ``require_captured()`` is available only on text result types. Captured
-    bytes remain untouched, so every byte value survives the round trip without
-    decoding or surrogate escapes.
-
-    Attributes
-    ----------
-    stdout:
-        Captured bytes. ``b""`` means captured and empty; ``None`` means
-        capture was disabled.
-    stderr:
-        Captured bytes, with the same ``b""``/``None`` distinction as
-        ``stdout``.
-
-    """
-
-    program: Program
-    argv: tuple[str, ...]
-    exit_code: int
-    pid: int
-    stdout: bytes | None
-    stderr: bytes | None
-    # Kept in step with ``CommandResult``: ``kw_only`` holds the seventh
-    # positional slot for ``relay_fallbacks`` so a seven-argument call cannot
-    # bind a measurements default into the relay tuple.
-    started_at: float = dc.field(default=0.0, kw_only=True)
-    duration: float = dc.field(default=0.0, kw_only=True)
-    max_rss_bytes: int | None = dc.field(default=None, kw_only=True)
-    user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
-    system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
-    resolved_path: str | None = dc.field(default=None, kw_only=True)
-    relay_fallbacks: tuple[RelayFallback, ...] = ()
-
     @property
-    def ok(self) -> bool:
-        """Whether the command exited successfully.
+    def captures(self) -> tuple[CapturedStream, ...]:
+        """Capture metadata for the final pipeline stage's streams.
+
+        This is the same stage :attr:`stdout` reads. Interior stages relay
+        their stdout to the next stage; their stderr, when captured, is
+        recorded on that stage's own ``stages[i].captures``.
 
         Returns
         -------
-        bool
-            ``True`` exactly when ``exit_code`` is zero.
+        tuple[CapturedStream, ...]
+            The final stage's capture records, in stdout-then-stderr order,
+            empty when that stage captured nothing.
         """
-        return self.exit_code == 0
-
-
-@dc.dataclass(frozen=True, slots=True)
-class BytesPipelineResult:
-    """Binary-output pipeline result with :class:`PipelineResult` semantics.
-
-    Attributes
-    ----------
-    stages:
-        Per-stage byte results in execution order. Interior ``stdout`` is
-        ``None``; the final stage carries captured bytes when enabled.
-    failure_index:
-        Index of the stage that triggered fail-fast termination, or ``None``
-        when all stages completed successfully.
-
-    """
-
-    stages: tuple[BytesCommandResult, ...]
-    failure_index: int | None = None
-
-    @property
-    def final(self) -> BytesCommandResult:
-        """The result from the final pipeline stage.
-
-        Returns
-        -------
-        BytesCommandResult
-            The last stage's result in execution order.
-        """
-        return self.stages[-1]
-
-    @property
-    def failure(self) -> BytesCommandResult | None:
-        """The stage that triggered fail-fast termination, if any.
-
-        Returns
-        -------
-        BytesCommandResult | None
-            The failing stage result, or ``None`` when no stage triggered
-            fail-fast termination.
-        """
-        if self.failure_index is None:
-            return None
-        return self.stages[self.failure_index]
-
-    @property
-    def ok(self) -> bool:
-        """Whether every pipeline stage exited successfully.
-
-        Returns
-        -------
-        bool
-            ``True`` when every stage result is successful; otherwise
-            ``False``.
-        """
-        return all(stage.ok for stage in self.stages)
-
-    @property
-    def stdout(self) -> bytes | None:
-        """Captured output from the final pipeline stage.
-
-        Returns
-        -------
-        bytes | None
-            The final stage's captured standard output bytes, or ``None`` when
-            capture was disabled.
-        """
-        return self.final.stdout
+        return self.final.captures

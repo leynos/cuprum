@@ -9,6 +9,7 @@ import typing as typ
 import pytest
 
 from cuprum._streams import _drain, _StreamConfig
+from cuprum.capture_policy import CapturePolicy, FullCapture
 from cuprum.echo_events import EchoErrorCategory
 from cuprum.echo_observation import observe_echo
 
@@ -37,12 +38,12 @@ def _reader(chunks: tuple[bytes, ...]) -> asyncio.StreamReader:
 def _config(
     sink: typ.IO[str],
     *,
-    capture: bool,
+    capture: CapturePolicy | None,
     errors: str = "replace",
 ) -> _StreamConfig:
     """Build a bounded UTF-8 echo configuration for one drain regression."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=True,
         echo_max_line_bytes=_BOUND,
         sink=sink,
@@ -52,7 +53,7 @@ def _config(
 
 
 def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
-    """capture=False does not retain an oversized unfinished echoed line."""
+    """A capture-disabled drain retains no oversized unfinished echoed line."""
     payload = b"z" * (2 * 1024 * 1024)
     chunks = tuple(
         payload[start : start + 8192] for start in range(0, len(payload), 8192)
@@ -60,10 +61,10 @@ def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
     sink = io.StringIO()
 
     captured = asyncio.run(
-        _drain(_reader(chunks), _config(sink, capture=False)),
+        _drain(_reader(chunks), _config(sink, capture=None)),
     )
 
-    assert captured is None, "echo-only drains must not create captured output"
+    assert captured.payload is None, "echo-only drains must not create captured output"
     assert len(sink.getvalue().encode()) <= _BOUND, (
         "the unfinished echoed line must remain bounded without capture"
     )
@@ -72,7 +73,7 @@ def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
 def test_bounded_echo_rejects_utf16_before_draining() -> None:
     """Bounded raw-line echo rejects UTF-16 before it can corrupt a sink."""
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         echo_max_line_bytes=_BOUND,
         sink=io.StringIO(),
@@ -89,7 +90,7 @@ def test_unbounded_utf16_echo_remains_supported() -> None:
     payload = "payload".encode("utf-16")
     sink = io.StringIO()
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         echo_max_line_bytes=None,
         sink=sink,
@@ -99,7 +100,9 @@ def test_unbounded_utf16_echo_remains_supported() -> None:
 
     captured = asyncio.run(_drain(_reader((payload,)), config))
 
-    assert captured == "payload", "unbounded capture must decode the full payload"
+    assert captured.payload == "payload", (
+        "unbounded capture must decode the full payload"
+    )
     assert sink.getvalue() == "payload", "unbounded echo must still mirror UTF-16"
 
 
@@ -132,13 +135,13 @@ def test_rejected_bounded_echo_does_not_observe_truncation() -> None:
                 _reader((payload,)),
                 _config(
                     typ.cast("typ.IO[str]", sink),
-                    capture=True,
+                    capture=FullCapture(),
                     errors="strict",
                 ),
             )
         )
 
-    assert captured == payload.decode(), "capture must retain the rejected line"
+    assert captured.payload == payload.decode(), "capture must retain the rejected line"
     assert [event.error_category for event in events] == [
         EchoErrorCategory.UNICODE_ENCODE
     ], f"only the failed write must be observed, got={events!r}"

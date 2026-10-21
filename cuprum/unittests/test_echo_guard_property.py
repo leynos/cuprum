@@ -29,6 +29,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import (
     BrokenPipePolicy,
     EchoErrorCategory,
@@ -45,7 +46,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.unittests._stream_drain_support import (
-        CapturedOrNone,
+        CapturedDrain,
     )
 
 # ``derandomize=True`` makes the example count the coverage knob, and each
@@ -225,7 +226,7 @@ def _config(
 ) -> _StreamConfig:
     """Build a UTF-8 stream config that echoes into *sink* under *policy*."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=True,
         sink=sink,
         encoding="utf-8",
@@ -238,7 +239,7 @@ async def _drain_case(
     case: tuple[bytes, tuple[bytes, ...], int, _FailingCall],
     error: cabc.Callable[[], BaseException],
     policy: BrokenPipePolicy,
-) -> tuple[CapturedOrNone, _FailingWriteSink, tuple[RelayFallback, ...]]:
+) -> tuple[CapturedDrain, _FailingWriteSink, tuple[RelayFallback, ...]]:
     """Drain one generated partition into a sink that fails at one echo."""
     _payload, chunks, failing_write, mode = case
     sink = _FailingWriteSink(failing_write, error, mode)
@@ -314,7 +315,7 @@ def test_echo_guard_stops_after_the_first_write_failure(
         captured, sink, fallbacks = asyncio.run(_drain_case(case, error, policy))
 
     context = f"chunks={chunks!r}, failing_write={failing_write!r}, mode={mode!r}"
-    assert captured == payload.decode("utf-8", errors="replace"), (
+    assert captured.payload == payload.decode("utf-8", errors="replace"), (
         f"capture must decode the complete payload for {context}"
     )
     assert sink.rejected_attempt is not None, (

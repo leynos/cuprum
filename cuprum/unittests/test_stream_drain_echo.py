@@ -18,7 +18,7 @@ def test_drain_echoes_split_multibyte_text_sink() -> None:
 
     captured = asyncio.run(_drain(_reader(chunks), _config(sink, echo=True)))
 
-    assert captured == expected, (
+    assert captured.payload == expected, (
         f"capture must decode the whole payload for chunks={chunks!r}"
     )
     assert sink.getvalue() == expected, (
@@ -32,7 +32,7 @@ def test_drain_strictly_echoes_split_multibyte_text_sink() -> None:
     chunks = (b"before \xe2", b"\x98", b"\x83 after")
     sink = io.StringIO()
     config = _StreamConfig(
-        capture_output=False,
+        capture=None,
         echo_output=True,
         sink=sink,
         encoding="utf-8",
@@ -41,7 +41,9 @@ def test_drain_strictly_echoes_split_multibyte_text_sink() -> None:
 
     captured = asyncio.run(_drain(_reader(chunks), config))
 
-    assert captured is None, f"echo-only drains must return None for chunks={chunks!r}"
+    assert captured.payload is None, (
+        f"echo-only drains must return None for chunks={chunks!r}"
+    )
     assert sink.getvalue() == "before \u2603 after", (
         "strict text-sink echo must reconstruct split multibyte characters for "
         f"chunks={chunks!r}, received={sink.getvalue()!r}"
@@ -55,10 +57,10 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
     sink = io.TextIOWrapper(raw_sink, encoding="utf-8")
 
     captured = asyncio.run(
-        _drain(_reader(chunks), _config(sink, capture=False, echo=True)),
+        _drain(_reader(chunks), _config(sink, capture=None, echo=True)),
     )
 
-    assert captured is None, (
+    assert captured.payload is None, (
         f"buffered echo-only drains must return None for chunks={chunks!r}"
     )
     assert raw_sink.getvalue() == b"".join(chunks), (
@@ -95,7 +97,7 @@ def test_final_flush_after_disabled_echo_writes_nothing() -> None:
     )
     attempts = sink.attempts
 
-    assert captured == "ś\N{REPLACEMENT CHARACTER}", (
+    assert captured.payload == "ś\N{REPLACEMENT CHARACTER}", (
         "capture must keep the rejected character and flush the decoder tail "
         f"after echo is disabled for captured={captured!r}"
     )

@@ -353,6 +353,17 @@ was never captured.
 `isinstance(result, CommandResult)` for base-result checks and compare fields
 individually when comparing results across these types.
 
+The narrowed type is promised only when both streams are decoded text. A run
+that captures one stream and leaves the other uncaptured returns a
+`CommandResult` with `None` for the stream it did not capture. A run whose
+`FileBackedCapture` spilled a stream to a file also returns a `CommandResult`,
+and that stream's `stdout` or `stderr` is `None`: the text is in the file the
+stream's record names under `captures`, not in the payload.
+`require_captured()` raises `ValueError` naming such a stream rather than
+reporting an empty string, because an absent payload and an empty stream are
+different facts. See
+[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+
 <!-- tested-example: capture-and-echo -->
 
 ```python
@@ -619,7 +630,218 @@ before the child starts, rather than silently choosing one side:
 Reusing one `fd()` target across several runs shares its file offset, so each
 run continues where the previous one stopped. `RunOutputOptions.stdin` accepts
 only `pipe()` and `inherit()`: the input itself is passed to the run call's
-`stdin=` argument, as the next section describes.
+`stdin=` argument, as it has always been; see
+[Stream input from a producer](#stream-input-from-a-producer).
+
+### Capture policies
+
+Capture is configured per stream, and a stream's policy decides where its bytes
+are kept. `capture=True` and `capture=False` are the shorthands for the
+whole-run switch, and each stream can name its own policy with `capture_stdout`
+and `capture_stderr`:
+
+| Policy                        | What the run reports                                     |
+| ----------------------------- | -------------------------------------------------------- |
+| `True`                        | Complete text, held in the parent's memory. The default. |
+| `False`                       | Nothing: `None` for that stream, and no record.          |
+| `FullCapture()`               | The same as `True`, stated explicitly.                   |
+| `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
+| `FileBackedCapture(...)`      | Text in memory until the threshold, then a named file.   |
+
+For `run()` and pipelines, a per-stream field left at `None` inherits
+`capture`, and a per-stream value always wins for its own stream:
+`capture=True, capture_stderr=False` captures stdout in full and nothing on
+stderr. `SafeCmd.start()` is the handle-specific exception: it forces both
+streams on, while retaining any explicit capture policy. Mixing `capture=` with
+`capture_stdout=` is allowed and well defined, not an error. A value that is
+neither a policy nor a `bool` is refused with `ValueError` before the child is
+spawned.
+
+A stdout or stderr target other than `pipe` is refused while that stream's
+resolved capture policy or echo is enabled, because the parent has no pipe to
+read. Redirection never disables capture or echo automatically. Set the matching
+`capture_stdout`/`capture_stderr` field to `False` (or use `capture=False`
+while leaving that field unset), and set the matching
+`echo_stdout`/`echo_stderr` field to `False` (or use `echo=False` while leaving
+that field unset). An explicit per-stream field still overrides its shorthand.
+
+### Bounded capture
+
+`BoundedCapture` keeps the tail of a stream in memory and reports what it
+dropped. The bound counts **bytes, not characters**, so a multi-byte character
+is never split _in text capture_; a text run's retained tail is always
+decodable on its own. A byte-exact run (`run_bytes()`) asks for the child's own
+bytes, so it is handed the exact byte tail instead: trimming it to a code-point
+boundary would discard data the caller asked for, and that tail need not be
+independently decodable.
+
+<!-- tested-example: users-guide-bounded-capture -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import BoundedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="bounded-capture")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('abcdefghij')"
+)
+options = RunOutputOptions(
+    capture_stdout=BoundedCapture(max_bytes=4), capture_stderr=False
+)
+result = command.run_sync(output=options)
+assert result.stdout == "ghij"
+
+# The record says how much of the stream the result does not show.
+(record,) = result.captures
+assert record.stream == "stdout"
+assert record.policy == "bounded"
+assert record.total_bytes == 10
+assert record.dropped_bytes == 6
+assert record.truncated is True
+```
+
+A bound is a decision about what the _result_ keeps. It never shortens what a
+pipeline stage hands to the stage after it, and it never shortens the mirrored
+copy an echo sink receives; those read the child's own pipe.
+
+Because the head of the stream is gone, a bounded _text_ capture can only be
+trimmed back to a character boundary for encodings whose boundaries survive
+that loss. UTF-8, the fixed-width UTF-16 and UTF-32 codecs, and single-byte
+encodings such as Latin-1 or CP1252 all qualify. A multi-byte East Asian codec
+— Shift-JIS, EUC-JP, GBK, Big5, and their relatives — does not: once the lead
+byte is dropped, its trail byte is indistinguishable from a character of its
+own. A run that pairs `BoundedCapture` with such an encoding is refused with
+`ValueError` before the child is spawned, rather than returning text the child
+never wrote. Use `FullCapture` or `FileBackedCapture` for those encodings, or
+capture the stream as bytes, where nothing is decoded and no cut can be misread.
+
+### File-backed capture
+
+`FileBackedCapture` keeps the stream on the parent's heap until it passes
+`spill_threshold_bytes`, then moves it to a file and appends there. Past the
+threshold the parent's memory stops tracking the child's output, so a long or
+noisy command no longer costs memory proportional to what it wrote:
+
+<!-- tested-example: users-guide-file-backed-capture -->
+
+```python
+import sys
+import tempfile
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.capture_policy import FileBackedCapture
+from cuprum.sh import RunOutputOptions
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="file-backed")
+command = sh.make(Program(sys.executable), catalogue=catalogue)(
+    "-c", "import sys; sys.stdout.write('z' * 4096)"
+)
+with tempfile.TemporaryDirectory() as directory:
+    options = RunOutputOptions(
+        capture_stdout=FileBackedCapture(spill_threshold_bytes=64, directory=directory),
+        capture_stderr=False,
+    )
+    result = command.run_sync(output=options)
+    (record,) = result.captures
+    assert record.storage == "file"
+    # Text mode reports the spill as a file rather than reading it back, so
+    # the result carries no text for a stream the parent did not retain.
+    assert result.stdout is None
+    assert record.path is not None
+    # The run removes its own file before returning; the record is a statement
+    # that the spill happened, not a promise the file is still there.
+    assert not record.path.exists()
+```
+
+In byte mode (`run_bytes()`) a spilled capture is read back, because a caller
+who asked for the child's own bytes cannot be handed anything less. That read
+is O(stream size), so byte mode does not carry the bounded-memory guarantee
+that text mode does.
+
+`directory` defaults to the system temporary directory, and the file's name is a
+`NamedTemporaryFile` name. Pass `keep_file=True` to keep it: the file then
+survives the run, `record.owned` is `False`, and removing it is the caller's
+job. Without it, `record.owned` is `True` and the run removes the file before
+returning the result — on the success path, on a non-zero exit, on a timeout,
+and on cancellation alike. One cancellation is the exception: if the run stops
+before the initial spill's prefix is written, the file has not become the
+caller's yet and cleanup removes it even under `keep_file=True`.
+
+Spill I/O runs off the event loop but is shielded, so a write already handed to
+a worker is never abandoned mid-flight. The operational cost is that a stalled
+spill filesystem — a hung NFS mount, a frozen FUSE filesystem — stalls the run
+with it: the child's deadline may terminate the process, but the run cannot
+settle until the blocked write returns. Put `directory` on a local, responsive
+filesystem when the timeout and cancellation guarantees matter.
+
+A failure on any of the spill file's routes — create, append, read back in byte
+mode, or remove at the end of the run — is absorbed rather than raised: a
+failure of the storage is not a failure of the command that produced it. When
+the run otherwise returns, the caller still receives a result and the three
+retention failures set `storage_failed=True` on the record. Read that flag
+together with `storage`, because the pair distinguishes the cases:
+
+- The file could not be created. The stream never left memory, so `storage`
+  stays `"memory"`, `path` is `None`, and the capture is _complete_ — the
+  caller has the whole stream and only lost the spill.
+- An append failed after the spill began. `storage` is `"file"` and `path`
+  names the file; no further writes are accepted, but the bytes accepted before
+  the failure are offered in a final flush. If that flush and byte-mode
+  read-back succeed, the returned payload includes those bytes. If the flush
+  also fails, the earlier append-failure event remains authoritative, and
+  buffered bytes are not guaranteed in the payload. `storage_failed=True` is
+  what tells the difference between a short capture and an incomplete one.
+- Byte-mode read-back failed. `storage` is `"file"` but no text or bytes are
+  reported, because the bytes could not be recovered. The file follows the
+  policy rather than the failure: it is left in place only under
+  `keep_file=True`, so retrying the read at `record.path` requires that
+  setting. Under the default, cleanup removes the file before the run returns.
+
+A failed removal sets nothing: it is housekeeping, and cleanup runs on the way
+out of every run, including one already carrying the caller's own timeout or
+cancellation. An error about a temporary file must not replace either, so that
+route absorbs its own failure silently: it sets no flag and emits no
+`CaptureEvent`, and the surviving file is the only trace. A storage failure
+never turns a timeout or cancellation into an ordinary result; it is absorbed
+so the run's own outcome stands.
+
+### Reading a stream's capture metadata
+
+Every captured stream contributes one `CapturedStream` to `result.captures`, in
+stdout-then-stderr order, and a stream that was not captured contributes none.
+The record is how a caller learns that a result is a tail rather than the whole
+stream, or that the payload is a file rather than text:
+
+| Field            | Meaning                                       |
+| ---------------- | --------------------------------------------- |
+| `stream`         | `"stdout"` or `"stderr"`.                     |
+| `policy`         | `"full"`, `"bounded"`, or `"file_backed"`.    |
+| `total_bytes`    | What the drain received, not what was kept.   |
+| `dropped_bytes`  | What the bound discarded. `0` for the others. |
+| `storage`        | `"memory"` or `"file"`.                       |
+| `path`           | The spill file, when the storage is a file.   |
+| `owned`          | Whether this run still must remove that file. |
+| `storage_failed` | Whether the spill failed, as above.           |
+| `truncated`      | Derived: `dropped_bytes > 0`.                 |
+
+For a kept spill, `record.read_text()` reads the path synchronously and may
+block. A memory-backed record raises `ValueError`; a missing or unreadable path
+raises `OSError`. Unknown encodings or error handlers raise `LookupError`, and
+strict decoding can raise `UnicodeError`. Callers that need to avoid blocking
+can offload the read to a worker thread.
+
+`truncated` is derived rather than stored, so it cannot disagree with the count
+beside it. Spill transitions and storage failures are also published as
+`CaptureEvent`s; see [Observe production runs](#observe-production-runs).
+
+On a pipeline, `PipelineResult.captures` reports the final stage alone: an
+interior stage relays its stdout to the next stage rather than capturing it, so
+those bytes have no record anywhere. An interior stage's stderr, when that
+stage captures it, is recorded on that stage's own `stages[i].captures`; a
+stage that captured neither stream has an empty `captures`.
 
 ### Binary output
 
@@ -663,6 +885,14 @@ each command or stage keeps the full set of measurements (`pid`, `started_at`,
 `relay_fallbacks`). The output fields of a `BytesCommandResult` are
 `bytes | None`, and each stage of a `BytesPipelineResult` is a
 `BytesCommandResult`.
+
+Byte-exact results carry `captures` too, with the same records and meaning as
+in text mode, and `BytesPipelineResult.captures` reads the final stage exactly
+as its `stdout` does. A byte payload cannot say on its own whether a policy
+shortened it, moved it to a file, or failed to retain it, so the records are
+how a `run_bytes()` caller learns any of that. A bounded byte capture returns
+the retained bytes and reports the discarded count, and a spilled byte capture
+returns the bytes read back from its file.
 
 Text remains the default, and the mode is explicit: `run()` never returns bytes
 and `run_bytes()` never returns text, so a mismatch is a bug rather than a
@@ -1003,6 +1233,10 @@ question. Choose by the question:
   Rust-pump events cover throughput and routing; see
   [Other observation channels](#other-observation-channels). A Rust pump
   decline means Cuprum used another stream path, not that the child failed.
+- **What did a capture policy do to the output?** `observe_capture` reports a
+  `CaptureEvent` when a bound discards bytes, a stream spills to a file, or a
+  spill-file create, write, flush, or read-back fails; see
+  [Other observation channels](#other-observation-channels).
 
 Keep callbacks bounded, and avoid recording payloads or arguments as metric
 labels.
@@ -1337,7 +1571,12 @@ re-raising an error about a child that is already gone. A `timeout` passed to
 `start()` is instead the default deadline for every `wait()` on that handle,
 because the clock a timeout is measured against starts at the wait that asks
 for one. Capture is always on for a handle, so a stopped child still reports
-its output on the result.
+its output on the result. A per-stream `False` value inherits the forced-on
+shorthand; an explicit capture policy still controls how that stream is
+retained. Because `start()` reads both streams through parent-side pipes, it
+raises `ValueError` for redirected stdout or stderr targets even when that
+stream's capture field is `False`. Use `run()` or `run_sync()` when redirecting
+output.
 
 `terminate(grace=...)` overrides the cancel grace for one call. The example's
 exit code of `-15` is the POSIX convention for a child ended by `SIGTERM`; one
@@ -1710,6 +1949,7 @@ Registrations are context-local, like the policy registrations in
 | --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | Execution lifecycle   | `sh.observe(hook)`               | An `ExecEvent` per phase; see [Structured execution events](#structured-execution-events)                                                           | `MetricsHook` in `cuprum.adapters.metrics_adapter`                  |
 | Control operations    | `observe_control(hook)`          | A `ControlEvent` per `signal()`, `terminate()`, or `kill()` on a `RunningCommand`                                                                   | `control_metrics_hook` in `cuprum.adapters.control_metrics`         |
+| Capture outcomes      | `observe_capture(hook)`          | A `CaptureEvent` when a bound discards bytes or a spill file moves or fails; see [Bounded capture](#bounded-capture)                                | Not applicable                                                      |
 | Echo fallbacks        | `observe_echo(hook)`             | An `EchoEvent` when echo truncates a line, a sink fails, or bounded delivery drops or abandons output                                               | `EchoMetricsHook` in `cuprum.adapters.echo_metrics`                 |
 | Line-stream lifecycle | `observe_line_stream(hook)`      | A `LineStreamEvent` as a `SafeCmd.lines()` stream spawns, saturates, tears down, or ends                                                            | `line_stream_metrics_hook` in `cuprum.adapters.line_stream_metrics` |
 | Stream operations     | `observe_stream_operation(hook)` | A `StreamOperationEvent` per completed drain or transfer; see [Aggregate Python stream-operation events](#aggregate-python-stream-operation-events) | `stream_operation_metrics_hook` in `cuprum.adapters.stream_metrics` |
@@ -1726,7 +1966,8 @@ labels. The adapter never uses sink metadata or output content as a metric
 label.
 
 The `observe_*` functions are importable from `cuprum`, except
-`observe_stream_operation`, which lives in `cuprum.stream_observation`. For
+`observe_capture` and `observe_stream_operation`. They live in
+`cuprum.capture_observation` and `cuprum.stream_observation`, respectively. For
 example, a supervisor can record how each stop request went:
 
 <!-- tested-example: control-observation -->

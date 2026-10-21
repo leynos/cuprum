@@ -1259,3 +1259,236 @@ The split changed no public surface. `_subprocess_stdin_stream.py` imports
 `__all__`, so no importer outside the module ever saw them. The maturin wheel
 snapshot gained exactly one line for the new module, which is the same
 one-line-per-module shape every other split here records.
+
+## Addendum (2026-10-14): the deprecated output spellings leave `cuprum/sh/output.py`
+
+`cuprum/sh/output.py` reached 379 lines of the 400-line ceiling the 2026-09-25
+addendum's split was written to respect, and the per-stream capture policies of
+issue #443 add fields, resolution, and a property to `RunOutputOptions` itself.
+The module could not absorb that growth and could not shed it either: the two
+compatibility surfaces it also held — the deprecated `IOOptions` alias and the
+flat `capture=`/`echo=` keyword shim behind `Pipeline.run` — describe how to
+_reach_ the options vocabulary rather than what the vocabulary means, and both
+are scheduled to disappear.
+
+Those two surfaces left `cuprum/sh/output.py`, but not for one home.
+`cuprum/sh/pipeline_output.py` owns the flat keyword shim and its existing
+re-export through `cuprum.sh.pipeline`; `cuprum/sh/_deprecated.py` takes only
+`IOOptions`:
+
+- `IOOptions` — the deprecated alias, which resolves every field exactly as its
+  base does and then warns, now in `cuprum/sh/_deprecated.py`.
+- `_DeprecatedOutputFlags` and `_resolve_pipeline_output` — the flat
+  `capture=`/`echo=` keyword arguments of `Pipeline.run`/`run_sync`, translated
+  into a `RunOutputOptions`, in `cuprum/sh/pipeline_output.py`.
+
+The options module keeps only `RunOutputOptions` and its private helpers, and
+sheds both surfaces at once so the capture work has room.
+
+No public API changes: `cuprum/sh/__init__.py` re-exports every moved name with
+the same object identity, so `cuprum.sh.IOOptions` and
+`cuprum.sh._resolve_pipeline_output` resolve as before and `cuprum/__init__.py`
+is untouched. `cuprum/sh/pipeline.py` imports the flags from
+`cuprum.sh.pipeline_output` and `IOOptions` comes from `cuprum.sh._deprecated`,
+which are the only in-package callers. No module in this tree needs a
+module-size suppression.
+
+## Addendum (2026-10-14): the convenience-sink machinery leaves `cuprum/sh/output.py`
+
+Clearing the deprecated spellings (the addendum above) took
+`cuprum/sh/output.py` to 318 lines, but that was measured before the per-stream
+capture policies of issue #443 were restored to it. The two new fields, their
+resolution, and the `resolved_capture` property take the module to 431 lines —
+past the 400-line ceiling a second time, and by the same mechanism: the ceiling
+applies to production targets, and this is one.
+
+`cuprum/sh/_convenience_sink.py` now owns the machinery behind the `group` and
+`annotate_failure` convenience flags: `_validate_convenience_flags`, which
+rejects a non-`bool` for either, and `synthesize_sink`, which materializes them
+as a `GitHubActionsSink`. The two were formerly a module function and a private
+method of `RunOutputOptions`; the method's body only ever read or replaced its
+own object's fields, so making it a module-level function over an options
+argument is a rename and nothing more. Together they are 58 lines, and moving
+them leaves `cuprum/sh/output.py` at 370 lines.
+
+The cut is a responsibility boundary, not a line count: these two describe what
+the convenience flags _produce_ — a presentation adapter configured for one
+half of the framing — whereas the options module describes what an options
+object _is_. The workflow-command syntax, the stop-commands lease, and the
+`GITHUB_ACTIONS` environment gate all stay inside the adapter and its
+synthesizer, and the options class calls into them from `__post_init__`.
+
+There is no cycle. `cuprum/sh/_convenience_sink.py` imports `GitHubActionsSink`
+at run time and `RunOutputOptions` only under `TYPE_CHECKING`, so the
+annotation on its parameter does not make the options module's import of it
+mutual at run time. The `_synthesized_sink` identity field stays declared on
+`RunOutputOptions`, because it is an init field that `dataclasses.replace`
+forwards and is what distinguishes a sink this run synthesized from one a
+caller supplied.
+
+No public API changes: neither moved name was ever exported — one is private
+and the other was a private method — so `cuprum/sh/__init__.py` and
+`cuprum/__init__.py` are untouched by this addendum. `cuprum/sh/output.py` is
+the only importer, and `make pylint-classic` reports 10.00/10 on both passes
+with no module-size suppression anywhere in the tree.
+
+## Addendum (2026-10-18): four splits forced by per-stream capture
+
+The per-stream capture policies of issue #443 added a policy object, a decoded
+configuration, an accumulator factory, and a second resolution rule to modules
+that were already near the ceiling. Four more splits came out of that, each cut
+along a boundary that predates the feature rather than purely by line count.
+
+`cuprum/_stream_config.py` now owns `_StreamConfig`, the value a drain is
+handed for one of a child's two streams. It moved out of `cuprum/_streams.py`
+because that module also holds the consumption predicates and the echo and pipe
+plumbing, and the config is the one part of it whose construction _derives_ an
+accumulator — which is what makes a cancelled drain's spill file reachable from
+the run's reconciliation point. `cuprum._streams` re-exports the type, so the
+handful of modules that import it from there are unchanged; the new module is a
+leaf and nothing imports it except through that re-export.
+
+`cuprum/_subprocess_stream_post_exit.py` now owns the three awaits between a
+streamed child's exit and its completed gather: settling an owned process
+group, waiting through the deadline path, and waiting for the stdin writer.
+These came out of `cuprum/_subprocess_stream_run.py`, which keeps the run loop,
+and every await is written to hand a failure to the coordinator rather than
+repair it locally, so the module reads as one policy. The run module re-imports
+all three names under `as` aliases of themselves. That re-import is
+load-bearing: the callers stayed behind in the run module, so it is that
+module's globals they resolve, and the teardown-boundary tests patch the names
+where the production path still reads them. Moving the definitions without
+keeping those bindings would have left the tests patching a name nothing calls.
+
+`cuprum/sh/_capture_options.py` now owns `_resolve_capture`, the rule that
+turns one stream's declared value — `None`, a `bool`, or a policy — into a
+policy or `None`. It left `cuprum/sh/output.py` for the same ceiling that drove
+the two addenda above, and the cut is also the resolution rule in one place:
+stdout and stderr resolve identically because they call the same function, and
+the validation raises before a spawn rather than at a drain.
+`cuprum/sh/output.py` re-exports it, so the options class calls it through the
+name it always had.
+
+`cuprum/_line_stream/spawn.py` now owns the part of a `SafeCmd.lines()` run
+that exists before the run is handed back: the spawn, the stdin writer, the
+stream consumers, the chained line hooks, and the unwind of a run that failed
+before it could be returned. It split from
+`cuprum/_line_stream/coordinator.py`, which keeps the settlement and deadline
+logic that follows the hand-back; the coordinator's own docstring already
+described itself in terms of what happens _after_ that point.
+`cuprum/_line_stream/__init__.py` exports `_start_line_stream_run` from the new
+module, so the package's own facade is the only seam callers see.
+
+No public API changes in any of the four: every moved name is private, and the
+three facades that re-export — `cuprum._streams`, `cuprum.sh.output`, and
+`cuprum._line_stream` — preserve the import path each importer already used.
+`cuprum/_subprocess_stream_run.py` additionally preserves the _binding_ in that
+module, for the patch seam described above. `max-module-lines = 400` still has
+no suppression anywhere in the tree.
+
+### The resolved views move to a mixin
+
+A fifth split followed from restoring a public import path rather than from the
+capture feature itself. `cuprum.sh.output.IOOptions` was exported from
+`cuprum/sh/output.py` on `main` and the 2026-10-14 split moved the class to
+`cuprum/sh/_deprecated.py` without leaving the name behind. Restoring it there
+is an import cycle — `_deprecated` imports `RunOutputOptions` from
+`output.py` — so the module resolves it lazily through a module-level
+`__getattr__`, and that adapter plus its docstring took `output.py` from 400
+lines to 439, back over the ceiling.
+
+`cuprum/sh/_resolved_options.py` now owns the four resolved-value queries —
+`resolved_broken_pipe_policy`, `resolved_capture`, `captures_any_stream`, and
+`resolved_echo` — as `_ResolvedOptionsMixin`, which `RunOutputOptions`
+inherits. The cut is a genuine one: these are the _query_ half of the options,
+what the caller's spelling resolved to, while the fields they read stay
+declared on the dataclass. That the four move together is the point: they are
+one query surface, so a split that took only the newly added `resolved_capture`
+would leave the options class reading some of its resolved values through a
+base and the rest through its own body. Moving all four keeps them mirroring
+each other, and the alternatives had narrowed to a `too-many-lines` suppression
+or leaving the public import path broken.
+
+The mixin declares `__slots__ = ()` for the reason `_BytesEntryPoints` and
+`_OwnedStart` do: an un-slotted mixin donates a `__dict__` to the frozen,
+slotted dataclass inheriting it, which would silently defeat the slots.
+`cuprum/sh/output.py` keeps no re-export of the properties, because there were
+never separate names to re-export — the class's own attribute lookup finds them
+through the base, so every `options.resolved_capture` call site is unchanged
+and the class docstring's examples still hold.
+
+## Addendum (2026-10-18): the spill-I/O leaf and the asynchronous capture seam
+
+CodeRabbit's round-8 review of the per-stream capture work identified the
+filesystem calls of a file-backed capture as blocking work on the run's event
+loop: create, write, flush, and byte-mode read-back all executed inline, so a
+slow or full disk held up the child's other stream, the deadline, and
+cancellation for as long as the write took. Moving them onto a worker is not a
+rewrite of one call site. `asyncio.to_thread` starts a separate worker per
+call, and the capture's contract is _order_: the buffered prefix must land
+before the chunks after it, and the flush before the read-back. Serializing one
+accumulator's calls needs state, and that state has to live somewhere.
+
+`cuprum/_capture_spill_io.py` is that somewhere. It holds `_create_spill` — the
+one blocking call that has to exist as a named function, because it is the seam
+the failure tests patch — plus `_SpillIo`, the object that runs each blocking
+call on a worker under a per-accumulator lock. Every other call is a bound
+method supplied at the call site: the accumulator awaits
+`self._io.run(file.write, chunk)` and gets the result or the `OSError`. Naming
+each call as a one-line forwarding function was the first shape, and the tree's
+own `R9104` rule rejects that as a trivial attribute wrapper; supplying the
+bound method at the call site is the rule's documented remedy, and it also
+makes the traceback name the method that actually raised. The split is cut
+along a real boundary rather than by line count: `cuprum/_capture_file.py`
+keeps the _policy_ — when to spill, how a failure is absorbed, what the record
+says — and the new module owns _how a blocking call is made without blocking
+the run_. The accumulator's own logic never sees a thread, an executor, or a
+lock.
+
+The direction of the import graph is what makes the split safe. The new module
+imports exactly two things from the tree, `_shielded_cleanup` from
+`cuprum/_process_lifecycle.py` and `SpillHandle` from
+`cuprum/_capture_types.py`, and `_capture_file.py` imports the leaf. No cycle:
+`_process_lifecycle` does not know about capture, `_capture_types` is a leaf
+that imports nothing from the package, and the spill leaf composes the
+lifecycle module's existing cancellation answer rather than adding a second one.
+`tempfile` also moved here, because the create call is the leaf's business,
+and the leaf binds `NamedTemporaryFile` by name rather than reaching through
+the module: the failure tests patch
+`cuprum._capture_spill_io.NamedTemporaryFile`, which substitutes this module's
+dependency instead of rewriting `tempfile`'s own attribute for every importer
+in the process.
+
+`_publish_spill` lives in the same leaf, and for the same reason. A
+`NamedTemporaryFile` is made with `delete=False`, so it is a file only the
+accumulator knows about from the moment it exists; building the handle that
+teardown reconciles is part of what creation hands back, not a later decision
+the accumulator makes once the write has succeeded. Publishing it after the
+prefix and flush would leave a cancellation in that window with a file no
+result names and no sink can reach. The handle is therefore published with
+`keep=False` whatever the policy says, and the accumulator promotes it to the
+caller's keep policy only once the prefix has landed.
+
+The seam it feeds is `CaptureSink`, in `cuprum/_capture_types.py`, whose three
+methods are now coroutines. That is a deliberate protocol change and not a
+convenience: retention is the child's output, a file-backed policy cannot
+retain a chunk without a write, and a synchronous `absorb` would put that write
+on the loop by construction. Making the whole seam async — not just the
+file-backed implementation — keeps one protocol for the drain rather than a
+policy test between two, at the cost of a coroutine step per chunk for the two
+heap-backed accumulators, which answer without suspending. The drain awaits
+`absorb` in `cuprum/_streams.py` and `finalize` in
+`cuprum/_stream_drain_finish.py`, so both the single-command and the pipeline
+paths reach a spill through the same await.
+
+`SpillHandle.close` in the same module changed with it: its unlink already ran
+on a worker, and its descriptor close now does too, because closing is the same
+blocking call that took the rest of the spill off the loop. `keep_file=True`
+remains the sole exception — the descriptor is closed and the file is left for
+the caller.
+
+No public API change: the leaf is private, `CaptureSink` is a private protocol
+implemented by private accumulators, and the four `cuprum/_capture_*.py`
+modules that existed before keep their names and responsibilities.
+`max-module-lines = 400` still has no suppression: the largest capture module is
+`cuprum/_capture_file.py` at 361 lines.

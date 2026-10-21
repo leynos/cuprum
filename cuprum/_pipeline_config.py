@@ -4,31 +4,41 @@
 ``on_line``, alongside context-derived stream settings. Its ``consumes_stdout``
 and ``consumes_stderr`` decisions keep a stream readable when capture, echo,
 line observation, or the idle heartbeat needs it, and the ``stream_config`` and
-``stderr_stream_config`` properties supply the stream-specific capture, echo,
-sink, encoding, and error configuration consumed by pipeline stream tasks.
+``stderr_stream_config`` fields supply the stream-specific capture, echo, sink,
+encoding, and error configuration consumed by pipeline stream tasks.
+
+Both stream configurations are built once, by ``__post_init__``, rather than
+per read. That is not merely an economy: a stream config carries the capture
+accumulator for its own policy, so a run that rebuilt them would hand its
+consumers accumulators no other party could reach, and the spill files those
+accumulators own would outlive the run that created them.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
-import functools
 import sys
 import typing as typ
 
-from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
+from cuprum._bounded_encoding import _reject_unsupported_bounded_captures
 from cuprum._constants import DEFAULT_MAX_LINE_CHARS
-from cuprum._delivery_lifecycle import _queue_idle_diagnostic
-from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
-from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
-from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
-from cuprum._stream_drain_state import _RelayDiagnostics
+from cuprum._pipeline_config_setup import (
+    _build_pipeline_delivery_worker,
+    _build_pipeline_idle_monitor,
+    _cleanup_failed_pipeline_setup,
+)
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum.capture_presence import captures_any_stream as _captures_any_stream
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
+    from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._stream_drain_state import _RelayDiagnostics
     from cuprum._streams import _MirrorCursor
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
@@ -41,7 +51,14 @@ class _PipelineRunConfig:
 
     ctx: ExecutionContext
 
-    capture: bool
+    # One resolved policy per stream, so a caller can bound the final stage's
+    # stdout without bounding every stage's stderr, or spill one and not the
+    # other. ``None`` means that stream is not captured at all. The policies
+    # are resolved by ``RunOutputOptions``, so the shorthand ``capture`` bool
+    # the caller may have spelled is already turned into a policy here.
+    capture_stdout: CapturePolicy | None
+
+    capture_stderr: CapturePolicy | None
 
     echo_stdout: bool
 
@@ -58,11 +75,7 @@ class _PipelineRunConfig:
 
     on_line: _LineHookFn | None = None
 
-    # One decoded-character bound for the whole pipeline, inherited by every
-    # stage's stdout and stderr config: the caller named it once on the options
-    # object, and a stage is not the place to second-guess how much of an
-    # unterminated line may be retained. Defaulted for the callers that build
-    # this config directly; ``None`` disables the bound.
+    # One decoded-character bound for every stage's line observer.
     max_line_chars: int | None = DEFAULT_MAX_LINE_CHARS
 
     # One policy for the whole pipeline, inherited by every stage's stdout and
@@ -79,11 +92,56 @@ class _PipelineRunConfig:
 
     idle: _IdleMonitor | None = None
 
+    # The run-owned writer the stream tasks echo through, and the diagnostics
+    # its eventual close reports. ``None`` until the caller opts into bounded
+    # delivery, which is also what tells every stream config to write directly.
     delivery_worker: _DeliveryWorker | None = None
 
     delivery_grace_s: float | None = None
 
     idle_delivery_diagnostics: _RelayDiagnostics | None = None
+
+    # Built once, here, because each one owns the capture accumulator its
+    # policy selected. A run whose consumers built their own would leave the
+    # accumulators holding the spill files unreachable from teardown, so the
+    # files would outlive the run. Both are derived state, so neither takes
+    # part in equality or the representation.
+    stream_config: _StreamConfig = dc.field(init=False, repr=False, compare=False)
+    stderr_stream_config: _StreamConfig = dc.field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        """Build both streams' configurations, and their accumulators, once."""
+        object.__setattr__(
+            self,
+            "stream_config",
+            self._build_stream_config(
+                capture=self.capture_stdout,
+                echo_output=self.echo_stdout,
+                fallback_sink=self.stdout_sink,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "stderr_stream_config",
+            self._build_stream_config(
+                capture=self.capture_stderr,
+                echo_output=self.echo_stderr,
+                fallback_sink=self.stderr_sink,
+            ),
+        )
+
+    @property
+    def captures_any_stream(self) -> bool:
+        """Whether the pipeline captures at least one of the two streams.
+
+        The observation tag reports "capture" as one bool, and this is the
+        reading that keeps its meaning under per-stream policies: a run that
+        captures anything at all is a capturing run, and a run that names no
+        policy for either stream captures nothing.
+        """
+        return _captures_any_stream(self.capture_stdout, self.capture_stderr)
 
     @property
     def consumes_stdout(self) -> bool:
@@ -94,7 +152,7 @@ class _PipelineRunConfig:
         off, and the idle heartbeat needs raw chunks for the same reason.
         """
         return (
-            self.capture
+            self.capture_stdout is not None
             or self.echo_stdout
             or self.idle is not None
             or self.on_line is not None
@@ -108,7 +166,7 @@ class _PipelineRunConfig:
         the same gates that keep stdout readable apply here.
         """
         return (
-            self.capture
+            self.capture_stderr is not None
             or self.echo_stderr
             or self.idle is not None
             or self.on_line is not None
@@ -117,21 +175,25 @@ class _PipelineRunConfig:
     def _build_stream_config(
         self,
         *,
+        capture: CapturePolicy | None,
         echo_output: bool,
         fallback_sink: typ.IO[str],
     ) -> _StreamConfig:
         """Build one parent-consumed pipeline stream configuration.
 
-        Both pipeline streams are wired identically here; only the echo gate
-        and the resolved destination differ. When a presentation-sink session
-        is active, a mirrored stream routes through the session's log
-        destination instead of its fallback, so it lands inside the adapter's
-        framing in the order the adapter received it. That bracketing is
-        required for stdout and stderr alike: every mirrored stream must fall
-        between the session's opening and closing frames.
+        Both pipeline streams are wired identically here; only the capture
+        policy, the echo gate, and the resolved destination differ. When a
+        presentation-sink session is active, a mirrored stream routes through
+        the session's log destination instead of its fallback, so it lands
+        inside the adapter's framing in the order the adapter received it. That
+        bracketing is required for stdout and stderr alike: every mirrored
+        stream must fall between the session's opening and closing frames.
 
         Parameters
         ----------
+        capture : CapturePolicy | None
+            This stream's resolved capture policy, or ``None`` for a stream
+            the run is not capturing.
         echo_output : bool
             Whether this stream's lines are mirrored to the parent.
         fallback_sink : typ.IO[str]
@@ -145,7 +207,7 @@ class _PipelineRunConfig:
         """
         framed = self.sink_bracket.resolve_destination(fallback_sink)
         return _StreamConfig(
-            capture_output=self.capture,
+            capture=capture,
             echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
             max_line_chars=self.max_line_chars,
@@ -158,22 +220,6 @@ class _PipelineRunConfig:
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
             mirror=self._echo_mirror(framed),
-        )
-
-    @property
-    def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
-        return self._build_stream_config(
-            echo_output=self.echo_stdout,
-            fallback_sink=self.stdout_sink,
-        )
-
-    @property
-    def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage."""
-        return self._build_stream_config(
-            echo_output=self.echo_stderr,
-            fallback_sink=self.stderr_sink,
         )
 
     def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
@@ -216,7 +262,16 @@ def _prepare_pipeline_config(
     """Normalize runtime options for pipeline execution from one options object."""
     ctx, stdout_sink, stderr_sink = _resolve_pipeline_context(context)
     # Keep ``RunOutputOptions`` as the only carrier for resolved output behaviour.
-    echo_stdout, echo_stderr = output.resolved_echo
+    capture_stdout, capture_stderr = output.resolved_capture
+    # Rejected here, before any stage is spawned. The encoding is the run's,
+    # shared by every stage, so one refusal covers the whole pipeline; a
+    # bounded text capture that reached the drain under an unrepairable codec
+    # would decode an orphaned trail byte as a character the child never wrote.
+    _reject_unsupported_bounded_captures(
+        (capture_stdout, capture_stderr),
+        encoding=ctx.encoding,
+        capture_bytes=capture_bytes,
+    )
     sink_bracket = _SinkBracket.open(
         output.sink,
         sinks.SessionStart(label="pipeline", argv=()),
@@ -241,9 +296,10 @@ def _prepare_pipeline_config(
         )
         return _PipelineRunConfig(
             ctx=ctx,
-            capture=output.capture,
-            echo_stdout=echo_stdout,
-            echo_stderr=echo_stderr,
+            capture_stdout=capture_stdout,
+            capture_stderr=capture_stderr,
+            echo_stdout=output.resolved_echo[0],
+            echo_stderr=output.resolved_echo[1],
             max_echo_line_bytes=output.max_echo_line_bytes,
             max_line_chars=output.max_line_chars,
             broken_pipe_policy=output.resolved_broken_pipe_policy,
@@ -273,38 +329,6 @@ def _prepare_pipeline_config(
         raise
 
 
-def _cleanup_failed_pipeline_setup(
-    output: RunOutputOptions,
-    delivery_worker: _DeliveryWorker | None,
-    sink_bracket: _SinkBracket,
-    run_error: BaseException,
-) -> None:
-    """Release the delivery worker and sink acquired before setup failed."""
-    if delivery_worker is not None:
-        try:
-            delivery_worker.close(grace=0.0)
-        except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
-            _note_setup_cleanup_failure(
-                run_error,
-                "Output delivery worker cleanup",
-                close_error,
-            )
-    try:
-        if output.delivery is None:
-            sink_bracket.close(outcome=_outcome_for_error(run_error))
-        else:
-            sink_bracket.close_bounded(
-                outcome=_outcome_for_error(run_error),
-                grace=0.0,
-            )
-    except BaseException as close_error:  # ruff: ignore[blind-except] - preserve the setup error.
-        _note_setup_cleanup_failure(
-            run_error,
-            "Presentation sink cleanup",
-            close_error,
-        )
-
-
 def _resolve_pipeline_context(
     context: ExecutionContext | None,
 ) -> tuple[ExecutionContext, typ.IO[str], typ.IO[str]]:
@@ -320,62 +344,3 @@ def _resolve_pipeline_context(
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
     return ctx, stdout_sink, stderr_sink
-
-
-def _build_pipeline_delivery_worker(
-    output: RunOutputOptions,
-    sink_bracket: _SinkBracket,
-    stdout_sink: typ.IO[str],
-    stderr_sink: typ.IO[str],
-) -> _DeliveryWorker | None:
-    """Start one shared worker for the pipeline's resolved stream sinks."""
-    delivery = output.delivery
-    if delivery is None:
-        return None
-    return _new_delivery_worker(
-        delivery,
-        sink_bracket.resolve_destination(stdout_sink),
-        sink_bracket.resolve_destination(stderr_sink),
-        operation_lock=sink_bracket.writer_lock,
-    )
-
-
-def _build_pipeline_idle_monitor(
-    output: RunOutputOptions,
-    sink_bracket: _SinkBracket,
-    stderr_sink: typ.IO[str],
-    delivery_worker: _DeliveryWorker | None,
-) -> tuple[_IdleMonitor | None, _RelayDiagnostics | None]:
-    """Build aggregate idle reporting through the pipeline's stderr route."""
-    diagnostics = _RelayDiagnostics() if delivery_worker is not None else None
-    idle_delivery = (
-        None
-        if delivery_worker is None or diagnostics is None
-        else functools.partial(
-            _queue_idle_diagnostic,
-            delivery_worker,
-            diagnostics,
-        )
-    )
-    # Resolve through the active session so the keepalive shares the run's sink.
-    idle = _build_idle_monitor(
-        output.idle_after,
-        output.on_idle,
-        _PIPELINE_IDLE_SUBJECT,
-        _IdleSinkConfig(
-            sink=sink_bracket.resolve_destination(stderr_sink),
-            delivery=idle_delivery,
-        ),
-    )
-    return idle, diagnostics
-
-
-def _note_setup_cleanup_failure(
-    run_error: BaseException,
-    cleanup_action: str,
-    cleanup_error: BaseException,
-) -> None:
-    """Attach a bounded cleanup diagnostic without replacing setup failure."""
-    run_error.add_note(
-        f"{cleanup_action} also failed ({type(cleanup_error).__name__})."
-    )

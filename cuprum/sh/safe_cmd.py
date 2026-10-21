@@ -52,10 +52,14 @@ from cuprum.sh.line_options import (
     # Re-exported under this module's name as well as imported for use here.
     # This module is where the line-iteration path has always been read from;
     # re-importing the helpers elsewhere would give a test double a second
-    # binding that no production call path resolves.
+    # binding that no production call path resolves. The ``as`` form marks the
+    # names this module no longer calls but must keep binding.
     _line_iteration_tracking,
-    _reject_redirected_lines_stdout,
+    _reject_line_iteration_conflicts,
     _resolve_line_stdin_source,
+)
+from cuprum.sh.line_options import (
+    _reject_redirected_lines_stdout as _reject_redirected_lines_stdout,
 )
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import CapturedResult, CommandResult
@@ -246,8 +250,7 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        _reject_redirected_lines_stdout(out)
+        _reject_line_iteration_conflicts(self, out, ctx)
         stdin_source = _resolve_line_stdin_source(stdin, ctx, out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _line_iteration_tracking()

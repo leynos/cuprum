@@ -39,10 +39,12 @@ from cuprum._result_assembly import _require_bytes, _require_text
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import types
 
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
     from cuprum.sh import SafeCmd
@@ -114,16 +116,19 @@ async def _await_pipeline_wait_result(
 
 async def _gather_pipeline_outputs(
     spawn: _PipelineSpawnResult,
-) -> tuple[tuple[_StreamPayload | None, ...], _StreamPayload | None]:
+) -> tuple[tuple[_CapturedDrain | None, ...], _CapturedDrain | None]:
     """Gather stderr by stage and final stdout from spawn tasks.
 
-    Each payload arrives in the pipeline's mode: text in the ordinary one, the
-    child's bytes untouched in the byte-exact one. Nothing here inspects the
-    type; the mode is read once, where each result is built.
+    Each drain result carries its payload in the pipeline's mode — text in the
+    ordinary one, the child's bytes untouched in the byte-exact one — and it
+    carries the capture record and any spill handle with it. Nothing here
+    inspects either; the mode is read once, where each result is built, and the
+    record travels on to that same site because it is the only thing that knows
+    which spill file this run still has to remove.
 
     Returns
     -------
-    tuple[tuple[_StreamPayload | None, ...], _StreamPayload | None]
+    tuple[tuple[_CapturedDrain | None, ...], _CapturedDrain | None]
         Each stage's stderr in stage order, then the final stage's stdout, or
         ``None`` where the spawn attached no such consumer.
     """
@@ -165,7 +170,7 @@ def _stage_relay_fallbacks(
 
 
 def _join_stage_stderr(
-    stderr_by_stage: tuple[_StreamPayload | None, ...],
+    stderr_by_stage: tuple[_CapturedDrain | None, ...],
     *,
     capture_bytes: bool,
 ) -> _StreamPayload:
@@ -179,6 +184,10 @@ def _join_stage_stderr(
     because a stage payload in the wrong mode is an internal contradiction —
     the helpers that say so are the same ones the result builders use.
 
+    A stage with no consumer contributes nothing, which is the same empty value
+    the join would otherwise supply: a stage whose stderr was never piped has
+    no stderr to report, and the deadline path must not invent one.
+
     Returns
     -------
     _StreamPayload
@@ -186,11 +195,18 @@ def _join_stage_stderr(
         ``None``: ``b""`` is itself a valid join result, and the distinction
         between it and ``None`` is the one the capture flag draws everywhere.
     """
+    payloads = tuple(_stage_stderr_payloads(stderr_by_stage))
     if capture_bytes:
-        return b"".join(
-            _require_bytes(chunk, "stderr") or b"" for chunk in stderr_by_stage
-        )
-    return "".join(_require_text(chunk, "stderr") or "" for chunk in stderr_by_stage)
+        return b"".join(_require_bytes(chunk, "stderr") or b"" for chunk in payloads)
+    return "".join(_require_text(chunk, "stderr") or "" for chunk in payloads)
+
+
+def _stage_stderr_payloads(
+    stderr_by_stage: tuple[_CapturedDrain | None, ...],
+) -> cabc.Iterator[_StreamPayload | None]:
+    """Yield each stage's captured stderr payload, in stage order."""
+    for drain in stderr_by_stage:
+        yield None if drain is None else drain.payload
 
 
 def _build_timeout_expired_error(
@@ -215,18 +231,42 @@ def _build_timeout_expired_error(
         terminated stages had produced.
     """
     stderr_text: _StreamPayload | None = None
-    if outputs.capture:
+    if outputs.capture_stderr is not None:
         stderr_text = _join_stage_stderr(
             outputs.stderr_by_stage,
             capture_bytes=outputs.capture_bytes,
         )
-    output = outputs.final_stdout if outputs.capture else None
     return _sh_module().TimeoutExpired(
         cmd=tuple(cmd.argv_with_program for cmd in parts),
         timeout=timeout,
-        output=output,
+        output=_final_stage_stdout(outputs),
         stderr=stderr_text,
     )
+
+
+def _final_stage_stdout(outputs: _PipelineOutputs) -> _StreamPayload | None:
+    """Report the final stage's stdout as the expired run's captured output.
+
+    Two independent conditions have to hold, which is why this is a helper
+    rather than an inline conditional now that capture is per stream: the
+    caller must have asked for stdout at all — a run that captured only stderr
+    reports no ``output``, exactly as it reports no ``stdout`` on its stage
+    result — and the spawn must have attached a stdout consumer. The payload
+    is then narrowed to the run's mode, because the widening that lets one
+    drain serve both modes leaves the type a type checker cannot narrow here.
+
+    Returns
+    -------
+    _StreamPayload | None
+        The child's captured stdout in the run's mode, or ``None`` when
+        stdout was not captured or no consumer read it.
+    """
+    drain = outputs.final_stdout
+    if outputs.capture_stdout is None or drain is None:
+        return None
+    if outputs.capture_bytes:
+        return _require_bytes(drain.payload, "stdout")
+    return _require_text(drain.payload, "stdout")
 
 
 async def _collect_pipeline_inputs(
@@ -270,7 +310,8 @@ async def _collect_pipeline_inputs(
         outputs = _PipelineOutputs(
             stderr_by_stage=stderr_by_stage,
             final_stdout=final_stdout,
-            capture=config.capture,
+            capture_stdout=config.capture_stdout,
+            capture_stderr=config.capture_stderr,
             capture_bytes=config.capture_bytes,
             relay_fallbacks_by_stage=relay_fallbacks_by_stage,
         )

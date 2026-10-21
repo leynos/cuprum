@@ -144,7 +144,8 @@ def _execution(
     return _SubprocessExecution(
         cmd=_probe_command(),
         ctx=ExecutionContext(),
-        capture=False,
+        capture_stdout=None,
+        capture_stderr=None,
         echo_stdout=False,
         echo_stderr=False,
         max_echo_line_bytes=None,

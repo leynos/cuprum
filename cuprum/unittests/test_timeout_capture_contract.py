@@ -21,6 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum import Program, TimeoutExpired, sh
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
@@ -28,14 +29,22 @@ from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
 )
+from cuprum.capture_policy import FullCapture
 from cuprum.sh import RunOutputOptions
+from cuprum.unittests._stream_drain_support import (
+    _BOTH_CAPTURED,
+    _NONE_CAPTURED,
+    captured,
+)
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
     _BLOCK_SECONDS,
     CHILD_STDERR,
     CHILD_STDOUT,
+    MARKER_STARTUP_GRACE_S,
     child_argv,
     python_interpreter,
+    wait_for_marker,
 )
 
 if typ.TYPE_CHECKING:
@@ -43,22 +52,17 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
-async def _never_reaches_eof() -> str | None:
+async def _never_reaches_eof() -> _CapturedDrain:
     """Block as a reader does on a pipe whose EOF never arrives."""
     await asyncio.Event().wait()
+    return _CapturedDrain()
 
 
-async def _never_reaches_eof_bytes() -> bytes | None:
+async def _never_reaches_eof_bytes() -> _CapturedDrain:
     """Block as a byte-exact reader does on a pipe whose EOF never arrives."""
     await asyncio.Event().wait()
+    return _CapturedDrain()
 
-
-# The child is a bare interpreter importing only stdlib modules, which was
-# measured at 17 ms (19 ms worst of five) on this host. Two seconds is over a
-# hundred times that, so the cap only bites if start-up has gone pathological,
-# and it is a cap rather than a wait: the marker lands in milliseconds and the
-# run deadline below is what the test actually spends its time on.
-_MARKER_STARTUP_GRACE_S = 2.0
 
 # Longer than the marker grace, so a slow start-up can never be mistaken for the
 # timeout under test, and short enough to stay well inside pytest's 30-second
@@ -68,9 +72,7 @@ _RUN_TIMEOUT_S = 5.0
 
 
 #: A consumer that blocks until cancelled, in either capture mode.
-type _WedgedReader = cabc.Callable[
-    [], cabc.Coroutine[object, object, str | bytes | None]
-]
+type _WedgedReader = cabc.Callable[[], cabc.Coroutine[object, object, _CapturedDrain]]
 
 
 # Writes a payload that is not valid UTF-8, then blocks. ``sys.argv[1]`` is the
@@ -86,27 +88,11 @@ _INVALID_UTF8_CHILD_SOURCE = "; ".join((
 ))
 
 
-async def _reaches_eof_late(text: str, turns: int) -> str | None:
-    """Return ``text`` after ``turns`` scheduling turns, as a late EOF would."""
+async def _reaches_eof_late(text: str, turns: int) -> _CapturedDrain:
+    """Report ``text`` after ``turns`` scheduling turns, as a late EOF would."""
     for _ in range(turns):
         await asyncio.sleep(0)
-    return text
-
-
-async def _wait_for_marker(marker: Path, *, deadline: float) -> None:
-    """Fail unless the child writes its readiness marker before ``deadline``."""
-    loop = asyncio.get_running_loop()
-    try:
-        async with asyncio.timeout_at(deadline):
-            while loop.time() < deadline:
-                # ASYNC240: a child process writes this file, so no asyncio
-                # primitive can observe it directly.
-                if marker.exists():  # ruff: ignore[blocking-path-method-in-async-function]
-                    return
-                await asyncio.sleep(0.01)
-    except TimeoutError:
-        pass
-    pytest.fail(f"the child did not write {marker} before its deadline")
+    return captured(text)
 
 
 def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> None:
@@ -125,10 +111,12 @@ def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> No
         )
 
         async with asyncio.timeout(_CAPTURE_EOF_GRACE_S * 2):
-            stdout_text, stderr_text = await _drain_stream_consumers(
+            stdout_drain, stderr_drain = await _drain_stream_consumers(
                 consumers,
-                _DrainContext(capture=True),
+                _DrainContext(captures=_BOTH_CAPTURED),
             )
+        stdout_text = stdout_drain.payload
+        stderr_text = stderr_drain.payload
 
         assert stdout_text is not None, (
             f"a capturing drain must report stdout as text, got {stdout_text!r}"
@@ -162,10 +150,12 @@ def test_capturing_drain_waits_for_an_imminent_eof() -> None:
             asyncio.create_task(_reaches_eof_late("err", turns=3)),
         )
 
-        stdout_text, stderr_text = await _drain_stream_consumers(
+        stdout_drain, stderr_drain = await _drain_stream_consumers(
             consumers,
-            _DrainContext(capture=True),
+            _DrainContext(captures=_BOTH_CAPTURED),
         )
+        stdout_text = stdout_drain.payload
+        stderr_text = stderr_drain.payload
 
         assert stdout_text == "out", (
             f"a reader that reached EOF must keep its capture, got {stdout_text!r}"
@@ -204,7 +194,7 @@ def test_capturing_drain_settles_its_readers_when_cancelled_mid_grace() -> None:
         drain = asyncio.create_task(
             _drain_stream_consumers(
                 consumers,
-                _DrainContext(capture=True, eof_grace_waiter=wait_at_grace),
+                _DrainContext(captures=_BOTH_CAPTURED, eof_grace_waiter=wait_at_grace),
             ),
         )
         await grace_started.wait()
@@ -250,16 +240,18 @@ def test_non_capturing_drain_leaves_a_wedged_reader_unset(
             asyncio.create_task(wedged_reader()),
         )
 
-        stdout_value, stderr_value = await _drain_stream_consumers(
+        stdout_drain, stderr_drain = await _drain_stream_consumers(
             consumers,
-            _DrainContext(capture=False, capture_bytes=capture_bytes),
+            _DrainContext(captures=_NONE_CAPTURED, capture_bytes=capture_bytes),
         )
 
-        assert stdout_value is None, (
-            f"a non-capturing drain must leave stdout unset, got {stdout_value!r}"
+        # The whole result must be empty, not merely its payload: a record here
+        # would claim a capture that no policy on this route ever asked for.
+        assert stdout_drain == _CapturedDrain(), (
+            f"a non-capturing drain must leave stdout unset, got {stdout_drain!r}"
         )
-        assert stderr_value is None, (
-            f"a non-capturing drain must leave stderr unset, got {stderr_value!r}"
+        assert stderr_drain == _CapturedDrain(), (
+            f"a non-capturing drain must leave stderr unset, got {stderr_drain!r}"
         )
 
     asyncio.run(run_case())
@@ -274,7 +266,7 @@ def test_non_capturing_drain_discards_a_buffered_consumer_when_signalled() -> No
         reader = asyncio.StreamReader()
         reader.feed_data(b"buffered output")
         config = _StreamConfig(
-            capture_output=True,
+            capture=FullCapture(),
             echo_output=False,
             sink=io.StringIO(),
             encoding="utf-8",
@@ -288,13 +280,13 @@ def test_non_capturing_drain_discards_a_buffered_consumer_when_signalled() -> No
         await asyncio.sleep(0)
         discard_event.set()
 
-        stdout_text, stderr_text = await _drain_stream_consumers(
+        stdout_drain, stderr_drain = await _drain_stream_consumers(
             consumers,
-            _DrainContext(capture=False, discard_on_cancel=discard_event),
+            _DrainContext(captures=_NONE_CAPTURED, discard_on_cancel=discard_event),
         )
 
-        assert stdout_text is None
-        assert stderr_text is None
+        assert stdout_drain == _CapturedDrain()
+        assert stderr_drain == _CapturedDrain()
         assert all(task.cancelled() for task in consumers), (
             "non-capturing cleanup must settle both readers by cancellation"
         )
@@ -377,12 +369,12 @@ def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -
             catalogue=python_catalogue()[0],
         )(*child_argv(marker))
         run_timeout = _RUN_TIMEOUT_S
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run(timeout=run_timeout, output=RunOutputOptions(capture=True)),
         )
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -415,10 +407,12 @@ def test_capturing_bytes_drain_reports_empty_bytes_without_a_capture() -> None:
         )
 
         async with asyncio.timeout(_CAPTURE_EOF_GRACE_S * 2):
-            stdout_bytes, stderr_bytes = await _drain_stream_consumers(
+            stdout_drain, stderr_drain = await _drain_stream_consumers(
                 consumers,
-                _DrainContext(capture=True, capture_bytes=True),
+                _DrainContext(captures=_BOTH_CAPTURED, capture_bytes=True),
             )
+        stdout_bytes = stdout_drain.payload
+        stderr_bytes = stderr_drain.payload
 
         assert stdout_bytes == b"", (
             f"a byte-exact capture must fall back to b''; got {stdout_bytes!r}"
@@ -466,14 +460,14 @@ def test_bytes_timeout_keeps_flushed_output_after_the_child_is_ready(
         # The run deadline has to allow for start-up *and* still fire while the
         # child blocks, so that what the test reads came from the timeout path.
         run_timeout = _RUN_TIMEOUT_S
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run_bytes(
                 timeout=run_timeout, output=RunOutputOptions(capture=True)
             ),
         )
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -506,12 +500,12 @@ def test_bytes_timeout_keeps_an_invalid_utf8_prefix(tmp_path: Path) -> None:
 
     async def run_case() -> TimeoutExpired:
         """Wait for readiness, then let the deadline take the child."""
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         # Long enough that the payload is flushed before the deadline, short
         # enough that the deadline still takes the child while it sleeps.
         run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
 
         with pytest.raises(TimeoutExpired) as expired:
             await run
@@ -534,12 +528,12 @@ def test_bytes_run_cancelled_externally_reraises_cancellation(tmp_path: Path) ->
 
     async def run_case() -> None:
         """Cancel the run from outside, before its deadline could fire."""
-        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        deadline = asyncio.get_running_loop().time() + MARKER_STARTUP_GRACE_S
         # Unreachable in this test: the cancellation is issued long before it,
         # and the child is terminated rather than waited out.
         run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
-        await _wait_for_marker(marker, deadline=deadline)
+        await wait_for_marker(marker, deadline=deadline)
         run.cancel()
 
         with pytest.raises(asyncio.CancelledError):

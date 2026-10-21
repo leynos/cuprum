@@ -17,12 +17,16 @@ PACKAGE_NAME = "cuprum"
 DEFAULT_ECHO_MAX_LINE_BYTES = 64 * 1024
 
 # Line observation retains an incomplete line until its terminator arrives.
-# That wait is unbounded only if the terminator never does, so the default
-# bounds it in *decoded characters* — not bytes, and not counting the
-# terminator — and a longer line is published as a sequence of fragments.
-# Chosen to match the echo bound so a default run does not retain more per
-# line than it would mirror.
+# Bound that retention in decoded characters, independently of echoed bytes.
 DEFAULT_MAX_LINE_CHARS = 64 * 1024
+
+# Bytes a ``FileBackedCapture`` holds on the heap before it spills the stream to
+# a temporary file. One mebibyte is enough to keep a chatty-but-finite command's
+# output in memory, where the caller reads it from ``stdout``/``stderr`` as
+# before, while still bounding what a genuinely noisy child can cost the parent.
+# The threshold is a memory decision, never a content one: a stream that stays
+# below it is finalized exactly as ``FullCapture`` would finalize it.
+DEFAULT_CAPTURE_SPILL_THRESHOLD_BYTES = 1024 * 1024
 
 # Error policy a byte-exact run's *views* decode under. A view is any decode
 # that renders the child's bytes for display or inspection — line observation,

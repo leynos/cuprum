@@ -7,6 +7,7 @@ import sys
 import typing as typ
 
 from cuprum._bounded_delivery import _DeliveryWorker, _new_delivery_worker
+from cuprum._bounded_encoding import _reject_unsupported_bounded_captures
 from cuprum._delivery_lifecycle import _queue_idle_diagnostic
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor, _IdleSinkConfig
@@ -46,6 +47,29 @@ def _resolve_command_destinations(
     )
 
 
+def _reject_contested_captures(state: _ExecutionState) -> None:
+    """Refuse a bounded capture the run's encoding cannot safely trim.
+
+    A bounded capture trimmed under an encoding the trim cannot repair would
+    decode an orphaned trail byte as a character of its own, and the caller
+    would read text the child never wrote. Both facts — the policy and the
+    encoding — are in hand here and nowhere earlier: the policy lives on the
+    options and the encoding on the context, and this seam is the first that
+    brings them together.
+
+    Raises
+    ------
+    ValueError
+        If either stream names a ``BoundedCapture`` whose encoding is not
+        trim-safe and the run renders text.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the guard this delegates to
+    _reject_unsupported_bounded_captures(
+        state.output.resolved_capture,
+        encoding=state.context.encoding,
+        capture_bytes=state.capture_bytes,
+    )
+
+
 def _build_subprocess_execution(
     cmd: SafeCmd,
     state: _ExecutionState,
@@ -62,6 +86,8 @@ def _build_subprocess_execution(
         state.output.stdin,
         has_source=state.stdin_data is not None,
     )
+    _reject_contested_captures(state)
+    capture_stdout, capture_stderr = state.output.resolved_capture
     delivery = state.output.delivery
     delivery_worker = (
         None
@@ -78,7 +104,8 @@ def _build_subprocess_execution(
         return _SubprocessExecution(
             cmd=cmd,
             ctx=state.context,
-            capture=state.output.capture,
+            capture_stdout=capture_stdout,
+            capture_stderr=capture_stderr,
             echo_stdout=state.output.resolved_echo[0],
             echo_stderr=state.output.resolved_echo[1],
             max_echo_line_bytes=state.output.max_echo_line_bytes,

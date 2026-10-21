@@ -261,7 +261,14 @@ def test_failed_pipeline_config_build_closes_delivery_worker_and_sink(
         raise run_error
 
     monkeypatch.setattr(bounded_delivery, "_DeliveryWorker", record_worker_creation)
-    monkeypatch.setattr(pipeline_config, "_build_idle_monitor", fail_idle_monitor)
+    # The idle monitor is built by ``_pipeline_config_setup``; ``_pipeline_config``
+    # binds that module's builder under its own name, which is the seam
+    # ``_prepare_pipeline_config`` actually calls.
+    monkeypatch.setattr(
+        pipeline_config,
+        "_build_pipeline_idle_monitor",
+        fail_idle_monitor,
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         pipeline_config._prepare_pipeline_config(

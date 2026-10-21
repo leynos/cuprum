@@ -24,13 +24,12 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _split_complete_lines, _StreamConfig
+from cuprum.capture_policy import CapturePolicy, FullCapture
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.unittests._stream_drain_support import (
-        CapturedOrNone,
-    )
+    from cuprum.unittests._stream_drain_support import CapturedDrain
 
 _PROPERTY_MAX_EXAMPLES = 24
 _CHUNKS = st.lists(st.binary(min_size=1, max_size=6), min_size=1, max_size=6)
@@ -94,6 +93,12 @@ class _RejectingSink:
         """Model the flush call on a text stream."""
 
 
+# The default policy for these drain tests: one shared, immutable instance,
+# because a call in a default argument is banned and a fresh object per call
+# would allocate for no reason.
+_FULL_CAPTURE = FullCapture()
+
+
 def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
     """Build a stream-reader-shaped stub yielding the given chunks."""
     return typ.cast("asyncio.StreamReader", _ChunkedReader(chunks))
@@ -102,13 +107,13 @@ def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
 def _config(
     recorder: _ActivityRecorder,
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = True,
     sink: typ.IO[str] | None = None,
 ) -> _StreamConfig:
     """Build a stream config whose only run-owned observer is *recorder*."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=echo,
         sink=sink if sink is not None else io.StringIO(),
         encoding="utf-8",
@@ -136,13 +141,13 @@ def _run_drain(
     recorder: _ActivityRecorder,
     chunks: cabc.Sequence[bytes],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = True,
-) -> CapturedOrNone:
+) -> CapturedDrain:
     """Run the canonical drain over *chunks* and return what it captured."""
     config = _config(recorder, capture=capture, echo=echo)
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain the chunked reader with the configuration under test."""
         return await _drain(_reader(chunks), config)
 
@@ -168,7 +173,7 @@ def test_every_non_empty_chunk_reports_activity(chunks: list[bytes]) -> None:
     """Property: activity is reported once per raw read, whatever the split."""
     recorder = _ActivityRecorder()
     captured = _run_drain(recorder, chunks)
-    assert captured == _expected_text(chunks), (
+    assert captured.payload == _expected_text(chunks), (
         f"capture must survive any chunking for chunks={chunks!r}, "
         f"captured={captured!r}"
     )
@@ -188,7 +193,7 @@ def test_activity_is_reported_before_every_line(chunks: list[bytes]) -> None:
     """Property: no line callback can precede the read that produced it."""
     recorder = _ActivityRecorder()
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain with a line observer recording into the same event log."""
         return await _drain(
             _reader(chunks),
@@ -214,8 +219,8 @@ def test_observed_output_without_capture_stays_unretained(
 ) -> None:
     """Property: a run may watch for silence while retaining nothing."""
     recorder = _ActivityRecorder()
-    captured = _run_drain(recorder, chunks, capture=False, echo=False)
-    assert captured is None, (
+    captured = _run_drain(recorder, chunks, capture=None, echo=False)
+    assert captured.payload is None, (
         f"an observing run must retain no text for chunks={chunks!r}, got {captured!r}"
     )
     assert recorder.activities() == len(chunks), (
@@ -231,12 +236,12 @@ def test_rejected_echo_chunks_still_report_activity(chunks: list[bytes]) -> None
     recorder = _ActivityRecorder()
     config = _config(recorder, sink=typ.cast("typ.IO[str]", _RejectingSink()))
 
-    async def exercise() -> CapturedOrNone:
+    async def exercise() -> CapturedDrain:
         """Drain with the sink that refuses every echoed chunk."""
         return await _drain(_reader(chunks), config)
 
     captured = asyncio.run(exercise())
-    assert captured == _expected_text(chunks), (
+    assert captured.payload == _expected_text(chunks), (
         f"capture must complete despite a rejected echo for chunks={chunks!r}"
     )
     assert recorder.activities() == len(chunks), (

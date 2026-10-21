@@ -36,7 +36,56 @@ from cuprum.sh.execution import ExecutionContext, StdinInput
 from cuprum.sh.output import RunOutputOptions
 
 if typ.TYPE_CHECKING:
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.sh import SafeCmd
+
+
+def _reject_redirected_handle_streams(output: RunOutputOptions) -> None:
+    """Reject streams a running handle cannot read from parent-side pipes.
+
+    Raises
+    ------
+    ValueError
+        If stdout or stderr names a non-pipe target.
+    """
+    redirected = [
+        name
+        for name, target in (("stdout", output.stdout), ("stderr", output.stderr))
+        if target is not None and target.kind != "pipe"
+    ]
+    if redirected:
+        msg = (
+            "SafeCmd.start() always captures output, so "
+            f"{', '.join(redirected)} cannot be redirected. "
+            "Use run() or run_sync() to redirect streams."
+        )
+        raise ValueError(msg)
+
+
+def _handle_capture_setting(
+    *,
+    setting: CapturePolicy | bool | None,
+) -> CapturePolicy | bool | None:
+    """Make an explicit false inherit the handle's forced-on capture flag."""
+    return None if setting is False else setting
+
+
+def _handle_capture_options(output: RunOutputOptions) -> RunOutputOptions:
+    """Enable handle capture while retaining each explicit capture policy."""
+    capture_stdout = _handle_capture_setting(setting=output.capture_stdout)
+    capture_stderr = _handle_capture_setting(setting=output.capture_stderr)
+    capture_settings_unchanged = (
+        capture_stdout is output.capture_stdout
+        and capture_stderr is output.capture_stderr
+    )
+    if output.capture and capture_settings_unchanged:
+        return output
+    return dc.replace(
+        output,
+        capture=True,
+        capture_stdout=capture_stdout,
+        capture_stderr=capture_stderr,
+    )
 
 
 def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
@@ -45,16 +94,24 @@ def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
     Capture is forced on for a handle because a handle exists so its caller can
     inspect the child after the fact, and a child whose streams were routed to
     ``DEVNULL`` cannot be asked what it said. The caller's own settings still
-    govern echo and every other presentation decision.
+    govern echo and every other presentation decision. A per-stream ``False``
+    value is reset to ``None`` so it inherits the forced-on shorthand, while
+    an explicit capture policy remains in force.
+
+    Owned handles read both streams through parent-side pipes, so a non-pipe
+    target is refused before the capture fields are normalized.
 
     Returns
     -------
     RunOutputOptions
-        The caller's settings with ``capture`` set, or the default settings
-        when none were given.
+        The caller's settings with ``capture`` set and per-stream opt-outs
+        removed, or the default settings when none were given. Explicit
+        per-stream capture policies remain unchanged.
+
     """
     resolved = output or RunOutputOptions()
-    return resolved if resolved.capture else dc.replace(resolved, capture=True)
+    _reject_redirected_handle_streams(resolved)
+    return _handle_capture_options(resolved)
 
 
 async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
@@ -126,8 +183,9 @@ class _OwnedStart:
         block settles the run on exit — a child still running is stopped down
         the same ``SIGTERM``, cancel-grace, ``SIGKILL`` path a cancelled
         ``run()`` takes — so a caller cannot leave a child behind by forgetting
-        about it. Output capture is always on, whatever *output* says, so a
-        stopped child still reports what the command wrote.
+        about it. Output capture is always on, whatever *output* says. A
+        per-stream ``False`` value inherits the forced-on shorthand, while an
+        explicit capture policy still controls that stream's retention.
 
         Unlike ``run()``, no deadline is enforced while the handle is merely
         held: the clock a timeout is measured against starts at the ``wait``
@@ -158,9 +216,11 @@ class _OwnedStart:
         ------
         PermissionError
             If the command is not allowed by the active scope.
+        ValueError
+            If stdout or stderr is redirected to a non-pipe target.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
-        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate from the allowlist and stdin resolution
+        """  # ruff: ignore[docstring-extraneous-exception] - exceptions propagate from allowlist, stdin, and owned-capture validation
         cmd = typ.cast("SafeCmd", self)
         _enforce_allowlist(cmd)
         ctx = context or ExecutionContext()
@@ -168,8 +228,9 @@ class _OwnedStart:
             context=ctx,
             # Capture is forced on: a handle exists so its caller can inspect
             # the child after the fact, and a child whose streams were routed
-            # to ``DEVNULL`` cannot be asked what it said. The caller's own
-            # settings still govern echo and every other presentation choice.
+            # to ``DEVNULL`` cannot be asked what it said. Explicit policies
+            # still govern each stream's retention; presentation stays with
+            # the caller.
             output=_with_capture(output),
             stdin_data=stdin.resolve(ctx) if stdin is not None else None,
             timeout=_resolve_timeout(timeout=timeout, context=context),

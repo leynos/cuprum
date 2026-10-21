@@ -23,6 +23,8 @@ from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import (
+    _is_captured_text_pair,
+    _recorded_captures,
     _require_bytes,
     _require_captured_text,
     _require_text,
@@ -66,7 +68,9 @@ if typ.TYPE_CHECKING:
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum.capture_policy import CapturedStream
     from cuprum.echo_events import RelayFallback
+    from cuprum.program import Program
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -101,16 +105,22 @@ def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
 class _DirectCompletion:
     """The settled facts of a direct run, once its streams have reconciled.
 
-    ``stdout_text``, ``stderr_text``, and ``relay_diagnostics`` stay ``None``
-    on the direct path, which captures nothing; the stream path overwrites all
-    three. Returning them as one record keeps the waiting and the result
-    assembly in separate helpers, so neither accumulates enough locals to trip
-    the repository's ``too-many-locals`` ceiling.
+    ``stdout_text``, ``stderr_text``, ``captures``, and ``relay_diagnostics``
+    stay ``None`` (or, for ``captures``, empty) on the direct path, which
+    captures nothing; the stream path overwrites all four. Returning them as
+    one record keeps the waiting and the result assembly in separate helpers,
+    so neither accumulates enough locals to trip the repository's
+    ``too-many-locals`` ceiling.
 
     The two payload fields are typed ``str | bytes`` because the drain reports
     whichever the run's mode asked for. Nothing here inspects the type: the
     mode is read once, at the seam that chooses which result class to build,
     so the payload reaches its field unexamined.
+
+    ``captures`` carries the drain's own records, in stdout-then-stderr order,
+    and travels beside the payloads rather than being read off the drain a
+    second time: the drain happens exactly once per run, and only its result
+    knows how each policy retained its stream.
     """
 
     exit_code: int
@@ -118,6 +128,7 @@ class _DirectCompletion:
     stdout_text: _StreamPayload | None
     stderr_text: _StreamPayload | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
+    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
 
 
 def _relay_fallbacks_for_result(
@@ -152,19 +163,23 @@ async def _await_direct_completion(
     stdout_text: _StreamPayload | None = None
     stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
+    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
     try:
         if execution.consumes_stdout or execution.consumes_stderr:
             (
                 exit_code,
                 exited_at,
-                stdout_text,
-                stderr_text,
+                stdout_drain,
+                stderr_drain,
                 relay_diagnostics,
             ) = await _run_subprocess_with_streams(
                 process,
                 execution,
                 pid=pid,
             )
+            stdout_text = stdout_drain.payload
+            stderr_text = stderr_drain.payload
+            captures = (stdout_drain.capture, stderr_drain.capture)
         else:
             exit_code, exited_at = await _run_subprocess_without_streams(
                 process,
@@ -193,6 +208,7 @@ async def _await_direct_completion(
         stdout_text=stdout_text,
         stderr_text=stderr_text,
         relay_diagnostics=relay_diagnostics,
+        captures=captures,
     )
 
 
@@ -257,32 +273,43 @@ def _build_command_result(
     keeps every measurement — duration, rusage, the relay diagnostics — from
     being computed twice under two names, which is how a binary run would come
     to report figures that a text run of the same command did not. The two
-    constructions differ only in the class and in the narrowing of the captured
-    payloads, and both narrowing rules are read from
-    :mod:`cuprum._result_assembly` rather than restated here.
+    constructions differ in the class, in the narrowing of the captured
+    payloads, and in the capture records the class can carry; both narrowing
+    rules are read from :mod:`cuprum._result_assembly` rather than restated
+    here.
+
+    Every class carries ``captures``. A byte-exact run needs it most: a spilled
+    stream is read back, so a failed write or a failed flush can shorten the
+    payload it hands over, and the payload alone cannot say so. The text run
+    needs it for the complementary reason: a ``FileBackedCapture`` that spilled
+    reports ``None`` rather than text, and the record is then the only thing
+    naming the file that holds the stream.
+
+    Text capture narrows to ``CapturedResult`` only when *both* settled
+    payloads are decoded text. That class promises two strings, and a run that
+    captured one stream alone, or spilled one to a file, settles the other as
+    ``None`` — a stream it did capture, which the narrowed class would have to
+    reject. Those runs report the payloads and their records as an ordinary
+    ``CommandResult``.
 
     Returns
     -------
     CommandResult | BytesCommandResult
         A ``BytesCommandResult`` when the run captured bytes, a
-        ``CapturedResult`` when it captured text, or an ordinary
-        ``CommandResult`` when capture was disabled.
+        ``CapturedResult`` when both text streams are decoded text, or an
+        ordinary ``CommandResult`` otherwise.
     """
     sh = _sh_module()
+    shared = _shared_result_fields(execution, completion, measurements)
     if execution.capture_bytes:
         return sh.BytesCommandResult(
-            program=execution.cmd.program,
-            argv=execution.cmd.argv,
-            exit_code=completion.exit_code,
+            **shared,
             stdout=_require_bytes(completion.stdout_text, "stdout"),
             stderr=_require_bytes(completion.stderr_text, "stderr"),
-            **measurements.as_kwargs(),
         )
-    if execution.capture:
+    if _is_captured_text_pair(completion.stdout_text, completion.stderr_text):
         return sh.CapturedResult(
-            program=execution.cmd.program,
-            argv=execution.cmd.argv,
-            exit_code=completion.exit_code,
+            **shared,
             stdout=_require_captured_text(
                 completion.stdout_text,
                 "stdout",
@@ -295,16 +322,56 @@ def _build_command_result(
                 program=execution.cmd.program,
                 exec_id=str(execution.observation.exec_id),
             ),
-            **measurements.as_kwargs(),
         )
     return sh.CommandResult(
-        program=execution.cmd.program,
-        argv=execution.cmd.argv,
-        exit_code=completion.exit_code,
+        **shared,
         stdout=_require_text(completion.stdout_text, "stdout"),
         stderr=_require_text(completion.stderr_text, "stderr"),
-        **measurements.as_kwargs(),
     )
+
+
+class _SharedResultFields(typ.TypedDict):
+    """The result fields every output mode of a settled run declares.
+
+    Declared rather than left as ``dict[str, object]`` so unpacking it into a
+    result constructor keeps each field's type: an opaque value type would
+    make the ``**`` argument unrepresentable to the type checker, and the
+    fields would stop being checked against the declarations they fill.
+    """
+
+    program: Program
+    argv: tuple[str, ...]
+    exit_code: int
+    pid: int
+    started_at: float
+    duration: float
+    max_rss_bytes: int | None
+    user_cpu_seconds: float | None
+    system_cpu_seconds: float | None
+    resolved_path: str | None
+    relay_fallbacks: tuple[RelayFallback, ...]
+    captures: tuple[CapturedStream, ...]
+
+
+def _shared_result_fields(
+    execution: _SubprocessExecution,
+    completion: _DirectCompletion,
+    measurements: _RunMeasurements,
+) -> _SharedResultFields:
+    """Build the fields every result class of a settled run declares.
+
+    Returns
+    -------
+    _SharedResultFields
+        The shared constructor fields, keyed by parameter name.
+    """
+    return {
+        "program": execution.cmd.program,
+        "argv": execution.cmd.argv,
+        "exit_code": completion.exit_code,
+        **measurements.as_kwargs(),
+        "captures": _recorded_captures(completion.captures),
+    }
 
 
 # The execution bundle, its spawn start, the spawn seam itself, and the

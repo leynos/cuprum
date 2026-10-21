@@ -158,16 +158,27 @@ def _reject_captured_redirection(
     target = options.stdout if name == "stdout" else options.stderr
     if target is None or target.kind == "pipe":
         return
-    captures = options.capture or (
+    # The per-stream policy, not the ``capture`` shorthand: with
+    # ``capture=False, capture_stdout=FullCapture()`` it is stdout that needs
+    # the pipe, and the shorthand alone would let the redirection through and
+    # fail later at spawn. ``echo_stdout``/``echo_stderr`` are already resolved
+    # by ``__post_init__`` before this rule runs, so they need no lookup.
+    stream_index = 0 if name == "stdout" else 1
+    captures = options.resolved_capture[stream_index] is not None or (
         options.echo_stdout if name == "stdout" else options.echo_stderr
     )
     if not captures:
         return
+    # The rule reads the resolved per-stream policy, so the advice names that
+    # policy too. ``capture=False`` alone does not clear the refusal when a
+    # policy field overrides the shorthand: it disables the default for a
+    # stream left at ``None``, and the field is what still asks for the pipe.
     msg = (
         f"RunOutputOptions {name} cannot be redirected to "
         f"{target.kind!r} while capture or echo is enabled: there is no "
-        f"parent-side pipe to read. Set capture=False (and echo=False) "
-        f"or leave {name} unset."
+        f"parent-side pipe to read. Set capture_{name}=False (or "
+        f"capture=False with capture_{name} unset) and echo_{name}=False "
+        f"(or echo=False with echo_{name} unset), or leave {name} unset."
     )
     raise ValueError(msg)
 

@@ -41,7 +41,7 @@ def test_line_observer_bounds_an_unterminated_run_as_it_arrives() -> None:
         )
     )
 
-    assert captured == "a" * 10 + "b" * 10, (
+    assert captured.payload == "a" * 10 + "b" * 10, (
         f"capture must stay complete, got {captured!r}"
     )
     assert all(len(line) <= 4 for line in lines), (

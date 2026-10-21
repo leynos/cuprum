@@ -24,6 +24,8 @@ import dataclasses as dc
 import time
 import typing as typ
 
+from cuprum._capture_cleanup import _cleanup_capture_sinks
+from cuprum._capture_types import CaptureSinkRegistry
 from cuprum._context_policy import _merge_env
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_records import (
@@ -36,7 +38,7 @@ from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,
 )
-from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import (
     _cwd_arg,
@@ -87,6 +89,9 @@ class _SpawnedPipelineStages:
     # teardown can signal each stage the way it was spawned. A partial spawn
     # gets a short list, matching the few processes actually recorded.
     owns_group: list[bool] = dc.field(default_factory=list)
+    # Filled by the capture-task factory as it creates each consumer, so a
+    # teardown can remove the spill file of a drain no result will ever report.
+    captures: CaptureSinkRegistry = dc.field(default_factory=CaptureSinkRegistry)
 
     def to_spawn_result(
         self,
@@ -115,6 +120,7 @@ class _SpawnedPipelineStages:
                 observations=observations,
             ),
             owns_group=tuple(self.owns_group),
+            captures=self.captures,
         )
 
 
@@ -175,6 +181,7 @@ async def _spawn_pipeline_stages(
                 observation=observation,
                 is_last_stage=(idx == last_idx),
                 started_at=resources.started_at[-1],
+                captures=resources.captures,
             ),
         )
         resources.stderr_tasks.append(stage_tasks[0])
@@ -184,10 +191,8 @@ async def _spawn_pipeline_stages(
 
 
 async def _cleanup_spawned_processes(
-    processes: list[asyncio.subprocess.Process],
-    stderr_tasks: list[_StreamConsumerTask | None],
-    stdout_task: _StreamConsumerTask | None,
     policy: _TeardownPolicy,
+    staged: _SpawnedPipelineStages,
 ) -> None:
     """Terminate processes and cancel tasks after a spawn failure.
 
@@ -199,18 +204,50 @@ async def _cleanup_spawned_processes(
     group signalled even though the failure happened in a later stage: the
     partial spawn is exactly when a descendant left holding an inherited pipe
     would otherwise survive its parent's teardown.
+
+    *staged* is the partial accumulator itself rather than three of its
+    members. It was unpacked at the call site until the capture registry made
+    a fourth, and reading the same ``_SpawnedPipelineStages`` here that the
+    spawn filled is what keeps a teardown from being handed the tasks of one
+    spawn and the accumulators of another. Every member is optional: the
+    registry holds every accumulator the cancelled consumers were reading
+    into, because a cancel is exactly the case their spill files are still
+    owned by — the consumer is stopped before it can finalize, so no drain
+    result is built and its handle never reaches a caller.
     """
-    await _terminate_all_shielded(processes, policy)
+    await _terminate_all_shielded(staged.processes, policy)
 
     tasks: list[_StreamConsumerTask] = [
-        task for task in stderr_tasks if task is not None
+        task for task in staged.stderr_tasks if task is not None
     ]
-    if stdout_task is not None:
-        tasks.append(stdout_task)
+    if staged.stdout_task is not None:
+        tasks.append(staged.stdout_task)
 
     for task in tasks:
         task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await _shielded_cleanup(_cancel_stage_tasks_and_sinks(tasks, staged))
+
+
+async def _cancel_stage_tasks_and_sinks(
+    tasks: list[_StreamConsumerTask],
+    staged: _SpawnedPipelineStages,
+) -> None:
+    """Await the cancelled stage tasks, then release their capture sinks.
+
+    Cancel and cleanup belong to one shielded step. A cancellation arriving
+    between two separately shielded calls would leave the accumulators — and
+    the spill files they own — unclosed, on a path that is already dealing with
+    a failed spawn. The cleanup runs after the gather because a task the cancel
+    has not finished unwinding may still be appending to the file it holds.
+
+    The gather passes ``return_exceptions=True``, so it cannot raise; the
+    ``finally`` states the ordering as an invariant rather than relying on that
+    flag staying as it is.
+    """
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        await _cleanup_capture_sinks(staged.captures.sinks)
 
 
 async def _spawn_pipeline_processes(
@@ -231,13 +268,11 @@ async def _spawn_pipeline_processes(
         # a pipeline that is already being torn down.
         await _stop_idle_monitor(config.idle)
         await _cleanup_spawned_processes(
-            resources.processes,
-            resources.stderr_tasks,
-            resources.stdout_task,
             _TeardownPolicy(
                 config.ctx.cancel_grace,
                 owns_group=resources.owns_group,
             ),
+            resources,
         )
         _emit_terminal_events(
             observations,

@@ -33,18 +33,26 @@ import contextlib
 import logging
 import typing as typ
 
+from cuprum._stream_drain_finish import _CapturedDrain, _empty_capture_for
 from cuprum._timeout_reporting import (
     _report_capture_eof_grace_expiry,
     _report_teardown_drain_failure,
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._subprocess_wait_types import (
         _Consumer,
         _ConsumerPair,
         _DrainContext,
-        _StreamPayload,
+        _DrainPair,
     )
+    from cuprum.capture_policy import CaptureStreamName
+
+# The two streams in the order every drain pair uses, so the fallback builder
+# can be indexed by the same integer that selects a run's policy for it.
+_STREAM_NAMES: tuple[CaptureStreamName, CaptureStreamName] = ("stdout", "stderr")
 
 # A capturing drain gives readers a short bounded chance to observe the EOF
 # created by process termination. A grandchild may keep a pipe open, so teardown
@@ -58,7 +66,7 @@ _DRAIN_LOGGER = logging.getLogger("cuprum._subprocess_wait")
 
 def _consumer_awaitable(
     task: _Consumer,
-) -> asyncio.Task[_StreamPayload | None] | asyncio.Future[_StreamPayload | None]:
+) -> asyncio.Task[_CapturedDrain] | asyncio.Future[None]:
     """Return a settled stand-in for a stream that has no consumer task.
 
     :func:`_settle_consumers` gathers its inputs positionally — index ``0`` is
@@ -72,15 +80,13 @@ def _consumer_awaitable(
 
     Returns
     -------
-    asyncio.Task[_StreamPayload | None] | asyncio.Future[_StreamPayload | None]
+    asyncio.Task[_CapturedDrain] | asyncio.Future[None]
         The task itself when there is one, otherwise a future already settled
         to ``None`` so the gather still sees a slot for this stream.
     """
     if task is not None:
         return task
-    future: asyncio.Future[_StreamPayload | None] = (
-        asyncio.get_running_loop().create_future()
-    )
+    future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
     future.set_result(None)
     return future
 
@@ -88,13 +94,13 @@ def _consumer_awaitable(
 async def _drain_stream_consumers(
     consumers: _ConsumerPair,
     context: _DrainContext,
-) -> tuple[_StreamPayload | None, _StreamPayload | None]:
-    """Cancel pending consumers, drain them once, and report their output.
+) -> _DrainPair:
+    """Cancel pending consumers, drain them once, and report what they captured.
 
     A capture-aware drain lets its readers observe EOF before it cancels them,
-    then maps an absent result to the empty value so a timed-out capturing run
+    then maps an absent result to the empty capture so a timed-out capturing run
     always reports something for both streams. Other paths discard output and
-    therefore skip the grace window and retain ``None`` for absent text.
+    therefore skip the grace window and retain nothing for absent text.
 
     A consumer that drains with an unexpected exception (anything other than the
     ``CancelledError`` produced by cancelling it) is still absorbed to preserve
@@ -105,22 +111,23 @@ async def _drain_stream_consumers(
 
     Returns
     -------
-    tuple[_StreamPayload | None, _StreamPayload | None]
-        The stdout and stderr payloads, as ``str`` or ``bytes`` according to
-        the run's mode. Capturing drains return an empty payload for both
-        streams, while other drains report ``None`` for absent output.
+    _DrainPair
+        The stdout and stderr results, each a payload with the record
+        describing it. A capturing drain reports an empty capture for a stream
+        it lost a reader on, while a drain that was not capturing reports a
+        wholly empty result.
 
     """
-    if context.capture:
+    if context.capturing:
         await _await_capture_eof_grace(consumers, context)
     stdout_result, stderr_result = await _settle_consumers(
         consumers,
-        discard_on_cancel=(None if context.capture else context.discard_on_cancel),
+        discard_on_cancel=(None if context.capturing else context.discard_on_cancel),
     )
     _report_drain_failures(stdout_result, stderr_result, context)
-    stdout_text = _decode_consumer_result(stdout_result, context=context)
-    stderr_text = _decode_consumer_result(stderr_result, context=context)
-    return stdout_text, stderr_text
+    stdout_drain = _decode_consumer_result(stdout_result, stream=0, context=context)
+    stderr_drain = _decode_consumer_result(stderr_result, stream=1, context=context)
+    return stdout_drain, stderr_drain
 
 
 async def _await_capture_eof_grace(
@@ -155,8 +162,8 @@ async def _await_capture_eof_grace(
 
 
 def _report_drain_failures(
-    stdout_result: _StreamPayload | BaseException | None,
-    stderr_result: _StreamPayload | BaseException | None,
+    stdout_result: _CapturedDrain | BaseException | None,
+    stderr_result: _CapturedDrain | BaseException | None,
     context: _DrainContext,
 ) -> None:
     """Report unexpected consumer failures without replacing the primary error."""
@@ -187,35 +194,82 @@ def _report_drain_failures(
 
 
 def _decode_consumer_result(
-    result: _StreamPayload | BaseException | None,
+    result: _CapturedDrain | BaseException | None,
     *,
+    stream: int,
     context: _DrainContext,
-) -> _StreamPayload | None:
-    """Map an absent consumer result to the contract for its drain.
+) -> _CapturedDrain:
+    """Map a settled consumer task to the contract for its drain.
 
-    A reader that already produced a payload was configured for the run's mode
+    A reader that already produced a capture was configured for the run's mode
     and is returned untouched. The fallback an absent one gets has to be built
     for that same mode, since a ``bytes``-typed result field cannot carry the
-    text-mode ``""``.
+    text-mode ``""`` — and it has to carry a *record* as well as a payload, so
+    that a caller cannot tell a lost reader from a child that wrote nothing by
+    the shape of what it receives.
+
+    The fallback is decided *per stream*: a run may capture one pipe and not the
+    other, and a stream that was never captured owes an empty result rather than
+    an empty payload, which would claim output existed where no reader ever ran.
+    *stream* indexes the run's policies to make that choice.
+
+    Parameters
+    ----------
+    result : _CapturedDrain | BaseException | None
+        What the consumer task settled to.
+    stream : int
+        Which of the two streams *result* belongs to.
+    context : _DrainContext
+        The drain this result belongs to: its policies decide whether an
+        absent reader owes an empty capture or nothing at all, and its mode
+        decides what that empty capture's payload type is.
 
     Returns
     -------
-    _StreamPayload | None
-        The reader's own payload, the mode's empty value when a capturing
-        drain lost its reader, or ``None`` when the drain was not capturing.
+    _CapturedDrain
+        The reader's own result, the mode's empty capture when a capturing
+        drain lost its reader, or a wholly empty result when the drain was not
+        capturing.
     """
     if not isinstance(result, BaseException) and result is not None:
         return result
-    if not context.capture:
-        return None
-    return b"" if context.capture_bytes else ""
+    return _empty_capture_for(
+        policy=context.captures[stream],
+        stream=_STREAM_NAMES[stream],
+        capture_bytes=context.capture_bytes,
+    )
+
+
+def _decode_consumer_drains(
+    results: cabc.Sequence[_CapturedDrain | BaseException | None],
+    *,
+    context: _DrainContext,
+) -> _DrainPair:
+    """Decode both settled streams of a completed gather, in stream order.
+
+    A stream cuprum holds no pipe for is still one of two positions: its slot
+    settles to ``None`` and must report *that stream's* empty capture, or a
+    redirected stdout would hand stderr's result to stdout's caller. The two
+    reads are one function so no call site can decode one slot and forget the
+    other, and so the stream indexes stay beside the names they select.
+
+    Returns
+    -------
+    _DrainPair
+        The stdout and stderr results, each the reader's own capture or the
+        empty capture its configured policy owed when no reader ran.
+    """
+    return (
+        _decode_consumer_result(results[0], stream=0, context=context),
+        _decode_consumer_result(results[1], stream=1, context=context),
+    )
 
 
 async def _settle_consumers(
     consumers: tuple[_Consumer, ...],
     *,
     discard_on_cancel: asyncio.Event | None = None,
-) -> list[_StreamPayload | BaseException | None]:
+) -> list[_CapturedDrain | BaseException | None]:
     """Cancel unfinished consumers and drain every result once.
 
     A stream cuprum holds no pipe for contributes a settled ``None`` rather
@@ -223,8 +277,8 @@ async def _settle_consumers(
 
     Returns
     -------
-    list[_StreamPayload | BaseException | None]
-        One settled entry per input, in input order: the captured payload, the
+    list[_CapturedDrain | BaseException | None]
+        One settled entry per input, in input order: the drain result, the
         exception a consumer raised, or ``None`` for a stream with no consumer.
     """
     if discard_on_cancel is not None:
@@ -259,6 +313,7 @@ __all__ = [
     "_await_eof_grace",
     "_cancel_pending_consumers",
     "_consumer_awaitable",
+    "_decode_consumer_drains",
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_report_drain_failures",

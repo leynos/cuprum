@@ -19,6 +19,7 @@ import logging
 import typing as typ
 
 from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._stream_drain_finish import _CapturedDrain, _empty_capture
 from cuprum._stream_line_boundaries import _LineAccumulator
 
 if typ.TYPE_CHECKING:
@@ -26,7 +27,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._streams import _LineSink, _RelayDiagnostics, _StreamConfig
-    from cuprum._subprocess_wait_types import _StreamPayload
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class _LineConsumption:
 
     config: _StreamConfig
     on_line: _LineSink
-    drain: cabc.Callable[..., cabc.Awaitable[_StreamPayload | None]]
+    drain: cabc.Callable[..., cabc.Awaitable[_CapturedDrain]]
     relay_diagnostics: _RelayDiagnostics | None
 
 
@@ -91,21 +91,20 @@ async def _emit_line(sink: _LineSink, line: str) -> None:
 async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     consumption: _LineConsumption,
-) -> str | bytes | None:
+) -> _CapturedDrain:
     """Drain a stream while incrementally decoding and emitting complete lines.
 
-    The decoder feeds the line sink only; the capture buffer the drain returns
-    is untouched, so a byte-exact config still yields the child's own bytes
-    here and the widened payload is narrowed by the caller, not by this
+    The decoder feeds the line sink only; the drain's capture accumulator is
+    untouched, so a byte-exact config still yields the child's own bytes here
+    and the widened payload is narrowed by the caller, not by this
     function. A stream that was never attached reports the empty capture in
     the run's own mode, matching
     :func:`cuprum._streams._consume_stream_without_lines`.
 
     Returns
     -------
-    str | bytes | None
-        The capture, typed by ``config.capture_bytes``; ``None`` when the run
-        captured nothing.
+    _CapturedDrain
+        The captured payload, record, and spill handle from the drain.
     """
     if stream is None:
         return _empty_capture(consumption.config)
@@ -123,9 +122,12 @@ async def _consume_stream_with_lines(
         relay_diagnostics=consumption.relay_diagnostics,
     )
     await publisher.finish()
-    if consumption.config.capture_bytes:
-        return _require_bytes(captured, "line-observed stream")
-    return _require_text(captured, "line-observed stream")
+    if captured.payload is not None:
+        if consumption.config.capture_bytes:
+            _require_bytes(captured.payload, "line-observed stream")
+        else:
+            _require_text(captured.payload, "line-observed stream")
+    return captured
 
 
 def _report_line_fragmentation(config: _StreamConfig) -> None:
@@ -149,13 +151,6 @@ def _line_bound_bucket(max_line_chars: int | None) -> str:
         if max_line_chars <= limit:
             return bucket
     return "gt_64k"
-
-
-def _empty_capture(config: _StreamConfig) -> str | bytes | None:
-    """Report an unattached stream in the mode the run asked for."""
-    if not config.capture_output:
-        return None
-    return b"" if config.capture_bytes else ""
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:

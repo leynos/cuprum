@@ -106,6 +106,10 @@ open each document.
   `CommandResult` contract for explicit and uncaptured calls.
 - [ADR-025: Bounded output delivery][adr-025] - accepted decision for
   opt-in, byte-bounded output delivery on a run-owned daemon worker.
+- [ADR-026: Narrow captured results only for complete text][adr-026] - accepted
+  decision to construct `CapturedResult` only when both settled streams are
+  decoded text, reporting per-stream and spilled captures as a `CommandResult`
+  that carries the same capture records.
 
 ## Requests for comments
 
@@ -166,6 +170,7 @@ open each document.
 [adr-023]: adr-023-opt-in-telemetry-redaction.md
 [adr-024]: adr-024-captured-command-output-types.md
 [adr-025]: adr-025-bounded-output-delivery.md
+[adr-026]: adr-026-narrowed-results-only-for-complete-text-capture.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

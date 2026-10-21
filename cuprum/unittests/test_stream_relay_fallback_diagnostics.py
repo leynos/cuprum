@@ -9,6 +9,7 @@ import typing as typ
 import pytest
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.capture_policy import CapturePolicy, FullCapture
 from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 
 if typ.TYPE_CHECKING:
@@ -45,6 +46,12 @@ class _ChunkedReader:
         if not self._chunks:
             return b""
         return self._chunks.pop(0)
+
+
+# The default policy for these drain tests: one shared, immutable instance,
+# because a call in a default argument is banned and a fresh object per call
+# would allocate for no reason.
+_FULL_CAPTURE = FullCapture()
 
 
 def _reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
@@ -108,13 +115,13 @@ def _null_scope() -> _NullScope:
 def _config_with_stream(
     sink: typ.IO[str],
     *,
-    capture: bool = True,
+    capture: CapturePolicy | None = _FULL_CAPTURE,
     echo: bool = True,
     stream: EchoStream = EchoStream.STDOUT,
 ) -> _StreamConfig:
     """Build a UTF-8 config pinned to one named output stream."""
     return _StreamConfig(
-        capture_output=capture,
+        capture=capture,
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -138,15 +145,13 @@ def test_binary_buffer_sink_receives_original_bytes() -> None:
     captured = asyncio.run(
         _drain(
             _reader(chunks),
-            _config_with_stream(
-                typ.cast("typ.IO[str]", sink), capture=False, echo=True
-            ),
+            _config_with_stream(typ.cast("typ.IO[str]", sink), capture=None, echo=True),
             relay_diagnostics=relay_diagnostics,
         ),
     )
     relay_diagnostics.settle()
 
-    assert captured is None
+    assert captured.payload is None
     assert b"".join(sink.buffer.raw) == b"".join(chunks), (
         "the binary fast path must forward the original child bytes unchanged"
     )
@@ -172,7 +177,7 @@ def test_text_only_failure_records_once_across_all_surfaces(
         )
     relay_diagnostics.settle()
 
-    assert captured == b"".join(chunks).decode("utf-8", errors="replace"), (
+    assert captured.payload == b"".join(chunks).decode("utf-8", errors="replace"), (
         "capture must complete even though the sink rejected the output"
     )
     assert sink.attempts == ["plain ", "ś"], (
@@ -212,14 +217,14 @@ def test_drain_collects_diagnostics_without_observers_or_capture() -> None:
             _drain(
                 _reader(("ś".encode(), b" tail")),
                 _config_with_stream(
-                    typ.cast("typ.IO[str]", sink), capture=False, echo=True
+                    typ.cast("typ.IO[str]", sink), capture=None, echo=True
                 ),
                 relay_diagnostics=relay_diagnostics,
             ),
         )
     relay_diagnostics.settle()
 
-    assert captured is None, "capture-disabled drains still return None"
+    assert captured.payload is None, "capture-disabled drains still return None"
     assert sink.attempts == ["ś"], (
         "the disablement must be the first and only echo attempt"
     )

@@ -34,6 +34,7 @@ import typing as typ
 
 import pytest
 
+from cuprum.capture_policy import BoundedCapture
 from cuprum.sh import RunOutputOptions, StdioTarget
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -327,6 +328,55 @@ def test_capture_or_echo_rejects_a_redirected_stream(
     )
     assert "echo=False" in message, (
         f"the rejection must name the echo setting to relax; got {message!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("options_call", "relaxing_field"),
+    [
+        pytest.param(
+            lambda out: RunOutputOptions(
+                capture=False,
+                capture_stdout=BoundedCapture(max_bytes=8),
+                stdout=out,
+            ),
+            "capture_stdout",
+            id="stdout-policy",
+        ),
+        pytest.param(
+            lambda out: RunOutputOptions(
+                capture=False,
+                capture_stderr=BoundedCapture(max_bytes=8),
+                stderr=out,
+            ),
+            "capture_stderr",
+            id="stderr-policy",
+        ),
+    ],
+)
+def test_a_per_stream_policy_rejects_redirection_the_shorthand_alone_would_allow(
+    options_call: cabc.Callable[[StdioTarget], RunOutputOptions],
+    relaxing_field: str,
+    tmp_path: Path,
+) -> None:
+    """A per-stream policy is a capture request, redirection notwithstanding.
+
+    ``capture=False`` disables only the shorthand, so a check reading the
+    shorthand alone would see no capture and let this through — and the run
+    would then have no parent-side pipe to drain the very stream the policy was
+    told to retain. The refusal has to follow the resolved per-stream policy.
+
+    The advice has to say so as well: here the shorthand is already ``False``,
+    so telling the caller to set it is an instruction that changes nothing. The
+    field that actually holds the capture request is the one that must be named.
+    """
+    out = StdioTarget.path(tmp_path / "redirected.log")
+
+    message = _rejects(lambda: options_call(out), "cannot be redirected")
+
+    assert f"{relaxing_field}=False" in message, (
+        f"the rejection must name {relaxing_field}, the field that still asks "
+        f"for the pipe; got {message!r}"
     )
 
 

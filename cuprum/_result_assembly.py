@@ -10,11 +10,15 @@ Three result classes describe the output contract:
 
 The stream drain can widen payloads to ``str | bytes``, so
 :func:`_require_bytes` and :func:`_require_text` restore the type required by
-the selected mode. The single-command path uses
-:func:`_require_captured_text` when capture is enabled; it rejects a missing
-stream before a :class:`cuprum.sh.CapturedResult` can be built. Pipeline
-assembly uses the broader text and byte checks because an interior stage's
-stdout may be streamed to the next process instead of captured.
+the selected mode. :func:`_is_captured_text_pair` decides whether a settled
+text run can be narrowed at all: :class:`cuprum.sh.CapturedResult` promises two
+strings, so it is built only when both payloads are decoded text. A run whose
+streams are not both text — one captured alone, or a file-backed capture that
+left its text in the file — is reported as an ordinary ``CommandResult``. The
+single-command path then uses :func:`_require_captured_text`, which rejects a
+missing stream before a :class:`cuprum.sh.CapturedResult` can be built.
+Pipeline assembly uses the broader text and byte checks because an interior
+stage's stdout may be streamed to the next process instead of captured.
 
 :class:`_RunMeasurements` carries the fields all three result classes declare
 identically, so adding a measurement to one construction cannot silently
@@ -36,6 +40,7 @@ from cuprum.events import CaptureMode
 if typ.TYPE_CHECKING:
     from cuprum._rusage import ChildResourceUsage, _ChildRusageSnapshot
     from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum.capture_policy import CapturedStream
     from cuprum.echo_events import RelayFallback
 
 _LOGGER = logging.getLogger(__name__)
@@ -177,6 +182,31 @@ def _require_text(payload: _StreamPayload | None, stream: str) -> str | None:
     return _require_mode_payload(payload, stream, str, CaptureMode.TEXT)
 
 
+def _is_captured_text_pair(
+    stdout: _StreamPayload | None,
+    stderr: _StreamPayload | None,
+) -> bool:
+    """Whether both settled payloads are decoded text, and so may be narrowed.
+
+    :class:`cuprum.sh.CapturedResult` promises both streams are ``str``, which
+    is a stronger claim than "the run captured something". A run may capture one
+    stream alone, and a text-mode :class:`~cuprum.capture_policy.FileBackedCapture`
+    that spilled reports ``None`` for the stream it moved to a file — its text
+    is at ``path`` rather than in the payload, by the memory contract the
+    policy exists for. Narrowing either shape would have to reject a stream the
+    run did capture, so the class is built only when this predicate holds and
+    every other text run is reported as an ordinary ``CommandResult``. The
+    capture records travel on both classes, so a caller wanting the spill's
+    locator reads ``captures`` either way.
+
+    Returns
+    -------
+    bool
+        ``True`` when both payloads are ``str``.
+    """
+    return isinstance(stdout, str) and isinstance(stderr, str)
+
+
 def _require_captured_text(
     payload: _StreamPayload | None,
     stream: str,
@@ -201,8 +231,42 @@ def _require_captured_text(
     return text
 
 
+def _recorded_captures(
+    captures: tuple[CapturedStream | None, CapturedStream | None],
+) -> tuple[CapturedStream, ...]:
+    """Flatten a run's per-stream capture records into its result's tuple.
+
+    A result reports one record per stream it actually captured, in
+    stdout-then-stderr order, and nothing for a stream it did not. Draining the
+    optional pair here rather than at each construction site is what keeps
+    ``CommandResult.captures`` from being ``(None, None)`` for a run that
+    captured one stream and ``(record,)`` for a run that captured both — the
+    shape a caller would have to know the config to unpick.
+
+    Parameters
+    ----------
+    captures : tuple[CapturedStream | None, CapturedStream | None]
+        The stdout and stderr records, either of which is ``None`` when that
+        stream was not captured.
+
+    Returns
+    -------
+    tuple[CapturedStream, ...]
+        The records that exist, in stream order.
+
+    Examples
+    --------
+    A run that captured only stderr reports one record::
+
+        _recorded_captures((None, stderr_record))
+    """
+    return tuple(record for record in captures if record is not None)
+
+
 __all__ = [
     "_RunMeasurements",
+    "_is_captured_text_pair",
+    "_recorded_captures",
     "_require_bytes",
     "_require_captured_text",
     "_require_text",

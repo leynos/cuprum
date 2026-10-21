@@ -22,6 +22,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
 - [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
 - [ADR-024: Type captured command output](adr-024-captured-command-output-types.md)
+- [ADR-026: Narrow captured results only for complete text](adr-026-narrowed-results-only-for-complete-text-capture.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -31,12 +32,18 @@ assumptions, and current proof status.
 ## Captured single-command result assembly
 
 `cuprum._subprocess_execution._build_command_result` selects the result class
-for a settled single command: text capture builds `CapturedResult`, while
-capture-off builds `CommandResult`. `_require_captured_text` in
-`cuprum._result_assembly` checks each decoded stream before the narrowed result
+for a settled single command: a text run builds `CapturedResult` when both
+settled payloads are decoded text, and `CommandResult` otherwise.
+`_is_captured_text_pair` in `cuprum._result_assembly` makes that decision from
+the payloads rather than from the capture configuration, so a run that captured
+one stream alone, or spilled one to a file, is not narrowed into a class whose
+streams are both `str`. The capture records are passed to both constructions.
+`_require_captured_text` checks each decoded stream before the narrowed result
 is constructed. A missing stream on this path logs the operation, text mode,
 stream, program, and execution ID without rendering command output, then raises
 the existing execution-invariant error.
+[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md) records
+why the narrowed class is restricted this way.
 
 `SafeCmd.run` and `run_sync` mirror that runtime boundary in their overloads:
 omitted `output` and `output=None` return `CapturedResult`; an explicit
@@ -2366,8 +2373,8 @@ its default is `_READ_SIZE`, currently 65536 bytes. The private
 relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
-read/echo/buffer loop behind both consume variants. It reads in that configured
-size, extends the capture buffer with the **raw** chunk when capturing, echoes
+read-and-fan-out loop behind both consume variants. It reads in that configured
+size, awaits `CaptureSink.absorb` with the **raw** chunk when capturing, echoes
 each chunk to the configured sink when echoing, and hands the chunk to the
 optional `on_chunk` callback for variant-specific processing:
 
@@ -2376,11 +2383,37 @@ optional `on_chunk` callback for variant-specific processing:
   incremental decoder and emits completed lines, then flushes the decoder tail
   after the drain returns.
 
+`CaptureSink` in `cuprum._capture_types` is the drain's per-stream capture
+capability. The accumulator built from the resolved policy decides what it
+retains: all bytes received by the drain for full capture, a bounded tail for
+bounded capture, or memory followed by a spill file for file-backed capture.
+`finalize()` returns a `CaptureFinal` with the rendered payload,
+`CapturedStream` metadata, and an optional `SpillHandle`. `_finish_drain`
+carries those values together in `_CapturedDrain` so result assembly cannot
+separate a payload from the record or cleanup handle that describes it.
+
 Re-use policy: the public entry point remains `_consume_stream`, which
 dispatches between the two variants on whether an `on_line` callback was
 supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
+
+`CaptureSink` in `cuprum._capture_types` is asynchronous — `absorb`,
+`finalize`, and `cleanup` are all coroutines — but no single owner awaits all
+three. The drain awaits `absorb` once per raw chunk and `finalize` once when
+the drain settles. `cleanup` belongs to the run's teardown instead:
+`_finalize_capture_handles` is awaited by the success path beside result
+assembly and by `_reconcile_run_tasks` after a teardown drain, and it closes
+the handles the drain results carry before calling `_cleanup_capture_sinks` on
+the accumulators. That second call is the only path reaching a drain that was
+cancelled mid-await and so never finalized. The two heap-backed accumulators
+answer without suspending, so awaiting costs one coroutine step per chunk; the
+file-backed one spills through `cuprum._capture_spill_io`, whose `_SpillIo`
+serializes that accumulator's blocking calls onto a worker thread so the loop
+stays free and the file's contents stay in the order the child wrote. A new
+accumulator implements the same three coroutines rather than a second
+synchronous protocol, because a policy test in the drain would be one place
+where a file-backed sink could be driven on the loop inadvertently.
 
 The pipeline side uses the same keyword-only contract: `_pump_stream` and its
 `_relay_chunks`, `_drain_stream_reader`, and `_drain_stream_reader_bounded`
@@ -2396,16 +2429,20 @@ configuration.
 The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
 runners. A byte run is an ordinary run carrying one extra fact,
 `capture_bytes`, on its resolved `_SubprocessExecution` state. That fact flows
-to `_StreamConfig.capture_bytes`, and the single payload renderer,
-`cuprum._stream_drain_finish._captured_payload`, decides at the end of the
-drain whether to return `bytes(buffer)` or
-`buffer.decode(config.encoding, errors=config.errors)`.
+to `_StreamConfig.capture_bytes`. Every capture accumulator retains raw bytes;
+`cuprum._capture_decode._render` is the single seam that returns those bytes
+unchanged for byte mode or decodes them with the configured encoding and error
+policy for text mode. A kept file-backed text capture leaves its bytes at the
+reported path; a spill the caller does not keep is removed during cleanup. Byte
+mode reads a spill back because the caller asked for the child's bytes as the
+result. That read-back means byte mode does not retain the bounded-memory
+guarantee of text mode.
 
 Capture and line emission are independent channels, which is what lets one
 drain serve both modes:
 
-- The drain's buffer always holds the child's raw bytes; it is never decoded in
-  place.
+- The per-stream capture accumulator receives raw chunks and applies its
+  retention policy without changing the bytes sent to the other consumers.
 - `_consume_stream_with_lines` decodes a *copy* through its own incremental
   decoder to find line boundaries and publish lines.
 - The two therefore compose. A byte-exact run with a registered `sh.observe()`
@@ -2505,26 +2542,26 @@ runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
 loop, while text runs keep `config.errors`, so a strict text run still raises
 from echo exactly as it did before byte mode existed. See
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md), and
-`cuprum._stream_drain_finish._captured_payload` renders the capture from the
-drain's own untouched buffer per its config: a text run decodes under
-`config.errors`, while a byte-exact run returns `bytes(buffer)` and never
-consults that policy.
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md). Capture receives
+each raw chunk independently of the echo decoder, and
+`cuprum._capture_decode._render` renders the accumulator's retained bytes as
+text or bytes at finalization.
 
 `_drain_chunks` invokes `config.activity` immediately after a non-empty raw
-read, before decoding, echoing, truncation, and line callbacks. This is the
-only activity signal the idle heartbeat sees, so a partial line, a multibyte
-sequence split across reads, discarded output, and a chunk that is never echoed
-all count as activity, while EOF and parent-generated diagnostics do not. The
-callback receives no child bytes: it exists to reset a timer, not to observe
-output.
+read, before capture retention, decoding, echoing, and line callbacks. This is
+the only activity signal the idle heartbeat sees, so a partial line, a
+multibyte sequence split across reads, discarded output, and a chunk that is
+never echoed all count as activity, while EOF and parent-generated diagnostics
+do not. The callback receives no child bytes: it exists to reset a timer, not
+to observe output.
 
-The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
-write and the incremental decoder and records where a mirrored sink ended up;
-the mirror cursor it records into is created and retained by the idle heartbeat
+The echo renderer lives in `cuprum/_stream_echo.py`, which owns the sink write
+and incremental decoder and records where a mirrored sink ended up; the mirror
+cursor it records into is created and retained by the idle heartbeat
 (`cuprum/_idle_heartbeat.py`) and reaches the renderer through `_StreamConfig`.
-The drain loop in `cuprum/_streams.py` only reads the bytes and owns the state
-it renders.
+The drain loop in `cuprum/_streams.py` reads the bytes and coordinates capture,
+echo, and line delivery; capture rendering remains in
+`cuprum._capture_decode._render`.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
@@ -2539,11 +2576,11 @@ of either kind disables echo for the rest of that drain, logs one `WARNING` on
 the `cuprum.stream` logger with structured `cuprum_*` extras, and lets every
 other error propagate unchanged. The two recoveries share `_disable_echo`, so
 the guard flip and its three bounded projections cannot drift apart; only the
-`cuprum_error_category` differs. Capture (`buffer.extend`) always runs before
-the echo step, so a rejected echo write never loses captured bytes, and the
-binary `.buffer` fast path inside `_write_chunk` is unchanged. The catch is by
-`BrokenPipeError` name rather than `OSError`, which is what keeps a genuinely
-unreachable device propagating under both policies.
+`cuprum_error_category` differs. `CaptureSink.absorb` always runs before the
+echo step, so a rejected echo write never loses bytes already accepted by the
+capture policy, and the binary `.buffer` fast path inside `_write_chunk` is
+unchanged. The catch is by `BrokenPipeError` name rather than `OSError`, which
+is what keeps a genuinely unreachable device propagating under both policies.
 
 The first failure is owned entirely by that one `_echo_write` transition: the
 `cuprum.stream` `WARNING`, the opt-in `cuprum.echo_observation.observe_echo`
@@ -2591,23 +2628,26 @@ The selection evidence and raw samples are recorded in
 
 ### Concurrency model
 
-Each `_drain()` invocation is self-contained. It owns its capture buffer
-(`bytearray`), the line-emitting variant's `codecs.IncrementalDecoder`, and any
-text-only echo decoder. The `on_chunk` callback closes over the line decoder
-and acts only as the chunk delivery hook. Concurrent stdout and stderr drains
-therefore do not share mutable capture or decoder state.
+Each `_drain()` invocation is self-contained. It receives its own
+policy-specific `CaptureSink`, the line-emitting variant's
+`codecs.IncrementalDecoder`, and any text-only echo decoder. The `on_chunk`
+callback closes over the line decoder and acts only as the chunk delivery hook.
+Concurrent stdout and stderr drains therefore do not share mutable capture or
+decoder state; a file-backed accumulator serializes its disk operations through
+its spill I/O helper.
 
 The echo sink (`config.sink`) may be shared between concurrent drains when
 stdout and stderr are both echoed. Writes to that sink interleave only at
 `await` points: once a drain starts writing a single decoded chunk, there is no
 intermediate `await` before that chunk write finishes.
 
-Cancellation is fail-fast. If an `asyncio.Task` wrapping `_drain()` is
-cancelled, `asyncio.CancelledError` propagates from `stream.read()`. When
-`config.capture_output` is true and `config.discard_on_cancel` is unset, the
-bytes captured so far are rendered in the run's mode and returned — decoded for
-a text run, raw for a byte-exact one; when the discard event is set (or output
-is not being captured), those bytes are discarded and cancellation propagates.
+Cancellation preserves partial capture when the policy asks for it. If a read
+or a file-backed absorb is cancelled and the drain has a `CaptureSink`,
+`_finish_drain` finalizes the bytes already accepted under that stream's
+policy. Text mode returns decoded retained text or a spill path; byte mode
+returns the exact retained bytes, reading a spill back when needed. If
+`config.discard_on_cancel` is set, or no capture sink exists, cancellation
+propagates without a partial capture result.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
@@ -7029,27 +7069,30 @@ collection paths.
 ## Output behaviour carrier
 
 `RunOutputOptions` is the canonical carrier for command output behaviour: it
-holds `capture`, the `echo` shorthand, the resolved `echo_stdout` and
-`echo_stderr` gates, the idle-reporting fields `idle_after` and `on_idle`, and
-the optional `delivery` policy for bounded presentation output. `capture` is
-one joint switch for both streams, while an unset per-stream gate inherits
-`echo`. The idle fields follow the same rule as the rest of the carrier: spawn
-paths read `idle_after` and `on_idle` off the object rather than threading them
-as separate arguments, and a run that sets neither idle field keeps the
-existing no-stream fast path. Public command execution should accept or
-construct this object rather than threading separate `capture` and `echo`
+holds the `capture` and `echo` shorthands, the per-stream `capture_stdout`,
+`capture_stderr`, `echo_stdout` and `echo_stderr` fields, the idle-reporting
+fields `idle_after` and `on_idle`, and the optional `delivery` policy for
+bounded presentation output. Resolution is one rule for both options: a
+per-stream field left at `None` inherits its shorthand, and an explicit value
+wins for its own stream. `resolved_capture` and `resolved_echo` are the queries
+that apply it, and `captures_any_stream` reports whether either resolved policy
+retains anything. The idle fields follow the same rule as the rest of the
+carrier: spawn paths read `idle_after` and `on_idle` off the object rather than
+threading them as separate arguments, and a run that sets neither idle field
+keeps the existing no-stream fast path. Public command execution should accept
+or construct this object rather than threading separate `capture` and `echo`
 keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
 handling stays explicit, testable, and compatible with the `IOOptions`
 deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
-`output.capture` / `output.echo` for the observation tags. `Pipeline.run` /
-`run_sync` use the same `output` parameter and resolve it before building the
-pipeline execution config. There is no parallel internal `(capture, echo)`
-value object: the former `_IOBehaviour` was redundant with `RunOutputOptions`
-and has been removed. `IOOptions` remains only as a deprecated subclass alias
-that emits a `DeprecationWarning`.
+`output.captures_any_stream` / `output.resolved_echo` for the observation tags.
+`Pipeline.run` / `run_sync` use the same `output` parameter and resolve it
+before building the pipeline execution config. There is no parallel internal
+`(capture, echo)` value object: the former `_IOBehaviour` was redundant with
+`RunOutputOptions` and has been removed. `IOOptions` remains only as a
+deprecated subclass alias that emits a `DeprecationWarning`.
 
 Internal adapters may translate legacy or aggregate configuration into
 `RunOutputOptions` at the boundary. For example, the concurrent runner converts
@@ -7074,9 +7117,10 @@ different sentinels or coercion rules need their own validator.
 
 `RunOutputOptions.__post_init__` resolves the `echo` shorthand into
 `echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
-while an explicit field overrides it for that stream alone. `capture` remains
-one joint boolean, so a stream that is not echoed is still captured when
-`capture` is `True`.
+while an explicit field overrides it for that stream alone. Capture resolves by
+the same rule into one policy per stream, so a run may bound stdout while
+leaving stderr complete; a stream that is not echoed is still captured when its
+own policy retains it, and the `capture` shorthand alone still sets both.
 
 `ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
 fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.
@@ -7472,11 +7516,14 @@ is the private bundle of stream configuration, PID, and the stdout/stderr
 diagnostics collectors that the streamed run creates before handing those
 values to the consumer tasks. `_reconcile_shielded` is the reconciliation both
 pre-gather exit routes owe: it drains the consumers under one
-`_shielded_cleanup`, and takes the run's capture setting rather than deciding
-for itself, because the routes disagree about what the drained text is for —
-the exit-wait deadline hands it to the caller's `TimeoutExpired`, while the
-route re-raising some other failure settles promptly and keeps `capture=False`
-so the capture grace is not spent on text nobody will read.
+`_shielded_cleanup`, and takes a `preserve` flag rather than deciding for
+itself, because the routes disagree about what the drained text is for — the
+exit-wait deadline hands it to the caller's `TimeoutExpired`, while the route
+re-raising some other failure settles promptly and keeps `preserve=False` so
+the capture grace is not spent on text nobody will read. Preserving applies the
+run's per-stream capture policies; discarding reports the policy pair
+`(None, None)`, and every stream the drain then settles comes back as an empty
+`_CapturedDrain` rather than as captured text.
 
 `cuprum/_command_finalization.py` owns the post-spawn finalization cluster that
 was split out of `cuprum/_command_internals.py` when the stdio-resolution work
@@ -7730,21 +7777,22 @@ there is no group signal to release it at all. The phase therefore calls
 writer, drains the consumers, and settles the diagnostics.
 
 The drain boundary carries an important teardown policy. The routes that reach
-the caller as a `TimeoutExpired` pass `capture=True`, allowing the fixed
+the caller as a `TimeoutExpired` pass `preserve=True`, allowing the fixed
 `_CAPTURE_EOF_GRACE_S` window to preserve text that is about to arrive at EOF.
 There are two such routes, and they must agree: a deadline expiring during the
 *exit wait* drains from `_wait_for_streamed_process_exit`, and one expiring
 *after* the child has exited — in the post-exit boundary the module docstring
-describes — drains from `_settle_group_and_reconcile_consumers`. Both pass
-`execution.capture` and hand the drained text to `_handle_stream_timeout`, so a
-capturing run reports its output whichever half of the run the deadline landed
-in. Cancellation, stdin-writer failure, and consumer-failure cleanup pass
-`capture=False`, so they cancel and settle promptly without waiting for that
-window or retaining output. The timeout and cancellation reconciliations run
-under `_shielded_cleanup`; if cancellation arrives during capture grace, both
-consumer tasks are settled before `CancelledError` is re-raised. Keep these
-choices at the drain boundary: moving capture draining into generic cleanup
-changes both timeout output and cancellation latency.
+describes — drains from `_settle_group_and_reconcile_consumers`. Both build the
+drain context from the run's per-stream capture policies and hand the drained
+text to `_handle_stream_timeout`, so a capturing run reports its output
+whichever half of the run the deadline landed in. Cancellation, stdin-writer
+failure, and consumer-failure cleanup pass `preserve=False`, so they cancel and
+settle promptly without waiting for that window or retaining output. The
+timeout and cancellation reconciliations run under `_shielded_cleanup`; if
+cancellation arrives during capture grace, both consumer tasks are settled
+before `CancelledError` is re-raised. Keep these choices at the drain boundary:
+moving capture draining into generic cleanup changes both timeout output and
+cancellation latency.
 
 All three subprocess exit-wait paths use `_await_process_exit` from
 `cuprum/_process_exit.py`: the single-command wait in `_wait_for_exit_code`,
@@ -8211,10 +8259,10 @@ executes:
    with the stdout/stderr consumer tasks. On `TimeoutError` or
    `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
    stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
-   The timeout reconciliation passes the execution's capture setting so the
-   bounded EOF grace preserves partial text before `_handle_stream_timeout`
-   raises `_SubprocessTimeoutError`; cancellation passes `capture=False` and
-   re-raises `CancelledError` after all tasks settle.
+   The timeout reconciliation passes `preserve=True` so the bounded EOF grace
+   preserves partial text before `_handle_stream_timeout` raises
+   `_SubprocessTimeoutError`; cancellation passes `preserve=False` and re-raises
+   `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits the exit through `_await_exit_or_writer_failure`, which settles the

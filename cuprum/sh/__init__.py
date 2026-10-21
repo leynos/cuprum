@@ -12,8 +12,9 @@ The implementation is split across submodules by responsibility:
 - ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
   counterparts ``BytesCommandResult`` and ``BytesPipelineResult``, plus
   ``CapturedResult`` for captured single-command text.
-- ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
+- ``output`` holds ``RunOutputOptions``.
 - ``stdio`` holds the ``StdioTarget`` standard-stream binding vocabulary.
+- ``_deprecated`` holds the deprecated ``IOOptions`` alias.
 - ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
 - ``pipeline`` holds the ``Pipeline`` composition primitive.
 - ``factory`` holds the ``make`` builder factory.
@@ -58,6 +59,14 @@ from cuprum._process_handle_errors import (
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout
+from cuprum.capture_policy import (
+    BoundedCapture,
+    CapturedStream,
+    FileBackedCapture,
+    FullCapture,
+)
+from cuprum.capture_policy import CapturePolicy as CapturePolicy
+from cuprum.capture_policy import CapturePolicyKind as CapturePolicyKind
 from cuprum.catalogue import DEFAULT_CATALOGUE as DEFAULT_CATALOGUE
 from cuprum.catalogue import ProgramCatalogue as ProgramCatalogue
 from cuprum.catalogue import ProjectSettings as ProjectSettings
@@ -68,6 +77,7 @@ from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
 from cuprum.echo_events import RelayFallback as RelayFallback
 from cuprum.program import Program as Program
+from cuprum.sh._deprecated import IOOptions
 from cuprum.sh.argv import ArgValue as ArgValue
 from cuprum.sh.argv import Path as Path
 from cuprum.sh.argv import _serialize_kwargs as _serialize_kwargs
@@ -93,11 +103,10 @@ from cuprum.sh.execution import _CwdType as _CwdType
 from cuprum.sh.execution import _EnvMapping as _EnvMapping
 from cuprum.sh.execution import cabc as cabc
 from cuprum.sh.factory import make
-from cuprum.sh.output import BoundedDelivery, IOOptions, RunOutputOptions, StdioTarget
+from cuprum.sh.output import BoundedDelivery, RunOutputOptions, StdioTarget
 from cuprum.sh.output import _validate_convenience_flags as _validate_convenience_flags
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
-from cuprum.sh.output import warnings as warnings
 from cuprum.sh.pipeline import Pipeline
 from cuprum.sh.pipeline import _DeprecatedOutputFlags as _DeprecatedOutputFlags
 from cuprum.sh.pipeline import _resolve_pipeline_output as _resolve_pipeline_output
@@ -115,12 +124,18 @@ from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BoundedCapture",
     "BoundedDelivery",
     "BytesCommandResult",
     "BytesPipelineResult",
+    "CapturePolicy",
+    "CapturePolicyKind",
     "CapturedResult",
+    "CapturedStream",
     "CommandResult",
     "ExecutionContext",
+    "FileBackedCapture",
+    "FullCapture",
     "IOOptions",
     "LineStream",
     "Pipeline",

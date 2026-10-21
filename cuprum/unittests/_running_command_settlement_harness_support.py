@@ -233,20 +233,24 @@ class _SettlementHarness:
         # collected under the value-blind task type: the waiters carry a
         # ``CommandResult`` and the stream consumers carry a payload, and
         # ``Task`` is invariant in its result type.
-        tasks: list[asyncio.Task[typ.Any]] = [
-            task for task in (self._waiter,) if task is not None
-        ]
-        # Rules can replace the current handle while its shielded settlement
-        # is still draining. Every handle remains owned by this model.
+        tasks: list[asyncio.Task[typ.Any]] = (
+            [] if self._waiter is None else [self._waiter]
+        )
+        # A run owns consumer tasks, and one abandoned mid-drain still holds
+        # them: collected here so nothing is reported unawaited at close. The
+        # settlement task is read from every handle for the same reason, and not
+        # only from the current one: a rule may have replaced ``self._handle``
+        # mid-machine, and the runs it replaced still owe the loop their
+        # settlement.
         for handle in self._handles:
-            settling = handle._settlement._task
-            if settling is not None:
-                tasks.append(settling)
             tasks.extend(
                 consumer
                 for consumer in handle._run.ownership.consumers
                 if consumer is not None
             )
+            settling = handle._settlement._task
+            if settling is not None:
+                tasks.append(settling)
         for task in tasks:
             task.cancel()
         self._drive(asyncio.gather(*tasks, return_exceptions=True))

@@ -60,7 +60,9 @@ def test_consume_stream_variants_capture_identically(
         ),
     )
 
-    assert plain == with_lines == payload.decode("utf-8", errors="replace"), (
+    assert (
+        plain.payload == with_lines.payload == payload.decode("utf-8", errors="replace")
+    ), (
         "plain and line-emitting variants must match whole-payload decode for "
         f"payload={payload!r}, chunks={chunks!r}"
     )

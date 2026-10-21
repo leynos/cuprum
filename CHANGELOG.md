@@ -745,6 +745,132 @@ _Applications upgrading from 0.1 should follow the
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above
   ([#375](https://github.com/leynos/cuprum/issues/375)).
+- **Byte-exact result mode:** `SafeCmd.run_bytes()` / `run_bytes_sync()` and
+  `Pipeline.run_bytes()` / `run_bytes_sync()` return a subprocess's output as
+  the child's own bytes, through `BytesCommandResult` and
+  `BytesPipelineResult`. The new classes declare the same fields as
+  `CommandResult` and `PipelineResult` — measurements included — except that
+  `stdout` and `stderr` are `bytes | None`, so a binary payload survives the
+  round trip instead of being decoded with a lossy error handler. Capture is
+  the only thing the mode changes: text stays the default, `run()` never
+  returns bytes and `run_bytes()` never returns text, echo sinks and idle
+  heartbeats behave as they do in text mode, and a timeout still carries
+  partial output in the same field. A caller-supplied
+  `RunOutputOptions.on_line` is refused with `ValueError` before the child
+  spawns, because a decoded-text callback beside a byte-exact capture would be
+  a second, contradictory contract for one stream; structured observation
+  registered with `sh.observe()` is unaffected and still receives decoded
+  lines, since capture and line emission travel on separate channels. That
+  holds even under `ExecutionContext(errors="strict")`: a byte-exact run's
+  observation and echo render a _view_ of the child's bytes and replace
+  undecodable input, so an ambient hook cannot raise from the read loop and
+  cost the byte-exact run the bytes it had already captured.
+
+  The replacement view is scoped to byte mode, so text mode is unchanged. A
+  strict text run still raises from the line reader and from echo, exactly as
+  it did before the byte-exact mode existed; its views decode under
+  `ExecutionContext.errors` in step with the capture. Only a byte-exact run
+  gets the non-aborting view, and only where the capture is the child's own
+  bytes.
+
+  An external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout.
+
+  The mode an execution used is observable. `ExecEvent` carries a
+  `capture_mode` field on every phase — `CaptureMode.TEXT` or
+  `CaptureMode.BYTES` — for the reason `env_mode` is carried: the mode is
+  resolved before the child spawns and describes the whole execution rather
+  than one measurement, and without it a byte-exact run and a text run of the
+  same command are identical in every counter and span attribute, leaving a
+  timeout or teardown failure unattributable to the mode that hit it. It is a
+  trusted typed field rather than an observation tag, since a caller may shadow
+  any tag key. The logging adapter projects it as `cuprum_capture_mode`, the
+  tracing adapter as `cuprum.capture_mode`, and the metrics adapter as a
+  `capture_mode` label on `cuprum_executions_total` and
+  `cuprum_failures_total`. Only the mode travels; no captured payload, argument
+  vector, or other unbounded value joins it. Two mode-boundary diagnostics are
+  recorded without rendering their inputs: a refused `on_line` logs the mode it
+  turned away, and a mode/payload invariant mismatch logs the mode, stream, and
+  the two types ([#444](https://github.com/leynos/cuprum/issues/444)).
+- **Per-stream capture policies:** `RunOutputOptions` accepts `capture_stdout`
+  and `capture_stderr`, each naming one of `FullCapture` — the default, and
+  today's behaviour — `BoundedCapture(max_bytes=N)`, or
+  `FileBackedCapture(spill_threshold_bytes=…, directory=…, keep_file=…)`. A
+  stream left at `None` inherits the existing `capture` shorthand and an
+  explicit per-stream value wins for its own stream: for example,
+  `capture=True, capture_stderr=False` captures stdout in full and nothing on
+  stderr. Every current caller resolves exactly as before. A value that is
+  neither a policy nor a `bool` is refused with `ValueError` before the child
+  spawns, so a typo costs an exception rather than a run that captured
+  something unintended.
+
+  A capture policy governs the _result_, never the relay. Bytes a pipeline
+  stage hands the next stage are relayed rather than captured, so a bounded
+  stage still delivers a complete stream to its consumer, and a bound does not
+  shorten the mirrored copy an echo sink receives, which `max_echo_line_bytes`
+  bounds separately on its own path. A `BoundedCapture` therefore retains a
+  suffix of the child's output at the cost of a caller-chosen byte budget
+  rather than a lifetime of unbounded growth, which is what makes a
+  long-running or noisy child affordable to diagnose. The bound is on bytes
+  rather than characters, since bytes are what the child wrote and what the
+  parent holds; the retained tail is trimmed forwards to a code-point boundary
+  before decoding, so a truncated capture never grows a replacement character
+  at its leading edge and never raises out of a strict decoder. It may be a few
+  bytes shorter than `max_bytes` after the trim — never longer, and always a
+  suffix.
+
+  `FileBackedCapture` keeps the stream on the heap until it passes a threshold
+  — one mebibyte by default, and `None` spills on the first byte — then writes
+  the bytes that have arrived to a temporary file and appends every later chunk
+  there, so retention stops growing with the child's output. A stream that
+  never crosses the threshold is finalized exactly as `FullCapture` would have
+  finalized it, so raising the threshold is a pure memory decision and never
+  changes what the caller reads. A spilled text-mode capture reports `None` on
+  `stdout`/`stderr` and names the spill at the record's `path`; the run removes
+  that file before returning, so `CapturedStream.read_text` can read the spill
+  only when the policy was built with `keep_file=True`. A byte-exact run reads
+  the file back before removal instead, because a caller who asked for the
+  child's own bytes cannot be handed anything less, and that read is O(stream
+  size) so byte mode does not carry the bounded-memory guarantee text mode does.
+
+  Cuprum owns the file it creates and removes it on every outcome — success,
+  non-zero exit, timeout, and cancellation alike — so a long-lived process
+  cannot accumulate spill files across runs. `keep_file=True` leaves the file
+  for the caller on every exit route, except for a cancellation landing before
+  the initial spill's prefix is written: until that write lands the file is
+  still the run's, so cleanup removes it. Cleanup is a pair of steps with one
+  owner: the result-construction site closes the handle every settled drain
+  reports, and teardown reconciles the accumulators themselves, which is the
+  only path that reaches a drain cancelled mid-await. `SpillHandle.close` is
+  idempotent and both callers run it under `_shielded_cleanup`, so the two
+  paths agree rather than racing. Spill I/O is shielded as well, so a stalled
+  spill filesystem stalls the run with it: a timeout or cancellation cannot
+  settle until a blocked write returns.
+
+  Every captured stream contributes one `CapturedStream` to the new
+  stdout-then-stderr-ordered `CommandResult.captures`, and `PipelineResult`
+  reports the final stage's records; an uncaptured stream contributes none, so
+  a record's presence is itself the statement that the stream was captured.
+  `total_bytes` reports what the child wrote beside `dropped_bytes` for what
+  the bound discarded, with `truncated` derived from the two, so a caller can
+  always tell a short stream from a shortened one and the counts cannot
+  disagree. `storage` distinguishes memory from file, `path` names the spill,
+  `owned` says who must remove it, and `storage_failed` says the file is
+  incomplete rather than merely short. A storage failure is absorbed rather
+  than raised — a failure to _retain_ output is not a failure of the command
+  that produced it — so the child is still reaped and a run that otherwise
+  returns still hands the caller a result; on a timeout or cancellation there
+  is no result to equip, and the failure is absorbed so the run's own outcome
+  stands. A failed creation leaves the stream on the heap where it is still
+  reported complete, while a failed append keeps the prefix that reached the
+  file and reports `storage_failed`. Both are distinguished by reading the flag
+  together with `storage`. `cuprum.capture_events` and
+  `cuprum.capture_observation` publish the same facts as `CaptureEvent`s on an
+  opt-in `observe_capture` channel carrying only a stream name, a closed-set
+  category, byte counts, and an error _class name_ — never the payload, the
+  spill path, or exception text — so a hook may forward them to a metrics
+  backend whose labels are low-cardinality by contract
+  ([#443](https://github.com/leynos/cuprum/issues/443)).
 
 ### Breaking changes
 

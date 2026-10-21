@@ -10,18 +10,25 @@ import typing as typ
 import pytest
 
 from cuprum._line_stream import coordinator
+from cuprum.capture_policy import BoundedCapture, FullCapture
 from cuprum.line_stream_events import LineStreamPhase
+from cuprum.unittests._stream_drain_support import captured
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._line_stream import _LineStreamRun
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait import _DrainContext
+    from cuprum._subprocess_wait import _DrainContext, _DrainPair
+    from cuprum.capture_policy import CapturePolicy
 
 
 class _TimeoutHandledError(Exception):
     """Sentinel raised by the patched timeout translator."""
+
+
+_STDOUT_DRAIN = captured("stdout text")
+_STDERR_DRAIN = captured("stderr text")
 
 
 @dc.dataclass(slots=True)
@@ -69,7 +76,7 @@ class _FailedExitTestDouble:
         self,
         tasks: object,
         context: _DrainContext,
-    ) -> tuple[str, str]:
+    ) -> _DrainPair:
         """Record the reconciled ownership and its cleanup context."""
         return await self._record("reconcile", tasks, context)
 
@@ -77,7 +84,7 @@ class _FailedExitTestDouble:
         self,
         tasks: object,
         context: _DrainContext,
-    ) -> tuple[str, str]:
+    ) -> _DrainPair:
         """Record the drained consumers and their cleanup context."""
         return await self._record("drain", tasks, context)
 
@@ -86,18 +93,31 @@ class _FailedExitTestDouble:
         marker: str,
         tasks: object,
         context: _DrainContext,
-    ) -> tuple[str, str]:
-        """Record one drain seam invocation and produce captured output."""
+    ) -> _DrainPair:
+        """Record one drain seam invocation and produce captured output.
+
+        The result is a whole drain pair rather than two bare payloads: the
+        seams under test hand the line-stream coordinator everything a
+        consumer settled to, and the coordinator reads the payload off it to
+        build the ``TimeoutExpired``. Returning bare strings here would let a
+        seam that discarded the record — and with it the spill handle — pass
+        this module's assertions.
+
+        Returns
+        -------
+        _DrainPair
+            The canned stdout and stderr drain results, in that order.
+        """
         self.task_sets.append(tasks)
         self.contexts.append(context)
         self.order.append(marker)
         await asyncio.sleep(0)
-        return "stdout", "stderr"
+        return _STDOUT_DRAIN, _STDERR_DRAIN
 
     async def shield(
         self,
-        operation: cabc.Awaitable[tuple[str, str]],
-    ) -> tuple[str, str]:
+        operation: cabc.Awaitable[_DrainPair],
+    ) -> _DrainPair:
         """Await the patched cleanup operation without changing its outcome."""
         return await operation
 
@@ -146,15 +166,15 @@ class _FailedExitTestDouble:
     def assert_cleanup_contract(
         self,
         *,
-        capture: bool,
+        expected_captures: tuple[CapturePolicy | None, CapturePolicy | None],
         expected_phases: tuple[LineStreamPhase, ...],
     ) -> None:
-        """Assert the shared capture policy, PID, phases, and teardown order."""
+        """Assert the per-stream capture policies, PID, phases, and teardown order."""
         contexts = self.contexts
         order = self.order
         phases = [entry for entry in order if isinstance(entry, LineStreamPhase)]
-        assert [context.capture for context in contexts] == [capture], (
-            f"cleanup must use the outcome capture policy, got {contexts!r}"
+        assert [context.captures for context in contexts] == [expected_captures], (
+            f"cleanup must use the outcome capture policies, got {contexts!r}"
         )
         assert contexts[0].pid == 123, (
             f"cleanup must retain the child PID, got {contexts!r}"
@@ -195,12 +215,21 @@ def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
     return typ.cast("_LineStreamRun", run)
 
 
+_STDOUT_POLICY = FullCapture()
+_STDERR_POLICY = BoundedCapture(max_bytes=64)
+# What a route that preserves no output hands to the drain, per stream.
+_NOTHING_PRESERVED: tuple[CapturePolicy | None, CapturePolicy | None] = (None, None)
+# What a preserving route hands over: the run's own policies, per stream, in
+# the stdout-then-stderr order every drain context uses.
+_PRESERVED = (_STDOUT_POLICY, _STDERR_POLICY)
+
+
 @pytest.mark.parametrize(
-    ("error", "capture", "expected_phases"),
+    ("error", "expected_captures", "expected_phases"),
     [
         (
             TimeoutError("deadline expired"),
-            True,
+            _PRESERVED,
             (
                 LineStreamPhase.TIMEOUT,
                 LineStreamPhase.TEARDOWN_STARTED,
@@ -209,7 +238,7 @@ def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
         ),
         (
             asyncio.CancelledError(),
-            False,
+            _NOTHING_PRESERVED,
             (
                 LineStreamPhase.CANCELLED,
                 LineStreamPhase.TEARDOWN_STARTED,
@@ -218,7 +247,7 @@ def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
         ),
         (
             ValueError("consumer failed"),
-            False,
+            _NOTHING_PRESERVED,
             (
                 LineStreamPhase.TEARDOWN_STARTED,
                 LineStreamPhase.TEARDOWN_COMPLETED,
@@ -229,23 +258,34 @@ def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
 def test_failed_line_stream_exit_reconciles_with_the_outcome_capture_policy(
     monkeypatch: pytest.MonkeyPatch,
     error: BaseException,
-    capture: bool,
+    expected_captures: tuple[CapturePolicy | None, CapturePolicy | None],
     expected_phases: tuple[LineStreamPhase, ...],
 ) -> None:
-    """Timeout captures output; cancellation and failures discard it."""
+    """Timeout captures output; cancellation and failures discard it.
+
+    The two streams carry *different* policies in the preserving arm, so an
+    implementation that collapsed them to one flag — the shape this replaces —
+    could not satisfy the expectation.
+    """
     double = _FailedExitTestDouble(error=error)
     run = _failed_run(double)
     execution = typ.cast(
         "_SubprocessExecution",
-        types.SimpleNamespace(capture=True, observation=object(), timeout=0.5),
+        types.SimpleNamespace(
+            capture_stdout=_STDOUT_POLICY,
+            capture_stderr=_STDERR_POLICY,
+            capture_bytes=False,
+            observation=object(),
+            timeout=0.5,
+        ),
     )
     double.install(monkeypatch)
 
     if isinstance(error, TimeoutError):
         double.run_timeout_exit(run, execution)
-        assert double.timeout_calls == [("stdout", "stderr")], (
-            "timeout translation must retain reconciled capture, got "
-            f"{double.timeout_calls!r}"
+        assert double.timeout_calls == [("stdout text", "stderr text")], (
+            "timeout translation must retain each reconciled drain's payload, "
+            f"got {double.timeout_calls!r}"
         )
     else:
         caught = double.run_failed_exit(run, execution)
@@ -253,7 +293,10 @@ def test_failed_line_stream_exit_reconciles_with_the_outcome_capture_policy(
             f"failed exit must preserve its original exception, got {caught!r}"
         )
 
-    double.assert_cleanup_contract(capture=capture, expected_phases=expected_phases)
+    double.assert_cleanup_contract(
+        expected_captures=expected_captures,
+        expected_phases=expected_phases,
+    )
 
 
 def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
@@ -268,6 +311,10 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
             tasks=types.SimpleNamespace(
                 consumers=consumers,
                 discard_on_cancel=asyncio.Event(),
+                # The discard drain now releases the accumulators the
+                # consumers were reading into, so this case has to supply the
+                # (empty) pair a run with no capture policies holds.
+                captures=(None, None),
             ),
             telemetry=types.SimpleNamespace(emit=double.emit),
         ),
@@ -275,21 +322,27 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
     observation = object()
     execution = typ.cast(
         "_SubprocessExecution",
-        types.SimpleNamespace(observation=observation),
+        types.SimpleNamespace(
+            capture_stdout=_STDOUT_POLICY,
+            capture_stderr=_STDERR_POLICY,
+            capture_bytes=False,
+            observation=observation,
+        ),
     )
     double.install(monkeypatch)
 
     result = asyncio.run(coordinator._discard_drain(run, 456, execution))
 
-    assert result == ("stdout", "stderr"), (
+    assert result == (_STDOUT_DRAIN, _STDERR_DRAIN), (
         f"the discard drain must return its drain result, got {result!r}"
     )
     assert double.task_sets == [consumers], (
         f"the discard drain must drain the consumer tasks, got {double.task_sets!r}"
     )
     context = double.contexts[0]
-    assert context.capture is False, (
-        f"the discard drain must never capture output, got {context.capture!r}"
+    assert context.captures == (None, None), (
+        "the discard drain must preserve no stream's capture, even though the "
+        f"execution carries policies; got {context.captures!r}"
     )
     assert context.pid == 456, (
         f"the discard drain must keep its supplied PID, got {context.pid!r}"
@@ -305,6 +358,74 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
         "drain",
         LineStreamPhase.TEARDOWN_COMPLETED,
     ], f"the discard drain must bracket the drain in teardown, got {double.order!r}"
+
+
+class _ReleasedSink:
+    """A capture sink that records its release."""
+
+    def __init__(self) -> None:
+        """Start unreleased."""
+        self.released = False
+
+    async def absorb(self, chunk: bytes) -> None:
+        """Accept output, which this case never sends."""
+
+    async def finalize(self) -> typ.NoReturn:
+        """Refuse to finalize; the discard path builds no result."""
+        raise NotImplementedError
+
+    async def cleanup(self) -> None:
+        """Record the release."""
+        self.released = True
+
+
+def test_discard_drain_releases_the_capture_sinks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The discard path owns the sink release, since it bypasses reconciliation.
+
+    ``_reconcile_run_tasks`` is where a normal teardown closes the
+    accumulators, and the drain context here asks for no capture at all, so a
+    consumer cancelled mid-read never finalizes and nothing else would close a
+    spill file. This case fails without the ``finally`` in ``_discard_drain``.
+    """
+    double = _FailedExitTestDouble(error=ValueError("unused"))
+    sink = _ReleasedSink()
+    # A release that touched only the stdout slot would pass just as well with
+    # ``captures=(sink, None)``, so hold a second sink in the stderr slot.
+    stderr_sink = _ReleasedSink()
+    run = typ.cast(
+        "_LineStreamRun",
+        types.SimpleNamespace(
+            tasks=types.SimpleNamespace(
+                consumers=object(),
+                discard_on_cancel=asyncio.Event(),
+                captures=(sink, stderr_sink),
+            ),
+            telemetry=types.SimpleNamespace(emit=double.emit),
+        ),
+    )
+    execution = typ.cast(
+        "_SubprocessExecution",
+        types.SimpleNamespace(
+            capture_stdout=_STDOUT_POLICY,
+            capture_stderr=_STDERR_POLICY,
+            capture_bytes=False,
+            observation=object(),
+        ),
+    )
+    double.install(monkeypatch)
+
+    asyncio.run(coordinator._discard_drain(run, 456, execution))
+
+    assert sink.released, (
+        "the discard path drains no settled result, so it must release the "
+        "stdout accumulator itself or the spill file survives the run"
+    )
+    assert stderr_sink.released, (
+        "the release must cover every captured slot, not only stdout, or a "
+        "stderr spill file survives the run"
+    )
 
 
 def _teardown_run(order: list[object]) -> _LineStreamRun:

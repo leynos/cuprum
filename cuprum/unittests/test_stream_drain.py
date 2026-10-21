@@ -9,6 +9,7 @@ import typing as typ
 import pytest
 
 from cuprum._streams import _drain, _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.unittests._stream_drain_support import (
     CapturedOrNone,
     CapturedPair,
@@ -22,9 +23,12 @@ from cuprum.unittests._stream_drain_support import (
 def test_drain_empty_capture_returns_empty_text() -> None:
     """Empty captured streams drain to an empty string."""
     sink = io.StringIO()
-    captured = asyncio.run(_drain(_reader(()), _config(sink)))
+    drained = asyncio.run(_drain(_reader(()), _config(sink)))
 
-    assert not captured, "empty captured streams must decode to empty text"
+    assert not drained.payload, "empty captured streams must decode to empty text"
+    assert drained.capture is not None, (
+        "a captured stream must report a record when its payload is empty"
+    )
     assert not sink.getvalue(), "non-echoing empty streams must not write to sink"
 
 
@@ -32,7 +36,7 @@ def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
     """The drain loop retains the injected benchmark read size."""
     reader = _ChunkedReader((b"first", b"second"))
     config = _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
@@ -42,7 +46,9 @@ def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
 
     captured = asyncio.run(_drain(typ.cast("asyncio.StreamReader", reader), config))
 
-    assert captured == "firstsecond", f"expected complete capture, got {captured!r}"
+    assert captured.payload == "firstsecond", (
+        f"expected complete capture, got {captured!r}"
+    )
     assert reader.read_sizes == [17, 17, 17], (
         "every drain reader call must retain the explicit read size, got "
         f"{reader.read_sizes}"
@@ -55,7 +61,7 @@ def test_drain_respects_capture_and_echo_flags() -> None:
     sink = io.StringIO()
     captured = asyncio.run(_drain(_reader(chunks), _config(sink, echo=True)))
 
-    assert captured == b"alpha \xe2\x98\x83".decode(), (
+    assert captured.payload == b"alpha \xe2\x98\x83".decode(), (
         f"captured text must decode the complete payload for chunks={chunks!r}"
     )
     assert sink.getvalue() == _decode_chunks(chunks), (
@@ -68,10 +74,11 @@ def test_drain_can_disable_capture_while_echoing() -> None:
     chunks = (b"only ", b"echo")
     sink = io.StringIO()
     captured = asyncio.run(
-        _drain(_reader(chunks), _config(sink, capture=False, echo=True)),
+        _drain(_reader(chunks), _config(sink, capture=None, echo=True)),
     )
 
-    assert captured is None, "capture-disabled drains must return None"
+    assert captured.payload is None, "capture-disabled drains must return no payload"
+    assert captured.capture is None, "capture-disabled drains must report no record"
     assert sink.getvalue() == "only echo", (
         f"echo-only drain must write all decoded chunks for chunks={chunks!r}"
     )
@@ -86,7 +93,7 @@ def test_discarding_a_cancelled_capture_skips_decoding() -> None:
         reader = asyncio.StreamReader()
         reader.feed_data(b"\xff")
         config = _StreamConfig(
-            capture_output=True,
+            capture=FullCapture(),
             echo_output=False,
             sink=io.StringIO(),
             encoding="utf-8",
@@ -114,7 +121,7 @@ def test_cancelled_capture_retains_buffered_text() -> None:
         task = asyncio.create_task(_drain(reader, _config(io.StringIO())))
         await asyncio.sleep(0)
         task.cancel()
-        return await task
+        return (await task).payload
 
     assert asyncio.run(run_case()) == "partial output"
 
@@ -130,7 +137,7 @@ def test_cancelled_capture_flushes_replacement_echo() -> None:
         task = asyncio.create_task(_drain(reader, _config(sink, echo=True)))
         await asyncio.sleep(0)
         task.cancel()
-        return await task, sink.getvalue()
+        return (await task).payload, sink.getvalue()
 
     assert asyncio.run(run_case()) == (
         "\N{REPLACEMENT CHARACTER}",

@@ -1,27 +1,31 @@
 """Captured/echoed output configuration for ``cuprum.sh`` runs.
 
-``RunOutputOptions`` (and its deprecated ``IOOptions`` alias) configure how a
-command or pipeline's stdout and stderr are captured, mirrored, and
-optionally reframed through a presentation sink. The ``cuprum.sh`` package
-re-exports the public names.
+``RunOutputOptions`` configures how a command or pipeline's stdout and stderr
+are captured, mirrored, and optionally reframed through a presentation sink.
+The ``cuprum.sh`` package re-exports the public name. The deprecated
+``IOOptions`` alias lives in :mod:`cuprum.sh._deprecated`; the deprecated flat
+``capture``/``echo`` keywords that still reach this vocabulary are owned by
+:mod:`cuprum.sh.pipeline_output`.
 
 The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
 policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported
-here so ``cuprum.sh.output`` remains a usable import path for it. The same
-applies to the field rules in :mod:`cuprum.sh.output_rules`, which are
-re-exported under their original names for existing importers.
+here so ``cuprum.sh.output`` remains a usable import path for it. Field rules
+from :mod:`cuprum.sh.output_rules` are re-exported under their original names.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-import warnings
 
 from cuprum._bounded_delivery import BoundedDelivery, _validate_delivery_options
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES, DEFAULT_MAX_LINE_CHARS
 from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
+from cuprum.sh._capture_options import _resolve_capture as _resolve_capture
+from cuprum.sh._capture_options import _resolved_capture as _resolved_capture
+from cuprum.sh._convenience_sink import synthesize_sink
+from cuprum.sh._resolved_options import _ResolvedOptionsMixin
 from cuprum.sh.output_rules import (
     _validate_convenience_flags as _validate_convenience_flags,
 )
@@ -36,18 +40,29 @@ from cuprum.sh.stdio_rules import (
     _validate_stdio_targets as _validate_stdio_targets,
 )
 
-# ``GitHubActionsSink`` comes from the same package surface rather than its
-# ``github_actions`` submodule: the package publishes it in ``__all__``, and the
-# convenience flags synthesize it as part of this class's documented contract.
-from cuprum.sinks import GitHubActionsSink
-
-# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
-from cuprum.sinks import base as sinks
+# ``RunOutputOptions.sink`` is public and its annotation names ``sinks``, so
+# ``typing.get_type_hints`` must resolve ``sinks`` from this module's globals —
+# a type-checking block would break that. Ruff reads an annotation-only use as
+# type-only and suggests moving it; the run-time sink construction that used to
+# keep this import visibly run-time now lives in ``cuprum.sh._convenience_sink``.
+from cuprum.sinks import base as sinks  # ruff: ignore[typing-only-first-party-import]
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    # Type-only like ``LineHook`` below: the capture policies appear in field
+    # and property annotations and in docstring examples, never in run-time
+    # expressions — ``__post_init__`` delegates the resolution that used them
+    # to :mod:`cuprum.sh._capture_options`.
+    from cuprum.capture_policy import CapturePolicy
     from cuprum.lines import LineHook
+
+    # Name-compatible rather than type-accurate: this module publishes
+    # ``IOOptions`` at run time only, through ``__getattr__`` below, because
+    # the alias lives in :mod:`cuprum.sh._deprecated` and that module imports
+    # this one. The block gives the export checker a name to resolve without
+    # making the import real.
+    from cuprum.sh._deprecated import IOOptions
 
 __all__ = [
     "BoundedDelivery",
@@ -57,8 +72,40 @@ __all__ = [
 ]
 
 
+def __getattr__(name: str) -> object:
+    """Resolve the deprecated ``IOOptions`` alias on first use.
+
+    The alias lived in this module before :mod:`cuprum.sh._deprecated` took it
+    over, and callers still import it from here. A module-level import would
+    be a cycle — ``_deprecated`` imports ``RunOutputOptions`` from this module
+    — so the name is resolved when it is asked for instead, which is also why
+    it cannot be a plain re-export.
+
+    Parameters
+    ----------
+    name : str
+        The attribute being resolved.
+
+    Returns
+    -------
+    object
+        The compatibility name, when this module supplies one.
+
+    Raises
+    ------
+    AttributeError
+        If *name* is not a compatibility name this module supplies.
+    """
+    if name == "IOOptions":
+        from cuprum.sh._deprecated import IOOptions
+
+        return IOOptions
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
-class RunOutputOptions:
+class RunOutputOptions(_ResolvedOptionsMixin):
     """Configure captured and mirrored command output.
 
     Parameters
@@ -67,6 +114,24 @@ class RunOutputOptions:
         Store stdout and stderr on the returned result. Capture is independent
         of echoing, so a captured stream can remain silent and an echoed stream
         can be left uncaptured.
+    capture_stdout : CapturePolicy | bool | None, keyword-only, default=None
+        How stdout is captured. ``None`` inherits ``capture``; a policy is
+        used as given; ``True`` and ``False`` are the shorthand's spelling for
+        a complete capture and no capture. A
+        :class:`~cuprum.capture_policy.BoundedCapture` retains the most recent
+        ``max_bytes`` of the stream and reports the exact dropped byte count,
+        and a :class:`~cuprum.capture_policy.FileBackedCapture` spills to a
+        temporary file past a threshold, reporting the path instead of the
+        text. A bounded *text* capture is refused before spawning under an
+        encoding whose code-point boundaries a truncated tail cannot repair,
+        which is every multi-byte codec except UTF-8 and fixed-width UTF-16
+        or UTF-32; byte captures are not restricted. The policy governs the
+        capture tap only: bytes a pipeline stage relays to the next stage are
+        never affected.
+    capture_stderr : CapturePolicy | bool | None, keyword-only, default=None
+        How stderr is captured, resolved exactly as ``capture_stdout`` is and
+        independently of it, so the two streams can be configured differently
+        in one run.
     echo : bool, default=False
         Shorthand for enabling both ``echo_stdout`` and ``echo_stderr`` unless
         either stream has an explicit override.
@@ -80,8 +145,6 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
-        Non-integers, including ``bool``, raise ``TypeError``; zero and
-        negative integers raise ``ValueError``.
     broken_pipe_policy : BrokenPipePolicy | str, keyword-only, default=STRICT
         How echoing responds when a presentation sink reports
         ``BrokenPipeError``, which is what a destination that has closed under
@@ -110,20 +173,17 @@ class RunOutputOptions:
     max_line_chars : int | None, keyword-only, default=64 * 1024
         Maximum number of decoded characters retained for one observed line.
         The count covers line content only: terminators are held separately
-        and never counted. A line longer than this is published as fragments
-        of exactly this many characters through the same line sink, so the
-        ``lines()`` driver's backpressure still applies and no event ever
-        exceeds the bound. Fragments can split a grapheme cluster or a
-        multi-byte character's decoded form; they are not otherwise
-        distinguished from complete lines. The bound is independent of
-        ``capture`` and ``echo``: a run with capture disabled is bounded
-        exactly as a capturing one is, and ``max_echo_line_bytes`` bounds only
-        the mirrored copy in bytes. ``None`` disables the bound and restores
-        unbounded retention for one line. The field is keyword-only because it
-        was inserted mid-list: accepting it positionally would have taken
-        ``on_line``'s slot and shifted every field after it. Non-integers,
-        including ``bool``, raise ``TypeError``; zero and negative integers
-        raise ``ValueError``.
+        and never counted. A longer line is published as fragments of exactly
+        this many characters through the same line sink, so the ``lines()``
+        driver's backpressure still applies and no event exceeds the bound.
+        Fragments can split a grapheme cluster or a multi-byte character's
+        decoded form; they are not otherwise distinguished from complete
+        lines. The bound is independent of ``capture`` and ``echo``:
+        ``max_echo_line_bytes`` bounds only the mirrored copy in bytes.
+        ``None`` disables bounded retention. This field is keyword-only
+        because a positional value would take ``on_line``'s slot and shift
+        every field after it. Non-integers, including ``bool``, raise
+        ``TypeError``; zero and negative integers raise ``ValueError``.
     idle_after : float | None, default=None
         Seconds of silence, measured across both streams, before the run
         reports that it is still running. ``None`` disables idle reporting and
@@ -219,6 +279,13 @@ class RunOutputOptions:
     """
 
     capture: bool = True
+    # Keyword-only although they read beside ``capture``: ``RunOutputOptions``
+    # is a public, non-``kw_only`` dataclass whose first six fields are
+    # positional, and ``test_public_api`` pins them. Declaring these two
+    # positionally would take the slots of ``max_echo_line_bytes`` and
+    # ``on_line`` and rebind every existing positional caller.
+    capture_stdout: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
+    capture_stderr: CapturePolicy | bool | None = dc.field(default=None, kw_only=True)
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
@@ -230,8 +297,6 @@ class RunOutputOptions:
         default=BrokenPipePolicy.STRICT,
         kw_only=True,
     )
-    # Keyword-only for the same reason as ``broken_pipe_policy``: inserted
-    # mid-list, a positional field would take ``on_line``'s slot.
     max_line_chars: int | None = dc.field(
         default=DEFAULT_MAX_LINE_CHARS,
         kw_only=True,
@@ -263,9 +328,27 @@ class RunOutputOptions:
         compare=False,
         kw_only=True,
     )
+    # Non-init, for the reason ``_synthesized_sink`` above is: a resolution
+    # stored over the declared fields would be re-passed by
+    # ``dataclasses.replace`` as an explicit per-stream declaration.
+    _resolved_capture: tuple[CapturePolicy | None, CapturePolicy | None] = dc.field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=(None, None),
+    )
 
     def __post_init__(self) -> None:
-        """Resolve the echo shorthand and synthesize a sink from the flags."""
+        """Resolve the echo and capture shorthands, then synthesize any sink."""
+        object.__setattr__(
+            self,
+            "_resolved_capture",
+            _resolved_capture(
+                shorthand=self.capture,
+                capture_stdout=self.capture_stdout,
+                capture_stderr=self.capture_stderr,
+            ),
+        )
         object.__setattr__(
             self,
             "echo_stdout",
@@ -298,85 +381,13 @@ class RunOutputOptions:
         )
         _validate_convenience_flags(self)
         _validate_stdio_targets(self)
-        self._synthesize_sink_from_flags()
+        synthesize_sink(self)
+
         _validate_max_line_chars(self.max_line_chars)
         _validate_positive_bound("max_echo_line_bytes", self.max_echo_line_bytes)
 
-    def _synthesize_sink_from_flags(self) -> None:
-        """Materialize the convenience flags as this run's presentation sink.
-
-        Both flags are spelled as a configuration of the existing
-        :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
-        code, which is what keeps workflow-command syntax inside the adapter.
-        The synthesized sink carries no ``force``, so it stays subject to the
-        adapter's own ``GITHUB_ACTIONS`` gate. Private identity metadata tracks
-        the adapter created by this options object so
-        :func:`dataclasses.replace` can resynthesize it when flags change.
-        An adapter supplied to a new options object remains explicit regardless
-        of its concrete type.
-        """
-        is_synthesized_sink = self.sink is self._synthesized_sink
-        if self.sink is not None and not is_synthesized_sink:
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        if not (self.group or self.annotate_failure):
-            if is_synthesized_sink:
-                object.__setattr__(self, "sink", None)
-            object.__setattr__(self, "_synthesized_sink", None)
-            return
-        synthesized_sink = GitHubActionsSink(
-            emit_group=self.group,
-            emit_annotation=self.annotate_failure,
-        )
-        object.__setattr__(
-            self,
-            "sink",
-            synthesized_sink,
-        )
-        object.__setattr__(self, "_synthesized_sink", synthesized_sink)
-
-    @property
-    def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
-        """The policy behind the declared ``BrokenPipePolicy | str`` field.
-
-        ``__post_init__`` normalizes the field, but the declared type stays
-        wide because a caller may spell the policy as a string. This is the
-        narrow view the execution layer reads, so it never has to parse.
-
-        Returns
-        -------
-        BrokenPipePolicy
-            The normalized policy member, never a string and never ``None``.
-        """
-        return _parse_broken_pipe_policy(self.broken_pipe_policy)
-
-    @property
-    def resolved_echo(self) -> tuple[bool, bool]:
-        """The resolved ``(echo_stdout, echo_stderr)`` gates.
-
-        ``__post_init__`` fills any ``None`` per-stream field from ``echo``,
-        so the returned pair is always concrete and reflects an explicit
-        per-stream override where one was supplied.
-        """
-        # The dataclass is frozen and ``__post_init__`` resolves both fields,
-        # but the declared field types stay ``bool | None``; the resolved pair
-        # is the constructor's contract, not something the declared types can
-        # express to the type checker.
-        return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class IOOptions(RunOutputOptions):
-    """Deprecated alias for command output stream options."""
-
-    def __post_init__(self) -> None:
-        """Resolve the inherited options, then warn about the deprecated alias."""
-        # Zero-arg ``super()`` breaks under ``slots=True``: the decorator
-        # rebuilds the class, so the method's ``__class__`` cell refers to the
-        # pre-rebuild class and the instance fails the ``super`` type check.
-        RunOutputOptions.__post_init__(self)
-        warnings.warn(
-            "IOOptions is deprecated; use RunOutputOptions instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    # The resolved views -- ``resolved_capture``, ``captures_any_stream``,
+    # ``resolved_echo``, and ``resolved_broken_pipe_policy`` -- are contributed
+    # by ``_ResolvedOptionsMixin``; the class docstring's examples above are
+    # still resolved through them, because the mixin's properties bind on the
+    # instance exactly as methods declared here would.

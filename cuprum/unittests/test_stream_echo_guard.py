@@ -20,6 +20,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.capture_policy import FullCapture
 from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 from cuprum.unittests._stream_drain_support import (
     _count_text_writes,
@@ -55,7 +56,7 @@ class _Cp1252TextOnlySink:
 def _config(sink: typ.IO[str], *, echo: bool = True) -> _StreamConfig:
     """Build a UTF-8 stream config for echo-guard tests."""
     return _StreamConfig(
-        capture_output=True,
+        capture=FullCapture(),
         echo_output=echo,
         sink=sink,
         encoding="utf-8",
@@ -70,7 +71,7 @@ def test_drain_completes_capture_when_text_sink_cannot_encode() -> None:
 
     captured = asyncio.run(
         _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
-    )
+    ).payload
 
     assert captured == b"".join(chunks).decode("utf-8", errors="replace"), (
         "capture must complete even when the echo sink rejects a chunk for "
@@ -89,7 +90,7 @@ def test_drain_stops_echo_after_first_encode_failure() -> None:
 
     captured = asyncio.run(
         _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
-    )
+    ).payload
 
     assert captured == b"".join(chunks).decode("utf-8", errors="replace"), (
         "capture must stay complete while echo is disabled for "
@@ -169,7 +170,7 @@ def test_flush_after_disabled_echo_does_not_raise() -> None:
         )
         await asyncio.sleep(0)
         task.cancel()
-        return await task, sink
+        return (await task).payload, sink
 
     captured, sink = asyncio.run(run_case())
 
@@ -289,7 +290,7 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
                 _config(typ.cast("typ.IO[str]", sink)),
                 relay_diagnostics=relay_diagnostics,
             ),
-        )
+        ).payload
     relay_diagnostics.settle()
     fallbacks = relay_diagnostics.snapshot()
     warnings = [record for record in caplog.records if record.name == "cuprum.stream"]
