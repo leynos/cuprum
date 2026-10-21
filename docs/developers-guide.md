@@ -8487,15 +8487,15 @@ executes:
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams` in `cuprum/_subprocess_direct_run.py`,
    which creates the same writer task and awaits the exit through
-   `_await_exit_or_writer_failure`, racing the exit wait against the writer so a
-   producer that fails at once ends the run with its own error rather than being
-   reported later as a slow child. The exit wait it wraps,
+   `_await_exit_or_writer_failure`, racing the exit wait against the writer so
+   a producer that fails at once ends the run with its own error rather than
+   being reported later as a slow child. The exit wait it wraps,
    `_wait_for_exit_code_within_timeout`, carries the run's whole configured
    deadline; the *writer* await that follows is a separate await with its own
-   bound, and it has to be, because the writer can park on a pipe no reader will
-   ever drain — a descendant that inherited the run's stdin and does not read it
-   — so an unbounded await there hangs the run past a deadline it had already
-   reached. `_await_writer_within_deadline` therefore takes
+   bound, and it has to be, because the writer can park on a pipe no reader
+   will ever drain — a descendant that inherited the run's stdin and does not
+   read it — so an unbounded await there hangs the run past a deadline it had
+   already reached. `_await_writer_within_deadline` therefore takes
    `_deadline_for_collection(execution)` and awaits the writer under it,
    shielded so the bound is reached before the writer's own 0.5 s close grace
    rather than after it. On expiry, and equally on `asyncio.CancelledError` or

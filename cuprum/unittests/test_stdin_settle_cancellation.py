@@ -34,15 +34,24 @@ and each scenario recorded against each:
   the pipe are all still there when the loop is asked. This is the scenario
   that pins the fix.
 - Making the settle unbounded again — the shape the window replaced — fails
-  ``test_a_child_that_never_reads_does_not_wedge_the_run`` and leaves the other
-  passing. It is the direction the window itself creates, and the scenario is
-  the one that pins *it*.
-- Deleting the direct path's call to the settle fails neither. That is worth
-  recording rather than hiding, because it is a limit of both scenarios: with
-  the settle gone the run returns at once and leaks a task rather than
-  wedging, and neither scenario cancels on that path, so neither has a census
-  that would see it. What covers the reclaim on the direct path is the
-  reclaim's own test, not this module.
+  ``test_a_child_that_never_reads_ends_the_run_on_its_deadline`` and leaves the
+  other passing. It is the direction the window itself creates, and the
+  scenario is the one that pins *it*.
+- Deleting the direct path's post-exit wait altogether fails neither. That is
+  worth recording rather than hiding, because it is a limit of both scenarios:
+  with the wait gone the run returns at once and reports the child's exit code
+  rather than its own expiry, and neither scenario cancels on that path, so
+  neither has a census that would see it. What covers the direct path's bound
+  and its cleanup is
+  ``cuprum.unittests.test_run_no_stream_post_exit_deadline``, not this module.
+
+The two scenarios also reach the writer through different names now that the
+direct run has been split into its own module: the streamed path settles from
+``cuprum._subprocess_stream_run._await_stdin_writer``, the direct path awaits
+from ``cuprum._subprocess_direct_run._await_writer_within_deadline``. Only the
+first scenario installs the post-exit probe, because only it needs to be told
+when the wait has begun; the second case is a deadline case and reaches its
+conclusion without instrumenting anything.
 
 So each scenario is the other's negative control as well as its sibling: a
 deletion that one repays is measurably invisible to the other, which is what
@@ -57,7 +66,13 @@ import typing as typ
 
 import pytest
 
-from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput, StdinStream
+from cuprum.sh import (
+    ExecutionContext,
+    RunOutputOptions,
+    StdinInput,
+    StdinStream,
+    TimeoutExpired,
+)
 from cuprum.unittests._stdin_run_cancellation_support import (
     _CANCEL_GRACE_S,
     _FINALIZED,
@@ -243,37 +258,46 @@ def test_cancelling_after_child_exit_reclaims_the_writer(
     asyncio.run(run_case())
 
 
-def test_a_child_that_never_reads_does_not_wedge_the_run(
+def test_a_child_that_never_reads_ends_the_run_on_its_deadline(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """A child that exits without reading must not hold the run open.
+    """A child that exits without reading cannot hold the run open past its deadline.
 
-    This is the window's original purpose, stated as a test rather than as a
-    comment. The child exits at once leaving a grandchild holding the read end,
-    the caller supplied more than the pipe buffer, and the run holds no pipe
-    for the child's output — the configuration that spawns no stream consumers
-    at all, so there is not even a reader to notice the child is gone. The
-    writer blocks in ``drain``, and an unbounded settle would make the run
-    indistinguishable from a stalled child: the caller would wait on a writer
-    whose remaining bytes can reach nobody.
+    This is the shape the post-exit bound exists for. The child exits at once
+    leaving a grandchild holding the read end, the caller supplied more than
+    the pipe buffer, and the run captures and echoes nothing — the
+    configuration that spawns no stream consumers at all, so there is not even
+    a reader to notice the child is gone. The writer blocks in ``drain`` behind
+    a payload the dead child will never read.
 
-    Unlike the cancellation scenario this one does not cancel, so it fails on
-    the deadline rather than on a leak if the reclaim goes away — which is why
-    the deadline is short and the assertion distinguishes the two. A reclaimed
-    run reports the child's own exit code; a wedged one raises ``TimeoutError``.
+    The direct path awaits that writer under the run's own remaining deadline,
+    not under the streamed path's fixed settle window. That choice is
+    deliberate and is what this case records: the direct run has no consumers
+    whose output a fixed window would protect, so reclaiming the writer early
+    would report the child's success while silently truncating input the
+    caller asked cuprum to deliver. Waiting the deadline out and then reporting
+    ``TimeoutExpired`` says what actually happened — the input was not
+    delivered and the configured budget ran out.
+
+    So the assertion is the deadline, not the child's exit code: a wedged run
+    would hang, and a run that quietly abandoned its writer would return ``0``.
+    Both are failures here, and they fail differently, which is why the elapsed
+    time and the exception are both read.
     """
     command = python_builder("-c", _EXITS_AND_HOLDS_STDIN)
 
-    async def run_case() -> int:
-        """Run with more than the pipe can hold and report the child's exit."""
-        result = await command.run(
-            stdin=StdinInput(data=b"x" * _BLOCKING_PAYLOAD_BYTES),
-            output=RunOutputOptions(capture=False),
-            timeout=_RECLAIM_DEADLINE_S,
+    async def run_case() -> None:
+        """Run with more than the pipe can hold and assert the public expiry."""
+        with pytest.raises(TimeoutExpired) as raised:
+            await command.run(
+                stdin=StdinInput(data=b"x" * _BLOCKING_PAYLOAD_BYTES),
+                output=RunOutputOptions(capture=False),
+                timeout=_RECLAIM_DEADLINE_S,
+            )
+        assert raised.value.timeout == _RECLAIM_DEADLINE_S, (
+            "the expiry must report the timeout the caller configured; a "
+            "remaining budget reported as the timeout would make one field "
+            f"mean two things; got {raised.value.timeout!r}"
         )
-        return result.exit_code
 
-    assert asyncio.run(run_case()) == 0, (
-        "the child exited successfully, so a run that reclaims its writer "
-        "reports that exit code rather than a timeout"
-    )
+    asyncio.run(run_case())
