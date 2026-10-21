@@ -16,12 +16,20 @@ at all; and an uncaptured run, which has no consumer to bound. Each case fixes
 its own policy and capture setting because they assert four different outcomes
 — bounded expiry, reclamation, survival, and prompt completion — not one
 outcome under four settings.
+
+The whole module is POSIX-only. Three cases configure ``OWN_GROUP``, which the
+policy rejects on Windows rather than emulating, and all four reap their
+descendant with ``SIGKILL``. The module is one of ``EXTENSION_TEST_TARGETS``,
+so the extension-gated CI job collects it on a Windows runner as well; the
+skip below is what turns that collection into recorded skips rather than a
+run of failures about a primitive the platform does not have.
 """
 
 from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import sys
 import threading
 import typing as typ
 
@@ -55,6 +63,20 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
+
+# Three of the four cases configure ``OWN_GROUP``, which the policy rejects on
+# Windows rather than emulating, and every case reaps its descendant with
+# ``SIGKILL``, which Windows does not have either. The module is scoped to the
+# platform that has both. Skipping is not cosmetic — this module is one of
+# ``EXTENSION_TEST_TARGETS``, which the extension-gated CI job runs on a Windows
+# runner, so without the mark the job fails on a platform gap rather than on the
+# code under test.
+_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX process groups are unavailable on Windows",
+)
+
+pytestmark = _posix_only
 
 # The deadline a run is given. It is comfortably below ``RUN_BUDGET_S`` so the
 # elapsed assertion can tell "returned on its own deadline" apart from "the
