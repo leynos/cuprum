@@ -1984,12 +1984,47 @@ gates must be re-run rather than the stale log cited.
 
 ## Outcomes & retrospective
 
-To be completed as milestones land. At minimum it will record: which routes
-were bounded, the measured overshoot past the deadline on each, whether the
-`INHERIT` arms discriminated as predicted, whether any route needed a design
-change, and what a future contributor should read first — the module docstring
-of `cuprum/_subprocess_stream_run.py`, whose account of the streamed boundary
-is the shape all three routes now follow.
+All three post-exit routes are bounded, and the bound is the run's remaining
+deadline rather than a fixed window: the direct run's stdin-writer
+reconciliation (EP-M1), `SafeCmd.lines()`'s drain (EP-M2), and
+`Pipeline.run()`'s stage-output collection (EP-M3). A fourth case the original
+finding did not name turned up while implementing EP-M1 — a run that configures
+no `timeout=` has no remainder to spend, so the direct path had to fall back to
+the shared settle window rather than pass `None` through to `asyncio.timeout`,
+which means "no bound" and would have re-introduced the hang on the one route
+that cannot report it.
+
+Overshoot past the deadline is the cleanup allowances and nothing else:
+`cancel_grace` (0.5 s default), the 0.25 s capture EOF window once per
+capturing run, the 0.5 s stdin close for a run given `stdin` data, and the
+bounded one-second `_POST_KILL_SETTLEMENT_S` after an `OWN_GROUP` pipeline
+forcibly kills its group. No route needed a design change; the one deviation
+considered and recorded is the pipeline's deadline stamp, which is taken when
+collection begins rather than at spawn.
+
+The `INHERIT` arms discriminated as predicted, and that was the prediction
+worth testing: under `OWN_GROUP` the expiry's teardown can signal the group,
+which closes the pipe and releases the writer whether or not reconciliation
+ever reached it, so an arm that only ran `OWN_GROUP` would pass on a fix that
+bounded the await but never settled what it stopped waiting for. The `INHERIT`
+arm is what separates a bound that was *entered* from one whose cleanup
+actually *completed*, and it is the arm that failed when the settlement half
+was deliberately removed.
+
+A future contributor should read `cuprum/_subprocess_stream_run.py` first: its
+module docstring states the shape all three routes now follow — every await
+between the child's exit and the completed gather sits inside one boundary
+under one absolute deadline, because each can be cancelled and each needs the
+same aftermath. ADR-021's addendum records why bounding that boundary is the
+precondition for the settlement rather than a substitute for it.
+
+Two process observations are worth carrying forward. First, a code-health
+finding is cheaper to repair than to argue: three of this branch's four were
+one hoisted predicate and two docstrings that had grown to restate their
+module's own argument. Second, a test helper extracted for a code-health score
+has to be shown still to bite — the two-cancellation case was re-run against a
+deliberately broken production shield and failed with its own message before
+the helper was kept.
 
 ## Appendix — how to reproduce the hang by hand
 
