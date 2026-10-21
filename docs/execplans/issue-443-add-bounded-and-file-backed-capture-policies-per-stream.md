@@ -100,10 +100,13 @@ escalation, not a workaround.
   `CommandResult`, and `BytesPipelineResult.captures` reads the final stage, so
   a `run_bytes()` caller can tell a bounded tail from a complete stream, name a
   spill, and see a storage failure. It matters most here: the bytes alone
-  cannot distinguish a complete capture from a shortened one. A spilled stream
-  is read back so the caller receives the child's bytes in full, and that read
-  is O(stream size), so byte mode gets none of the bounded-memory guarantee
-  that text mode gets.
+  cannot distinguish a complete capture from a shortened one. The byte-mode
+  payload includes every byte accepted by the accumulator only if
+  finalization's flush and read-back both succeed. After an append failure,
+  finalization still attempts the flush; if it fails, bytes still buffered are
+  not guaranteed in the payload, and a read-back failure returns `None`. That
+  read is O(stream size), so byte mode gets none of the bounded-memory
+  guarantee that text mode gets.
 - **No new runtime dependency.** The spill file uses the standard library's
   `tempfile`; nothing is added to `pyproject.toml`.
 - **No public API removal.** `RunOutputOptions.capture`, `.echo`,
@@ -766,10 +769,56 @@ Thresholds that trigger escalation when breached.
   and non-zero completion, timeout, and external cancellation after promotion;
   assert the retained bytes at the public `SafeCmd.run()` boundary. The two
   spill suites share `_capture_spill_run_support.py`. The focused suites report
-  `12 passed`; two lint findings in the new test code were corrected. Rerun the
-  full gate sequence after this plan update.
+  `12 passed`; two lint findings in the new test code were corrected. The full
+  certification for the source diff then ran sequentially from parent
+  `54372b6c8` with dirty-diff SHA-256
+  `c0d9134149f730ed0cb43e203f86a0a17fe6b2d349ee7a6138cd925affecedee`; commit
+  `c0a08bd01d19c93e52eb93a6ed7cfede14e1bd7e` contains that same diff. Across 22
+  pytest sessions, `make test` reported 5,518 passed and 114 skipped; Rust
+  nextest passed 167 of 167 tests, and all doctest binaries succeeded (three
+  ignored tests). All seven gate records have exit status zero and are under
+  `/tmp/` with the
+  `*-cuprum-rebase-issue443-onto-f359f2ec4-review-followup-2-20261020.out`
+  filename pattern.
+
+  A later sequential revalidation used that same source candidate plus the
+  then-current plan update: HEAD `c0a08bd01d19c93e52eb93a6ed7cfede14e1bd7e`,
+  tree `48b2eb80342aa978a44322b0bb5f1cf9fa18966b`, and dirty-diff SHA-256
+  `0f65f109a603f640ce2d5feeb1812c91bed6799b8f7c175c5dc77609aa213238`. Six gates
+  passed; `make test` exited 2 after Python reported 5,518 passed and 114
+  skipped and Rust nextest passed 166 of 167 tests. The
+  `cuprum-streams::compile_tests::transition_privacy` trybuild case timed out
+  at 1,800.064 seconds while its nested Cargo work waited on the shared package
+  cache lock and compiler admission. The nested build reported finishing after
+  19m 28s, but nextest had already timed out, so this attempt is not passing
+  test evidence. Its seven logs are under `/tmp/` with the
+  `*-83d745e2-c310-4ba9-9a19-bd9e4e873ee5-rebase-issue443-onto-f359f2ec4-execplan-final-20261020.out`
+  filename pattern.
+
+  The append-failure qualification requested by the candidate assessment was
+  already present in the users' guide and design document on this descendant of
+  `f926d12cb`: finalization attempts a flush, byte-mode read-back returns
+  accepted bytes only when both succeed, and bytes still buffered after a
+  failed flush are not guaranteed in the payload. The summary above repeated
+  the unconditional guarantee and is corrected here.
 
   Date/Author: 2026-10-20, implementation agent.
+
+- [x] (2026-10-21) Re-ran the documentation gates against this plan revision
+  so the plan update itself carries current evidence, rather than relying on a
+  source-certification run whose tree differed. The dirty-diff SHA-256
+  `161442e406e05ce4b5af004b179c9b2da382bd94ef0d81246c8c9c5c2f848f97` is
+  unchanged across `make markdownlint` (18 s) and `make nixie` (1 s); both exit
+  zero. That same content already passed `make check-fmt`, `make lint`, and
+  `make typecheck` in the `doc-corrected-final` run at the same SHA, so all five
+  gates applicable to a plan-only change hold for one exact tree. The source
+  certification above remains the test evidence; this run adds none and does
+  not supersede it. Logs:
+  `/tmp/markdownlint-cuprum-rebase-issue443-onto-f359f2ec4-docfinal-20261021.out`
+  and
+  `/tmp/nixie-cuprum-rebase-issue443-onto-f359f2ec4-docfinal-20261021.out`.
+
+  Date/Author: 2026-10-21, implementation agent.
 
 ## Surprises & discoveries
 
