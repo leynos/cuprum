@@ -16,6 +16,18 @@ whatever is still parked after its bounded window
 in one module is what makes them agree: every path that bounds a writer's exit
 bounds it with the same figure, and a change to that figure cannot leave one
 path behind.
+
+The direct run (``cuprum._subprocess_direct_run``) is the one caller that
+*awaits* its writer without settling it, and the exception is a considered one
+rather than an omission. That run has no stream consumers, so there is no
+output still arriving that the window would protect, and a writer parked behind
+a payload the caller supplied has not delivered what it was asked to deliver.
+Bound by the run's remaining deadline, the wait ends with the public
+``TimeoutExpired`` — the run saying the input was not delivered and the budget
+ran out — where the settle window would have reported the child's success over
+truncated input. It still uses this module's ``_cancel_stdin_writer`` when the
+deadline expires or the run is cancelled, so the reclaim itself stays shared
+even though the bound does not.
 """
 
 from __future__ import annotations

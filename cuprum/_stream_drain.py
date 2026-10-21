@@ -170,9 +170,7 @@ def _report_eof_grace_expiry(
     context:
         The drain context supplying the telemetry identity.
     """
-    pending_count = sum(
-        task is not None and not task.done() for task in consumers
-    )
+    pending_count = sum(task is not None and not task.done() for task in consumers)
     if not pending_count:
         return
     _DRAIN_LOGGER.debug(

@@ -533,6 +533,37 @@ the issue was filed:
 - [x] (2026-10-21) Push and open the draft PR:
       [#652](https://github.com/leynos/cuprum/pull/652),
   draft, head `8936c9bfa`, with the Lody session link and `Fixes #533`.
+- [x] (2026-10-21) Rebase onto `origin/main` = `5da6d68fb`. Old head
+  `bf465eb5e`; old base `c38459100`; all 14 commits replayed, none dropped or
+  emptied. `range-diff` accounts for every commit: 9 identical, 5 rewritten
+  only where `main` relocated the module a function lived in. Recovery refs
+  `refs/recovery/533-pre-rebase-{old-head,old-base,target}` retained.
+- [x] (2026-10-21) Post-rebase adjudication of the two contract collisions the
+  rebase exposed. `main` had, since the branch's base, landed the stdin-plan
+  split and simultaneously given the *direct* run a fixed-window settle. Both
+  are recorded in `Decision log`: the four-argument
+  `_spawn_stdin_writer(process, plan, codec, observation)` is now the real
+  contract (superseding three recorded rejections), and the direct path keeps
+  this branch's remaining-deadline bound rather than adopting `main`'s fixed
+  window, because reporting the child's exit code over undelivered input is the
+  defect #533 exists to fix.
+- [x] (2026-10-21) Tests re-expressed for the adjudicated contract.
+  `test_stdin_settle_cancellation::test_a_child_that_never_reads_does_not_wedge_the_run`
+  asserted `main`'s contract (exit code 0 on a parked 2 MiB writer under a 10
+  s timeout); it is now
+  `test_a_child_that_never_reads_ends_the_run_on_its_deadline` and asserts the
+  public `TimeoutExpired` carrying the configured timeout. The shared harness
+  `_install_post_exit_probe` patched only
+  `cuprum._subprocess_stream_run._settle_stdin_writer`, which the rebased
+  direct path no longer calls; it now patches
+  `cuprum._subprocess_direct_run._await_writer_within_deadline` as well, and
+  its docstring no longer claims both paths live in one module. Both modules
+  green: `test_stdin_cooperative_cleanup.py` 2 passed in 1.07 s,
+  `test_stdin_settle_cancellation.py` 2 passed in 10.91 s.
+- [x] (2026-10-21) `cuprum/_subprocess_stdin_reclaim.py`'s module docstring now
+  names the direct run as the one caller that awaits its writer without
+  settling it, and states why that exception is considered rather than an
+  omission.
 
 ## Surprises & discoveries
 
@@ -852,6 +883,50 @@ the issue was filed:
   repository, not about a defect that a passing suite hides. Recorded once more
   because a rejection that is not re-verified after a milestone is exactly the
   kind that ships a real defect.
+
+- Decision (post-rebase adjudication, 2026-10-21): the three
+  `_spawn_stdin_writer` rejections above are **superseded**. They were correct
+  against the revisions they were checked at, and they are false against the
+  tree this branch now sits on. `main` has since landed the stdin-plan split
+  (issue #445/#511, commit `d93df9563`), and the four-argument contract the
+  review described is now exactly what the tree declares:
+
+  - `_spawn_stdin_writer(process, plan, codec, observation)` at
+    `cuprum/_subprocess_stdin.py:273-278`.
+  - `_SubprocessExecution.stdio: _ResolvedStdio` at
+    `cuprum/_subprocess_spawn.py:101`, with `_ResolvedStdio.stdin` as the plan.
+  - `_stdin_codec(ctx)` at `cuprum/_subprocess_stdin_stream.py:99`, and the
+    module itself exists.
+
+  The rebase resolution takes `main`'s calls everywhere: the direct run now
+  passes `execution.stdio.stdin` and `_stdin_codec(execution.ctx)`, and the
+  same applies to the streamed path and `_line_stream.drain`. Impact on this
+  plan: nothing in EP-M1…EP-M4's *design* changes — the deadline, the public
+  exception, and the route-level bound are untouched — but three Decision-log
+  entries that a future reader would otherwise trust now misdescribe the tree.
+  Rationale for keeping the false entries rather than editing them: they record
+  what was true when each review was answered, and rewriting them would erase
+  the evidence that the same reviewer was right about a later revision. The
+  supplement is the correction. **Lesson:** a rejection is only good for the
+  revision it was checked at; a rebase invalidates every one of them, and the
+  first thing to re-check after one is whatever was previously rejected.
+
+- Decision (post-rebase adjudication, 2026-10-21): the direct path keeps its
+  *own* post-exit policy instead of adopting `main`'s `_settle_stdin_writer`.
+  `main`'s direct run settles the writer through the fixed 0.25 s window, which
+  returns the child's exit code even when the caller's 2 MiB payload was never
+  delivered. This branch's direct path awaits the writer under the run's
+  remaining deadline and reports the public `TimeoutExpired` on expiry. The
+  branch's reading is the correct one for this issue and is kept, because "the
+  configured timeout covers every await after the child exits" is the whole
+  point of #533; a fixed window on the direct path is a bound that reports
+  success over truncated input. Consequences handled:
+  `cuprum.unittests.test_stdin_settle_cancellation
+  ::test_a_child_that_never_reads_does_not_wedge_the_run`
+  (a `main` test asserting the old contract) is re-expressed as
+  `test_a_child_that_never_reads_ends_the_run_on_its_deadline`, and the shared
+  harness `_install_post_exit_probe` now patches both post-exit seams because
+  the two live in different modules since `main` split the direct run out.
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
