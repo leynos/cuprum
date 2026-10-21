@@ -67,6 +67,7 @@ from cuprum.sh import (
 )
 from cuprum.unittests._post_exit_teardown_support import (
     PARKING_STDIN_BYTES,
+    RUN_BUDGET_S,
     DirectCleanupWatch,
     SpawnedWriter,
     assert_reclaimed,
@@ -286,6 +287,57 @@ def test_the_direct_run_deadline_expiry_is_the_public_timeout_expired(
                 f"{expired.timeout!r}"
             )
             descendant_pid = recorded_descendant_or_fail(pid_file)
+        finally:
+            reap_descendant(pid_file, descendant_pid)
+
+    asyncio.run(run_case())
+
+
+def test_a_run_without_a_timeout_still_bounds_its_post_exit_writer_wait(
+    owned_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
+) -> None:
+    """A run with no configured deadline is bounded by the settle window.
+
+    The deadline cases above bound the writer with what is left of the run's
+    own budget. A caller that configured no ``timeout=`` has no remainder to
+    wait out, and an await bounded by ``None`` is not bounded at all — so the
+    same parked writer that used to hang the deadlined run would hang this one
+    for ever, with no expiry to report and no cleanup to reach it.
+
+    The bound here is therefore the shared settle window rather than a
+    deadline, and the assertion is that the run *returns* at all. It is run
+    with the ``INHERIT`` policy so that no group signal can stand in for the
+    settlement: under ``OWN_GROUP`` a group teardown would release the writer
+    whether or not the settle reached it, and the case would pass on a run that
+    never bounded the await.
+    """
+    pid_file = tmp_path / "direct-no-timeout.pid"
+    command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
+
+    async def run_case() -> None:
+        """Run without a timeout and assert it ends inside the harness budget."""
+        descendant_pid: int | None = None
+        try:
+            result = await asyncio.wait_for(
+                command.run(
+                    stdin=StdinInput(data=b"x" * PARKING_STDIN_BYTES),
+                    output=_DIRECT_OUTPUT,
+                    context=ExecutionContext(process_group=ProcessGroupPolicy.INHERIT),
+                ),
+                RUN_BUDGET_S,
+            )
+            descendant_pid = recorded_descendant_or_fail(pid_file)
+            assert result.exit_code == 0, (
+                "the child exits successfully before the writer parks, so the "
+                f"run must report its exit; got {result.exit_code!r}"
+            )
+        except TimeoutError:
+            pytest.fail(
+                "a direct run with no configured timeout must still bound its "
+                "post-exit writer wait; without a remainder to spend, the "
+                "settle window is the only bound there is"
+            )
         finally:
             reap_descendant(pid_file, descendant_pid)
 

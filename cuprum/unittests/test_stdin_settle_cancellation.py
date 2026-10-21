@@ -73,6 +73,10 @@ from cuprum.sh import (
     StdinStream,
     TimeoutExpired,
 )
+from cuprum.unittests._post_exit_teardown_support import (
+    reap_descendant,
+    recorded_descendant,
+)
 from cuprum.unittests._stdin_run_cancellation_support import (
     _CANCEL_GRACE_S,
     _FINALIZED,
@@ -89,15 +93,17 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.sh import CommandResult, SafeCmd
     from cuprum.unittests._stdin_run_cancellation_support import _CancellationProbe
 
 # How long the grandchild holds the inherited read end open. The test finishes
 # long before this, so the window is never the constraint; it is here so a
-# grandchild that is never collected still dies on its own. The child cannot be
-# asked to reap what it spawned — it exits at once, which is the whole point —
-# and the grandchild is reparented to init, so the parent has no handle either.
+# grandchild the reaper somehow missed still dies on its own. The child cannot
+# be asked to reap what it spawned — it exits at once, which is the whole point
+# — and the grandchild is reparented to init, so the parent has no handle
+# either. The reaper below is what normally ends it; this is the backstop.
 _GRANDCHILD_LIFETIME_S = 120
 
 # The child hands its own stdin read end to a grandchild and exits at once,
@@ -111,12 +117,21 @@ _GRANDCHILD_LIFETIME_S = 120
 # A read end that outlives the child is the state the window exists for: writes
 # still succeed into the kernel's buffer, so there is no error to fail against
 # and nothing that will drain them.
+#
+# The grandchild records its pid before sleeping so the case can kill it rather
+# than leave it on the shared host for its whole lifetime. The child does not
+# wait for that file: it exits as soon as it has spawned, which is the point.
+_GRANDCHILD_RECORDS_PID = (
+    "import os, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))"
+)
 _EXITS_AND_HOLDS_STDIN = (
     "import subprocess, sys\n"
     "subprocess.Popen([\n"
     "    sys.executable,\n"
     "    '-c',\n"
-    f"    'import time; time.sleep({_GRANDCHILD_LIFETIME_S})',\n"
+    f"    {_GRANDCHILD_RECORDS_PID!r} + "
+    f"'; import time; time.sleep({_GRANDCHILD_LIFETIME_S})',\n"
+    "    sys.argv[1],\n"
     "])\n"
 )
 
@@ -127,8 +142,11 @@ _BLOCKING_PAYLOAD_BYTES = 1 << 21
 
 # The deadline the second scenario runs under. It is not what ends that run —
 # the settle window is, in well under a second — but it bounds a regression
-# that removes the reclaim, so a failure is a failure rather than a hang.
-_RECLAIM_DEADLINE_S = 10.0
+# that removes the reclaim, so a failure is a failure rather than a hang. It is
+# deliberately short: the claim is "expires at the configured value", not
+# "survives ten seconds", and the plan's own duration tolerance is 10 s per
+# test, which waiting this out in full would spend on nothing.
+_RECLAIM_DEADLINE_S = 1.0
 
 
 @pytest.fixture
@@ -196,6 +214,7 @@ async def _cancel_within_settle(
 def test_cancelling_after_child_exit_reclaims_the_writer(
     python_builder: cabc.Callable[..., SafeCmd],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A cancellation inside the settle window still reclaims the writer.
 
@@ -212,7 +231,8 @@ def test_cancelling_after_child_exit_reclaims_the_writer(
     the settle is guarded at its call site. The direct path's own guard is
     covered separately, by the scenario below.
     """
-    command = python_builder("-c", _EXITS_AND_HOLDS_STDIN)
+    pid_file = tmp_path / "settle-cancel-grandchild.pid"
+    command = python_builder("-c", _EXITS_AND_HOLDS_STDIN, str(pid_file))
     probe = _install_post_exit_probe(monkeypatch)
 
     async def producer() -> cabc.AsyncIterator[bytes]:
@@ -239,27 +259,37 @@ def test_cancelling_after_child_exit_reclaims_the_writer(
 
     async def run_case() -> None:
         """Cancel inside the window and assert what the run left behind."""
-        outcome = await _cancel_within_settle(
-            command,
-            probe,
-            stdin=StdinStream(producer()),
-            capture=True,
-        )
-        assert outcome == "cancelled", (
-            "cancelling a run that is settling its writer must propagate "
-            "CancelledError unwrapped and promptly; got " + outcome
-        )
-        # Read here, inside the loop, rather than after ``asyncio.run`` has
-        # closed it. The loop is what tears down whatever is still pending, so
-        # a census taken after it returns could not see a stranded writer even
-        # if there was one.
-        _assert_teardown_is_complete(_record_aftermath(probe))
+        grandchild_pid: int | None = None
+        try:
+            outcome = await _cancel_within_settle(
+                command,
+                probe,
+                stdin=StdinStream(producer()),
+                capture=True,
+            )
+            assert outcome == "cancelled", (
+                "cancelling a run that is settling its writer must propagate "
+                "CancelledError unwrapped and promptly; got " + outcome
+            )
+            # Read here, inside the loop, rather than after ``asyncio.run`` has
+            # closed it. The loop is what tears down whatever is still pending,
+            # so a census taken after it returns could not see a stranded
+            # writer even if there was one.
+            _assert_teardown_is_complete(_record_aftermath(probe))
+            grandchild_pid = recorded_descendant(pid_file)
+        finally:
+            # ``INHERIT`` is the default, and this run owns no group to settle:
+            # the grandchild the child spawned is nobody's to reap but the
+            # test's, so leaving it here would park a sleeper on the shared
+            # host for its whole lifetime.
+            reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
 
 
 def test_a_child_that_never_reads_ends_the_run_on_its_deadline(
     python_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
 ) -> None:
     """A child that exits without reading cannot hold the run open past its deadline.
 
@@ -279,25 +309,33 @@ def test_a_child_that_never_reads_ends_the_run_on_its_deadline(
     ``TimeoutExpired`` says what actually happened — the input was not
     delivered and the configured budget ran out.
 
-    So the assertion is the deadline, not the child's exit code: a wedged run
-    would hang, and a run that quietly abandoned its writer would return ``0``.
-    Both are failures here, and they fail differently, which is why the elapsed
-    time and the exception are both read.
+    So the assertion is the public expiry, not the child's exit code: a wedged
+    run hangs, and a run that quietly abandoned its writer returns ``0``.
+    Neither could satisfy ``raises(TimeoutExpired)``, and the two fail
+    differently — one by hanging the case, one by raising nothing at all.
     """
-    command = python_builder("-c", _EXITS_AND_HOLDS_STDIN)
+    pid_file = tmp_path / "no-reader-grandchild.pid"
+    command = python_builder("-c", _EXITS_AND_HOLDS_STDIN, str(pid_file))
 
     async def run_case() -> None:
         """Run with more than the pipe can hold and assert the public expiry."""
-        with pytest.raises(TimeoutExpired) as raised:
-            await command.run(
-                stdin=StdinInput(data=b"x" * _BLOCKING_PAYLOAD_BYTES),
-                output=RunOutputOptions(capture=False),
-                timeout=_RECLAIM_DEADLINE_S,
+        grandchild_pid: int | None = None
+        try:
+            with pytest.raises(TimeoutExpired) as raised:
+                await command.run(
+                    stdin=StdinInput(data=b"x" * _BLOCKING_PAYLOAD_BYTES),
+                    output=RunOutputOptions(capture=False),
+                    timeout=_RECLAIM_DEADLINE_S,
+                )
+            assert raised.value.timeout == _RECLAIM_DEADLINE_S, (
+                "the expiry must report the timeout the caller configured; a "
+                "remaining budget reported as the timeout would make one field "
+                f"mean two things; got {raised.value.timeout!r}"
             )
-        assert raised.value.timeout == _RECLAIM_DEADLINE_S, (
-            "the expiry must report the timeout the caller configured; a "
-            "remaining budget reported as the timeout would make one field "
-            f"mean two things; got {raised.value.timeout!r}"
-        )
+            grandchild_pid = recorded_descendant(pid_file)
+        finally:
+            # ``INHERIT`` is the default and this run owns no group, so the
+            # grandchild outlives it by design and must be reaped here.
+            reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
