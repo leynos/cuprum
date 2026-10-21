@@ -200,6 +200,14 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `coderabbit review --agent --committed --base main` reviewed all twelve
       changed files and returned zero findings, closing the one major finding
       from the previous pass.
+- [x] (2026-10-21) Re-run all seven gates at
+      `777afd82251743b70e29664d62582f17d4262be3`,
+      the commit carrying the previous record. Every log records that HEAD and
+      `EXIT=0`; `make test` again reported 5249 passed and 116 skipped across
+      its 22 pytest session summaries, 167 of 167 in Rust nextest, and three
+      `test result: ok` doctest lines. The earlier attempt at this record
+      produced two logs labelled with the pre-edit HEAD while exercising the
+      edited tree, so those logs were deleted rather than cited.
 
 ## Surprises & discoveries
 
