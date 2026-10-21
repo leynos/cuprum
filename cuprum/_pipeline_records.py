@@ -50,6 +50,24 @@ class _PipelineWaitResult:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class _PipelineOutputGather:
+    """What one bounded observation of the pipeline's readers produced.
+
+    The consumer tasks travel with the drain results they produced because the
+    settlement that follows must act on the same list: rebuilding it from the
+    spawn would let the two disagree about which readers exist, and the drain
+    slots are positional, so a disagreeing list would file one reader's output
+    under another's stage. A slot holds the whole result — the record and spill
+    handle travel with the payload — because the settlement that fills the
+    remaining slots and the result assembly that consumes them both need it.
+    """
+
+    tasks: list[_StreamConsumerTask | None]
+    drains: tuple[_CapturedDrain | None, ...]
+    finished: bool
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _PipelineStageResultInputs:
     """Aggregated wait outcome and captured output for stage results.
 

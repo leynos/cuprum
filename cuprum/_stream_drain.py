@@ -143,22 +143,52 @@ async def _await_capture_eof_grace(
                 consumers, discard_on_cancel=context.discard_on_cancel
             )
         raise
-    pending_count = sum(task is not None and not task.done() for task in consumers)
-    if pending_count:
-        _DRAIN_LOGGER.debug(
-            "capture_eof_grace_expired pending_readers=%s",
-            pending_count,
-            extra={
-                "cuprum_pending_readers": pending_count,
-                "cuprum_eof_grace_s": _CAPTURE_EOF_GRACE_S,
-            },
-        )
-        _report_capture_eof_grace_expiry(
-            context.observation,
-            pid=context.pid,
-            eof_grace_s=_CAPTURE_EOF_GRACE_S,
-            pending_readers=pending_count,
-        )
+    _report_eof_grace_expiry(consumers, context)
+
+
+def _report_eof_grace_expiry(
+    consumers: tuple[_Consumer, ...],
+    context: _DrainContext,
+) -> None:
+    """Report readers still unfinished once the capture EOF grace elapsed.
+
+    Shared by both drains rather than restated in each: the direct run waits on
+    its stdout/stderr pair and a pipeline waits on one stderr reader per stage
+    plus a final stdout reader, but "which readers are still pending, and how
+    that expiry is reported" is one rule. A caller passes whatever readers it
+    awaited; a count of zero is the ordinary case of a grace that was enough,
+    and reports nothing.
+
+    A slot may be ``None`` — a stream cuprum holds no pipe for — and is not a
+    pending reader: it never had a reader to finish, so counting it would
+    report an expiry the grace did not cause.
+
+    Parameters
+    ----------
+    consumers:
+        The readers the caller awaited, in any number.
+    context:
+        The drain context supplying the telemetry identity.
+    """
+    pending_count = sum(
+        task is not None and not task.done() for task in consumers
+    )
+    if not pending_count:
+        return
+    _DRAIN_LOGGER.debug(
+        "capture_eof_grace_expired pending_readers=%s",
+        pending_count,
+        extra={
+            "cuprum_pending_readers": pending_count,
+            "cuprum_eof_grace_s": _CAPTURE_EOF_GRACE_S,
+        },
+    )
+    _report_capture_eof_grace_expiry(
+        context.observation,
+        pid=context.pid,
+        eof_grace_s=_CAPTURE_EOF_GRACE_S,
+        pending_readers=pending_count,
+    )
 
 
 def _report_drain_failures(
@@ -317,5 +347,6 @@ __all__ = [
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_report_drain_failures",
+    "_report_eof_grace_expiry",
     "_settle_consumers",
 ]
