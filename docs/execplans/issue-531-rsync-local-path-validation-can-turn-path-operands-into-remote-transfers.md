@@ -187,6 +187,19 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       local path. Focused suites: 128 passed, 2 skipped. The fix was verified by
       mutation: restoring the drive-prefix spelling reproduced five failures,
       four of them "the rejection must name the offending operand role".
+- [x] (2026-10-21) Confirm CI at the fix commit
+      `9fea46cafd8b5532fce0fce673a8cd08ad9af0cb`.
+      All seven gates had already exited 0 at that HEAD with the same totals as
+      the previous certification (5249 passed and 116 skipped in Python, 167 of
+      167 in Rust nextest, all doctests `ok`). `gh pr checks 649` then reported
+      18 passed and 3 skipped with no failures, including the 20-minute
+      `coverage` job and `benchmark-ratchet`; the three skips are `automerge`,
+      `Loom model smoke test`, and `Kody Code Review`, none of which this PR
+      triggers. `gh pr view 649` reported `MERGEABLE` and `CLEAN` at that head.
+- [x] (2026-10-21) Re-run CodeRabbit over the committed range after the fix.
+      `coderabbit review --agent --committed --base main` reviewed all twelve
+      changed files and returned zero findings, closing the one major finding
+      from the previous pass.
 
 ## Surprises & discoveries
 
@@ -317,6 +330,17 @@ parsing, while a colon before the first separator is rsync's own remote
 grammar, which `--` does not change. The acceptance tests now assert the full
 argv including the separator, so the two contracts are pinned together.
 
+Lesson: the rebase's behaviour-test fixture reintroduced the very bug this
+issue is about, in the tests rather than the library. `tmp_path` is a drive
+prefix on Windows, which is exactly the spelling `safe_path()` used to accept
+and rsync reads as remote, so a fixture that "just built absolute paths" was
+itself a remote-transfer fixture on one platform. The fix is a fixed UNC anchor
+that is absolute under both `PurePath` flavours and begins with a separator,
+plus a step asserting the *opposite* operand is local. That second assertion is
+the general lesson: a test that checks an error names the right operand is
+vacuous unless it also pins the other operand as valid, because the builder
+reports whichever operand it reaches first.
+
 ## Conformance basis
 
 Upstream artefacts:
@@ -384,9 +408,15 @@ Obligations, methods, and evidence:
    colon-free segment lists; the existing
    `test_rsync_sync_rejects_relative_paths_unless_opted_in` keeps its meaning.
 7. Invariant: BDD-observable behaviour — a remote operand raises before any
-   command is built. Method: a new scenario in
-   `tests/features/builder_library.feature` with a step that captures the
-   exception and asserts no `SafeCmd` was produced.
+   command is built, and the error names that operand's role. Method: a new
+   scenario outline in `tests/features/builder_library.feature` with a step
+   that captures the exception and asserts no `SafeCmd` was produced.
+   Non-vacuity: the role assertion would also pass if the *other* operand were
+   rejected first, so a companion step asserts the operand opposite the remote
+   one is accepted by `safe_path(allow_relative=True)`. The fixture anchors
+   both operands on `//rsync-scenario/...` so they are absolute and local on
+   both POSIX and Windows; a `tmp_path`-based fixture reproduced five failures
+   when substituted back, four of them at the role assertion.
 8. Axiom: rsync's operand grammar treats a colon before the first path
    separator as a remote specification. Source: `rsync(1)` and the ticket's
    static trace. This is treated as an external contract, not re-derived.
