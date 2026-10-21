@@ -25,6 +25,7 @@ from cuprum.builders import RsyncOptions, rsync_sync, safe_path
 from cuprum.builders.rsync import _local_rsync_operand, _rsync_argv
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
 _POSIX_ONLY = pytest.mark.skipif(
@@ -149,7 +150,7 @@ def test_rsync_rejection_precedes_command_construction(
     """
     factory_calls: list[object] = []
 
-    def record_factory_call(program: object) -> typ.Callable[..., object]:
+    def record_factory_call(program: object) -> cabc.Callable[..., object]:
         """Record that the command factory ran, and return an unusable builder."""
         factory_calls.append(program)
 
