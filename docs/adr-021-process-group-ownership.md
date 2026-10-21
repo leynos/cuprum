@@ -612,3 +612,28 @@ time, but the descendant survives, because the only process an inherited run
 may signal is the direct child and that child has already exited. Bounding the
 gather makes an inherited run prompt; it does not make it reclaim anything, and
 it must not, which is what the policy means.
+
+## Addendum (2026-10-22): every owning run owes the settlement allowance
+
+The addendum above closes with the overshoot a pipeline owes, and in doing so
+it attributes the one-second `_POST_KILL_SETTLEMENT_S` wait to pipelines alone.
+That attribution is too narrow, and the sentence is left in place because
+accepted ADR text is append-only.
+
+`_settle_owned_group_before_draining` is the helper that reaches the wait, and
+the direct run, the streamed run, a `lines()` run, and a pipeline all call it on
+their expiry, failure, or cancellation routes. Whether a run owes the wait is
+decided by `ProcessGroupPolicy`, not by which entry point started it: a run
+that owns its group settles that group after forcibly killing it, and a run
+that inherits its caller's group settles nothing. A direct run that takes
+`stdin` and expires while its writer is still parked owes it for the same
+reason a pipeline does — the descendant holding the pipe has to go before the
+writer can be reclaimed.
+
+The success path is deliberately excluded, and that exclusion is what the
+earlier wording obscured. A run whose child exited within its budget and whose
+drains finished has nothing to settle, and signals nothing: descendants a
+caller left running are the caller's to manage, so killing the group there
+would contradict the `run()` contract that a descendant outlives its parent
+unless the run expires. Settlement is a teardown step, reached only from a
+decision that the run is over.

@@ -2258,11 +2258,11 @@ A run can exceed the deadline by the cleanup allowances and nothing else:
 - The 0.5 s stdin close window, for a run that was given `stdin` data and is
   still reconciling its writer.
 
-A pipeline with `ProcessGroupPolicy.OWN_GROUP` adds a bounded settlement wait
-of up to one second after it forcibly kills the group, because a descendant
-adopted by an init process can take that long to disappear. Without a timeout
-configured (`timeout=None`), none of these bounds applies and behaviour is
-unchanged.
+Any run with `ProcessGroupPolicy.OWN_GROUP` — a command, `lines()`, or a
+pipeline — adds a bounded settlement wait of up to one second after it
+forcibly kills the group, because a descendant adopted by an init process can
+take that long to disappear. Without a timeout configured (`timeout=None`),
+none of these bounds applies and behaviour is unchanged.
 
 With `lines()`, a caller that stops consuming is the thing that can keep a run
 open: the line queue is bounded, so a lagging consumer parks the reader, and
