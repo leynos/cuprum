@@ -650,8 +650,39 @@ the issue was filed:
   predates the commit, so it establishes the content and not the commit; the
   gate round for `61856ebd7` and its documentation commit is what the PR
   certifies.
+- [x] (2026-10-21) The failing
+      `Extension-gated tests (Windows Python/Rust boundary)` job at `720bd430a`
+      read: 24 of the 24 collected cases in
+      `cuprum/unittests/test_pipeline_post_exit_deadline.py` failed, 18 with
+      `ValueError: ProcessGroupPolicy.OWN_GROUP requires POSIX process groups`
+      and six with `AttributeError: module 'signal' has no attribute 'SIGKILL'`
+      (`/tmp/gh533-windows-ext-job.log`, run `39559707092`, job
+      `119087730814`). The module is declared in `EXTENSION_TEST_TARGETS` —
+      this branch's own `669e44529` put it there — so the Windows arm collects
+      it, and it had no platform skip. The skip was added to the module
+      (`pytestmark`) and the `EXTENSION_TEST_TARGETS` comment now says a listed
+      module must carry its own. Verified at `7729c0c34` with the change in the
+      tree: 16 passed, 8 skipped in 14.25 s, and `--collect-only` still reports
+      24 cases, so the mark hides no parametrization. Committed as `6bb6b778b`.
+      The required-check list for `main` names only
+      `Extension-gated tests (Python/Rust boundary)`, so this job is advisory —
+      but a red advisory check is a claim a reviewer has to discount, and the
+      failure was a real gap in the branch's own CI declaration rather than a
+      flake.
 
 ## Surprises & discoveries
+
+- **Declaring a module in `EXTENSION_TEST_TARGETS` also declares it for
+  Windows.** The list reads like "the modules that need the compiled
+  extension", and its stated purpose is to keep the Rust arms out of the main
+  suite. It is consumed by two jobs, and one of them runs on `windows-2022`;
+  nothing in the list's shape says so. A module whose cases need POSIX process
+  groups is therefore a Windows job failure the moment it joins the list, and
+  the failure looks like a product defect
+  (`OWN_GROUP requires POSIX process groups`) rather than a missing marker. The
+  lesson is to read the consumer list, not the comment, before adding an entry:
+  the comment described *why* the list exists, and the CI matrix described
+  *where* it runs.
 
 - **The defect is wider than the issue text, and narrower, than it first
   looked.** The issue names three routes. Probing all three plus their variants
