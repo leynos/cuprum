@@ -20,6 +20,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum import sh
 from cuprum.builders import RsyncOptions, rsync_sync, safe_path
 from cuprum.builders.rsync import _local_rsync_operand, _rsync_argv
 
@@ -131,6 +132,37 @@ def test_rsync_local_operand_rejects_remote_syntax_directly(operand: str) -> Non
     """The private operand check rejects remote syntax independent of _rsync_argv."""
     with pytest.raises(ValueError, match="rsync source must be a local path"):
         _local_rsync_operand(operand, role="source", allow_relative=True)
+
+
+@pytest.mark.parametrize("role", _ROLES)
+@pytest.mark.parametrize("operand", _REMOTE_OPERANDS)
+def test_rsync_rejection_precedes_command_construction(
+    operand: str,
+    role: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected operand never reaches ``sh.make``, in either role.
+
+    Asserting that no command was returned is weaker than it looks: the builder
+    could construct one and then raise, discarding it. Recording the factory
+    call itself is what establishes the ordering the ExecPlan requires.
+    """
+    factory_calls: list[object] = []
+
+    def record_factory_call(program: object) -> typ.Callable[..., object]:
+        """Record that the command factory ran, and return an unusable builder."""
+        factory_calls.append(program)
+
+        def refuse(*_argv: str) -> object:
+            """Stop the builder if the factory is ever reached."""
+            pytest.fail("sh.make must not run for a rejected operand")
+
+        return refuse
+
+    monkeypatch.setattr(sh, "make", record_factory_call)
+    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
+        rsync_sync(*_operands(role, operand, _MSYS_LOCAL), options=_RELATIVE)
+    assert factory_calls == [], "the command factory must not be reached"
 
 
 # Path segments avoid ".", NUL, and separators so generated paths are always

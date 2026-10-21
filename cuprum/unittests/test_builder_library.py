@@ -34,6 +34,14 @@ _POSIX_ONLY = pytest.mark.skipif(
 _WINDOWS_ONLY = pytest.mark.skipif(
     sys.platform != "win32", reason="Windows drive paths are absolute only on Windows"
 )
+# A portable absolute local spelling for the rsync acceptance test. A
+# ``tmp_path`` cannot serve there: its Windows drive prefix is rsync's remote
+# grammar even though ``PurePath`` calls it absolute. This UNC anchor is
+# absolute under both ``PurePath`` flavours, separator-first, and colon-free.
+# The ``share`` component is required, because ``PureWindowsPath`` treats a
+# two-component UNC path as a bare share and normalizes it with a trailing
+# separator, which would change the argv under assertion.
+_PORTABLE_RSYNC_ROOT = "//rsync-scenario/share"
 
 
 def test_safe_path_requires_absolute_by_default(tmp_path: Path) -> None:
@@ -164,10 +172,10 @@ def test_git_rev_parse_builder_outputs_args() -> None:
     assert cmd.argv == ("rev-parse", "main"), "git_rev_parse argv mismatch"
 
 
-def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
+def test_rsync_builder_outputs_args() -> None:
     """rsync_sync builds the expected argv ordering."""
-    source = tmp_path / "source"
-    destination = tmp_path / "destination"
+    source = f"{_PORTABLE_RSYNC_ROOT}/source"
+    destination = f"{_PORTABLE_RSYNC_ROOT}/destination"
     cmd = rsync_sync(
         source,
         destination,
@@ -186,8 +194,8 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         "--verbose",
         "--compress",
         "--",
-        source.as_posix(),
-        destination.as_posix(),
+        source,
+        destination,
     ), "rsync_sync argv mismatch"
 
 

@@ -1154,9 +1154,12 @@ The policy is covered in three layers.
 examples, the direct helper test, and the Hypothesis properties. The properties
 generate `host:path` and `host::module/path` operands for both roles, and
 include a non-vacuity property asserting each generated example first passes
-`safe_path(allow_relative=True)`. The `Rsync builder rejects remote operands`
-scenario in `tests/features/builder_library.feature` asserts that no command is
-built.
+`safe_path(allow_relative=True)`. That module also pins the construction order:
+a test records calls to `sh.make` and asserts none happen for a rejected
+operand, because a builder that constructs a command and then raises would
+still satisfy an assertion that merely checks no command was returned. The
+`Rsync builder rejects remote operands` scenario in
+`tests/features/builder_library.feature` asserts that no command is built.
 
 That module is kept separate from `test_builder_library.py` so the per-module
 line budget is not spent on one feature. Its acceptance fixtures are neutral
@@ -1164,18 +1167,25 @@ counterparts that stay local on both hosts: a native absolute path from
 `tmp_path` on POSIX, and the MSYS mount spelling `/cygdrive/c/data` under
 `allow_relative=True`. A Windows drive prefix is remote-ending syntax for rsync
 even where `PurePath` calls it absolute, so it can never serve as the neutral
-operand.
+operand. For the same reason, fixtures that must be local on *both* hosts use
+the fixed UNC anchor described below rather than `tmp_path`;
+`test_rsync_builder_outputs_args` in `test_builder_library.py` is one of them.
 
 The behaviour steps cannot use `tmp_path` for rsync at all, because a Windows
 `tmp_path` *is* a drive prefix. `given_valid_rsync_paths` therefore builds both
-operands on a fixed UNC anchor, `//rsync-scenario/...`, which `PurePath` calls
-absolute on POSIX and Windows alike and whose first character is a separator,
-so rsync reads it as local. The steps only build argv, never touch the
+operands on a fixed UNC anchor, `//rsync-scenario/share/...`, which `PurePath`
+calls absolute on POSIX and Windows alike and whose first character is a
+separator, so rsync reads it as local. The anchor has three components on
+purpose: `PureWindowsPath` treats a two-component UNC path as a bare share and
+normalizes it with a trailing separator, so the shorter spelling would give a
+different argv on Windows. The steps only build argv, never touch the
 filesystem, so the names need not exist. The scenario also asserts that the
 operand *opposite* the remote one is a local path: the builder validates the
 source first, so without that check a fixture whose non-remote operand was
 itself unacceptable would report the wrong role and the scenario would pass for
-the wrong reason.
+the wrong reason. That check calls `_local_rsync_operand` for the counterpart's
+own role rather than `safe_path`, since `safe_path` alone also accepts
+`host:path` and drive prefixes and so cannot establish rsync locality.
 
 ### End-of-options separators for positional operands
 

@@ -209,6 +209,29 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `test result: ok` doctest lines. The earlier attempt at this record
       produced two logs labelled with the pre-edit HEAD while exercising the
       edited tree, so those logs were deleted rather than cited.
+- [x] (2026-10-21) Act on the ExecPlan completeness assessment
+      (`ep531-completeness-70b69d31a`). CodeRabbit found the production fix
+      complete but named three remaining in-scope test defects, and inspection
+      confirmed all three. (1) `test_rsync_builder_outputs_args` still built its
+      operands from `tmp_path`, so on Windows the acceptance test would have
+      raised instead of asserting the argv; it now uses the portable
+      `//rsync-scenario/share` anchor, and the Windows boundary job cannot
+      settle this because it runs only `make test-extension`. (2)
+      `_operand_is_local` called `safe_path` alone, which also accepts
+      `host:path` and drive prefixes, so the counterpart assertion could not
+      establish the rsync-local property; it now calls `_local_rsync_operand`
+      for the counterpart's own role. (3) No test proved the construction
+      order, so the new
+      `test_rsync_rejection_precedes_command_construction` records `sh.make`
+      calls and asserts none occur for a rejected operand in either role. A
+      fourth defect was found while fixing the first: the anchor was a
+      two-component UNC path, which `PureWindowsPath` treats as a bare share
+      and normalizes with a trailing separator, so a `share` component was
+      added to keep the argv identical on both hosts. Non-vacuity evidence:
+      the `tmp_path` spelling is `remote=True` under the Windows grammar while
+      the new anchor is `remote=False`; and moving `sh.make` ahead of
+      `_rsync_argv` fails all 18 construction-order cases. Focused suite: 133
+      passed, 2 skipped.
 - [x] (2026-10-21) Certify the delivery tip
       `1fb7884e04a17db1ac16635efcb233c7c1ba03d7`. All seven gates exited 0
       with that HEAD recorded in each log, and `make test` reproduced 5249
@@ -279,6 +302,25 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
   colon-free, and the scenario asserts that the operand opposite the remote one
   is itself a local path, so a wrong-role rejection cannot pass for a
   right-role one.
+- Observation: the same `tmp_path` defect survived the first fix in
+  `cuprum/unittests/test_builder_library.py`. Evidence: CodeRabbit's
+  completeness assessment named `test_rsync_builder_outputs_args`, and the
+  Windows boundary job could not have caught it because
+  `.github/workflows/ci.yml` runs only `make test-extension` there, whose
+  targets are the Rust-extension suites. Impact: fixing one instance of a
+  platform-dependent fixture is not evidence that the fixture class is fixed;
+  the acceptance test now shares the portable anchor.
+- Observation: the UNC anchor itself was subtly wrong. Evidence:
+  `PureWindowsPath("//rsync-scenario/source").as_posix()` is
+  `//rsync-scenario/source/` — a two-component UNC path is a bare share, so
+  Windows appends a separator — while the three-component
+  `//rsync-scenario/share/source` normalizes identically on both hosts. Impact:
+  the anchor gained a `share` component, and the constant now records why.
+- Observation: asserting "no argv was captured" does not prove `sh.make` never
+  ran. Evidence: moving `sh.make(RSYNC)` ahead of `_rsync_argv` still raises,
+  yet fails all 18 construction-order cases once the factory call is recorded.
+  Impact: the boundary is now pinned at the factory, which is what the
+  ExecPlan's construction-order constraint actually claims.
 
 ## Decision log
 
@@ -320,6 +362,17 @@ rsync source must be a local path; remote syntax such as host:path, host::module
   steps are documented to run on every platform, and `tmp_path` is a remote
   operand for rsync on Windows. Pinning the counterpart keeps the role
   assertion from being satisfied by a rejection of the wrong operand.
+- D7. The anchor carries three components (`//rsync-scenario/share/...`) and
+  is mirrored in `test_rsync_builder_outputs_args`. Rationale: a two-component
+  UNC path is a bare share to `PureWindowsPath`, which appends a trailing
+  separator, so the argv would differ between hosts. The unit acceptance test
+  needs the same portability for the same reason, and calling the policy
+  rather than `safe_path` in the counterpart step is what makes that assertion
+  about rsync locality rather than generic validity.
+- D8. The construction-order test records `sh.make` calls instead of relying
+  on the absence of a returned command. Rationale: a builder that constructs
+  and then discards a command raises identically, so only the factory call
+  distinguishes the required ordering.
 
 ## Outcomes & retrospective
 
@@ -431,16 +484,25 @@ Obligations, methods, and evidence:
    that captures the exception and asserts no `SafeCmd` was produced.
    Non-vacuity: the role assertion would also pass if the *other* operand were
    rejected first, so a companion step asserts the operand opposite the remote
-   one is accepted by `safe_path(allow_relative=True)`. The fixture anchors
-   both operands on `//rsync-scenario/...` so they are absolute and local on
-   both POSIX and Windows; a `tmp_path`-based fixture reproduced five failures
-   when substituted back, four of them at the role assertion.
-8. Axiom: rsync's operand grammar treats a colon before the first path
+   one is accepted by the rsync operand policy for its own role — not by
+   `safe_path` alone, which also accepts `host:path` and drive prefixes. The
+   fixture anchors both operands on `//rsync-scenario/share/...` so they are
+   absolute and local on both POSIX and Windows; a `tmp_path`-based fixture
+   reproduced five failures when substituted back, four of them at the role
+   assertion.
+8. Invariant: for a rejected operand, `sh.make` is never called, in either
+   role. Method: a parameterized test that records factory calls through
+   `monkeypatch.setattr(sh, "make", ...)` and asserts none occurred.
+   Non-vacuity: moving `sh.make(RSYNC)` ahead of `_rsync_argv` in
+   `rsync_sync()` fails all 18 cases, so the assertion detects the exact
+   ordering defect the plan forbids rather than merely the absence of a
+   returned command.
+9. Axiom: rsync's operand grammar treats a colon before the first path
    separator as a remote specification. Source: `rsync(1)` and the ticket's
    static trace. This is treated as an external contract, not re-derived.
-9. Axiom: `PurePath(...).is_absolute()` is host-native on the running
-   interpreter. Source: `pathlib` documentation; exercised by both platform
-   tests.
+10. Axiom: `PurePath(...).is_absolute()` is host-native on the running
+    interpreter. Source: `pathlib` documentation; exercised by both platform
+    tests.
 
 Residual gaps: no live rsync is executed, so the tests establish the argv
 contract rather than observable remote traffic. The ticket's own reproduction
@@ -569,3 +631,7 @@ No new dependencies.
   resolutions, the second 400-line split created by merging with #637, the `--`
   separator's interaction with the operand policy, and the fact that a
   conflicting PR receives no CI at all.
+- 2026-10-21: Recorded the completeness assessment's three in-scope findings
+  and their fixes, the two-component UNC normalization defect found while
+  fixing them, and the new construction-order obligation with its mutation
+  evidence.
