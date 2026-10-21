@@ -137,12 +137,11 @@ async def _expire_line_stream(
     completed. Emitting after it would describe a run that had already been
     reclaimed as one that timed out while still being torn down.
 
-    Raises
-    ------
-    _SubprocessTimeoutError
-        Carrying the *captured* text, because a capturing run's output is what
-        the resulting ``TimeoutExpired`` reports to its caller.
-    """  # ruff: ignore[docstring-extraneous-exception] - _SubprocessTimeoutError propagates from _handle_stream_timeout
+    The expiry is reported with the *captured* text, because a capturing run's
+    output is what the resulting ``TimeoutExpired`` reports to its caller. The
+    return type is ``NoReturn`` for that reason: the refusal to return is what
+    keeps the caller's ``except`` arm from falling through to the success path.
+    """
     run.telemetry.emit(
         LineStreamPhase.TIMEOUT,
         _LineStreamEventDetails(error=exc),
