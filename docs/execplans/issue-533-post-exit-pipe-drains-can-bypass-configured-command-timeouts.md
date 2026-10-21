@@ -18,12 +18,16 @@ classic and DF12 `pylint`, `ambrleaks`, `Skylos`, the `nose` duplication gate,
 Clippy, Whitaker, spelling, `yamllint`, `actionlint`), `markdownlint`, `nixie`,
 and `make test` with 5219 Python tests passed across 22 sessions, 167 Rust
 tests passed and doctests clean. The draft PR is open as
-[#652](https://github.com/leynos/cuprum/pull/652). Three milestone reviews
-returned nineteen findings in total: fourteen were applied and five rejected as
-describing code that does not exist in this tree (see `Decision log`). What
-remains is the force push of the rebased series, a fresh review of the
-post-rebase head, and marking the PR ready for review. The direct run was split
-into `cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
+[#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
+milestones and one of the rebased head — returned twenty-two findings in total:
+seventeen were applied and five rejected as describing code that does not exist
+in this tree (see `Decision log`). The review of the rebased head found that
+the direct path had lost the settle-window fallback `main` applies to a run
+with no `timeout=`; that regression is fixed, pinned by a new test, and
+recorded in `Surprises & discoveries`. What remains is the gate round for that
+fix, its commit and push, and marking the PR ready for review. The direct run
+was split into `cuprum/_subprocess_direct_run.py` to stay inside the 400-line
+module cap.
 
 ## Purpose / big picture
 
@@ -108,12 +112,16 @@ the issue was filed:
   it bounds. A duration computed earlier would let the first await spend part
   of the budget and still hand the whole of it to the next.
 - `_deadline_for_collection` keeps its current behaviour: `None` for an
-  unconfigured timeout (so a run without `timeout=` stays unbounded), a
-  possibly negative remainder when the exit wait already overran, and its clock
-  read through `execution.observation.monotonic_clock()` rather than
-  `loop.time()`, so a test can hold the deadline still. It is `main`'s
-  definition in `cuprum/_subprocess_deadline.py`, adopted unchanged; this
-  branch adds callers and no behaviour.
+  unconfigured timeout, a possibly negative remainder when the exit wait
+  already overran, and its clock read through
+  `execution.observation.monotonic_clock()` rather than `loop.time()`, so a
+  test can hold the deadline still. It is `main`'s definition in
+  `cuprum/_subprocess_deadline.py`, adopted unchanged; this branch adds callers
+  and no behaviour. Its `None` means *no deadline configured*, which is not the
+  same as *no bound owed*: a caller that receives `None` must still choose a
+  bound of its own rather than passing `None` on to `asyncio.timeout`, which
+  would mean no bound at all. That distinction is what the review of the
+  rebased head found this branch had collapsed; see `Surprises & discoveries`.
 - Expiry continues to raise the public `cuprum.sh.TimeoutExpired` with the
   *configured* timeout and with the run's already-read output preserved. No new
   exception type, no new keyword argument, no change to the existing public
@@ -227,6 +235,19 @@ the issue was filed:
   existing `except TimeoutExpired:`-first ordering is preserved. EP-M3's
   handler is shared with the wait-timeout route precisely so the two cannot
   drift.
+
+- Risk: replacing an unbounded await with `asyncio.timeout(remaining)` *removes*
+  a bound elsewhere, because `remaining` is `None` for a run that configured no
+  deadline and `asyncio.timeout(None)` arms nothing. The branch then hangs a
+  caller that `main` returned for. Severity: high. Likelihood: high — this is
+  not hypothetical: it happened on this branch, was caught by the review of the
+  rebased head rather than by any test, and survived a full green gate round.
+  Mitigation: the `None` case is handled explicitly and pinned by
+  `test_a_run_without_a_timeout_still_bounds_its_post_exit_writer_wait`, whose
+  absence from the suite was the actual cause — every deadline test configured
+  a deadline, so no case could observe the deletion. The general rule for any
+  later narrowing of a shared helper: enumerate the helper's existing callers
+  and ask what each one becomes when the new parameter is absent.
 
 - Risk: the module docstrings under `cuprum/_subprocess_stream_run.py` and
   `cuprum/_line_stream/` are long and precise, and an edit that keeps the code
@@ -597,6 +618,38 @@ the issue was filed:
   interrogate (100.0%), classic pylint (10.00/10, both passes), DF12 pylint
   (10.00/10 on CPython 3.14.7), ambrleaks, Skylos, the nose duplication gate,
   Clippy, Whitaker, spelling, yamllint, actionlint.
+- [x] (2026-10-21) Post-rebase review of `720bd430a`
+  (`coderabbit review --agent --base main`). Three findings, all applied. The
+  major one is real and was reproduced before it was believed:
+  `_await_writer_within_deadline` took its bound from
+  `_deadline_for_collection(execution)`, which is `None` for a run with no
+  `timeout=`, and `asyncio.timeout(None)` is not a bound at all — so the branch
+  had *removed* the settle window `main` still applies there, and a direct run
+  with no timeout hung where `main` returned. A standalone probe against the
+  unfixed tree reported `HANG: still running after 20.60s`; against the fixed
+  tree, `RESULT: run returned after 0.80s`. The `None` branch now calls the
+  shared `_settle_stdin_writer`, and
+  `test_a_run_without_a_timeout_still_bounds_its_post_exit_writer_wait` pins
+  it; deleting the branch back out fails that test in 20.75 s with the intended
+  message, and restoring it passes in 0.87 s. The two test findings were also
+  valid: the `uncaptured` pipeline case now reaps inside the `finally` from the
+  first statement, and the settle-cancellation cases reap their grandchild and
+  run under a 1.0 s deadline, which brings that module from ~10 s to 1.86 s for
+  two tests. Module docstrings in `_subprocess_direct_run.py` and
+  `_subprocess_stdin_reclaim.py` and item 6 of the developers' guide
+  walkthrough now state the two bounds and which run each belongs to. Focused
+  re-runs: `test_stdin_settle_cancellation.py` 2 passed in 1.86 s,
+  `test_run_no_stream_post_exit_deadline.py` 12 passed in 19.62 s, and the five
+  touched suites 40 passed / 8 skipped in 44.12 s.
+- [x] (2026-10-21) Committed the three fixes as `61856ebd7`. A post-`fmt`
+  re-run of the three touched modules — `test_stdin_settle_cancellation.py`,
+  `test_run_no_stream_post_exit_deadline.py` and
+  `test_pipeline_post_exit_deadline.py` — reported 30 passed, 8 skipped in
+  35.68 s at `720bd430a` with the fixed tree
+  (`/tmp/focused-postfmt-e82aaf4b-38bb-456f-9cd2-e0b8abf09619.out`). That run
+  predates the commit, so it establishes the content and not the commit; the
+  gate round for `61856ebd7` and its documentation commit is what the PR
+  certifies.
 
 ## Surprises & discoveries
 
@@ -841,6 +894,27 @@ the issue was filed:
   blocker**, which is the opposite of what it looks like. Treat a
   `pytest-timeout` failure inside `selectors.poll` on this machine as
   undiagnosed until admission health is read from *outside* the failing process.
+
+- **The deadline fix had removed a bound that predated it.** The bug in #533 is
+  an unbounded wait; the branch's own first fix replaced the direct run's
+  unbounded await with `asyncio.timeout(_deadline_for_collection(execution))`
+  and read no further. That expression is `None` when the caller configured no
+  `timeout=`, and `asyncio.timeout(None)` is not a short deadline — it is no
+  deadline. So on the no-timeout route the branch turned a hang that `main`
+  already prevented into a hang it caused, and no test in the module noticed,
+  because every existing case configured a deadline (the no-timeout case that
+  did exist,
+  `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group`,
+  cancels rather than waits, so the settle path is never what ends it).
+
+  The general lesson is about the shape of the mistake rather than this
+  instance: a fix that *narrows* a shared helper to "the caller's configured
+  budget" must ask what that helper did for a caller that configured nothing.
+  `main`'s direct path had called `_settle_stdin_writer` unconditionally; the
+  rebase preserved the call for the streamed path only, and the diff read as a
+  simplification because the deleted call and the added `asyncio.timeout` sat
+  in different files after the module split. Splitting a module is exactly the
+  operation that makes this kind of deletion invisible in review.
 
 ## Decision log
 
@@ -1368,6 +1442,23 @@ the issue was filed:
   considered: `--snapshot-update` (rejected for the reason above, and because
   the regenerated blob would hide an accidental second addition).
 
+- Decision (EP-M1, 2026-10-21): the direct path's remaining-deadline bound is
+  scoped to runs that *have* a deadline; a run with no `timeout=` takes the
+  shared `_settle_stdin_writer` window instead. Rationale: `asyncio.timeout`
+  accepts `None` and means "no bound", not "no deadline to take a remainder
+  from", so passing the `None` straight through silently deleted the bound
+  `main` still applies on that path — a regression introduced by this branch,
+  not an inherited defect. The two bounds answer different questions. A
+  deadlined run has a budget the caller chose and an expiry it can be told
+  about, so spending the remainder and reporting `TimeoutExpired` is the run
+  saying what happened. An undeadlined run has neither, so the choice is
+  between a fixed window and hanging for ever; hanging is exactly the defect
+  #533 exists to fix, and it would arrive here on the one route that cannot
+  report it. Alternative considered: give the undeadlined run the same
+  remainder arithmetic with a sentinel infinity (rejected: an infinite deadline
+  is the unbounded await spelled differently, so the reviewer's finding would
+  still hold).
+
 ## Milestones
 
 Each milestone ends in a state that is coherent on its own: the repository
@@ -1385,7 +1476,12 @@ EP-M1 relocated to `cuprum/_subprocess_direct_run.py`, see the split decision in
    matters for latency, not correctness: awaiting the writer task makes it the
    await's `_fut_waiter`, and `Task.cancel()` forwards into it, so without the
    shield the boundary wakes only once the writer has finished dying —
-   including the 0.5 s close grace.
+   including the 0.5 s close grace. **Amended after review:** this step is
+   scoped to a run that configured a deadline. `_deadline_for_collection`
+   returns `None` when it did not, and `asyncio.timeout(None)` is not a short
+   bound but no bound, so the literal instruction removed the settle window
+   `main` still applies on that route. A run with no `timeout=` keeps
+   `_settle_stdin_writer` — see `Decision log` and `Surprises & discoveries`.
 2. On expiry, cancel the writer through
    `_shielded_cleanup(_cancel_stdin_writer(stdin_task))`, then settle the owned
    group and reconcile with an *empty* consumer bundle, so the group teardown
@@ -1413,7 +1509,10 @@ payload, capture, echo and observers all off, parametrized over
 byte-exact synchronous wrapper reaches the same path and costs one id. Assert
 the run ends, the raised exception is the public `TimeoutExpired`, pending
 tasks are inspected through `tests/helpers/timeouts.py::pending_tasks`, and any
-descendant is reaped in `finally`.
+descendant is reaped in `finally`. A fifth case, added after the review of the
+rebased head, covers the no-`timeout=` route that the parametrization cannot
+reach: every parametrized case configures `_DEADLINE_S`, which is exactly why
+none of them could see the settle-window removal.
 
 Acceptance evidence: the new module fails before the change with a hang past
 the harness bound (Red — observed as 4 failed in 82.81 s, all four
@@ -1596,8 +1695,15 @@ Invariants the change introduces or preserves:
 4. **I4 — cancellation is not expiry.** A caller cancelling the run is not
    reported as a timeout, and a run that completes successfully is never
    reported as expired.
-5. **I5 — no timeout configured means no bound.** A run without `timeout=`
-   behaves exactly as before.
+5. **I5 — no timeout configured means no deadline, not no bound.** A run
+   without `timeout=` has no remainder to spend and raises no `TimeoutExpired`,
+   but its post-exit writer wait is still bounded by the shared settle window.
+   It must return in bounded time and report the child's own result rather than
+   hanging. This invariant was first written as "a run without `timeout=`
+   behaves exactly as before", which stated the same thing while this branch
+   was still honouring it; the review of the rebased head found the branch had
+   stopped doing so, and the invariant is now stated positively so the defect
+   it missed is the thing it asserts.
 6. **I6 — inherited groups are never signalled.** Under `INHERIT` the change
    introduces no signal directed at any process the run does not lead.
 7. **I7 — delivered lines stay delivered.** A line already published to a
@@ -1696,8 +1802,20 @@ Methods, artefacts and discharge conditions:
   `TimeoutExpired`. The `lines()` case additionally asserts the absence of the
   `TIMEOUT` phase and the presence of both teardown phases, so it pins
   telemetry as well as the exception identity.
-- **I5:** a case with no `timeout=` that completes normally against a
-  descendant that does eventually exit.
+- **I5:** `test_a_run_without_a_timeout_still_bounds_its_post_exit_writer_wait`
+  runs the direct path with no `timeout=` against a descendant that never reads
+  a payload larger than the pipe buffer, under `INHERIT`, and asserts the run
+  returns with the child's exit code inside the harness budget. `INHERIT` is
+  load-bearing for the same reason it is on the deadline arms: a group teardown
+  under `OWN_GROUP` would release the writer and the case would pass on a run
+  that never bounded anything. Discharge: deleting the `remaining is None`
+  branch from `_await_writer_within_deadline` makes the case fail in 20.75 s
+  with the intended message; restoring it passes in 0.87 s. A `timeout=`-free
+  run whose descendant *does* eventually exit is also covered — both
+  settle-cancellation cases and
+  `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group` run
+  without a deadline — but none of those pin the *bound*, which is why the new
+  case exists.
 - **I6, L5:** a unit assertion on `_teardown_policy`'s ownership for each
   policy, plus the `INHERIT` route arms, which would fail if an inherited
   process were signalled — the test's own descendant reaper is the only thing
