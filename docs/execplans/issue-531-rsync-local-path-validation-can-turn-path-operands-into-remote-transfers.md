@@ -149,8 +149,20 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `test_builder_property_based.py`, which the merge had pushed to 442
       lines, over pylint's `max-module-lines = 400`. They now sit beside the
       named spellings they generalize in `test_rsync_operand_policy.py`.
-- [ ] (2026-10-20) Re-certify every gate at the rebased HEAD, push, and
-      confirm CI runs on the now-buildable merge ref.
+- [x] (2026-10-21) Re-certify every gate at the rebased HEAD
+      `ab53e24ebec6c9a90d1ac6315e4e79a4f582d567`. All seven logs record that
+      HEAD and `EXIT=0`: `check-fmt`, `lint`, `typecheck`, `test`,
+      `markdownlint`, `nixie`, and `duplication`. Evidence: `make test`
+      reported 5249 passed, 116 skipped across its Python session summaries,
+      167 of 167 passed in Rust nextest, and an all-`ok` doctest pass. The
+      earlier run at this HEAD exited 2 with one
+      `test_pinned_doctest_route_rejects_a_warning` timeout (1200 s against a
+      3836-passed run that itself took 3 h 23 min under host contention);
+      that single test passed alone in 319.86 s once inode-lock contention
+      fell to zero, confirming the failure was environmental rather than a
+      regression.
+- [ ] (2026-10-21) Push the rebased branch, confirm the PR merge ref is
+      buildable, and watch CI to success.
 
 ## Surprises & discoveries
 
