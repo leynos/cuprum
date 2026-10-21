@@ -162,7 +162,7 @@ def test_rsync_rejection_precedes_command_construction(
     monkeypatch.setattr(sh, "make", record_factory_call)
     with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
         rsync_sync(*_operands(role, operand, _MSYS_LOCAL), options=_RELATIVE)
-    assert factory_calls == [], "the command factory must not be reached"
+    assert not factory_calls, "the command factory must not be reached"
 
 
 # Path segments avoid ".", NUL, and separators so generated paths are always
