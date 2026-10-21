@@ -21,7 +21,14 @@ from unittest import mock
 
 import pytest
 
-from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
+from cuprum import (
+    ScopeConfig,
+    TimeoutExpired,
+    _pipeline_collect,
+    _pipeline_settlement,
+    scoped,
+    sh,
+)
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
@@ -268,7 +275,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
         with (
             mock.patch.object(_pipeline_collect, "_create_pipe_tasks", recorder),
             mock.patch.object(
-                _pipeline_collect, "_terminate_timed_out_stages", _no_termination
+                _pipeline_settlement, "_terminate_timed_out_stages", _no_termination
             ),
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),

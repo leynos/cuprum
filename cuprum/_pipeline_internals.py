@@ -37,9 +37,7 @@ from cuprum._pipeline_collect import (
     _await_pipeline_wait_result,
     _build_timeout_expired_error,
     _collect_pipeline_inputs,
-    _gather_pipeline_outputs,
     _sh_module,
-    _stage_relay_fallbacks,
 )
 from cuprum._pipeline_finalize import (
     _PIPELINE_FINALIZATION_ERROR,
@@ -63,6 +61,10 @@ from cuprum._pipeline_results import (
     _build_pipeline_result,
     _build_pipeline_stage_results,
     _emit_terminal_events,
+)
+from cuprum._pipeline_settlement import (
+    _gather_pipeline_outputs,
+    _stage_relay_fallbacks,
 )
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_stream_results import (

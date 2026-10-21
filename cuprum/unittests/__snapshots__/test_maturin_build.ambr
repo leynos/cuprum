@@ -59,6 +59,7 @@
       'cuprum/_pipeline_records.py',
       'cuprum/_pipeline_results.py',
       'cuprum/_pipeline_rust_pump_completion.py',
+      'cuprum/_pipeline_settlement.py',
       'cuprum/_pipeline_sink.py',
       'cuprum/_pipeline_spawn.py',
       'cuprum/_pipeline_stage_streams.py',
