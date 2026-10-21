@@ -9,16 +9,21 @@ Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await), EP-M2 (t
 `lines()` post-exit drain and the four-layer `TimeoutError` misclassification
 it exposed), EP-M3 (the pipeline's post-exit collection) and EP-M4
 (documentation and full validation) are all implemented, tested Red-then-Green,
-and committed. The full gate round at `8936c9bfa` is green: `check-fmt`, `lint`
-(including `yamllint` and `actionlint`), `typecheck`, `markdownlint`, `nixie`,
-and `make test` with 3312 Python tests passed, 167 Rust tests passed and
-doctests clean. The draft PR is open as
+and committed. The branch has since been rebased onto `origin/main` =
+`5da6d68fb`; all 14 commits replayed, and the two contract collisions the
+rebase exposed were adjudicated in favour of this issue's premise (see
+`Decision log`). The gate round at `905a49569` is green: `check-fmt`,
+`typecheck`, `lint` with all eleven stages observed (`ruff`, `interrogate`,
+classic and DF12 `pylint`, `ambrleaks`, `Skylos`, the `nose` duplication gate,
+Clippy, Whitaker, spelling, `yamllint`, `actionlint`), `markdownlint`, `nixie`,
+and `make test` with 5219 Python tests passed across 22 sessions, 167 Rust
+tests passed and doctests clean. The draft PR is open as
 [#652](https://github.com/leynos/cuprum/pull/652). Three milestone reviews
 returned nineteen findings in total: fourteen were applied and five rejected as
 describing code that does not exist in this tree (see `Decision log`). What
-remains is the final `scrutineer` gate round over this review's fixes and
-marking the PR ready for review. The direct run was split into
-`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
+remains is the force push of the rebased series, a fresh review of the
+post-rebase head, and marking the PR ready for review. The direct run was split
+into `cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
 
 ## Purpose / big picture
 
@@ -79,7 +84,14 @@ the issue was filed:
 
 - The issue's root-control site, `cuprum/_subprocess_wait.py:324-326` at
   `ebd6a41e4435`, is now `_wait_for_exit_code_within_timeout` plus the
-  `_deadline_for_collection` helper at `cuprum/_subprocess_wait.py:209-243`.
+  `_deadline_for_collection` helper. That helper was defined in
+  `cuprum/_subprocess_wait.py` when this plan was written and now lives in
+  `cuprum/_subprocess_deadline.py`, where `main` put it beside the exit wait it
+  is measured against; `cuprum._subprocess_wait` still re-exports it from its
+  `__all__` for the callers that reach it that way. This branch adopts that
+  module as the single owner rather than keeping a copy — the remainder is only
+  meaningful against the reference the exit wait was scheduled from, which is
+  the reason `main` gives for the move.
 - The issue's sink, `cuprum/_subprocess_stream_run.py:187` at `ebd6a41e4435`,
   is now `_run_subprocess_without_streams`, whose bare `await stdin_task` is
   the unbounded await in question. The function has since moved to
@@ -99,7 +111,9 @@ the issue was filed:
   unconfigured timeout (so a run without `timeout=` stays unbounded), a
   possibly negative remainder when the exit wait already overran, and its clock
   read through `execution.observation.monotonic_clock()` rather than
-  `loop.time()`, so a test can hold the deadline still.
+  `loop.time()`, so a test can hold the deadline still. It is `main`'s
+  definition in `cuprum/_subprocess_deadline.py`, adopted unchanged; this
+  branch adds callers and no behaviour.
 - Expiry continues to raise the public `cuprum.sh.TimeoutExpired` with the
   *configured* timeout and with the run's already-read output preserved. No new
   exception type, no new keyword argument, no change to the existing public
@@ -564,6 +578,25 @@ the issue was filed:
   names the direct run as the one caller that awaits its writer without
   settling it, and states why that exception is considered rather than an
   omission.
+- [x] (2026-10-21) First post-rebase gate round at `2ae38af08`, red on
+  `make lint`: `ruff`'s `implicit-return-value` at
+  `cuprum/_line_stream/drain.py:260`, a bare `return` in `_await_readers`,
+  whose contract is `BaseException | None`. The rule is part of the 0.16 rule
+  set the rebase brought in; the branch's own pre-rebase lint rounds predate
+  it. Fixed by writing the early exit as `return None`, matching every other
+  completing exit in the same function (`905a49569`). The rest of that round
+  mattered too: `make lint` aborts its recipe on the first failing stage, so
+  interrogate, DF12 pylint, ambrleaks, Skylos, the nose duplication gate,
+  Clippy, Whitaker, spelling, yamllint and actionlint were all left
+  **unobserved** rather than passing. Only the re-run below certifies them.
+- [x] (2026-10-21) Full gate round at `905a49569`, all six green, each log
+  written for this head: `make check-fmt`, `make test`, `make typecheck`,
+  `make lint`, `make markdownlint`, `make nixie`. `make test`: 22 pytest
+  sessions totalling 5219 passed, 122 skipped, 0 failed; nextest 167/167;
+  doctests clean. `make lint` exited 0 with all eleven stages observed — ruff,
+  interrogate (100.0%), classic pylint (10.00/10, both passes), DF12 pylint
+  (10.00/10 on CPython 3.14.7), ambrleaks, Skylos, the nose duplication gate,
+  Clippy, Whitaker, spelling, yamllint, actionlint.
 
 ## Surprises & discoveries
 
@@ -927,6 +960,19 @@ the issue was filed:
   `test_a_child_that_never_reads_ends_the_run_on_its_deadline`, and the shared
   harness `_install_post_exit_probe` now patches both post-exit seams because
   the two live in different modules since `main` split the direct run out.
+
+- Decision (post-rebase gate round, 2026-10-21): a lint rule the rebase
+  *introduced* is treated as a requirement on this branch too, even where the
+  flagged line predates the rebase. `ruff` 0.16's `implicit-return-value`
+  rejected `_await_readers`'s bare early `return` at
+  `cuprum/_line_stream/drain.py:260`. Rationale for fixing rather than
+  suppressing: the function's docstring already declares `BaseException | None`
+  and every other completing exit returns `None` explicitly, so the bare exit
+  was the odd one out and `return None` is the spelling the surrounding code
+  already uses. Impact: one token, no behaviour change, and the focused
+  `lines()` module re-run green. **Lesson:** re-running a gate after a rebase
+  can fail on *inherited* code, because the gate's own rule set moved with the
+  base — the failure belongs to the merge, not to the line's author.
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
@@ -1719,13 +1765,18 @@ uv run pytest cuprum/unittests/test_run_no_stream_post_exit_deadline.py -v
 uv run pytest cuprum/unittests/test_safe_cmd_lines_post_exit_deadline.py -v
 uv run pytest cuprum/unittests/test_pipeline_post_exit_deadline.py -v
 make test
+make typecheck
 make lint
 make check-fmt
+make markdownlint
+make nixie
 ```
 
 Expected: each focused module reports a non-zero collected count, no skips on
 this POSIX host, and no test over the 10 s tolerance; `make test` reports no
-failures and no warnings; `make lint` and `make check-fmt` exit zero.
+failures and no warnings; and the five gate targets each exit zero. The
+Markdown pair is included because the change surface touches `docs/`, and
+`make lint` already depends on `make spelling` but not on `markdownlint`.
 
 Gate runs are delegated to the `scrutineer` subagent, which runs them
 sequentially and writes one log per gate under `/tmp`. A gate log certifies the
