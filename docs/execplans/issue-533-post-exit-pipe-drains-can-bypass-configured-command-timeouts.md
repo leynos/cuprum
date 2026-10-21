@@ -128,11 +128,16 @@ the issue was filed:
   `cuprum/_subprocess_direct_run.py` (created by the EP-M1 split),
   `cuprum/_subprocess_wait.py`, `cuprum/_subprocess_execution.py`,
   `cuprum/_line_iteration.py`, the whole of `cuprum/_line_stream/`, and — for
-  EP-M3 — `cuprum/_pipeline_collect.py` and
-  `cuprum/_pipeline_stream_results.py`. Every one of these is a private module;
-  the escalation is about breadth, not about interface. The breach itself is
-  recorded in `Decision log` with the alternatives. A file outside this list,
-  or any change to a public signature, is still a stop-and-escalate event.
+  EP-M3 — `cuprum/_pipeline_collect.py`, `cuprum/_pipeline_stream_results.py`,
+  and the split-out `cuprum/_pipeline_settlement.py`, together with the
+  `cuprum/_pipeline_records.py` record they exchange. Every one of these is a
+  private module; the escalation is about breadth, not about interface. The
+  breach itself is recorded in `Decision log` with the alternatives. Four
+  further files were needed by gates rather than by the design —
+  `cuprum/_stream_drain.py`, `Makefile`, the maturin wheel snapshot, and
+  `pyproject.toml` — and they are recorded in the same place. A file outside
+  this list, or any change to a public signature, is still a stop-and-escalate
+  event.
 - Interface: stop and escalate if any public signature, exception type, or
   result field must change. In particular, if a route can only be bounded by
   changing `RunOutputOptions`, `ExecutionContext`, or `PipelineResult`, that is
@@ -411,9 +416,98 @@ the issue was filed:
   `Surprises & discoveries` repeats the corrected claim. Two were rejected as
   factually wrong for this tree, re-verified at `33e066dfd` rather than
   inherited from the previous rejection — see `Decision log`.
-- [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
-  route.
-- [ ] EP-M4 — documentation and full validation.
+- [x] (2026-10-21) EP-M3 production code and its regression module.
+  `_bounded_payloads` in `cuprum/_pipeline_stream_results.py`,
+  `cuprum/_pipeline_settlement.py` (new), `cuprum/_pipeline_records.py`
+  (`_PipelineOutputGather`), and the shared expiry handler in
+  `cuprum/_pipeline_collect.py`. `test_pipeline_post_exit_deadline.py`: 16
+  passed, 8 skipped (the Rust arms) in 14.24 s; the four modules run together —
+  the new one plus `test_pipeline_collect`, `test_pipeline_stream_results` and
+  `test_pipeline_timeouts` — report 40 passed, 8 skipped in 14.56 s.
+- [x] (2026-10-21) EP-M3 — three consecutive clean local runs of
+  `test_pipeline_post_exit_deadline.py` at `25a776a5c` with the EP-M3 tree in
+  place: `16 passed, 8 skipped` in 14.26 s, 14.24 s and 14.24 s
+  (`/tmp/test-cuprum-533-repeats.out`). `make check-fmt` then passed at the
+  same HEAD and tree after one `make fmt` pass re-wrapped the plan's
+  Decision-log edits; the log is
+  `/tmp/check-fmt-cuprum-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts.out`
+  and records its own HEAD and tree state. The gate and the milestone review
+  follow.
+- [x] (2026-10-21) EP-M3 gate round 1, red on the nose duplication gate inside
+  `make lint` (`/tmp/lint-…-epm3.out`, exit 2 at `Makefile:528`) with two
+  unsuppressed families. Both are cleared rather than suppressed wholesale. The
+  copy-paste pair — the pending-reader accounting and
+  `capture_eof_grace_expired` reporting, restated in
+  `_await_pipeline_eof_grace` — is now the shared
+  `_stream_drain._report_eof_grace_expiry`, which takes an arbitrary-length
+  reader tuple, so the two drains report one rule from one place while each
+  keeps its own wait. The TYPE_CHECKING-block family gained this change's two
+  modules and its reasoned allow entry was widened from thirty to thirty-two
+  members. A standalone `make duplication` then passed:
+  `59 allowed by reasoned exceptions`. Focused re-run of the four affected
+  modules: 34 passed, 8 skipped in 14.53 s
+  (`/tmp/pytest-cuprum-533-drain-shared.out`).
+- [x] (2026-10-21) EP-M4 documentation. `docs/users-guide.md`: the three-routes
+  sentence and the overshoot list (cancel grace, 0.25 s EOF window, the 0.5 s
+  stdin close for a run given `stdin` data, and the one-second owned-group
+  settlement), the `lines()` backpressure and delivered-lines-stay-delivered
+  paragraphs, the pipeline-timeouts paragraph, and pointers from "Handle a slow
+  command" and "Stream lines as they arrive". `docs/cuprum-design.md`: the
+  post-exit-boundary bullet, a `_pipeline_settlement.py` entry in the §8.1.5
+  module-boundary list, and the bounded pipeline collection passage. Reading
+  the shipped code to check that last passage corrected a claim I had drafted:
+  the direct run measures its remainder from `execution.started_at`, but
+  `_collect_pipeline_inputs` stamps `time.monotonic() + timeout` at the start
+  of collection, so spawn time is not deducted for a pipeline. Both documents
+  now say so instead of implying one shared reference. ADR-021 gained an
+  appended 2026-10-21 addendum rather than a Decision-log note: the settlement
+  it introduced is *unreachable* without the bound, which is a substantive
+  addition to that ADR's reasoning rather than a restatement. `make fmt`
+  re-wrapped both edited docs, and `make check-fmt` then exited 0.
+- [x] (2026-10-21) EP-M4 named focused modules: 85 passed, 8 skipped in 39.31 s
+  (`/tmp/test-cuprum-533-epm4-focused.out`) across
+  `test_timeout_capture_contract`, `test_capture_eof_grace_observability`,
+  `test_stream_run_owned_group_deadline`,
+  `test_stream_run_owned_group_post_exit`, `test_pipeline_timeouts`,
+  `test_safe_cmd_lines`, `test_line_stream_terminal_outcome`,
+  `test_pipeline_post_exit_deadline`, `test_pipeline_collect` and
+  `test_pipeline_stream_results`. The 8 skips are the Rust-parametrized arms,
+  which this host cannot run because the extension is not built.
+- [x] (2026-10-21) Full gate round on the EP-M3/EP-M4 tree
+  (`/tmp/{check-fmt,lint,typecheck,test}-…-epm3c.out`): `check-fmt` passed in 1
+  s, `lint` in 116 s with the duplication gate green at 59 reasoned exceptions,
+  `typecheck` in 1 s. `make test` then failed `test-python` with
+  `2 failed, 3310 passed, 101 skipped` in 244.97 s, and `test-rust` therefore
+  never ran. Both failures are consequences of the change, not of the
+  environment, and both name the same omission from a declared inventory.
+  `test_extension_build_contract.py:246` derives extension-gated modules from
+  the suite and found the new `test_pipeline_post_exit_deadline.py` was absent
+  from `EXTENSION_TEST_TARGETS`, so its eight Rust-backend arms would never run
+  in the one job that builds the extension; `test_maturin_build.py:185` found
+  the wheel snapshot one entry short of the shipped file list. Fixed by adding
+  the module to `Makefile`'s `EXTENSION_TEST_TARGETS` beside the other gated
+  modules and by adding the single `cuprum/_pipeline_settlement.py` line to
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr` in sorted position,
+  rather than by regenerating the snapshot wholesale. Focused re-run: 16 passed
+  in 4.97 s (`/tmp/focused-fixes-cuprum-….out`), with the snapshot report
+  showing `1 snapshot passed`.
+- [x] (2026-10-21) Full gate round 2 at `25a776a5c` with the inventory fixes
+  (`/tmp/{check-fmt,lint,typecheck,test}-…-epm3d.out`): `check-fmt` passed in 1
+  s, `typecheck` in 1 s, and **`make test` passed in 357 s — python 3312 passed
+  / 101 skipped in 233.57 s, nextest 167/167, doctests ok — so `test-rust` ran
+  for the first time at this HEAD.** Both previously-red tests are green, and
+  the new `test_pipeline_post_exit_deadline.py` ran 16 passed. `make lint` was
+  the only red gate, and it failed at `spelling` on my own prose: the
+  British-`-ise` form of "recognize", written in this plan (`…epm3d.out`, exit
+  2 at `Makefile:632`), where en-GB-oxendict requires `-ize`. The word was in
+  the unstaged docs, so the staged code tree was never affected, but the gate
+  sees the whole working tree. Recording the mistake reproduces it: the entry
+  first quoted the misspelling verbatim, in backticks, and `make markdownlint`
+  failed on this plan a second time. The `typos` gate reads fenced and inline
+  code as well as prose, so a misspelling cannot be cited as an example — it
+  has to be described. Fixed, then `make lint` re-run clean
+  (`/tmp/lint-…-epm3e.out`, exit 0) — this second run is what certifies
+  `yamllint` and `actionlint`, since the first aborted before reaching them.
 - [ ] Gate each commit through `scrutineer`; request `coderabbit review --agent`
   after each milestone.
 - [ ] Push and open the draft PR.
@@ -534,6 +628,21 @@ the issue was filed:
   file for a module list found no other mechanized inventory. So the practical
   rule is: **creating a module is a packaging change, and the wheel snapshot is
   the gate that will tell you.**
+
+  The same lesson repeated for `cuprum/_pipeline_settlement.py` on 2026-10-21,
+  which is why it was predicted rather than discovered the second time — but a
+  *second* inventory failed alongside it that the first module did not trip.
+  `test_extension_build_contract.py` derives the extension-gated test modules
+  from the suite textually and fails until each is declared in
+  `EXTENSION_TEST_TARGETS`, so the new
+  `cuprum/unittests/test_pipeline_post_exit_deadline.py` — which skips its Rust
+  arms with the shared reason — broke it. A new *test* module is therefore also
+  a wiring change, and the two inventories are independent: the wheel snapshot
+  enumerates shipped production modules, the extension contract enumerates
+  gated test modules, and one can be satisfied while the other is not. Both
+  failures shared a signature that is worth recognizing: they are the
+  repository's own *derivations* of a set that this change grew, and each one
+  failed with a message naming the missing member rather than with a diff.
 
 - **The `lines()` path never stamped `started_at` onto the bundle its caller
   keeps, and the deadline is what made that matter.** `_start_line_stream_run`
@@ -730,6 +839,60 @@ the issue was filed:
   is that a delivered line stays delivered. `asyncio.wait` observes; the
   existing reconciliation performs the cancellation, and it is the code that
   already knows how to do so without losing a trailing line. Date: 2026-10-16.
+
+- Decision (EP-M3, 2026-10-21): accept four files outside the `Scope`
+  tolerance's list, recorded here because that tolerance calls an outside file
+  a stop-and-escalate event. They are `cuprum/_stream_drain.py`, `Makefile`,
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr`, and
+  `pyproject.toml`. Each was forced by a *gate* rather than chosen while
+  designing: the duplication gate refused the pipeline's restatement of the
+  direct run's EOF-grace reporting, so the reporting moved to `_stream_drain.py`
+  (`_report_eof_grace_expiry`); the extension build contract derives gated
+  test modules from the suite and refused the new module until `Makefile`
+  declared it; the wheel snapshot enumerates shipped modules and refused the
+  build until it listed the new one; and the same duplication gate pairs
+  TYPE_CHECKING blocks, so the allow entry needed the two new members. None
+  changes a public signature, an exception type, or a result field, which is
+  what the adjacent `Interface` tolerance actually protects. Alternative
+  considered: stop and ask before each (rejected — each is a mechanical
+  consequence of a change already approved, the gates name the exact edit, and
+  halting four times would have recorded the same reasoning four times). Date:
+  2026-10-21.
+
+- Decision (EP-M3, 2026-10-21): extract the pending-reader accounting and the
+  `capture_eof_grace_expired` reporting into
+  `cuprum._stream_drain._report_eof_grace_expiry` rather than recording a
+  duplication exception for the pipeline's copy. Rationale: the nose gate
+  reported the pair as copy-paste, and the overlap is a rule both drains must
+  apply identically — which readers are still pending, and how that expiry is
+  reported — so a change to it should not be able to reach one route and miss
+  the other. What stays route-specific is only the *wait*: the direct run's is
+  hookable and typed over its stdout/stderr pair, while the pipeline's is an
+  `asyncio.wait` over N readers. The shared helper therefore takes a
+  `tuple[_StreamConsumerTask, ...]`, and the hook keeps its existing type.
+  Alternative considered: a per-location reasoned exception (rejected: the
+  AGENTS.md duplication policy is to treat a new finding as copy-paste until
+  proven otherwise, and the parallel structure here is not deliberate).
+
+- Decision (EP-M3, 2026-10-21): widen the TYPE_CHECKING-block allow entry from
+  thirty to thirty-two members for `_pipeline_settlement.py` and
+  `_pipeline_stream_results.py`, rather than restructuring either block.
+  Rationale: that entry already covers the idiom for thirty modules, and these
+  two join it on the same terms — each block names its own module's type-only
+  collaborators and nothing else. The alternative the gate offers, factoring
+  the block into a shared import, cannot remove a per-module binding.
+
+- Decision (EP-M3, 2026-10-21): declare the new
+  `test_pipeline_post_exit_deadline.py` in `Makefile`'s
+  `EXTENSION_TEST_TARGETS` and add one line to the maturin wheel snapshot,
+  rather than leaving the two failing tests to be handled with the docs. Both
+  are the repository's own inventories of what this change created, and the
+  tests that hold them are what makes a forgotten member fail loudly. The
+  snapshot line was inserted in sorted position and the focused module re-run,
+  not regenerated with `--snapshot-update`: the diff is then a claim the
+  reviewer can check by eye ("this change adds one module and the wheel ships
+  it"), where a regeneration would assert only that the snapshot now matches
+  whatever the build produced. Date: 2026-10-21.
 
 - Decision: do not signal an inherited group on a pipeline deadline, and do not
   attempt to. Rationale: under `INHERIT` the only process the run may signal is
@@ -975,6 +1138,64 @@ the issue was filed:
   nothing about ownership (rejected: it would have written a weaker assertion
   on a false premise, and the pipeline's owned-group reclamation would then
   have gone untested on the success route this milestone bounds).
+
+- Decision (EP-M3, 2026-10-21): the collector's bounded observation and
+  settlement are split out into a new module, `cuprum/_pipeline_settlement.py`,
+  which the collector now imports. Rationale: the EP-M3 work took
+  `_pipeline_collect.py` to 444 lines against Pylint's 400-line
+  `max-module-lines`, and the width came from exactly this concern — reader
+  observation, drain context, shielded settlement, stage termination, pump
+  reconciliation and the assembled `_PipelineOutputs`. The split is by feature
+  and by direction of travel: settlement is meaningful for any pipeline whose
+  stages exist, while the collector owns the *wait* and the `cuprum.sh` shim.
+  `_gather_pipeline_outputs` moved with it and `_pipeline_internals.py`
+  re-exports it from its new home, so the re-export list its callers rely on is
+  unchanged. `_expired_pipeline_outputs` ends an expired run and answers with
+  the outputs owed; the collector keeps `_report_pipeline_expiry`, which raises
+  the public `TimeoutExpired`. That direction matters: the settlement module
+  must not import the collector, or the two would form a cycle. Two dependants
+  had to follow the move — the termination stub in `test_pipeline_timeouts.py`,
+  which patched `_pipeline_collect._terminate_timed_out_stages` and now patches
+  the settlement module, and `test_pipeline_collect.py`, which no longer needs
+  to stub the gather at all because the invariant test reaches the real one
+  with empty readers. Alternative considered: trim docstrings and comments to
+  fit under the cap (rejected: it would have deleted the reasoning the cap
+  exists to protect, and the module would still hold two unrelated
+  responsibilities).
+
+- Decision (EP-M3, 2026-10-21): the impossible-state invariant is checked
+  *after* teardown, not before it. Rationale: a run that reaches the expiry
+  handler has live stages by construction, and `_expired_pipeline_outputs` is
+  what terminates them. Reporting "expiry without a configured timeout" first
+  would be correct about the invariant and wrong about the machine: it would
+  leave the very stages the handler exists to reap. The branch is unreachable
+  in practice — only a configured deadline can expire — so the ordering is
+  chosen for the failure mode, not for the common path. Alternative considered:
+  fail fast on the invariant and let the caller's `finally` reconcile
+  (rejected: the pipeline's `finally` reconciles the *pumps*, not the stages,
+  so the stages would leak).
+
+- Decision (EP-M3, 2026-10-21): no change was made to fit
+  `cuprum/unittests/test_pipeline_post_exit_deadline.py` under the 400-line
+  cap, because the cap does not bind it. Rationale: `pylint-classic` runs the
+  test roots in a second invocation with `--disable=too-many-lines` (the
+  `PYLINT_TEST_TARGETS` split in `Makefile`), so the ceiling applies to
+  production and benchmark sources only. Adding a split or a suppression for a
+  rule that is not enabled would have been churn against a policy the
+  repository deliberately scoped. Alternative considered: split the module
+  anyway for symmetry (rejected: the tests share one fixture set and one
+  harness, and splitting them would duplicate that harness).
+
+- Decision (EP-M3, 2026-10-21): the new gated module was added to
+  `EXTENSION_TEST_TARGETS` and the wheel snapshot was edited by hand rather
+  than regenerated, and both were staged into the code commit rather than the
+  documentation commit. Rationale: the two failures are consequences of the
+  code change, so a reader bisecting this branch should find the change and its
+  inventory updates in one commit; and a hand-edited snapshot asserts something
+  reviewable — "this change adds exactly one module and the wheel ships it" —
+  where a regeneration asserts only that the build matched itself. Alternative
+  considered: `--snapshot-update` (rejected for the reason above, and because
+  the regenerated blob would hide an accidental second addition).
 
 ## Milestones
 
