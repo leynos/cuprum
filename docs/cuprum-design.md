@@ -2415,9 +2415,13 @@ preserving the `SafeCmd.run()` execution contract:
   end in an expiry, the overshoot past the deadline is bounded by the cleanup
   allowances alone: `cancel_grace`, the 0.25 s `_CAPTURE_EOF_GRACE_S` window
   once per capturing run, and the 0.5 s stdin close grace for a run given
-  `stdin` data. A pipeline takes no stdin, so it owes only the first two, plus
-  the `_POST_KILL_SETTLEMENT_S` wait of one second that `_process_group`
-  applies after forcibly killing an owned group.
+  `stdin` data. A pipeline takes no stdin, so it owes only the first two. Every
+  run that owns its process group owes one more allowance on an expiry route:
+  the `_POST_KILL_SETTLEMENT_S` wait of up to one second that `_process_group`
+  applies after forcibly killing the group, which
+  `_settle_owned_group_before_draining` reaches for a direct run, a streamed
+  run, a `lines()` run, and a pipeline alike. A run that inherits its caller's
+  group settles nothing and owes no such wait.
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
