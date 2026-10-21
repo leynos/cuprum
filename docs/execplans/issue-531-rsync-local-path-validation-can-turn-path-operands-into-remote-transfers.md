@@ -208,6 +208,15 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       `test result: ok` doctest lines. The earlier attempt at this record
       produced two logs labelled with the pre-edit HEAD while exercising the
       edited tree, so those logs were deleted rather than cited.
+- [x] (2026-10-21) Certify the delivery tip
+      `1fb7884e04a17db1ac16635efcb233c7c1ba03d7`. All seven gates exited 0
+      with that HEAD recorded in each log, and `make test` reproduced 5249
+      passed and 116 skipped (Python), 167 of 167 (Rust nextest), and three
+      `test result: ok` doctest lines. CI then reported 18 checks passed and
+      the PR `CLEAN`/`MERGEABLE`. Because this record is itself a Markdown
+      edit, `make check-fmt`, `make lint`, `make markdownlint`, and
+      `make nixie` were re-run against the record commit; the full seven-gate
+      certification therefore covers every file except this paragraph.
 
 ## Surprises & discoveries
 
