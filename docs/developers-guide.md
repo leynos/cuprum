@@ -8498,15 +8498,21 @@ executes:
    already reached. `_await_writer_within_deadline` therefore takes
    `_deadline_for_collection(execution)` and awaits the writer under it,
    shielded so the bound is reached before the writer's own 0.5 s close grace
-   rather than after it. On expiry, and equally on `asyncio.CancelledError` or
-   an unexpected failure from either wait, `_cleanup_direct_run` cancels and
-   drains the writer task via `_cancel_stdin_writer` and then settles the run's
-   owned group, both under one shield, so a stdin drain blocked on an unread
-   pipe can neither delay the timeout's translation nor outlive the run.
-   Cancellation and other failures are then re-raised unchanged; only the
-   writer-deadline expiry is translated through `_handle_stream_timeout` with
-   `None` payloads, so a caller receives the same public `TimeoutExpired`
-   whichever route expired.
+   rather than after it. A run that configured no `timeout=` has no remainder
+   to spend and no expiry to report, so `_await_writer_within_deadline` takes
+   the shared `_settle_stdin_writer` window on that branch instead: passing
+   `None` to `asyncio.timeout` means no bound anywhere, and the same parked
+   writer would hold such a run for ever. The deadline bound applies to the
+   runs that have a deadline; the settle window is what bounds one that does
+   not. On expiry, and equally on `asyncio.CancelledError` or an unexpected
+   failure from either wait, `_cleanup_direct_run` cancels and drains the
+   writer task via `_cancel_stdin_writer` and then settles the run's owned
+   group, both under one shield, so a stdin drain blocked on an unread pipe can
+   neither delay the timeout's translation nor outlive the run. Cancellation
+   and other failures are then re-raised unchanged; only the writer-deadline
+   expiry is translated through `_handle_stream_timeout` with `None` payloads,
+   so a caller receives the same public `TimeoutExpired` whichever route
+   expired.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload size
