@@ -466,13 +466,22 @@ the issue was filed:
   vacuity, not by design, and are listed to show the probe distinguished them
   rather than to claim they are exercised.
 
-- **A timeout route can appear bounded while the descendant survives.** Route 11
-  returned in 1.58 s under `OWN_GROUP`, which looks like success until the pid
-  file is read: the descendant is still alive because the group teardown did
-  not reach it either. `Pipeline.run()` has no process-group policy of its own,
-  so this is a structural limitation rather than a regression, but the plan
-  records it so the new pipeline tests do not assert a reclamation that cannot
-  happen.
+- **A bounded return says nothing either way about the descendant, and the
+  original claim here was never measured.** Route 11 returned in 1.58 s under
+  `OWN_GROUP`. This plan originally recorded that the descendant survived that
+  teardown, on the premise that `Pipeline.run()` carries no process-group
+  policy. Both halves were wrong. `cuprum._pipeline_spawn` derives `owns_group`
+  from `config.ctx.resolved_process_group` for every stage
+  (`_pipeline_spawn.py:132-133`), records it per stage in the spawn result, and
+  the timeout handler passes it on to `_terminate_timed_out_stages`. A
+  measurement on 2026-10-21 that read the descendant's `/proc/<pid>/stat` state
+  found it already gone when the run returned at 1.52 s. What route 11 does
+  *not* exercise is the success path, where no teardown runs at all (route 8);
+  that is the route EP-M3 has to bound. `INHERIT` is the arm that genuinely
+  cannot reclaim a descendant, because the only process it may signal is the
+  direct child and that child has already exited (route 12). The new pipeline
+  tests therefore assert reclamation under `OWN_GROUP` and assert only a
+  bounded return under `INHERIT`.
 
 - **The chained lint log does not name the tool that failed.** `make lint` runs
   `ruff`, `interrogate`, `pylint`, `skylos`, the duplication gate, and then
@@ -723,10 +732,13 @@ the issue was filed:
   already knows how to do so without losing a trailing line. Date: 2026-10-16.
 
 - Decision: do not signal an inherited group on a pipeline deadline, and do not
-  attempt to. Rationale: `Pipeline.run()` has no process-group policy;
-  inventing one here would be a design change (see `Tolerances`). The plan
-  records the gap so the pipeline tests assert a bounded *return* rather than a
-  reclaimed descendant. Date: 2026-10-16.
+  attempt to. Rationale: under `INHERIT` the only process the run may signal is
+  the direct child, and on the post-exit routes that child has already exited;
+  reaching a descendant there would mean adopting a group the caller declined.
+  The plan records the gap so the pipeline tests assert a bounded *return*
+  rather than a reclaimed descendant on that arm. Date: 2026-10-16; rationale
+  corrected 2026-10-21, because the original cited a process-group policy
+  `Pipeline.run()` in fact has (see the entry of that date).
 
 - Decision: one new test module per route —
   `test_run_no_stream_post_exit_deadline.py` for the direct run,
@@ -889,6 +901,80 @@ the issue was filed:
   Impact: none on behaviour. The plan's earlier "four-file shape" sentence was
   a prediction made before EP-M1's module split; it has been replaced with the
   measured list rather than quietly exceeded.
+
+- Decision (EP-M3, 2026-10-21): the collector composes its own capture-grace
+  step over its N+1 consumer tasks, rather than handing them to
+  `_DrainContext.eof_grace_waiter`. Rationale: `_EofGraceWaiter` in
+  `cuprum/_subprocess_wait_types.py` is typed over a *two*-element tuple,
+  because it exists to serve the direct run's stdout/stderr pair, while a
+  pipeline holds one stderr consumer per stage plus at most one final stdout
+  consumer. Reusing the hook would either need that type widened — in a module
+  outside EP-M3's allowed change list — or a cast that lies about the tuple
+  length to a function the collector does not own. The collector therefore
+  awaits `(context.eof_grace_waiter or _await_eof_grace)(tuple(tasks))` in the
+  same shape `_await_capture_eof_grace` does, keeping one copy of the 0.25 s
+  rule (`_CAPTURE_EOF_GRACE_S`) and one copy of the pending-reader accounting
+  while leaving the public and private signatures alone. It still uses
+  `_settle_consumers`, `_decode_consumer_result` and `_DrainContext`, and it
+  does not call `_drain_stream_consumers`, whose failure reporting is
+  stdout/stderr-pair specific. Alternative considered: widen `_EofGraceWaiter`
+  to an arbitrary sequence (rejected: outside the allowed files, and it would
+  put pipeline-shaped knowledge into a direct-run type).
+
+- Decision (EP-M3, 2026-10-21): `_gather_pipeline_outputs` is retained and
+  taught to accept a deadline, rather than retired in favour of a single gather
+  inside the new helper. Rationale: EP-M3 deliverable 3 itself says to pass the
+  remaining budget "from `_collect_pipeline_inputs` *and*
+  `_gather_pipeline_outputs`", which presupposes the helper survives. Retiring
+  it would force an edit to `cuprum/_pipeline_internals.py`, which imports it
+  at line 38 and lists it in `__all__` at line 107; that module is outside the
+  milestone's allowed change list, and re-exporting the replacement from it
+  purely to keep the name importable would be compatibility theatre for a
+  private helper with one caller. Only `_gather_optional_text_tasks` is
+  retired, whose dependants are the collector's import and one unit test.
+  Alternative considered: keep `_gather_optional_text_tasks` and add a second,
+  bounded gather path (rejected: deliverable 2 requires one gather path).
+
+- Decision (EP-M3, 2026-10-21): no new per-stage telemetry code is added for
+  the final-output expiry. Rationale: `_run_spawned_pipeline` already catches
+  `_sh_module().TimeoutExpired` and calls `_finalize_pipeline_timeout`, which
+  calls `_report_pipeline_timeout_expiry` (per-stage `pid`, mode
+  `elapsed_deadline` or `non_positive_immediate`) and
+  `_emit_timeout_exit_events`. The shared handler inside the collector
+  therefore owes only the public `TimeoutExpired` carrying the configured
+  timeout, the captured output and the concatenated stage stderr. Adding a
+  second emission site would double-report every pipeline expiry. Alternative
+  considered: report at the expiry site as the single-command path does
+  (rejected: the pipeline contract is one deadline reported once per stage, and
+  that layer already does it).
+
+- Decision (EP-M3, 2026-10-21): "terminate and settle the stages first,
+  including owned groups whose leaders have exited" is satisfied by reusing
+  `_terminate_timed_out_stages`, not by adding leader-independent termination.
+  Rationale: `_stages_to_terminate` selects an owned stage unconditionally —
+  group ownership, not leader liveness, is what decides — and
+  `_terminate_all_shielded` absorbs per-stage failures, so it is safe while a
+  timeout is already propagating. Reimplementing any part of it would create a
+  second termination policy that could drift from the wait-timeout route's.
+  Alternative considered: branch on `process.returncode is None` before
+  terminating (rejected: it is the leader check this deliverable exists to
+  avoid, and it would skip the group that still holds the pipes).
+
+- Decision (EP-M3, 2026-10-21): the plan's earlier claim that
+  `Pipeline.run()` carries no process-group policy is withdrawn, and
+  `Surprises` and `Verification plan` are corrected to match. Rationale: the
+  code says otherwise — `_pipeline_spawn.py:132-133` resolves
+  `config.ctx.resolved_process_group` into a per-stage `owns_group`, records it
+  on the spawn result, and the deadline route hands it to
+  `_terminate_timed_out_stages`. A measurement reading the descendant's
+  `/proc/<pid>/stat` found route 11's descendant already gone when the run
+  returned, so the original claim was unmeasured as well as ungrounded.
+  Consequence for EP-M3: the new module asserts reclamation under `OWN_GROUP`
+  and only boundedness under `INHERIT`, rather than asserting boundedness
+  everywhere. Alternative considered: leave the claim in place and assert
+  nothing about ownership (rejected: it would have written a weaker assertion
+  on a false premise, and the pipeline's owned-group reclamation would then
+  have gone untested on the success route this milestone bounds).
 
 ## Milestones
 
@@ -1267,10 +1353,13 @@ is sufficient evidence, which is why both are parametrized on every case.
 
 Residual gaps, recorded rather than hidden:
 
-- A pipeline deadline cannot reclaim a descendant under `INHERIT`, and cannot
-  reclaim one under `OWN_GROUP` either, because `Pipeline.run()` carries no
-  process-group policy (`Surprises`, route 11). What is verified is that the
-  *run* returns inside its deadline plus the bounded graces.
+- A pipeline deadline cannot reclaim a descendant under `INHERIT`, because the
+  only process it may signal is the direct child and that child has already
+  exited (`Surprises`, route 12). Under `OWN_GROUP` it can and does: the
+  stage's group is recorded at spawn and reaches `_terminate_timed_out_stages`,
+  which was measured retiring the descendant before the run returned. What the
+  `INHERIT` arm verifies is that the *run* returns inside its deadline plus the
+  bounded graces.
 - The scenario suite cannot be exercised on a non-POSIX host; the POSIX-only
   marks are the same acknowledgement the existing post-exit tests make.
 
