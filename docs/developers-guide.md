@@ -1166,6 +1166,17 @@ counterparts that stay local on both hosts: a native absolute path from
 even where `PurePath` calls it absolute, so it can never serve as the neutral
 operand.
 
+The behaviour steps cannot use `tmp_path` for rsync at all, because a Windows
+`tmp_path` *is* a drive prefix. `given_valid_rsync_paths` therefore builds both
+operands on a fixed UNC anchor, `//rsync-scenario/...`, which `PurePath` calls
+absolute on POSIX and Windows alike and whose first character is a separator,
+so rsync reads it as local. The steps only build argv, never touch the
+filesystem, so the names need not exist. The scenario also asserts that the
+operand *opposite* the remote one is a local path: the builder validates the
+source first, so without that check a fixture whose non-remote operand was
+itself unacceptable would report the wrong role and the scenario would pass for
+the wrong reason.
+
 ### End-of-options separators for positional operands
 
 `safe_path` accepts names beginning with `-`, so argv construction must stop

@@ -179,6 +179,14 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       passed and 116 skipped (Python), 167 of 167 (Rust nextest), and `ok`
       doctests. This closes the gap where the earlier logs certified the
       pre-record tree rather than the pushed one.
+- [x] (2026-10-21) CodeRabbit pass over the rebased diff. It raised one major
+      finding: the BDD fixture built rsync operands from `tmp_path`, whose
+      Windows drive prefix is a remote operand, so the destination examples
+      would report a source error. Fixed by anchoring both operands on
+      `//rsync-scenario/...` and by asserting the non-remote counterpart is a
+      local path. Focused suites: 128 passed, 2 skipped. The fix was verified by
+      mutation: restoring the drive-prefix spelling reproduced five failures,
+      four of them "the rejection must name the offending operand role".
 
 ## Surprises & discoveries
 
@@ -228,6 +236,18 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
   listed only external checks while `gh pr view --json mergeable` reported
   `CONFLICTING`; CI builds the merge ref, which upstream cannot construct.
   Impact: the rebase was a precondition for observing CI, not merely a nicety.
+- Observation: the BDD fixture `given_valid_rsync_paths` used `tmp_path`, which
+  is a drive prefix on Windows and therefore a remote operand for rsync there.
+  Evidence: CodeRabbit's post-rebase pass reported it, and re-posing
+  `C:/Users/runner/.../source` to the policy showed
+  `PureWindowsPath(...).is_absolute()` is `True` while
+  `_is_remote_rsync_operand` is also `True`; substituting that spelling back
+  into the fixture made five behaviour cases fail, four with "the rejection
+  must name the offending operand role". Impact: both rsync steps now anchor
+  their operands on `//rsync-scenario/...`, which is absolute on both hosts and
+  colon-free, and the scenario asserts that the operand opposite the remote one
+  is itself a local path, so a wrong-role rejection cannot pass for a
+  right-role one.
 
 ## Decision log
 
@@ -263,6 +283,12 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
 ```plaintext
 rsync source must be a local path; remote syntax such as host:path, host::module or rsync:// is not supported
 ```
+
+- D6. The rsync behaviour scenario uses a fixed UNC anchor rather than
+  `tmp_path`, and asserts the non-remote counterpart is local. Rationale: the
+  steps are documented to run on every platform, and `tmp_path` is a remote
+  operand for rsync on Windows. Pinning the counterpart keeps the role
+  assertion from being satisfied by a rejection of the wrong operand.
 
 ## Outcomes & retrospective
 

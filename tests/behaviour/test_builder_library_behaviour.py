@@ -71,6 +71,9 @@ then("the rsync operands follow the end-of-options separator")(
 then(
     parsers.parse('an rsync operand validation error is raised for the "{role}"'),
 )(_steps.then_rsync_operand_error_raised)
+then(
+    parsers.parse('the operand opposite the remote "{role}" is a local path'),
+)(_steps.then_unrelated_rsync_operand_is_local)
 
 
 @scenario(

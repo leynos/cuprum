@@ -34,6 +34,7 @@ Feature: Core builder library
     Given valid rsync paths
     When I build an rsync sync command with a remote "<role>" operand "<operand>"
     Then an rsync operand validation error is raised for the "<role>"
+    And the operand opposite the remote "<role>" is a local path
 
     Examples:
       | role        | operand             |

@@ -22,6 +22,7 @@ from cuprum.builders import (
     TarCreateOptions,
     git_checkout,
     rsync_sync,
+    safe_path,
     tar_create,
 )
 
@@ -31,6 +32,13 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
 
 _CHECKPOINT_SOURCE = "--checkpoint-action=exec=touch pwned"
+
+# Rsync operands must be local paths on every host, and a ``tmp_path`` is not
+# one on Windows: its drive prefix spells a remote endpoint to rsync there. A
+# UNC anchor keeps the operands absolute, colon-free, and separator-first, so
+# they stay local to rsync on both POSIX and Windows. The steps build argv only
+# and never touch the filesystem, so the names need not exist.
+_UNC_ROOT = "//rsync-scenario"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -77,11 +85,12 @@ def given_core_git_builders() -> None:
     """No-op step for readability."""
 
 
-def given_valid_rsync_paths(tmp_path: Path) -> _RsyncPaths:
+def given_valid_rsync_paths() -> _RsyncPaths:
     """Provide absolute rsync source and destination paths."""
-    source = tmp_path / "source"
-    destination = tmp_path / "destination"
-    return _RsyncPaths(source=source.as_posix(), destination=destination.as_posix())
+    return _RsyncPaths(
+        source=f"{_UNC_ROOT}/source",
+        destination=f"{_UNC_ROOT}/destination",
+    )
 
 
 def given_tar_inputs(tmp_path: Path) -> _TarInputs:
@@ -269,6 +278,33 @@ def then_rsync_operand_error_raised(rsync_result: _CommandResult, role: str) -> 
     )
     assert f"rsync {role} must be a local path" in str(rsync_result.error), (  # ruff: ignore[assert] - step assertions replace return values
         "the rejection must name the offending operand role"
+    )
+
+
+def _operand_is_local(operand: str) -> bool:
+    """Report whether ``safe_path`` alone accepts ``operand`` as a local path."""
+    try:
+        safe_path(operand, allow_relative=True)
+    except ValueError:
+        return False
+    return True
+
+
+def then_unrelated_rsync_operand_is_local(
+    rsync_paths: _RsyncPaths,
+    role: str,
+) -> None:
+    """Verify only the remote operand, not its counterpart, can be rejected.
+
+    The rejection step asserts that the error names ``role``. That assertion
+    proves nothing if the fixture's other operand is itself unacceptable, since
+    the builder checks the source first and would then report the wrong role.
+    Pin the counterpart as a local operand so the scenario exercises the
+    remote grammar rather than an unusable fixture.
+    """
+    counterpart = rsync_paths.destination if role == "source" else rsync_paths.source
+    assert _operand_is_local(counterpart), (  # ruff: ignore[assert] - step assertions replace return values
+        f"the counterpart to the remote {role} must be a local path: {counterpart}"
     )
 
 
