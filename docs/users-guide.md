@@ -1510,12 +1510,24 @@ the child's drain waits for a free slot instead of buffering output without
 limit. Neither mechanism changes what is captured; `max_line_chars` only bounds
 how much any single event carries.
 
+`lines()` accepts the same `timeout` as `run()`, and the deadline it enforces
+includes the time the iterator spends waiting on a caller that has stopped
+consuming. A line already yielded is never taken back; once the deadline
+expires, iteration ends with `TimeoutExpired` and whatever had been captured
+stays available on the exception.
+
 ### Handle a slow command
 
 Pass `timeout` to `run()` or `run_sync()` and catch `TimeoutExpired`, which
 subclasses the built-in `TimeoutError`. `ExecutionContext.cancel_grace` sets
 how long Cuprum waits after asking the child to terminate before killing it.
 Output captured before the deadline stays available on the exception.
+
+The same `timeout` argument exists on `lines()` and on `Pipeline.run()`. It
+limits the command as a whole rather than each stage separately, and it keeps
+running after the child exits: a descendant still holding the pipes counts
+against it. See [Timeouts](#timeouts) for the exact bound on how far a run can
+overshoot.
 
 <!-- tested-example: slow-command -->
 
@@ -2231,6 +2243,35 @@ group rather than merely giving up on the readers, so the descendant is
 reclaimed and the run reports `TimeoutExpired` just as it would have if the
 child itself had overrun.
 
+This holds for all three ways of running a command: `run()` / `run_sync()`,
+`lines()`, and `Pipeline.run()`. In every case the deadline is a single budget
+for the whole run. Whatever the wait for the child leaves unused is what the
+collection that follows gets, so a run whose child exited promptly still ends
+at the configured deadline if its readers cannot finish.
+
+A run can exceed the deadline by the cleanup allowances and nothing else:
+
+- `ExecutionContext.cancel_grace` (0.5 s by default) — the wait after asking a
+  process to terminate before it is killed.
+- The 0.25 s end-of-file window above, once per capturing run whose readers
+  have not already finished.
+- The 0.5 s stdin close window, for a run that was given `stdin` data and is
+  still reconciling its writer.
+
+A pipeline with `ProcessGroupPolicy.OWN_GROUP` adds a bounded settlement wait
+of up to one second after it forcibly kills the group, because a descendant
+adopted by an init process can take that long to disappear. Without a timeout
+configured (`timeout=None`), none of these bounds applies and behaviour is
+unchanged.
+
+With `lines()`, a caller that stops consuming is the thing that can keep a run
+open: the line queue is bounded, so a lagging consumer parks the reader, and
+the run is still inside its deadline while that happens. That backpressure
+counts against the deadline like any other post-exit delay. When the deadline
+does expire, lines already yielded to the caller are not withdrawn — a
+delivered line stays delivered, and the `TimeoutExpired` reports whatever else
+had been captured.
+
 #### Where a timeout comes from
 
 Cuprum uses the first of these that is set:
@@ -2285,6 +2326,16 @@ the same capture rules as a successful run. Expiry is reported per stage: each
 stage gets a `timeout` event, a `cuprum.timeout` record with its `pid`, and one
 `cuprum_timeouts_total` increment. The fields and `timeout_mode` values match
 the single-command case.
+
+The deadline covers collecting each stage's output as well as waiting for the
+stages to exit. A pipeline takes no `stdin`, so the stdin close window does not
+apply to it, but the same end-of-file window does: a stage that exits while a
+descendant keeps its stderr or the final stage's stdout open does not extend
+the run indefinitely. On expiry, stages are terminated first — including an
+owned group whose leader has already exited — so readers can still capture what
+their stage wrote before they are settled. Output captured that way is
+preserved on the `TimeoutExpired`, and, for `ProcessGroupPolicy.OWN_GROUP`, the
+descendant is reclaimed exactly as it is for a single command.
 
 #### Reclaim a descendant with process-group ownership
 

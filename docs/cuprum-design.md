@@ -2332,6 +2332,28 @@ preserving the `SafeCmd.run()` execution contract:
   labels, while `TracingHook` adds a `cuprum.capture_eof_grace_expired` event
   to the matching span. No captured stream payload is emitted in that event.
   Unexpected reader failures remain separately reported as `teardown_error`.
+  The reporting itself lives in `_report_eof_grace_expiry`, which takes the
+  readers the caller awaited as an arbitrary-length tuple. It is shared because
+  the condition it describes is not specific to a two-stream run: a pipeline
+  awaits one stderr reader per stage plus at most one final stdout reader, and
+  both routes must count pending readers and report the expiry identically.
+  Only the *wait* stays route-specific, because the direct run's hookable
+  `_await_capture_eof_grace` is typed over its stdout/stderr pair while the
+  pipeline composes its own `asyncio.wait` over N readers.
+- The deadline bounds the post-exit collection, not only the wait for the
+  child. `_subprocess_wait._deadline_for_collection` computes what is left of
+  the configured `timeout` at the point collection begins, measured from the
+  same reference the exit wait used, so a child that exited promptly does not
+  hand the following collection a fresh full budget. A pipeline uses the same
+  absolute-deadline shape but stamps it when collection begins rather than at
+  spawn; the pipeline collection passage below records that difference. A run
+  with `timeout=None` collects unbounded, exactly as before. On the routes that
+  end in an expiry, the overshoot past the deadline is bounded by the cleanup
+  allowances alone: `cancel_grace`, the 0.25 s `_CAPTURE_EOF_GRACE_S` window
+  once per capturing run, and the 0.5 s stdin close grace for a run given
+  `stdin` data. A pipeline takes no stdin, so it owes only the first two, plus
+  the `_POST_KILL_SETTLEMENT_S` wait of one second that `_process_group`
+  applies after forcibly killing an owned group.
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
@@ -2362,6 +2384,18 @@ sequenceDiagram
     end
 ```
 
+- `cuprum/_pipeline_settlement.py` owns the one sequence that ends an expired
+  pipeline and reports what its readers had captured: terminate the stages,
+  reconcile the inter-stage pumps, observe the readers under the remaining
+  deadline, and settle them. Observation and settlement are deliberately
+  separate steps there. Observation only *reports* that readers are still
+  unfinished, and settlement runs afterwards — which is what lets a reader
+  capture what its stage wrote before the terminal process group is torn down
+  and the reader cancelled. Both routes that can discover an expiry, the stage
+  wait and the final output gather, call this one sequence so they cannot drift
+  apart. The module is the pipeline counterpart of the `_stream_drain` entry
+  above: that one owns the direct run's two-stream drain, this one owns the
+  collection a pipeline runs after its stages have been waited on.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -2381,6 +2415,25 @@ spawned. `_pipeline_stage_streams` selects descriptors and creates those
 consumers; `_pipeline_collect` settles and reads each collector after its stage
 outputs settle, then `_pipeline_results` assigns the records to the owning
 stage result in stage order.
+
+Collecting a pipeline's output is bounded by the same absolute deadline as
+waiting for its stages: `_collect_pipeline_inputs` stamps
+`time.monotonic() + timeout` once, hands the remainder to the stage wait, and
+hands what is left of it to the gather. A descendant holding the inherited
+pipes therefore cannot extend the run past the caller's deadline once the
+budget has been spent on the wait. The stamp is taken when collection begins
+rather than when the stages were spawned, which is a deliberate simplification
+the direct run does not share: a pipeline's stages are spawned before this
+function is reached, so a spawn that itself took an appreciable share of the
+budget is not deducted here. `_pipeline_stream_results._bounded_payloads`
+expresses the bound as `asyncio.wait`'s remaining timeout rather than as a
+cancellation, so a reader that already produced a payload keeps it and one
+still running is reported unfinished. Unfinished readers are then settled
+through `cuprum._pipeline_settlement`, which terminates the stages before it
+cancels anything — the termination is what releases the pipes and lets a reader
+capture what its stage had already written. Both the wait-timeout route and the
+success route that discovers an unfinished gather call that one sequence, so a
+pipeline cannot report output that depends on which route ended it.
 
 Pipeline startup is separated from pipeline termination for the same reason the
 single-command path separates them. `cuprum/_pipeline_spawn.py` starts the
