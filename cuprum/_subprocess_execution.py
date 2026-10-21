@@ -204,8 +204,9 @@ async def _await_direct_completion(
             # frame sees it, so a bare ``TimeoutError`` escaping it is a
             # reader's own failure — an ``on_line`` hook using
             # ``asyncio.timeout`` internally, say — and must reach the caller
-            # unchanged. Only the direct path can still raise one here, from
-            # the already-elapsed-deadline route of its exit wait.
+            # unchanged. Only the direct path can still raise one here: its
+            # exit wait re-raises the bare ``TimeoutError`` on both the
+            # non-positive and the elapsed positive deadline routes.
             raise
         _handle_subprocess_timeout(
             _SubprocessTimeoutContext(

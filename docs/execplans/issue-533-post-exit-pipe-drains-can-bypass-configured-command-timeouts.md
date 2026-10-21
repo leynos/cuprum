@@ -395,6 +395,22 @@ the issue was filed:
   were re-verified on both paths at `timeout=0.2` and `timeout=0` and still
   produce `TimeoutExpired` carrying the configured timeout, so narrowing the
   catches did not unbound the real deadline.
+- [x] (2026-10-21) EP-M2 milestone gate at `33e066dfd`. All four gates `exit=0`:
+  `check-fmt` (`/tmp/check-fmt-…-2.out`), `lint` (`/tmp/lint-…-3.out`),
+  `typecheck` (`/tmp/typecheck-…-3.out`), and `make test` (`/tmp/test-…-3.out`,
+  `167` Rust tests passed plus every `PYTEST_TARGETS` pattern). The first
+  `make test` attempt failed only on
+  `test_pinned_doctest_route_rejects_a_warning` after 600 s; that file has an
+  empty diff against the branch base, its per-route `CARGO_TARGET_DIR` was
+  never created, and admission was saturated at the time, so it was classified
+  environmental and re-dispatched rather than "fixed". The re-run passed the
+  same test at line 938.
+- [x] (2026-10-21) EP-M2 milestone review (`coderabbit review --agent`). Three
+  findings. One was valid and is applied: the comment above the bare `raise` in
+  `_subprocess_execution.py` now names both exit-wait routes, and this plan's
+  `Surprises & discoveries` repeats the corrected claim. Two were rejected as
+  factually wrong for this tree, re-verified at `33e066dfd` rather than
+  inherited from the previous rejection — see `Decision log`.
 - [ ] EP-M3 — `Pipeline.run()`'s final output and its `INHERIT` wait-timeout
   route.
 - [ ] EP-M4 — documentation and full validation.
@@ -589,7 +605,9 @@ the issue was filed:
   `execution.consumes_stdout or execution.consumes_stderr`, which is the same
   test that selected the streamed run in the first place; on the streamed path
   the bare exception is therefore a reader failure, and on the direct path it
-  can only come from the already-elapsed-deadline route of the exit wait.
+  comes from the exit wait itself: `_wait_for_exit_code_within_timeout`
+  re-raises a bare `TimeoutError` on both its routes, the non-positive
+  already-elapsed deadline and the elapsed positive one.
 
   Non-vacuity: with all four fixes reverted, both new tests fail —
   `test_lines_reader_timeout_is_not_reported_as_the_run_deadline` raises the
@@ -659,6 +677,24 @@ the issue was filed:
   been written against a different revision. Rationale for recording rather
   than silently skipping: a rejected finding is evidence about the review, not
   about the code, and the next reader will meet the same comment.
+
+- Decision (EP-M2 review, 2026-10-21): reject the same `_spawn_stdin_writer`
+  finding again, and re-verify rather than inherit the earlier rejection. The
+  follow-up review raised it once more, this time as `critical`, claiming
+  `execution.stdin_data` raises `AttributeError` because the bundle exposes
+  `stdio`. Re-checked at `33e066dfd`: `_spawn_stdin_writer` is still
+  `(process, stdin_data, observation)` at `cuprum/_subprocess_stdin.py:139`,
+  `_SubprocessExecution` still declares `stdin_data: bytes | None` at
+  `cuprum/_subprocess_spawn.py:68` and no `stdio` anywhere, and neither
+  `cuprum/_subprocess_stdin_stream.py` nor any `_stdin_codec` symbol exists in
+  the repository — the only occurrence of that name on disk is inside the quote
+  of this very review in this plan. The claim that the failure occurs "before
+  the child is awaited" is therefore untestable here: the attribute read
+  succeeds. Rationale for re-verifying instead of citing the earlier rejection:
+  the passage of a milestone and a fresh review is exactly when a
+  previously-rejected finding deserves a second look, and a rejection that
+  turns out to have been right would be a critical defect shipped on the
+  strength of a stale check.
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
