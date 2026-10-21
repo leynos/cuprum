@@ -241,6 +241,23 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       edit, `make check-fmt`, `make lint`, `make markdownlint`, and
       `make nixie` were re-run against the record commit; the full seven-gate
       certification therefore covers every file except this paragraph.
+- [x] (2026-10-21) Certify the assessment-fix tree at
+      `7a300bba29380685b3129e61c9d5a7ca25ccd217`. Two gate defects surfaced
+      between the fix and this certification and were corrected in their own
+      commits: `make fmt` reflowed one paragraph of decision log D7
+      (`369add6c9`), and two lint leaves rejected the new construction-order
+      test's spelling — classic Pylint C1803 for `factory_calls == []` and
+      Ruff `banned-api` for `typing.Callable` (`0888ef2a7`, then `7a300bba2`).
+      All seven gates then exited 0 with that HEAD recorded in each log:
+      `check-fmt`, `lint`, `typecheck`, `test`, `markdownlint`, `nixie`, and
+      `duplication`. Evidence: `make test` reported 5267 passed and 116
+      skipped across its 22 Python session summaries, 167 of 167 in Rust
+      nextest, and `test result: ok` doctest lines; `make lint` reported
+      10.00/10 from both Pylint environments and `duplication` recorded 65
+      reasoned exceptions. Logs carry the `-7a300bba2` suffix under `/tmp`.
+      Because this record is itself a Markdown edit, the Markdown-scoped gates
+      are re-run against the record commit, so the full certification covers
+      every file except this paragraph.
 
 ## Surprises & discoveries
 
@@ -412,6 +429,15 @@ the general lesson: a test that checks an error names the right operand is
 vacuous unless it also pins the other operand as valid, because the builder
 reports whichever operand it reaches first.
 
+Lesson: the assessment fixes themselves needed three gate attempts before they
+were shippable. The first commit failed `make check-fmt` because the new
+ExecPlan prose was not reflowed, the second failed classic Pylint on
+`factory_calls == []`, and the third failed Ruff's `banned-api` rule on
+`typing.Callable`. Each failure was mechanical and cheap to fix, but each one
+orphaned the gate evidence for the preceding head, so the whole seven-gate set
+had to be re-run from `check-fmt`. Running the formatting and lint leaves
+first, on the exact edited tree, would have collapsed that to one round.
+
 ## Conformance basis
 
 Upstream artefacts:
@@ -507,6 +533,14 @@ Obligations, methods, and evidence:
 Residual gaps: no live rsync is executed, so the tests establish the argv
 contract rather than observable remote traffic. The ticket's own reproduction
 is static, and the security scan did not run a live exploit.
+
+Proof inventory: not applicable. This change introduces no CrossHair, Kani,
+Verus, or LemmaScript proof and materially changes no existing proof, harness,
+or verified production code, so there is no proof obligation for a separate
+proof assessment to scrutinize. The obligations above are discharged by named
+tests, parameterized matrices, and Hypothesis properties, with the recorded
+non-vacuity evidence standing in for the negative controls a proof review would
+otherwise require.
 
 ## Context and orientation
 
@@ -635,3 +669,7 @@ No new dependencies.
   and their fixes, the two-component UNC normalization defect found while
   fixing them, and the new construction-order obligation with its mutation
   evidence.
+- 2026-10-21: Recorded the three gate defects found while shipping those fixes
+  (mdtablefix reflow, Pylint C1803, Ruff `banned-api`), the resulting
+  certification at `7a300bba2` with 5267 passed and 116 skipped in Python, and
+  a justified `not applicable` entry for the proof inventory.
