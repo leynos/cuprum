@@ -5,8 +5,9 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: DRAFT -> IN PROGRESS (approved for implementation by the task
-instruction that supplied the coding plan).
+Status: DRAFT -> IN PROGRESS -> COMPLETE (delivered on branch
+`issue-531-rsync-local-path-validation-can-turn-path-operands-into-remote-transfers`,
+draft PR #649, all deterministic gates green and CI `CLEAN`).
 
 ## Purpose / big picture
 
