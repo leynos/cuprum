@@ -9,18 +9,19 @@ configured ``timeout=`` never ends the run.
 
 The success path is the discriminating route: the stage wait returns normally,
 so no timeout handler runs and nothing has terminated the descendant that
-keeps the pipes open. The wait-timeout route is parametrized beside it because
-the two share one handler, and ``INHERIT`` beside ``OWN_GROUP`` because only an
-owning run may signal the stage's group at all.
+keeps the pipes open. Three sibling cases cover the rest of the matrix, one
+test each rather than a product: the wait-timeout route, which shares the same
+handler; ``INHERIT``, because only an owning run may signal the stage's group
+at all; and an uncaptured run, which has no consumer to bound. Each case fixes
+its own policy and capture setting because they assert four different outcomes
+— bounded expiry, reclamation, survival, and prompt completion — not one
+outcome under four settings.
 """
 
 from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
-import contextlib
-import os
-import signal
 import threading
 import typing as typ
 
@@ -37,6 +38,7 @@ from cuprum._testing import (
     set_rust_availability_for_testing,
 )
 from cuprum.sh import ExecutionContext, Pipeline, ProcessGroupPolicy, RunOutputOptions
+from cuprum.unittests._post_exit_teardown_support import reap_descendant
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
 from tests.helpers.timeouts import (
@@ -68,11 +70,6 @@ _HARNESS_BUDGET_S = 12.0
 # A marker written by the descendant's parent before it exits, so a capturing
 # run has captured output to preserve across the expiry.
 MARKER = "before-the-descendant"
-
-_POLICIES = [ProcessGroupPolicy.OWN_GROUP, ProcessGroupPolicy.INHERIT]
-_POLICY_IDS = ["own-group", "inherit"]
-_CAPTURE_MODES = [True, False]
-_CAPTURE_IDS = ["capture", "no-capture"]
 
 type _PipelineRunFn = cabc.Callable[
     [Pipeline, _RunKwargs],
@@ -188,7 +185,7 @@ def stream_backend(request: pytest.FixtureRequest) -> StreamBackend:
 
 
 def _context(policy: ProcessGroupPolicy) -> ExecutionContext:
-    """Return an execution context selecting *policy* and the given timeout."""
+    """Return an execution context selecting *policy* with a short cancel grace."""
     return ExecutionContext(process_group=policy, cancel_grace=0.1)
 
 
@@ -262,19 +259,24 @@ def test_success_route_drain_is_bounded_by_the_configured_deadline(
     pid_file = tmp_path / "success-descendant.pid"
     pipeline = _pipeline(python, pid_file, blocks=False)
 
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        expired, leaked = _run_to_deadline(
-            pipeline,
-            pipeline_run_fn,
-            policy=ProcessGroupPolicy.OWN_GROUP,
-            capture=True,
-        )
+    try:
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            expired, leaked = _run_to_deadline(
+                pipeline,
+                pipeline_run_fn,
+                policy=ProcessGroupPolicy.OWN_GROUP,
+                capture=True,
+            )
 
-    assert expired.timeout == DEADLINE_S, (
-        f"the expiry must report the configured timeout {DEADLINE_S!r}, "
-        f"got {expired.timeout!r}"
-    )
-    assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+        assert expired.timeout == DEADLINE_S, (
+            f"the expiry must report the configured timeout {DEADLINE_S!r}, "
+            f"got {expired.timeout!r}"
+        )
+        assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+    finally:
+        # ``None`` makes the reaper read the pid file itself, so a run that
+        # failed before recording a descendant still exits through one path.
+        reap_descendant(pid_file, None)
 
 
 def test_wait_timeout_drain_is_bounded_and_reclaims_an_owned_group(
@@ -295,37 +297,41 @@ def test_wait_timeout_drain_is_bounded_and_reclaims_an_owned_group(
     pid_file = tmp_path / "timeout-descendant.pid"
     pipeline = _pipeline(python, pid_file, blocks=True)
     events: list[ExecEvent] = []
+    descendant: int | None = None
 
-    with (
-        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
-        sh.observe(events.append),
-    ):
-        expired, leaked = _run_to_deadline(
-            pipeline,
-            pipeline_run_fn,
-            policy=ProcessGroupPolicy.OWN_GROUP,
-            capture=True,
-        )
-        descendant = wait_for_pid_file(
-            pid_file,
-            context="the pipeline deadline reclamation",
-        )
+    try:
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            sh.observe(events.append),
+        ):
+            expired, leaked = _run_to_deadline(
+                pipeline,
+                pipeline_run_fn,
+                policy=ProcessGroupPolicy.OWN_GROUP,
+                capture=True,
+            )
+            descendant = wait_for_pid_file(
+                pid_file,
+                context="the pipeline deadline reclamation",
+            )
 
-    assert expired.timeout == DEADLINE_S, (
-        f"the expiry must report the configured timeout {DEADLINE_S!r}, "
-        f"got {expired.timeout!r}"
-    )
-    assert not leaked, f"the run left pending tasks behind: {leaked!r}"
-    assert isinstance(expired.output, str), (
-        f"a capturing expiry must report text output, got {expired.output!r}"
-    )
-    assert MARKER in expired.output, (
-        f"captured output must survive the expiry, got {expired.output!r}"
-    )
-    assert not process_is_running(descendant), (
-        f"an owning run must reclaim descendant pid {descendant}, "
-        f"stages={started_pids(events)!r}"
-    )
+        assert expired.timeout == DEADLINE_S, (
+            f"the expiry must report the configured timeout {DEADLINE_S!r}, "
+            f"got {expired.timeout!r}"
+        )
+        assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+        assert isinstance(expired.output, str), (
+            f"a capturing expiry must report text output, got {expired.output!r}"
+        )
+        assert MARKER in expired.output, (
+            f"captured output must survive the expiry, got {expired.output!r}"
+        )
+        assert not process_is_running(descendant), (
+            f"an owning run must reclaim descendant pid {descendant}, "
+            f"stages={started_pids(events)!r}"
+        )
+    finally:
+        reap_descendant(pid_file, descendant)
 
 
 def test_wait_timeout_drain_is_bounded_under_an_inherited_group(
@@ -345,20 +351,21 @@ def test_wait_timeout_drain_is_bounded_under_an_inherited_group(
     python = sh.make(python_program, catalogue=catalogue)
     pid_file = tmp_path / "inherit-descendant.pid"
     pipeline = _pipeline(python, pid_file, blocks=True)
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        expired, leaked = _run_to_deadline(
-            pipeline,
-            pipeline_run_fn,
-            policy=ProcessGroupPolicy.INHERIT,
-            capture=True,
-        )
-        descendant = wait_for_pid_file(
-            pid_file,
-            context="the inherited-group deadline settlement",
-        )
+    descendant: int | None = None
 
     try:
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            expired, leaked = _run_to_deadline(
+                pipeline,
+                pipeline_run_fn,
+                policy=ProcessGroupPolicy.INHERIT,
+                capture=True,
+            )
+            descendant = wait_for_pid_file(
+                pid_file,
+                context="the inherited-group deadline settlement",
+            )
+
         assert expired.timeout == DEADLINE_S, (
             f"the expiry must report the configured timeout {DEADLINE_S!r}, "
             f"got {expired.timeout!r}"
@@ -371,18 +378,7 @@ def test_wait_timeout_drain_is_bounded_under_an_inherited_group(
             f"captured output must survive the expiry, got {expired.output!r}"
         )
     finally:
-        _reap(descendant)
-
-
-def _reap(pid: int) -> None:
-    """Kill a descendant this test deliberately left running.
-
-    The descendant ignores ``SIGTERM`` by construction, so only ``SIGKILL``
-    ends it. The process may also have ended on its own, hence the suppressed
-    lookup failure.
-    """
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGKILL)
+        reap_descendant(pid_file, descendant)
 
 
 def test_uncaptured_success_route_does_not_wait_on_the_descendant(
@@ -426,4 +422,4 @@ def test_uncaptured_success_route_does_not_wait_on_the_descendant(
             f"both stages must report a normal exit, got {result.stages!r}"
         )
     finally:
-        _reap(descendant)
+        reap_descendant(pid_file, descendant)

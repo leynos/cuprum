@@ -5,17 +5,20 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await) and EP-M2
-(the `lines()` post-exit drain) are implemented, tested Red-then-Green, and
-committed with their commit gates green. EP-M2's CodeRabbit review returned ten
-findings: eight were applied and two are rejected as describing code that does
-not exist in this tree (see `Decision log`). Applying the first finding exposed
-the same `TimeoutError` misclassification at three further layers on the
-streamed `run()` path; all four fixes are in the working tree with their own
-regression module, and their commit gate is outstanding. EP-M3 (the pipeline's
-post-exit collection) and EP-M4 (documentation and full validation) remain. The
-direct run was split into `cuprum/_subprocess_direct_run.py` to stay inside the
-400-line module cap.
+Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await), EP-M2 (the
+`lines()` post-exit drain and the four-layer `TimeoutError` misclassification
+it exposed), EP-M3 (the pipeline's post-exit collection) and EP-M4
+(documentation and full validation) are all implemented, tested Red-then-Green,
+and committed. The full gate round at `8936c9bfa` is green: `check-fmt`, `lint`
+(including `yamllint` and `actionlint`), `typecheck`, `markdownlint`, `nixie`,
+and `make test` with 3312 Python tests passed, 167 Rust tests passed and
+doctests clean. The draft PR is open as
+[#652](https://github.com/leynos/cuprum/pull/652). Three milestone reviews
+returned nineteen findings in total: fourteen were applied and five rejected as
+describing code that does not exist in this tree (see `Decision log`). What
+remains is the final `scrutineer` gate round over this review's fixes and
+marking the PR ready for review. The direct run was split into
+`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
 
 ## Purpose / big picture
 
@@ -455,8 +458,8 @@ the issue was filed:
   command" and "Stream lines as they arrive". `docs/cuprum-design.md`: the
   post-exit-boundary bullet, a `_pipeline_settlement.py` entry in the §8.1.5
   module-boundary list, and the bounded pipeline collection passage. Reading
-  the shipped code to check that last passage corrected a claim I had drafted:
-  the direct run measures its remainder from `execution.started_at`, but
+  the shipped code to check that last passage corrected a drafted claim: the
+  direct run measures its remainder from `execution.started_at`, but
   `_collect_pipeline_inputs` stamps `time.monotonic() + timeout` at the start
   of collection, so spawn time is not deducted for a pipeline. Both documents
   now say so instead of implying one shared reference. ADR-021 gained an
@@ -497,7 +500,7 @@ the issue was filed:
   / 101 skipped in 233.57 s, nextest 167/167, doctests ok — so `test-rust` ran
   for the first time at this HEAD.** Both previously-red tests are green, and
   the new `test_pipeline_post_exit_deadline.py` ran 16 passed. `make lint` was
-  the only red gate, and it failed at `spelling` on my own prose: the
+  the only red gate, and it failed at `spelling` on prose in this plan: the
   British-`-ise` form of "recognize", written in this plan (`…epm3d.out`, exit
   2 at `Makefile:632`), where en-GB-oxendict requires `-ize`. The word was in
   the unstaged docs, so the staged code tree was never affected, but the gate
@@ -508,9 +511,28 @@ the issue was filed:
   has to be described. Fixed, then `make lint` re-run clean
   (`/tmp/lint-…-epm3e.out`, exit 0) — this second run is what certifies
   `yamllint` and `actionlint`, since the first aborted before reaching them.
+- [x] (2026-10-21) EP-M3/EP-M4 milestone review
+      (`coderabbit review --agent --committed --base-commit ed1d47e87`). Six
+      findings. Five were valid and are
+      applied. Two `OWN_GROUP` tests in `test_pipeline_post_exit_deadline.py`
+      now reap their descendant in `finally` through the shared
+      `_post_exit_teardown_support.reap_descendant`, with the whole body inside
+      the `try` so a run that raises still reaches the reaper; the module's
+      four unused parametrization constants are gone and its `_context`
+      docstring no longer mentions a timeout the function does not take; the
+      module docstring now describes the four sibling cases it actually holds
+      rather than a parametrization it does not perform; the plan's two
+      first-person passages and one second-person passage are impersonal; the
+      plan's status line and its EP-M3 `_await_pipeline_eof_grace` decision now
+      match the shipped mechanism. The sixth finding is the
+      `_spawn_stdin_writer` claim for the third time — see `Decision log`.
+      Focused re-run: `test_pipeline_post_exit_deadline.py` 16 passed, 8
+      skipped in 14.26 s (`/tmp/test-cuprum-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-epm3-review2.out`).
 - [ ] Gate each commit through `scrutineer`; request `coderabbit review --agent`
   after each milestone.
-- [ ] Push and open the draft PR.
+- [x] (2026-10-21) Push and open the draft PR:
+      [#652](https://github.com/leynos/cuprum/pull/652),
+  draft, head `8936c9bfa`, with the Lody session link and `Fixes #533`.
 
 ## Surprises & discoveries
 
@@ -627,7 +649,7 @@ the issue was filed:
   too, but neither is asserted against the tree, and grepping every tracked
   file for a module list found no other mechanized inventory. So the practical
   rule is: **creating a module is a packaging change, and the wheel snapshot is
-  the gate that will tell you.**
+  the gate that reports it.**
 
   The same lesson repeated for `cuprum/_pipeline_settlement.py` on 2026-10-21,
   which is why it was predicted rather than discovered the second time — but a
@@ -813,6 +835,23 @@ the issue was filed:
   previously-rejected finding deserves a second look, and a rejection that
   turns out to have been right would be a critical defect shipped on the
   strength of a stale check.
+
+- Decision (EP-M3/EP-M4 review, 2026-10-21): reject the `_spawn_stdin_writer`
+  finding for the third time, re-verified again at `8936c9bfa` rather than
+  inherited. This round it is filed as `major` and proposes the same
+  four-argument form plus a `_stdin_codec` helper imported from a module that
+  does not exist. Re-checked in the tree that produced the review:
+  `_spawn_stdin_writer` is still `(process, stdin_data, observation)` at
+  `cuprum/_subprocess_stdin.py:139-143`, and `_SubprocessExecution` still
+  declares `stdin_data: bytes | None` — this time at
+  `cuprum/_subprocess_spawn.py:68` — with no `stdio` field and no
+  `_stdin_codec` anywhere under `cuprum/`. The full suite passes at this HEAD,
+  including the blocked-stdin timeout tests that would fail with an
+  `AttributeError` before the `try`. Three rounds, three rejections, each
+  independently checked: the finding is about a different revision of this
+  repository, not about a defect that a passing suite hides. Recorded once more
+  because a rejection that is not re-verified after a milestone is exactly the
+  kind that ships a real defect.
 
 - Decision: bound each post-exit phase at the *route* level rather than by
   teaching the drain, the consumers, or the writer about deadlines. Rationale:
@@ -1073,16 +1112,27 @@ the issue was filed:
   pipeline holds one stderr consumer per stage plus at most one final stdout
   consumer. Reusing the hook would either need that type widened — in a module
   outside EP-M3's allowed change list — or a cast that lies about the tuple
-  length to a function the collector does not own. The collector therefore
-  awaits `(context.eof_grace_waiter or _await_eof_grace)(tuple(tasks))` in the
-  same shape `_await_capture_eof_grace` does, keeping one copy of the 0.25 s
-  rule (`_CAPTURE_EOF_GRACE_S`) and one copy of the pending-reader accounting
-  while leaving the public and private signatures alone. It still uses
-  `_settle_consumers`, `_decode_consumer_result` and `_DrainContext`, and it
-  does not call `_drain_stream_consumers`, whose failure reporting is
-  stdout/stderr-pair specific. Alternative considered: widen `_EofGraceWaiter`
-  to an arbitrary sequence (rejected: outside the allowed files, and it would
-  put pipeline-shaped knowledge into a direct-run type).
+  length to a function the collector does not own. The collector's own
+  `_await_pipeline_eof_grace` therefore calls
+  `asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)` over the whole N+1
+  consumer tuple and then `_report_eof_grace_expiry`, sharing the 0.25 s bound
+  and the pending-reader accounting with the direct run's drain while each
+  keeps its own wait. It still uses `_settle_consumers`,
+  `_decode_consumer_result` and `_DrainContext`, and it does not call
+  `_drain_stream_consumers`, whose failure reporting is stdout/stderr-pair
+  specific. Alternative considered: widen `_EofGraceWaiter` to an arbitrary
+  sequence (rejected: outside the allowed files, and it would put
+  pipeline-shaped knowledge into a direct-run type).
+
+  Correction (2026-10-21, milestone review): an earlier draft of this entry
+  said the collector awaits `(context.eof_grace_waiter or _await_eof_grace)` in
+  the shape `_await_capture_eof_grace` uses. That is not what shipped. The hook
+  is deliberately **not** consulted on the pipeline path: it exists so a
+  direct-run test can replace a wall-clock wait with a deterministic one, and
+  honouring it only when a pipeline happens to hold two readers would make that
+  test seam behave differently at stage counts the test cannot see.
+  `_await_pipeline_eof_grace` documents the same reason in its docstring. The
+  shared part is the `_stream_drain` bound and accounting, not the hook.
 
 - Decision (EP-M3, 2026-10-21): `_gather_pipeline_outputs` is retained and
   taught to accept a deadline, rather than retired in favour of a single gather
