@@ -699,6 +699,26 @@ the issue was filed:
       `cuprum/_subprocess_direct_run.py` is empty. `--collect-only` still
       reports 12 cases, with the eight entrypoint×policy cases now carrying
       joined ids such as `[run-own-group]`.
+- [x] (2026-10-21) The full gate round was run against `4d1b262db` and
+      certified, with every log stamped `HEAD before`/`HEAD after` at that
+      commit and zero tracked-tree changes on both stamps
+      (`/tmp/gh533-gates/*-4d1b262db.log`): `make check-fmt`, `make typecheck`,
+      `make test`, `make lint`, `make markdownlint` and `make nixie`, all exit
+      0. `make test` reported 22 pytest sessions, 5220 passed, 122 skipped,
+      0 failed, then nextest 167/167 with no failures and the Rust doctests
+      clean. The first attempt at `make lint` (`b033e8cab`) failed
+      `python-lint`'s `docstring-extraneous-exception` check: the
+      `_expire_line_stream` docstring had a `Raises` section naming
+      `_SubprocessTimeoutError`, which the helper does not raise itself — the
+      delegate `_handle_stream_timeout` does. The fix states the same fact in
+      prose and keeps the `NoReturn` rationale; it was committed as
+      `4d1b262db` and the whole round re-run there, because a gate cannot
+      certify a tree that changes under it.
+- [x] (2026-10-21) Force-pushed `4d1b262db` over SSH with the lease bound to
+      the remote head recorded immediately beforehand (`50c4536a4`), refreshed
+      the tracking ref with a leading `+`, and confirmed the remote head with
+      `git ls-remote` against `git rev-parse HEAD`; the branch's upstream now
+      names `origin/`. The PR's CI is running at that head.
 
 ## Surprises & discoveries
 
