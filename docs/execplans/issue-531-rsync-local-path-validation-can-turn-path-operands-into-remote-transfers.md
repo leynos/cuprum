@@ -161,8 +161,17 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       that single test passed alone in 319.86 s once inode-lock contention
       fell to zero, confirming the failure was environmental rather than a
       regression.
-- [ ] (2026-10-21) Push the rebased branch, confirm the PR merge ref is
-      buildable, and watch CI to success.
+- [x] (2026-10-21) Push the rebased branch, confirm the PR merge ref is
+      buildable, and watch CI to success. The remote tip was the pre-rebase
+      `b1378b57a`, so the push used
+      `--force-with-lease=...:b1378b57ac664207d40612f2866de2532ac2bd64`
+      after confirming that SHA matched the reflog's rebase-start parent;
+      `HEAD`, the refreshed tracking ref, and `git ls-remote` all then read
+      `c8e8d25b0bb3c4a6a8603192e9b2116b6595d5af`. PR #649 went from
+      `CONFLICTING` to `MERGEABLE`/`CLEAN`, and all 18 reported checks
+      passed, including `lint-test`, the three Python version jobs, both
+      extension-gated boundary jobs, all five native wheel builds,
+      `verify-wheel-install`, and the 20-minute `coverage` job.
 
 ## Surprises & discoveries
 
