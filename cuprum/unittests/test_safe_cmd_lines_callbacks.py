@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import typing as typ
 
 from cuprum import RunOutputOptions
@@ -73,6 +74,13 @@ def test_lines_stamp_events_from_the_spawn_clock(
       sit far below "now" and compute an elapsed time larger than the whole
       timeout, which the post-exit drain reports as ``TimeoutExpired``.
 
+    Neither assertion can catch the regression on its own. The stamp is
+    floored at zero, so a start from the real clock yields ``0.0`` rather than
+    a negative ``at``: the completion assertion is what fails, not the stamp.
+    Conversely a start above "now" would make the deadline comfortable while
+    leaving the stamp wrong. Asserting both is what makes either way of taking
+    the wrong reading fail.
+
     The line clock is injected in ``_line_callbacks``, where the stamping read
     lives. The start clock is injected in ``_command_internals``: both clocks
     are resolved at the observation's construction site, so patching that
@@ -81,13 +89,19 @@ def test_lines_stamp_events_from_the_spawn_clock(
     """
     from cuprum import _command_internals, _line_callbacks
 
+    # Imported *before* the clocks are patched, and deliberately so. A module
+    # source that still reads a module-level ``perf_counter`` binds it with
+    # ``from time import perf_counter`` at import time; importing it here, once
+    # the patch is installed, would bind the patch itself and let the
+    # regression pass. ``lines()`` imports this module lazily, so the test must
+    # not rely on a neighbouring test having imported it first.
+    importlib.import_module("cuprum._line_stream.spawn")
+
     # Deliberately above any real ``perf_counter`` reading (the machine's
     # uptime, in seconds). A start taken from the real clock would then sit far
     # *below* "now", making elapsed time enormous rather than merely wrong.
     clock_origin = 1e12
-    monkeypatch.setattr(
-        _command_internals.time, "perf_counter", lambda: clock_origin
-    )
+    monkeypatch.setattr(_command_internals.time, "perf_counter", lambda: clock_origin)
     monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: clock_origin + 3.25)
     command = python_builder("-c", "print('clock')")
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_callbacks import _chain_line_hooks
@@ -101,7 +100,7 @@ async def _start_line_stream_run(
     # execution when stamping each ``LineEvent``. Left at its ``0.0`` default,
     # every ``at`` would be the machine's monotonic uptime rather than seconds
     # since this command started.
-    started_at = perf_counter()
+    started_at = execution.observation.monotonic_clock()
     execution = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(execution)
     pid = process.pid
