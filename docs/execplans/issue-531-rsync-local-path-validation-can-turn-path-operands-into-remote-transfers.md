@@ -172,6 +172,13 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       passed, including `lint-test`, the three Python version jobs, both
       extension-gated boundary jobs, all five native wheel builds,
       `verify-wheel-install`, and the 20-minute `coverage` job.
+- [x] (2026-10-21) Re-run all seven gates at the delivery commit
+      `160744a5e01dc882181c47db63bffd3841916a9b`, which adds only this
+      ExecPlan record to the tree CI approved. Every log again records that
+      HEAD and `EXIT=0`; `make test` reproduced the same totals of 5249
+      passed and 116 skipped (Python), 167 of 167 (Rust nextest), and `ok`
+      doctests. This closes the gap where the earlier logs certified the
+      pre-record tree rather than the pushed one.
 
 ## Surprises & discoveries
 
