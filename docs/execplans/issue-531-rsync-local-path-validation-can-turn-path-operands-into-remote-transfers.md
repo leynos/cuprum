@@ -366,9 +366,9 @@ rsync source must be a local path; remote syntax such as host:path, host::module
   is mirrored in `test_rsync_builder_outputs_args`. Rationale: a two-component
   UNC path is a bare share to `PureWindowsPath`, which appends a trailing
   separator, so the argv would differ between hosts. The unit acceptance test
-  needs the same portability for the same reason, and calling the policy
-  rather than `safe_path` in the counterpart step is what makes that assertion
-  about rsync locality rather than generic validity.
+  needs the same portability for the same reason, and calling the policy rather
+  than `safe_path` in the counterpart step is what makes that assertion about
+  rsync locality rather than generic validity.
 - D8. The construction-order test records `sh.make` calls instead of relying
   on the absence of a returned command. Rationale: a builder that constructs
   and then discards a command raises identically, so only the factory call
