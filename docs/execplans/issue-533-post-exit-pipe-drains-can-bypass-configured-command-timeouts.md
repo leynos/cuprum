@@ -669,6 +669,36 @@ the issue was filed:
       but a red advisory check is a claim a reviewer has to discount, and the
       failure was a real gap in the branch's own CI declaration rather than a
       flake.
+- [x] (2026-10-21) The `CodeScene Code Health Review (main)` check failed at
+      `50c4536a4` with three gates red and four files flagged. Each finding was
+      repaired rather than adjudicated, because a newly introduced violation
+      fails the gate regardless of the check being advisory (PR #466's
+      correction), and three of the four were honest simplifications:
+      `_await_direct_completion` read `execution.consumes_stdout or
+      execution.consumes_stderr` twice and the second *BoolOp* pushed it to
+      cc = 9; `_collect_stream_output` and `_collect_line_stream_after_exit`
+      each carried docstring prose duplicating their module docstrings; the
+      deadline test module read five arguments at once and held a 70-line test.
+      The two prose trims were paired with one extraction each — the expiry arm
+      of `_collect_line_stream_after_exit` became `_expire_line_stream`, and
+      the two-cancellation choreography became
+      `cancel_twice_across_direct_cleanup` — so the shorter bodies are a
+      consequence of a named responsibility rather than of deleted explanation.
+      Local `CS_DISABLE_VERSION_CHECK=1 cs check` now reports 10.00 on all five
+      touched files, and it reproduced CI's wordings exactly on the earlier
+      round, so it is the iteration oracle; the check-run at the pushed head
+      remains the verdict to cite.
+- [x] (2026-10-21) The extracted test helper was proved non-vacuous before
+      committing. Replacing the production `_shielded_cleanup(settle_writer_
+      then_group())` with two sequential awaits made
+      `test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group`
+      fail with the intended message — "a second cancellation arriving during
+      the writer's reclamation must not cost the run its group settlement" —
+      so moving the choreography out of the test body did not cost the case its
+      teeth. The mutation was reverted and `git diff --stat` on
+      `cuprum/_subprocess_direct_run.py` is empty. `--collect-only` still
+      reports 12 cases, with the eight entrypoint×policy cases now carrying
+      joined ids such as `[run-own-group]`.
 
 ## Surprises & discoveries
 

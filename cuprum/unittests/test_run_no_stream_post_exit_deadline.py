@@ -71,12 +71,11 @@ from cuprum.unittests._post_exit_teardown_support import (
     DirectCleanupWatch,
     SpawnedWriter,
     assert_reclaimed,
-    await_within,
+    cancel_twice_across_direct_cleanup,
     owned_builder,
     reap_descendant,
     recorded_descendant_or_fail,
     run_to_its_own_deadline,
-    settle,
     start_owned_run,
 )
 from tests.helpers.timeouts import (
@@ -195,15 +194,23 @@ _ENTRYPOINTS: list[tuple[str, cabc.Callable[[ProcessGroupPolicy], _Invoke]]] = [
 ]
 
 
-@pytest.mark.parametrize("policy", _POLICIES, ids=_POLICY_IDS)
-@pytest.mark.parametrize("entrypoint", [name for name, _ in _ENTRYPOINTS])
+# One case per (entrypoint, policy), as a pair rather than as two stacked
+# parametrize marks: the case's body reads the policy and the entrypoint
+# together, and naming the pair keeps the dependency visible in the id.
+_CASES: list[tuple[str, ProcessGroupPolicy]] = [
+    (name, policy) for name in dict(_ENTRYPOINTS) for policy in _POLICIES
+]
+_CASE_IDS = [
+    f"{name}-{policy.name.lower().replace('_', '-')}" for name, policy in _CASES
+]
+
+
+@pytest.mark.parametrize("case", _CASES, ids=_CASE_IDS)
 def test_a_descendant_holding_stdin_does_not_outlive_the_direct_run_deadline(
     owned_builder: cabc.Callable[..., SafeCmd],
     tmp_path: Path,
-    *,
     monkeypatch: pytest.MonkeyPatch,
-    policy: ProcessGroupPolicy,
-    entrypoint: str,
+    case: tuple[str, ProcessGroupPolicy],
 ) -> None:
     """The direct run's post-exit stdin await honours the configured deadline.
 
@@ -222,6 +229,7 @@ def test_a_descendant_holding_stdin_does_not_outlive_the_direct_run_deadline(
     Both run because only the pair separates a bound that was entered from a
     cleanup that completed.
     """
+    entrypoint, policy = case
     pid_file = tmp_path / f"direct-stdin-{entrypoint}-{policy.name}.pid"
     command = owned_builder(*descendant_then_exit_argv(pid_file, exit_code=0))
     watch = SpawnedWriter(monkeypatch)
@@ -393,21 +401,9 @@ def test_a_second_cancel_during_the_direct_cleanup_still_settles_the_group(
             )
             # The child exits once the descendant has announced itself, which
             # parks the writer on the payload nothing will read. Cancelling
-            # there can only enter the post-exit cleanup.
-            await await_within(
-                watch.writer_gate.reached.wait(),
-                context="the direct run's post-exit writer wait",
-            )
-            run_task.cancel()
-            watch.writer_gate.released.set()
-            await await_within(
-                watch.cleanup_gate.reached.wait(),
-                context="the writer's reclamation",
-            )
-            run_task.cancel()  # second cancellation, delivered mid-cleanup
-            await asyncio.sleep(0)
-            watch.cleanup_gate.released.set()
-            await settle(run_task)
+            # there can only enter the post-exit cleanup, and the second
+            # cancellation lands on the writer's reclamation.
+            await cancel_twice_across_direct_cleanup(run_task, watch)
             assert watch.settled.is_set(), (
                 "a second cancellation arriving during the writer's reclamation "
                 "must not cost the run its group settlement: the two halves "
