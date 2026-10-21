@@ -266,7 +266,7 @@ async def _await_consumers(
     """
     readers = tuple(task for task in consumers if task is not None)
     if not readers:
-        return
+        return None
     finished, pending = await asyncio.wait(
         readers,
         timeout=remaining,
