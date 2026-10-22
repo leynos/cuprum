@@ -1,12 +1,12 @@
-"""The two single-command run loops.
+"""The streamed run: a child whose output the parent captures or relays.
 
 Split from ``cuprum._subprocess_execution`` so the orchestration module stays
-about spawning and result assembly. A run takes one of two shapes — the
-*streamed* run with stdout/stderr consumers attached, and the *direct* run
-without — and both live here because they owe the same debts: waiting for exit
-through the deadline path, and reconciling the tasks the run owns exactly once
-on every exit route. The direct run is a path of its own rather than a
-degenerate case of the other for the reason its docstring below records.
+about spawning and result assembly, and split *from* the direct run at
+``cuprum._subprocess_direct_run`` because the two owe different debts. This
+module's post-exit phase is a boundary: one deadline over three awaits that all
+share an aftermath. The direct run has no such boundary — one await, then a
+cleanup — and the shape of the code is what tells a reader which of the two they
+are looking at.
 
 The streamed run's post-exit phase has a shape that is not obvious from the
 code, and it is load-bearing:
@@ -49,12 +49,6 @@ from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _decode_consumer_drains
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_reclaim import (
-    _cancel_stdin_writer,
-    _settle_stdin_writer,
-)
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
@@ -76,12 +70,10 @@ from cuprum._subprocess_stream_post_exit import (
 )
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
-    _await_exit_or_writer_failure,
     _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
     _reconcile_run_tasks,
-    _wait_for_exit_code_within_timeout,
 )
 
 if typ.TYPE_CHECKING:
@@ -93,55 +85,6 @@ if typ.TYPE_CHECKING:
         _DrainPair,
         _RunTaskOwnership,
     )
-
-
-async def _run_subprocess_without_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> tuple[int, float]:
-    """Run a subprocess directly, without stdout/stderr capture or echo.
-
-    The direct path spawns no stream consumers, so the only task to reconcile is
-    the stdin writer. Whatever escapes the wait — a timeout, a cancellation, or
-    an unexpected failure — it is cancelled and drained through
-    :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
-    drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation. That cleanup is shielded, so a cancellation arriving while it
-    runs cannot abandon it. An unexpected stdin-writer failure after the process
-    exits normally propagates unchanged.
-
-    The wait is raced against that same writer — see
-    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure` — so a
-    producer that dies at once ends the run with its own failure rather than
-    being reported later as a slow child.
-
-    Returns
-    -------
-    tuple[int, float]
-        The process exit code and the observation's monotonic exit timestamp.
-    """
-    stdin_task = _spawn_stdin_writer(
-        process,
-        execution.stdio.stdin,
-        _stdin_codec(execution.ctx),
-        execution.observation,
-    )
-    try:
-        exit_code, exited_at = await _await_exit_or_writer_failure(
-            _wait_for_exit_code_within_timeout(process, execution),
-            stdin_task,
-        )
-    except BaseException:
-        await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
-        raise
-    # Settled rather than awaited: this path has no shared post-exit deadline
-    # scope over it (that scope belongs to the streamed path), so a producer
-    # parked in ``anext`` would make a bare await outlast the run's own
-    # deadline — the terminator would fire, the child would be killed, and the
-    # caller would go on waiting for the producer. See
-    # :func:`~cuprum._subprocess_stdin_reclaim._settle_stdin_writer`.
-    await _settle_stdin_writer(stdin_task)
-    return exit_code, exited_at
 
 
 async def _settle_group_and_reconcile_consumers(
@@ -209,24 +152,24 @@ async def _collect_stream_output(
     """Collect the stream consumers, settling the run's group if that fails.
 
     The three awaits below form one boundary *and* share one deadline; the
-    module docstring records why both matter. The deadline is read as the
-    argument to ``asyncio.timeout`` so it is measured immediately before the
-    scope it bounds, and it covers the heartbeat stop and the writer await as
-    well as the gather — a writer parked on a pipe a descendant never reads is
-    a hang the gather's own bound would never reach.
-
-    Expiry and cancellation are handled apart deliberately. Only the timer's
-    own expiry is a ``TimeoutError``; a cancellation still arrives as
-    ``CancelledError`` and takes the re-raising route, which keeps a caller's
-    cancellation distinguishable from the run's own deadline.
+    module docstring records why both matter. Expiry and cancellation are
+    handled apart for the reason given there, and the scope's ``expired()`` is
+    what tells this run's deadline from a consumer's own ``TimeoutError``.
 
     Returns
     -------
     _DrainPair
         The stdout and stderr results of the completed gather.
+
+    Raises
+    ------
+    TimeoutError
+        When a consumer fails with its own ``TimeoutError``; re-raised
+        unchanged after a discard reconciliation.
     """
+    deadline = asyncio.timeout(_deadline_for_collection(execution))
     try:
-        async with asyncio.timeout(_deadline_for_collection(execution)):
+        async with deadline:
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
             # The awaitables, not the tasks: a stream cuprum holds no pipe for
@@ -242,6 +185,17 @@ async def _collect_stream_output(
                 context=_drain_context(execution, tasks, pid, preserve=True),
             )
     except TimeoutError as exc:
+        if not deadline.expired():
+            # Not this scope's expiry, so an ordinary failure wearing a
+            # ``TimeoutError``. Reconcile without capturing, then re-raise it
+            # unchanged for the same reason every other failure route does.
+            await _settle_group_and_reconcile_consumers(
+                process,
+                execution,
+                tasks,
+                _drain_context(execution, tasks, pid, preserve=False),
+            )
+            raise
         # Capture-aware, matching the exit-wait route: a capturing run's text
         # is what the resulting ``TimeoutExpired`` reports, so discarding it
         # here would lose output the caller was explicitly promised.
@@ -343,7 +297,6 @@ async def _run_subprocess_with_streams(
 __all__ = [
     "_collect_stream_output",
     "_run_subprocess_with_streams",
-    "_run_subprocess_without_streams",
     "_settle_owned_group_before_draining",
     "_wait_for_streamed_process_exit",
 ]

@@ -22,12 +22,13 @@ the case where a newline-less echo can strand the diagnostic mid-line.
 
 The per-line callback for each stream is composed here — the observe-hook
 emission plus the caller's ``on_line``, both via
-``cuprum._line_callbacks._compose_line_callbacks`` — so ``SafeCmd.run()`` and
-``SafeCmd.lines()`` share one composition seam. Each consumer drains into the
-collector the run built for it: index ``0`` is stdout's, index ``1`` is
-stderr's. The spawn helper does not own those collectors; the run retains the
-same tuple so its single reconciliation point settles and reads them exactly
-once.
+``cuprum._line_callbacks._compose_observation_line_callback`` — so
+``SafeCmd.run()`` and ``SafeCmd.lines()`` share one composition seam, and the
+clock every stamp is measured against is bound by that seam rather than by each
+caller. Each consumer drains into the collector the run built for it: index
+``0`` is stdout's, index ``1`` is stderr's. The spawn helper does not own those
+collectors; the run retains the same tuple so its single reconciliation point
+settles and reads them exactly once.
 """
 
 from __future__ import annotations
@@ -37,7 +38,10 @@ import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
+from cuprum._line_callbacks import (
+    _compose_observation_line_callback,
+    _StageStreamCallbacks,
+)
 from cuprum._stream_config import (
     # Re-exported under this module's names as well as imported for use: both
     # once lived here, and ``_command_internals`` still reaches the sink
@@ -67,16 +71,26 @@ def _create_stream_callback(
     event_type: LineStreamName,
     pid: int | None,
 ) -> cabc.Callable[[str], _LineHookOutcome] | None:
-    """Create the composed per-line callback for one stream, or ``None``."""
-    emission = _LineEmissionContext(
-        stream="stdout",
-        pid=pid,
-        on_line=execution.on_line,
-        started_at=execution.started_at,
-    )
-    return _compose_line_callbacks(
+    """Create the composed per-line callback for one stream, or ``None``.
+
+    Composed through the observation-taking helper, which binds the stamp's
+    clock itself. Building the emission context here would let this path pair
+    ``execution.started_at`` with a clock other than the one it was sampled
+    from, and every stamp would then be a difference between two clocks.
+
+    Returns
+    -------
+    collections.abc.Callable[[str], _LineHookOutcome] | None
+        The composed callback, or ``None`` when nothing observes this stream.
+    """
+    return _compose_observation_line_callback(
         execution.observation,
-        dc.replace(emission, stream=event_type),
+        event_type,
+        _StageStreamCallbacks(
+            pid=pid,
+            on_line=execution.on_line,
+            started_at=execution.started_at,
+        ),
     )
 
 

@@ -49,7 +49,7 @@ from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
 from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
-from cuprum._subprocess_timeout import _emit_exit_event, _ExitEventDetails
+from cuprum._subprocess_timeout import _emit_run_exit_event
 from cuprum._subprocess_wait import (
     _drain_context,
     _reconcile_run_tasks,
@@ -271,15 +271,11 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
     # answer: it left ``max_rss_bytes`` unavailable on a handle result while
     # ``run()`` reported it for the same command.
     rusage = _wait4_spawn.resource_usage_for(run.process, None)
-    _emit_exit_event(
-        execution.observation,
-        _ExitEventDetails(
-            pid=run.process.pid,
-            exit_code=outcome.exit_code,
-            started_at=run.started_at,
-            exited_at=outcome.exited_at,
-            resource_usage=rusage,
-        ),
+    _emit_run_exit_event(
+        execution,
+        outcome,
+        pid=run.process.pid,
+        resource_usage=rusage,
     )
     return _sh_module().CommandResult(
         program=execution.cmd.program,

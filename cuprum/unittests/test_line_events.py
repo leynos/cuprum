@@ -10,7 +10,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _line_callbacks, lines
+from cuprum import lines
 from cuprum._line_callbacks import (
     _compose_line_callbacks,
     _fan_out_hooks,
@@ -56,12 +56,9 @@ class TestComposeLineCallbacks:
             "no observe hooks and no on_line must keep the no-callback path"
         )
 
-    def test_compose_stamps_elapsed_monotonic_time(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_compose_stamps_elapsed_monotonic_time(self) -> None:
         """The at field is the pinned clock reading minus the start reference."""
         reading = {"value": 10.0}
-        monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: reading["value"])
         received: list[LineEvent] = []
         callback = _compose_line_callbacks(
             _make_observation(),
@@ -70,6 +67,11 @@ class TestComposeLineCallbacks:
                 pid=7,
                 on_line=received.append,
                 started_at=9.25,
+                # Injected on the context, where the stamp reads it. Patching
+                # ``_line_callbacks.perf_counter`` would no longer reach the
+                # stamp: the field default binds that name when the class is
+                # created, which is before any test patches the module.
+                monotonic_clock=lambda: reading["value"],
             ),
         )
 
@@ -88,11 +90,8 @@ class TestComposeLineCallbacks:
             f"the event must retain the decoded line text, got {event!r}"
         )
 
-    def test_compose_fans_out_to_user_callback_with_stream_tag(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_compose_fans_out_to_user_callback_with_stream_tag(self) -> None:
         """Each composed callback stamps its own stream name."""
-        monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 5.0)
         received: list[LineEvent] = []
         callback = _compose_line_callbacks(
             _make_observation(),
@@ -101,6 +100,7 @@ class TestComposeLineCallbacks:
                 pid=42,
                 on_line=received.append,
                 started_at=4.0,
+                monotonic_clock=lambda: 5.0,
             ),
         )
 

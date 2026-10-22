@@ -178,10 +178,19 @@ class TestPipelinePreparationCost:
         The consumer stand-in replaces ``_consume_stream`` so no real stream
         machinery is needed; it is an async function, so ``create_task``
         accepts it and the stage's tasks settle by ordinary await.
+
+        Composition is spied at ``_line_callbacks``, where the shared seam
+        lives: the stage path reaches it through
+        ``_compose_observation_line_callback``, which resolves
+        ``_compose_line_callbacks`` from that module's globals. That is a
+        stronger pin than patching a name in the stage module, because the
+        pipeline can no longer route around the seam without this spy
+        recording nothing.
         """
+        from cuprum import _line_callbacks
         from cuprum import _pipeline_stage_streams as stage_streams
 
-        real_compose = stage_streams._compose_line_callbacks
+        real_compose = _line_callbacks._compose_line_callbacks
 
         def compose_spy(
             observation: _StageObservation,
@@ -208,7 +217,7 @@ class TestPipelinePreparationCost:
             # settle through the ordinary await below.
             await asyncio.sleep(0)
 
-        monkeypatch.setattr(stage_streams, "_compose_line_callbacks", compose_spy)
+        monkeypatch.setattr(_line_callbacks, "_compose_line_callbacks", compose_spy)
         monkeypatch.setattr(stage_streams, "_consume_stream", consume_spy)
 
         async def drive() -> None:

@@ -30,6 +30,7 @@ import pytest
 
 from cuprum import (
     ScopeConfig,
+    _subprocess_direct_run,
     _subprocess_stream_run,
     _subprocess_streams,
     _subprocess_wait,
@@ -228,21 +229,24 @@ class SpawnedWriter:
     :attr:`task` for the precondition that the writer was live, and pin
     settlement where nothing else can stand in for it.
 
-    The spawn is rebound on *two* modules, because the run has two paths and
-    each resolves the name in its own globals: ``_subprocess_stream_run``
-    spawns it for the direct run, and ``_subprocess_streams`` spawns it for the
-    streamed run after the shared spawn construction moved there. Rebinding
-    only the stream-run module would watch a name the streamed path never
-    reads, and the test would report a run that spawned no writer rather than
-    the missed seam it is.
+    The spawn is rebound on *every* module where a run resolves the name, one
+    per path: ``_subprocess_direct_run`` for the direct run, and
+    ``_subprocess_streams`` for the streamed run after the shared spawn
+    construction moved there. Rebinding only one of them would watch a name the
+    other path never reads, and the test would report a run that spawned no
+    writer rather than the missed seam it is.
+
+    A path that moved between modules needs no change here: the list names the
+    modules each path *reads*, not the module the code once lived in, so the
+    helper follows the code rather than a stale address.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rebind the spawn wherever a run resolves it, retaining the task."""
         self.task: asyncio.Task[None] | None = None
-        self._spawn = _subprocess_stream_run._spawn_stdin_writer
+        self._spawn = _subprocess_direct_run._spawn_stdin_writer
         monkeypatch.setattr(
-            _subprocess_stream_run,
+            _subprocess_direct_run,
             "_spawn_stdin_writer",
             self._watching_spawn,
         )
@@ -283,6 +287,73 @@ class SpawnedWriter:
         )
 
 
+class DirectCleanupWatch:
+    """Hold the direct run's post-exit cleanup open so arrivals are aimed.
+
+    The direct path's cleanup has two halves — reclaim the stdin writer, then
+    settle the group that writer was writing into — and the property under test
+    is that a cancellation arriving during the first does not cost the run the
+    second. Two gates make both arrivals deterministic: one holds the post-exit
+    writer wait so the first cancellation is delivered there, and one holds the
+    writer's reclamation so the second lands on that half rather than on
+    whatever the scheduler happened to be doing.
+
+    Settlement records arrival on *entry* and then runs the production one,
+    because the two are separate facts and both are needed. An event set on
+    entry says the second half was reached; the descendant being gone says it
+    ran to completion. A run that entered the settlement and was abandoned
+    part-way satisfies the first and not the second, which is exactly what a
+    shield over one half rather than the pair produces.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Capture the originals and rebind the module attributes to watch."""
+        self.writer_gate = Gate()
+        self.cleanup_gate = Gate()
+        self.settled = asyncio.Event()
+        self._await_writer = _subprocess_direct_run._await_writer_within_deadline
+        self._cancel_writer = _subprocess_direct_run._cancel_stdin_writer
+        self._settle_group = _subprocess_direct_run._settle_owned_group_before_draining
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_await_writer_within_deadline",
+            self._held_writer_wait,
+        )
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_cancel_stdin_writer",
+            self._held_cancel,
+        )
+        monkeypatch.setattr(
+            _subprocess_direct_run,
+            "_settle_owned_group_before_draining",
+            self._recording_settle,
+        )
+
+    async def _held_writer_wait(
+        self,
+        execution: _SubprocessExecution,
+        stdin_task: asyncio.Task[None],
+    ) -> None:
+        """Hold the post-exit writer wait so a cancellation lands on it."""
+        await self.writer_gate.hold()
+        await self._await_writer(execution, stdin_task)
+
+    async def _held_cancel(self, stdin_task: asyncio.Task[None] | None) -> None:
+        """Hold the writer's reclamation so a second cancellation lands there."""
+        await self.cleanup_gate.hold()
+        await self._cancel_writer(stdin_task)
+
+    async def _recording_settle(
+        self,
+        process: asyncio.subprocess.Process,
+        execution: _SubprocessExecution,
+    ) -> None:
+        """Record that the settlement was reached, then run the real one."""
+        self.settled.set()
+        await self._settle_group(process, execution)
+
+
 def recorded_descendant(pid_file: Path) -> int | None:
     """Read the descendant pid the child recorded, if it recorded one.
 
@@ -302,10 +373,36 @@ def recorded_descendant(pid_file: Path) -> int | None:
         return None
 
 
+# How long a cleanup path waits for a just-spawned grandchild to record its pid.
+# Deliberately short: this runs in a ``finally``, possibly on the way out of an
+# already-failing test, so it must not delay a suite by more than a moment. A
+# healthy run never spends it — the test body waits for the file before
+# reaching cleanup, so the first read below succeeds and the loop is skipped.
+_CLEANUP_PID_GRACE_S = 2.0
+
+
+def _await_recorded_descendant(pid_file: Path) -> int | None:
+    """Read the recorded pid, giving a just-spawned grandchild a moment to write it."""
+    deadline = time.monotonic() + _CLEANUP_PID_GRACE_S
+    while True:
+        recorded = recorded_descendant(pid_file)
+        if recorded is not None or time.monotonic() >= deadline:
+            return recorded
+        time.sleep(0.05)
+
+
 def reap_descendant(pid_file: Path, descendant_pid: int | None) -> None:
-    """Force-kill the descendant so a failing test does not leak it."""
+    """Force-kill the descendant so a failing test does not leak it.
+
+    A cleanup path is reached both when the test ran to completion and when an
+    assertion failed first. In the second case the grandchild may only just have
+    been spawned, so the pid file it writes is not there yet — and the child
+    deliberately does not wait for it, so this is the only notice cleanup gets.
+    Reading once would then reap nothing and park a sleeper on the shared host
+    for its whole lifetime, which is a leak a failing test must not cause.
+    """
     if descendant_pid is None:
-        descendant_pid = recorded_descendant(pid_file)
+        descendant_pid = _await_recorded_descendant(pid_file)
     if descendant_pid is not None and process_is_running(descendant_pid):
         with contextlib.suppress(ProcessLookupError):
             os.kill(descendant_pid, signal.SIGKILL)
@@ -340,7 +437,7 @@ async def assert_reclaimed(descendant_pid: int, message: str) -> None:
 
 
 async def run_to_its_own_deadline(
-    run: cabc.Coroutine[object, object, object],
+    run: cabc.Awaitable[object],
 ) -> TimeoutExpired:
     """Await *run*, requiring it to end on its own deadline and in time.
 
@@ -350,6 +447,13 @@ async def run_to_its_own_deadline(
     on the elapsed time is what shows the run ended because of *its* deadline
     rather than because the outer one gave up on it. Both are asserted here so
     a test cannot accidentally check one and read it as the other.
+
+    The parameter is any awaitable rather than a coroutine because both shapes
+    are real here: a test that drives a run inline hands over the coroutine the
+    entry point returned, and a test that has to keep working while the run is
+    live hands over the task it scheduled. Narrowing the annotation to the
+    coroutine would reject the second for being a task when the only thing this
+    helper does with it — hand it to ``asyncio.wait_for`` — accepts either.
 
     Returns
     -------
@@ -384,12 +488,27 @@ def start_owned_run(
     pid_file: Path,
     *,
     stdin: StdinInput | None = None,
+    capture: bool = True,
 ) -> asyncio.Task[object]:
-    """Start an owned run of a child that exits leaving a descendant behind."""
+    """Start an owned run of a child that exits leaving a descendant behind.
+
+    *capture* selects which of the run's two shapes is exercised, and the two
+    are genuinely different code: a capturing run takes the streamed boundary
+    with its consumer gather, and a non-capturing one takes the direct path
+    where the only task left after the child exits is the stdin writer. They
+    are named here rather than left to each caller because a test that reached
+    the wrong one would still spawn the same process tree and still look like
+    it was testing the scenario it describes.
+
+    Returns
+    -------
+    asyncio.Task[object]
+        The running task, so the caller can cancel it and await its end.
+    """
     command = builder(*descendant_then_exit_argv(pid_file, exit_code=0))
     return asyncio.ensure_future(
         command.run(
-            output=RunOutputOptions(capture=True, echo=False),
+            output=RunOutputOptions(capture=capture, echo=False),
             stdin=stdin,
             context=ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP),
         ),
@@ -412,6 +531,39 @@ async def reach_gate_and_cancel(
     await await_within(gate.reached.wait(), context=context)
     run_task.cancel()
     gate.released.set()
+    await settle(run_task)
+
+
+async def cancel_twice_across_direct_cleanup(
+    run_task: asyncio.Task[object],
+    watch: DirectCleanupWatch,
+) -> None:
+    """Cancel once to enter the direct cleanup, then again inside its first half.
+
+    Both arrivals are aimed rather than timed. The first cancellation is
+    delivered while the post-exit writer wait is parked on its gate, which is
+    the only way into the cleanup from a run that configures no deadline. The
+    second is delivered while the writer's reclamation is parked, so it lands on
+    that half instead of on whatever the scheduler happened to be doing.
+
+    The ``sleep(0)`` between the second cancellation and the release is what
+    lets the loop deliver it: a cancellation scheduled but not yet delivered
+    would be reported by :func:`settle` as the run ending, and the cleanup would
+    be released by the ``finally`` of the test rather than by this helper.
+    """
+    await await_within(
+        watch.writer_gate.reached.wait(),
+        context="the direct run's post-exit writer wait",
+    )
+    run_task.cancel()
+    watch.writer_gate.released.set()
+    await await_within(
+        watch.cleanup_gate.reached.wait(),
+        context="the writer's reclamation",
+    )
+    run_task.cancel()  # second cancellation, delivered mid-cleanup
+    await asyncio.sleep(0)
+    watch.cleanup_gate.released.set()
     await settle(run_task)
 
 

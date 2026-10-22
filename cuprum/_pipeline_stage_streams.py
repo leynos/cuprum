@@ -17,7 +17,10 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
+from cuprum._line_callbacks import (
+    _compose_observation_line_callback,
+    _StageStreamCallbacks,
+)
 from cuprum._streams import _consume_stream, _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 
@@ -103,21 +106,19 @@ def _create_stage_capture_tasks(
     """Create stderr and stdout capture tasks for a pipeline stage."""
     process = request.process
     config = request.config
-    observation = request.observation
     stderr_task: _StreamConsumerTask | None = None
     stdout_task: _StreamConsumerTask | None = None
 
     # Every stage's stderr is observed for lines, so the caller's ``on_line``
     # runs here too; the consumer itself is created whenever the stream is
     # consumed at all, which includes line observation with capture and echo off.
-    stderr_on_line = _compose_line_callbacks(
-        observation,
-        _LineEmissionContext(
-            stream="stderr",
-            pid=process.pid,
-            on_line=config.on_line,
-            started_at=request.started_at,
-        ),
+    callbacks = _StageStreamCallbacks(
+        pid=request.process.pid,
+        on_line=config.on_line,
+        started_at=request.started_at,
+    )
+    stderr_on_line = _compose_observation_line_callback(
+        request.observation, "stderr", callbacks
     )
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
     if config.consumes_stderr:
@@ -141,16 +142,9 @@ def _create_stage_capture_tasks(
     if not request.is_last_stage:
         return stderr_task, stdout_task, (stderr_relay_diagnostics, None)
 
-    stdout_on_line = _compose_line_callbacks(
-        observation,
-        _LineEmissionContext(
-            stream="stdout",
-            pid=process.pid,
-            on_line=config.on_line,
-            started_at=request.started_at,
-        ),
+    stdout_on_line = _compose_observation_line_callback(
+        request.observation, "stdout", callbacks
     )
-
     stdout_relay_diagnostics: _RelayDiagnostics | None = None
     if config.consumes_stdout:
         request.captures.register(config.stream_config.capture_sink)

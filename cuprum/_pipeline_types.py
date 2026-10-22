@@ -129,8 +129,9 @@ class _StageObservation:
     # their construction site rather than relying on this default, which binds
     # when the class is created and would ignore a patched ``time``. A
     # construction that supplies no clock still gets a usable one.
-    # Line stamps keep their own seam in ``cuprum.lines``, which the two paths
-    # already share.
+    # Per-line ``LineEvent.at`` stamps read this same callable, because the
+    # start reference they subtract is sampled from it: reading the stamp from
+    # a second clock would make it a difference between two clocks.
     monotonic_clock: cabc.Callable[[], float] = time.perf_counter
     # Minted once per stage observation so every lifecycle event this object
     # emits shares one correlation token, distinguishing this execution from

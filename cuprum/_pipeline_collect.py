@@ -8,14 +8,16 @@ stderr and the final stage's stdout, and maps a timeout into a
 the ``cuprum.sh`` lazy-import shim used to build those results. It is a
 companion to ``cuprum._pipeline_internals``, which re-exports its names
 to preserve its public surface, and collaborates with
-``cuprum._pipeline_spawn``, ``cuprum._pipeline_streams``,
-``cuprum._pipeline_types``, ``cuprum._pipeline_wait``, and
-``cuprum._process_lifecycle``.
+``cuprum._pipeline_settlement`` (the bounded observation and settlement
+of the run's readers), ``cuprum._pipeline_spawn``,
+``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``cuprum._pipeline_wait``, and ``cuprum._process_lifecycle``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import sys
 import time
 import typing as typ
@@ -26,12 +28,14 @@ from cuprum._pipeline_records import (
     _PipelineSpawnResult,
     _PipelineStageResultInputs,
 )
-from cuprum._pipeline_stream_results import (
-    _gather_optional_text_tasks,
-    _reconcile_pipe_tasks,
+from cuprum._pipeline_settlement import (
+    _expired_pipeline_outputs,
+    _gather_pipeline_outputs,
+    _settle_gathered_outputs,
+    _stage_relay_fallbacks,
 )
+from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._pipeline_streams import _create_pipe_tasks
-from cuprum._pipeline_teardown import _terminate_timed_out_stages
 from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._pipeline_wait import _wait_for_pipeline
 from cuprum._process_lifecycle import _shielded_cleanup
@@ -46,7 +50,6 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_wait_types import _StreamPayload
-    from cuprum.echo_events import RelayFallback
     from cuprum.sh import SafeCmd
 
 
@@ -112,61 +115,6 @@ async def _await_pipeline_wait_result(
         return await asyncio.wait_for(pipeline_wait, wait_timeout)
     finally:
         await _shielded_cleanup(_stop_idle_monitor(spawn.idle))
-
-
-async def _gather_pipeline_outputs(
-    spawn: _PipelineSpawnResult,
-) -> tuple[tuple[_CapturedDrain | None, ...], _CapturedDrain | None]:
-    """Gather stderr by stage and final stdout from spawn tasks.
-
-    Each drain result carries its payload in the pipeline's mode — text in the
-    ordinary one, the child's bytes untouched in the byte-exact one — and it
-    carries the capture record and any spill handle with it. Nothing here
-    inspects either; the mode is read once, where each result is built, and the
-    record travels on to that same site because it is the only thing that knows
-    which spill file this run still has to remove.
-
-    Returns
-    -------
-    tuple[tuple[_CapturedDrain | None, ...], _CapturedDrain | None]
-        Each stage's stderr in stage order, then the final stage's stdout, or
-        ``None`` where the spawn attached no such consumer.
-    """
-    stderr_by_stage = await _gather_optional_text_tasks(spawn.stderr_tasks)
-    final_stdout = None if spawn.stdout_task is None else await spawn.stdout_task
-    return stderr_by_stage, final_stdout
-
-
-def _stage_relay_fallbacks(
-    spawn: _PipelineSpawnResult,
-) -> tuple[tuple[RelayFallback, ...], ...]:
-    """Read each stage's relay diagnostics from its own collectors.
-
-    Every stage's tuple lists its stdout records first (final stage only,
-    matching the single-command result order) and then its stderr records.
-    Unsettled collectors — a drain cancelled during teardown — contribute an
-    empty tuple, keeping those diagnostics on the echo observation channel.
-
-    Returns
-    -------
-    tuple[tuple[RelayFallback, ...], ...]
-        One tuple per stage, in stage order, each listing that stage's stdout
-        records first (final stage only) and then its stderr records.
-    """
-    stage_tuples: list[tuple[RelayFallback, ...]] = []
-    for stderr_diagnostics, stdout_diagnostics in spawn.relay_diagnostics_by_stage:
-        if stdout_diagnostics is not None:
-            stdout_diagnostics.settle()
-        if stderr_diagnostics is not None:
-            stderr_diagnostics.settle()
-        stdout_fallbacks = (
-            () if stdout_diagnostics is None else stdout_diagnostics.snapshot()
-        )
-        stderr_fallbacks = (
-            () if stderr_diagnostics is None else stderr_diagnostics.snapshot()
-        )
-        stage_tuples.append(stdout_fallbacks + stderr_fallbacks)
-    return tuple(stage_tuples)
 
 
 def _join_stage_stderr(
@@ -269,6 +217,61 @@ def _final_stage_stdout(outputs: _PipelineOutputs) -> _StreamPayload | None:
     return _require_text(drain.payload, "stdout")
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineExpiry:
+    """Everything one deadline expiry owes: the run, its tasks, and its cause.
+
+    No deadline is carried. Both routes that construct this have already spent
+    the run's budget — the stage wait consumed it, or the final gather did — so
+    there is nothing left to bound settlement with; the settlement supplies its
+    own EOF grace. Keeping the spent figure here would invite a later reader to
+    treat it as a bound.
+    """
+
+    parts: tuple[SafeCmd, ...]
+    spawn: _PipelineSpawnResult
+    config: _PipelineRunConfig
+    pipe_tasks: list[asyncio.Task[None]]
+    cause: BaseException | None
+
+
+async def _report_pipeline_expiry(expiry: _PipelineExpiry) -> typ.NoReturn:
+    """Terminate, settle, and report a pipeline deadline expiry.
+
+    Both routes that can discover an expiry call this one handler, so the
+    wait-timeout route and the final-output expiry cannot drift apart. The
+    ordered work itself lives in
+    :func:`~cuprum._pipeline_settlement._expired_pipeline_outputs`; what this
+    adds is the public report.
+
+    Per-stage timeout telemetry is not emitted here:
+    ``_finalize_pipeline_timeout`` reports the expiry once per stage on the way
+    out, and a second emission site would double-report every pipeline deadline.
+
+    Raises
+    ------
+    _PipelineInvariantError
+        If an expiry was observed with no timeout configured. Only a configured
+        deadline can expire, so this reports a broken invariant.
+    """
+    # Teardown runs before the invariant below, not after it. A run that
+    # reaches here has live stages, and the impossible state is a reason to
+    # report rather than a reason to leave those stages running.
+    outputs = await _expired_pipeline_outputs(
+        expiry.spawn,
+        expiry.config,
+        pipe_tasks=expiry.pipe_tasks,
+    )
+    timeout = expiry.config.timeout
+    if timeout is None:
+        msg = "TimeoutError without a configured timeout"
+        raise _PipelineInvariantError(msg) from expiry.cause
+    timeout_error = _build_timeout_expired_error(expiry.parts, timeout, outputs)
+    if expiry.cause is None:
+        raise timeout_error
+    raise timeout_error from expiry.cause
+
+
 async def _collect_pipeline_inputs(
     parts: tuple[SafeCmd, ...],
     spawn: _PipelineSpawnResult,
@@ -293,34 +296,20 @@ async def _collect_pipeline_inputs(
             pipe_tasks=pipe_tasks,
         )
     except TimeoutError as exc:
-        await _terminate_timed_out_stages(
-            spawn.processes,
-            _TeardownPolicy(
-                config.ctx.cancel_grace,
-                owns_group=spawn.owns_group,
+        await _report_pipeline_expiry(
+            _PipelineExpiry(
+                parts=parts,
+                spawn=spawn,
+                config=config,
+                pipe_tasks=pipe_tasks,
+                cause=exc,
             ),
-            observations=spawn.stages.observations,
         )
-        await _reconcile_pipe_tasks(pipe_tasks)
-        stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
-        relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)
-        if timeout is None:
-            msg = "TimeoutError without a configured timeout"
-            raise _PipelineInvariantError(msg) from exc
-        outputs = _PipelineOutputs(
-            stderr_by_stage=stderr_by_stage,
-            final_stdout=final_stdout,
-            capture_stdout=config.capture_stdout,
-            capture_stderr=config.capture_stderr,
-            capture_bytes=config.capture_bytes,
-            relay_fallbacks_by_stage=relay_fallbacks_by_stage,
-        )
-        raise _build_timeout_expired_error(parts, timeout, outputs) from exc
     finally:
         # The inter-stage pumps are owned here, so every exit reconciles them:
         # success, the deadline path, caller cancellation, and the non-positive
         # deadline that cancels _wait_for_pipeline before its own finally can
-        # run. The timeout branch above still reconciles explicitly, because
+        # run. The deadline handler above still reconciles explicitly, because
         # the pumps must reach EOF after the stages are terminated but *before*
         # the outputs are gathered; _reconcile_pipe_tasks is safe to run twice,
         # so this is a no-op once that has happened. Shielded because the
@@ -331,10 +320,27 @@ async def _collect_pipeline_inputs(
         await _shielded_cleanup(_reconcile_pipe_tasks(pipe_tasks))
 
     # Gathering sits after the ``try`` so ``except TimeoutError`` covers only
-    # the wait: a timeout raised while gathering is a different failure and must
-    # not be reported as a pipeline timeout. Every branch of the handler raises,
-    # so this is reached only on success.
-    stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+    # the wait: a timeout raised *by a reader* while gathering is a different
+    # failure and must not be reported as a pipeline timeout. The deadline
+    # still bounds this gather; expiry is reported through the explicit flag
+    # rather than through the exception type, so nothing here relabels an
+    # unrelated error.
+    gathered = await _gather_pipeline_outputs(spawn, deadline=timeout_deadline)
+    if not gathered.finished:
+        await _report_pipeline_expiry(
+            _PipelineExpiry(
+                parts=parts,
+                spawn=spawn,
+                config=config,
+                pipe_tasks=pipe_tasks,
+                cause=None,
+            ),
+        )
+    stderr_by_stage, final_stdout = await _settle_gathered_outputs(
+        gathered,
+        spawn=spawn,
+        config=config,
+    )
     return _PipelineStageResultInputs(
         wait_result=wait_result,
         stderr_by_stage=stderr_by_stage,

@@ -91,33 +91,24 @@ def test_timeout_without_configured_timeout_raises_invariant_error(
         await asyncio.sleep(0)
         raise originating_error
 
-    async def fake_gather_pipeline_outputs(
-        *_args: object,
-        **_kwargs: object,
-    ) -> tuple[tuple[str | None, ...], str | None]:
-        """Return empty captured output for the guarded branch."""
-        await asyncio.sleep(0)
-        return (), None
-
     monkeypatch.setattr(
         "cuprum._pipeline_collect._await_pipeline_wait_result",
         fake_await_pipeline_wait_result,
     )
-    monkeypatch.setattr(
-        "cuprum._pipeline_collect._gather_pipeline_outputs",
-        fake_gather_pipeline_outputs,
-    )
 
     # The guarded branch needs only the pipe-task inputs and timed-out stage
-    # termination target. Empty processes and observations keep both no-ops.
-    # ``owns_group`` is read while building the teardown policy, so it is part
-    # of what the stand-in has to provide; the ``cast`` that presents this as a
-    # spawn result would otherwise hide its absence from the type checker and
-    # leave the branch to fail with an ``AttributeError`` at runtime.
+    # termination target. Empty processes, observations and readers keep every
+    # teardown step a no-op, so the run reaches the invariant without a real
+    # spawn. Each attribute read on the way is part of what the stand-in has to
+    # provide; the ``cast`` that presents this as a spawn result would otherwise
+    # hide its absence from the type checker and leave the branch to fail with
+    # an ``AttributeError`` at runtime.
     spawn = typ.cast(
         "_PipelineSpawnResult",
         types.SimpleNamespace(
             processes=[],
+            stderr_tasks=[],
+            stdout_task=None,
             relay_diagnostics_by_stage=(),
             owns_group=(),
             stages=types.SimpleNamespace(observations=()),

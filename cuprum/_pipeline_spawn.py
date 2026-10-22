@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import time
 import typing as typ
 
 from cuprum._capture_cleanup import _cleanup_capture_sinks
@@ -144,7 +143,13 @@ async def _spawn_pipeline_stages(
         # recorded duration includes the time its spawn blocked, matching
         # the direct-command boundary. Sampling after the await would
         # exclude the spawn-await latency instead.
-        resources.started_at.append(time.perf_counter())
+        #
+        # The monotonic reading comes from the stage observation rather than
+        # from this module's ``time``, because the per-line ``LineEvent.at``
+        # stamps subtract this reference from that same callable: a reference
+        # taken from a different clock would make each stamp a difference
+        # between two clocks rather than an elapsed time.
+        resources.started_at.append(observation.monotonic_clock())
         resources.wall_clock_started_at.append(observation.wall_clock())
         stream_fds = _get_stage_stream_fds(
             idx,

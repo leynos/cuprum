@@ -56,9 +56,32 @@ async def _settle_owned_group_before_draining(
     child left behind is still in the group, still holds the write end of the
     run's pipes, and no signal aimed at the leader can reach it. Draining first
     would spend the bounded capture grace on readers that cannot reach EOF and
-    then discard output the descendant was still producing. The teardown is
-    shielded like every other one on a failure path, so a cancellation arriving
-    during its grace period cannot skip the escalation.
+    then discard output the descendant was still producing.
+
+    So the group is settled on every teardown that would otherwise be blocked
+    by it, and it lives here rather than beside any one run shape because
+    three of them call it: the streamed run before its gather, the line stream
+    before its post-exit drain, and the direct run's teardown — which reclaims
+    its writer first and settles the group second, hence the ordering note
+    below. Two neighbouring shapes answer the same question without calling
+    it. The owned handle has its own helper in
+    :mod:`cuprum._process_handle.coordinator`, which takes the handle's record
+    rather than a bundle; pipelines reach the capped wait through
+    ``_terminate_all_shielded``, because they own several stage groups rather
+    than one.
+
+    Only the exit paths that are already tearing a run down settle. The
+    success path of a direct run, whose child exited within its budget and
+    whose writer finished, does not: descendants a caller deliberately left
+    running are the caller's to manage, and killing the group there would
+    contradict what ``run()`` promises. The direct run's own teardown reclaims
+    the writer *first* and settles the group second, so the pair shares one
+    shield; that order is the opposite of the gather-based paths, where
+    settlement must precede a drain that would otherwise wait for EOF the
+    descendant never provides.
+
+    The teardown is shielded like every other one on a failure path, so a
+    cancellation arriving during its grace period cannot skip the escalation.
 
     A run that does not own its group has nothing to do here — its only
     teardown target is the direct child, which has already exited on every path

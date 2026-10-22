@@ -176,6 +176,9 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 # suite: with the extension installed, test_pipeline.py trips the descriptor
 # close race in issue #124 and aborts the interpreter. One definition here,
 # consumed by both the extension-tests CI job and the documented local command.
+# A module listed here runs on the Windows runner too, so anything POSIX-only
+# must carry its own platform skip rather than relying on the job's platform:
+# `test_pipeline_post_exit_deadline.py` is one such module.
 EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_rust_consume_stream.py \
   cuprum/unittests/test_rust_streams_boundary_property.py \
@@ -188,6 +191,7 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_loom_model_conformance.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
+  cuprum/unittests/test_pipeline_post_exit_deadline.py \
   tests/behaviour/test_rust_streams_behaviour.py \
   tests/behaviour/test_rust_streams_errors_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \

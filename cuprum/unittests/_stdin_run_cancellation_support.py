@@ -41,6 +41,7 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._subprocess_spawn import _SubprocessExecution
     from cuprum._subprocess_stdin_stream import _StdinCodec
     from cuprum.sh import CommandResult, SafeCmd
 
@@ -186,45 +187,67 @@ def _install_probe(
 _SETTLE_PUMPS = 100
 
 
+async def _let_writer_reach_its_park(stdin_task: asyncio.Task[None] | None) -> None:
+    """Give the writer the scheduler turns it needs to reach its blocking write."""
+    if stdin_task is None:
+        return
+    for _ in range(_SETTLE_PUMPS):
+        await asyncio.sleep(0)
+        if stdin_task.done():
+            return
+
+
+def _report_window_opened(
+    probe: _CancellationProbe, stdin_task: asyncio.Task[None] | None
+) -> None:
+    """Record whether the window opened on a live writer, then announce it.
+
+    The reading is taken here rather than left for the test to inspect,
+    because once the real wait returns the writer is done either way; only a
+    reading taken as the window opens can tell a window that was occupied from
+    one that opened on nothing.
+    """
+    probe.writer_pending_at_settle = stdin_task is not None and not stdin_task.done()
+    probe.settling.set()
+
+
 def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationProbe:
-    """Patch the seams that report a run has entered its post-exit settle.
+    """Patch the seams that report a run has entered its post-exit wait.
 
-    The signal is the run's own entry into the settle, and it is emitted from
-    just before the real settle is called. That ordering is what makes it
-    usable: setting the event does not suspend, so the run reaches
-    ``await _settle_stdin_writer(...)`` in the same scheduler turn and is
-    already inside the guarded wait by the time the waiter it just released
-    runs. A signal emitted any earlier would let a cancellation land before
-    the guard existed, which is a race the guard is not meant to cover.
+    Two routes reach a child that has already exited, and they do it through
+    different names, so one patch cannot cover both. The streamed path settles
+    its writer from ``cuprum._subprocess_stream_post_exit._await_stdin_writer``;
+    the direct path awaits it under the run's remaining deadline from
+    ``cuprum._subprocess_direct_run._await_writer_within_deadline``. The two
+    live in different modules because the direct run was split out of the
+    streamed one, so each name is patched where it is *resolved* — the module
+    that owns the call — rather than at a single shared definition.
 
-    The wrapper first gives the writer a bounded number of scheduler turns.
-    That is not a substitute for the window: it puts the writer *into* the
-    state the window is for — parked on a write nothing will drain — so the
-    window is genuinely occupied when it opens, rather than being a formality
-    the writer would have exited on its own. The real settle still runs, still
-    opens the same window, and is still the thing a cancellation interrupts;
-    only the writer's head start is arranged.
+    The signal is emitted in both cases from just before the real wait is
+    called. That ordering is what makes it usable: setting the event does not
+    suspend, so the run reaches its guarded wait in the same scheduler turn
+    and is already inside it by the time the waiter it just released runs. A
+    signal emitted any earlier would let a cancellation land before the guard
+    existed, which is a race the guard is not meant to cover.
 
-    The settle is patched where the name is *resolved*, not where it is
-    defined, and there are two such sites because the post-exit phase has its
-    own module. The direct path settles from
-    ``_run_subprocess_without_streams`` in ``_subprocess_stream_run``, so that
-    module's global covers it. The streamed path settles from
-    ``_await_stdin_writer`` in ``_subprocess_stream_post_exit``, which resolves
-    the name from its own globals; patching only the run module would leave
-    that path settling for real with the probe never signalled. Both are
-    patched for that reason. ``_line_stream.drain`` resolves the name too, but
-    only for ``lines()``, which no caller here uses; patching it would add a
-    binding no exercised call path reads.
+    The streamed path's settle is patched where the name is *resolved*:
+    ``_await_stdin_writer`` lives in ``_subprocess_stream_post_exit`` and calls
+    ``_settle_stdin_writer`` from that module's globals, so that is the binding
+    a probe has to replace. The run module no longer resolves it — the post-exit
+    phase settles the writer from the post-exit module — so patching the run
+    module would only add a name no call path reads.
+    ``_line_stream.drain`` resolves ``_settle_stdin_writer`` too, but only for
+    ``lines()``, which no caller here uses; patching it would add a binding no
+    exercised call path reads.
 
     Returns
     -------
     _CancellationProbe
         The events, records, and handles the patched seams fill in.
     """
+    import cuprum._subprocess_direct_run as direct_run_module
     import cuprum._subprocess_stdin_stream as stream_module
     import cuprum._subprocess_stream_post_exit as post_exit_module
-    import cuprum._subprocess_stream_run as stream_run_module
     from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 
     probe = _new_probe()
@@ -237,25 +260,35 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
 
     async def tracked_settle(stdin_task: asyncio.Task[None] | None) -> None:
         """Report the window occupied, then settle for real."""
-        if stdin_task is not None:
-            for _ in range(_SETTLE_PUMPS):
-                await asyncio.sleep(0)
-                if stdin_task.done():
-                    break
-        # Recorded rather than left for the test to inspect: after the settle
-        # returns, the writer is done either way, so only a reading taken here
-        # can tell a window that was occupied from one that opened on nothing.
-        probe.writer_pending_at_settle = (
-            stdin_task is not None and not stdin_task.done()
-        )
-        probe.settling.set()
+        await _let_writer_reach_its_park(stdin_task)
+        _report_window_opened(probe, stdin_task)
         await _settle_stdin_writer(stdin_task)
+
+    real_await_writer = direct_run_module._await_writer_within_deadline
+
+    async def tracked_await_writer(
+        execution: _SubprocessExecution,
+        stdin_task: asyncio.Task[None],
+    ) -> None:
+        """Report the window occupied, then await the writer for real.
+
+        The direct path's post-exit wait is a different shape from the
+        streamed settle — it is bounded by the run's own deadline rather than
+        by one fixed window — but the moment a cancellation interrupts is the
+        same moment, and it is reported the same way so the two arms of a
+        parametrized case can be read alike.
+        """
+        await _let_writer_reach_its_park(stdin_task)
+        _report_window_opened(probe, stdin_task)
+        await real_await_writer(execution, stdin_task)
 
     # Both resolution sites. A run takes one path or the other, so only one of
     # the two wrappers is ever entered per test; patching both is what makes
     # the probe independent of which path the case exercises.
-    monkeypatch.setattr(stream_run_module, "_settle_stdin_writer", tracked_settle)
     monkeypatch.setattr(post_exit_module, "_settle_stdin_writer", tracked_settle)
+    monkeypatch.setattr(
+        direct_run_module, "_await_writer_within_deadline", tracked_await_writer
+    )
     return probe
 
 

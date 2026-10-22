@@ -569,3 +569,72 @@ what the settlement probe found. The helper is now `_report_teardown`; it is
 `report_group_teardown` in `cuprum/_group_teardown.py`. The earlier text is
 left in place because accepted ADR text is append-only, and the behaviour it
 describes is unchanged.
+
+## Addendum (2026-10-21): the deadline is what makes a pipeline's settlement reachable
+
+The addendum of 2026-10-11 established that a configured timeout bounds the
+stream collection, and traced that through the direct run. A pipeline reaches
+the same hazard by the same route and needed the same bound, in the one place
+its structure makes it easy to miss: a pipeline starts its stages' output
+gathering *after* the stage wait has returned, so a stage that exits promptly
+hands the gathering no deadline at all. A last stage that spawns a
+``SIGTERM``-immune descendant, inherits its pipes to it, and exits 0 is
+therefore a run whose child exited successfully, whose deadline is nowhere in
+view, and which waits on that descendant for as long as it lives. The configured
+``timeout=`` never fires, because the stage wait it governs has already
+finished.
+
+Ownership sharpens the point rather than softening it. The reclaiming option
+does not help on this route: nothing has decided the run expired, so no
+teardown is issued and the owning group is never signalled. The group's
+settlement is reachable only from a decision to expire, which is precisely what
+a gathering that outlives its deadline never makes. Bounding the gathering is
+therefore not merely a tidy return to the caller — it is the precondition for
+the group settlement this ADR introduced. Once the expiry is reached, the
+sequence is the ordinary one: the stages are terminated *first*, including an
+owned group whose leader has already exited, since it is the group that holds
+the pipes; the inter-stage pumps are reconciled; and only then are the readers
+settled, so a reader can still capture what its stage had already written
+before it is cancelled. Output captured that way is preserved on the
+``TimeoutExpired``.
+
+The overshoot a pipeline owes past its deadline is smaller than a direct run's,
+and the difference is structural rather than a choice. A pipeline takes no
+``stdin``, so it never owes the stdin close grace; it owes ``cancel_grace``,
+the 0.25 s capture EOF window once per capturing run, and the one-second
+``_POST_KILL_SETTLEMENT_S`` wait that ``_process_group`` applies after forcibly
+killing an owned group. The last of these exists for the adopted-descendant
+case recorded under "Reclaim a descendant with process-group ownership", and it
+now bounds a route that could previously wait without any bound at all.
+
+Under ``INHERIT`` the outcome is deliberately different: the run returns on
+time, but the descendant survives, because the only process an inherited run
+may signal is the direct child and that child has already exited. Bounding the
+gather makes an inherited run prompt; it does not make it reclaim anything, and
+it must not, which is what the policy means.
+
+## Addendum (2026-10-22): every owning run owes the settlement allowance
+
+The addendum above closes with the overshoot a pipeline owes, and in doing so
+it attributes the one-second `_POST_KILL_SETTLEMENT_S` wait to pipelines alone.
+That attribution is too narrow, and the sentence is left in place because
+accepted ADR text is append-only.
+
+The direct run, the streamed run, and a `lines()` run call
+`_settle_owned_group_before_draining` on their expiry, failure, or cancellation
+routes. The owned handle has its own equivalent helper, and a pipeline reaches
+the same wait through `_terminate_all_shielded`; no single helper spans all of
+them. Whether a run owes the wait is decided by `ProcessGroupPolicy`, not by
+which entry point started it: a run that owns its group settles that group
+after forcibly killing it, and a run that inherits its caller's group settles
+nothing. A direct run that takes `stdin` and expires while its writer is still
+parked owes it for the same reason a pipeline does — the descendant holding the
+pipe has to go before the writer can be reclaimed.
+
+The success path is deliberately excluded, and that exclusion is what the
+earlier wording obscured. A run whose child exited within its budget and whose
+drains finished has nothing to settle, and signals nothing: descendants a
+caller left running are the caller's to manage, so killing the group there
+would contradict the `run()` contract that a descendant outlives its parent
+unless the run expires. Settlement is a teardown step, reached only from a
+decision that the run is over.
