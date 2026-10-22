@@ -7773,6 +7773,18 @@ within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
 so callers and the tests that monkeypatch them by module path resolve the same
 names as before.
 
+`cuprum/_subprocess_outcome.py` owns what a settled run reports:
+`_DirectCompletion` is the record the waiting helpers produce, and
+`_build_command_result` turns it into the result class the run's mode calls
+for, with `_relay_fallbacks_for_result` flattening the per-stream echo
+diagnostics those results carry. It was split out of `_subprocess_execution` to
+bring that module back under the 400-line ceiling once the post-exit deadline
+work pushed it over, on the boundary the code already drew: the orchestration
+module owns *when* a run settles, this one owns *what* it reports.
+`_subprocess_execution` re-exports `_DirectCompletion` and
+`_relay_fallbacks_for_result`, so the reporting paths and the tests that
+monkeypatch them by module path resolve the same names as before.
+
 `cuprum/_subprocess_wait.py` holds `_drain_context` and `_reconcile_run_tasks`
 (see the wait-path detail below). The child-exit wait — `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, and the `_deadline_for_collection`
@@ -8180,7 +8192,8 @@ single shield. The group settlement matters because the writer may be parked on
 a pipe that only the descendant holding it can release, and under
 `ProcessGroupPolicy.INHERIT` there is no group to signal and the cancellation
 is all there is. That helper delegates to `_settle_owned_group_before_draining`
-in `cuprum/_subprocess_wait.py`, which both run shapes share.
+in `cuprum/_subprocess_stream_post_exit.py`, which the direct run, the streamed
+run, and the `lines()` drain all share.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
