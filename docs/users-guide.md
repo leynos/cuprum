@@ -2445,8 +2445,10 @@ descendant keeps its stderr or the final stage's stdout open does not extend
 the run indefinitely. On expiry, stages are terminated first — including an
 owned group whose leader has already exited — so readers can still capture what
 their stage wrote before they are settled. Output captured that way is
-preserved on the `TimeoutExpired`, and, for `ProcessGroupPolicy.OWN_GROUP`, the
-descendant is reclaimed exactly as it is for a single command.
+preserved on the `TimeoutExpired`, and, for `ProcessGroupPolicy.OWN_GROUP`, a
+descendant still in the owned group is reclaimed exactly as it is for a single
+command. Reclamation reaches the group, not the family tree: a descendant that
+has left the group is beyond it, as the bounded guarantee below explains.
 
 #### Reclaim a descendant with process-group ownership
 
