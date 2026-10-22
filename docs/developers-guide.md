@@ -1122,6 +1122,78 @@ Both `TarCreateOptions` and `RsyncOptions` provide `allow_relative`. It
 defaults to `False`, so `safe_path` rejects relative paths unless a caller
 explicitly opts in.
 
+`RsyncOptions.allow_relative` permits *local* relative operands only. It does
+not relax the rsync-specific operand policy described below.
+
+### Rsync local-only operand policy
+
+`safe_path` validates generic filesystem properties and decides absoluteness
+with `PurePath(...).is_absolute()`, which is host-native. A Windows drive
+prefix is therefore relative on POSIX and is rejected by default, even though
+rsync would read it as a remote specification.
+
+`_local_rsync_operand()` in `cuprum/builders/rsync.py` runs after `safe_path()`
+for each operand and enforces rsync's local-only grammar. It returns the
+normalized `SafePath`, or raises `ValueError` naming the operand role (`source`
+or `destination`) when it is the layer that rejects the operand. That
+role-specific message is only reachable once `safe_path()` has accepted the
+value; under default options a relative remote spelling may instead fail
+earlier as `PathRejection.NOT_ABSOLUTE`. The private predicate
+`_is_remote_rsync_operand()` reports remote spelling when the value starts with
+`rsync://` (case-insensitive) or contains `:` before the first `/`. A colon at
+or after the first separator, as in `dir/host:path`, stays local.
+
+The helper applies the predicate to both the raw value and the normalized
+`SafePath` string, so normalization cannot hide a remote endpoint.
+`_rsync_argv` calls it for the source and then the destination before
+`sh.make(RSYNC)` runs, and neither helper is exported. Remote transfers are
+intentionally unsupported by the core builder and need a custom builder;
+`safe_path` provides no remote-endpoint grammar.
+
+Because the generic policy runs first, the role-specific message is only
+reachable once `safe_path()` has accepted the value. Under default options a
+relative remote spelling such as `host:path` may instead fail earlier as
+`PathRejection.NOT_ABSOLUTE`; the role-specific message is what an
+`allow_relative=True` caller sees.
+
+The policy is covered in three layers.
+`cuprum/unittests/test_rsync_operand_policy.py` holds the parameterized
+examples, the direct helper test, and the Hypothesis properties. The properties
+generate `host:path` and `host::module/path` operands for both roles, and
+include a non-vacuity property asserting each generated example first passes
+`safe_path(allow_relative=True)`. That module also pins the construction order:
+a test records calls to `sh.make` and asserts none happen for a rejected
+operand, because a builder that constructs a command and then raises would
+still satisfy an assertion that merely checks no command was returned. The
+`Rsync builder rejects remote operands` scenario in
+`tests/features/builder_library.feature` asserts that no command is built.
+
+That module is kept separate from `test_builder_library.py` so the per-module
+line budget is not spent on one feature. Its acceptance fixtures are neutral
+counterparts that stay local on both hosts: a native absolute path from
+`tmp_path` on POSIX, and the MSYS mount spelling `/cygdrive/c/data` under
+`allow_relative=True`. A Windows drive prefix is remote-ending syntax for rsync
+even where `PurePath` calls it absolute, so it can never serve as the neutral
+operand. For the same reason, fixtures that must be local on *both* hosts use
+the fixed UNC anchor described below rather than `tmp_path`;
+`test_rsync_builder_outputs_args` in `test_builder_library.py` is one of them.
+
+The behaviour steps cannot use `tmp_path` for rsync at all, because a Windows
+`tmp_path` *is* a drive prefix. `given_valid_rsync_paths` therefore builds both
+operands on a fixed UNC anchor, `//rsync-scenario/share/...`, which `PurePath`
+calls absolute on POSIX and Windows alike and whose first character is a
+separator, so rsync reads it as local. The anchor has three components on
+purpose: `PureWindowsPath` treats a two-component UNC path as a bare share and
+normalizes it with a trailing separator, so the shorter spelling would give a
+different argv on Windows. The steps only build argv, never touch the
+filesystem, so the names need not exist. The scenario also asserts that the
+operand *opposite* the remote one is a local path: the builder validates the
+source first, so without that check a fixture whose non-remote operand was
+itself unacceptable would report the wrong role and the scenario would pass for
+the wrong reason. That check calls `_local_rsync_operand` for the counterpart's
+own role rather than `safe_path`, since `safe_path` alone also accepts
+`host:path` and drive prefixes and so cannot establish rsync locality.
+
 ### End-of-options separators for positional operands
 
 `safe_path` accepts names beginning with `-`, so argv construction must stop

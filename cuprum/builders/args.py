@@ -12,7 +12,6 @@ SafePath = typ.NewType("SafePath", str)
 GitRef = typ.NewType("GitRef", str)
 
 _GIT_REF_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
-_WINDOWS_ABS_PATTERN = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 class PathRejection(enum.Enum):
@@ -70,6 +69,10 @@ def classify_path_string(
 ) -> PathRejection | None:
     """Classify why a raw path string is rejected, or ``None`` if valid.
 
+    Absoluteness is decided by ``PurePath`` for the running host only. Foreign
+    spellings such as a Windows drive prefix are therefore *relative* on POSIX,
+    which is what rsync and the filesystem would also see there.
+
     Parameters
     ----------
     raw_value:
@@ -90,15 +93,14 @@ def classify_path_string(
     >>> classify_path_string("/etc/hosts", allow_relative=False) is None
     True
     """
-    path = PurePath(raw_value)
-    is_absolute = path.is_absolute() or bool(_WINDOWS_ABS_PATTERN.match(raw_value))
     if not raw_value:
         return PathRejection.EMPTY
     if "\x00" in raw_value:
         return PathRejection.NUL
+    path = PurePath(raw_value)
     if ".." in path.parts:
         return PathRejection.PARENT_SEGMENT
-    if not allow_relative and not is_absolute:
+    if not allow_relative and not path.is_absolute():
         return PathRejection.NOT_ABSOLUTE
     return None
 
@@ -112,6 +114,10 @@ def _validate_path_string(raw_value: str, *, allow_relative: bool) -> None:
 
 def safe_path(value: str | Path, *, allow_relative: bool = False) -> SafePath:
     """Validate and normalize a filesystem path.
+
+    Absoluteness is host-native: a value is absolute only if ``PurePath``
+    says so for the running host. A Windows drive prefix is hence rejected on
+    POSIX, where it is a relative path.
 
     Parameters
     ----------

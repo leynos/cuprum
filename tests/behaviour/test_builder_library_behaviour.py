@@ -46,6 +46,12 @@ when(
 when("I build a relative rsync sync command", target_fixture="relative_rsync_result")(
     _steps.when_build_relative_rsync_command
 )
+when(
+    parsers.parse(
+        'I build an rsync sync command with a remote "{role}" operand "{operand}"',
+    ),
+    target_fixture="rsync_result",
+)(_steps.when_build_rsync_command_with_remote_operand)
 then(parsers.parse('the git command argv is "{program}" "{verb}" "{ref}"'))(
     _steps.then_git_argv_matches
 )
@@ -62,6 +68,12 @@ then("the tar sources follow the end-of-options separator")(
 then("the rsync operands follow the end-of-options separator")(
     _steps.then_rsync_operands_follow_separator
 )
+then(
+    parsers.parse('an rsync operand validation error is raised for the "{role}"'),
+)(_steps.then_rsync_operand_error_raised)
+then(
+    parsers.parse('the operand opposite the remote "{role}" is a local path'),
+)(_steps.then_unrelated_rsync_operand_is_local)
 
 
 @scenario(
@@ -94,6 +106,14 @@ def test_rsync_builder() -> None:
 )
 def test_tar_builder() -> None:
     """Behavioural coverage for tar builder."""
+
+
+@scenario(
+    "../features/builder_library.feature",
+    "Rsync builder rejects remote operands",
+)
+def test_rsync_remote_operand_rejection() -> None:
+    """Behavioural coverage for the rsync local-only operand policy."""
 
 
 @scenario(

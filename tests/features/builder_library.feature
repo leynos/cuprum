@@ -29,3 +29,19 @@ Feature: Core builder library
     Given relative rsync paths beginning with --
     When I build a relative rsync sync command
     Then the rsync operands follow the end-of-options separator
+
+  Scenario Outline: Rsync builder rejects remote operands
+    Given valid rsync paths
+    When I build an rsync sync command with a remote "<role>" operand "<operand>"
+    Then an rsync operand validation error is raised for the "<role>"
+    And the operand opposite the remote "<role>" is a local path
+
+    Examples:
+      | role        | operand             |
+      | source      | host:path           |
+      | destination | host:path           |
+      | source      | host::module/path   |
+      | destination | host::module/path   |
+      | destination | user@host:backup    |
+      | source      | rsync://host/module |
+      | destination | [::1]:path          |

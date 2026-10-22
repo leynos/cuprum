@@ -22,6 +22,10 @@ The invariants checked here are:
   ``Path`` yields the same argv as the equivalent string.
 - The public wrappers attach the curated program and the argv produced
   by the pure builders.
+
+The rsync local-only operand properties live in
+``cuprum/unittests/test_rsync_operand_policy.py`` with the examples they
+generalize.
 """
 
 from __future__ import annotations

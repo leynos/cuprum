@@ -13,6 +13,7 @@ requires GNU tar, because the option pair it defends against is GNU tar's.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed ``tar --version`` probe.
 import tarfile
@@ -172,3 +173,45 @@ def test_rsync_copies_option_shaped_relative_paths(tmp_path: Path) -> None:
     assert destination.read_text(encoding="utf-8") == "payload\n", (
         "the copied payload must match the source"
     )
+
+
+def test_rsync_with_a_remote_looking_source_transfers_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote-spelling source is rejected before the real rsync can dial out.
+
+    The argv tests establish the contract without a tool; this one shows what
+    the contract is for. ``rsync`` is pointed at a stub on ``PATH`` that records
+    any invocation, so an accepted ``host:path`` would be visible as a call
+    rather than as a network attempt. ``allow_relative=True`` is required to
+    reach the rsync-specific layer at all: without it, ``safe_path()`` rejects
+    the spelling as non-absolute first, and the remote-grammar check is never
+    exercised. The acceptance case beside it is
+    ``test_rsync_copies_option_shaped_relative_paths``, so the stub is not
+    merely proving that ``PATH`` is broken.
+    """
+    stub_dir = tmp_path / "stub-bin"
+    stub_dir.mkdir()
+    recorded = tmp_path / "rsync-calls.txt"
+    stub = stub_dir / "rsync"
+    stub.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{recorded}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    destination = tmp_path / "destination.txt"
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    with pytest.raises(ValueError, match="rsync source must be a local path"):
+        rsync_sync(
+            "example.invalid:module/file",
+            destination,
+            options=RsyncOptions(archive=True, allow_relative=True),
+        )
+
+    assert not recorded.exists(), (
+        "a rejected remote operand must never reach the rsync executable"
+    )
+    assert not destination.exists(), "no transfer may be attempted"

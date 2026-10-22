@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import typing as typ
 from pathlib import Path
 
@@ -22,9 +23,25 @@ from cuprum.builders import (
     tar_create,
     tar_extract,
 )
+from cuprum.builders.args import PathRejection
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="host-native absolute semantics differ on Windows"
+)
+_WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows drive paths are absolute only on Windows"
+)
+# A portable absolute local spelling for the rsync acceptance test. A
+# ``tmp_path`` cannot serve there: its Windows drive prefix is rsync's remote
+# grammar even though ``PurePath`` calls it absolute. This UNC anchor is
+# absolute under both ``PurePath`` flavours, separator-first, and colon-free.
+# The ``share`` component is required, because ``PureWindowsPath`` treats a
+# two-component UNC path as a bare share and normalizes it with a trailing
+# separator, which would change the argv under assertion.
+_PORTABLE_RSYNC_ROOT = "//rsync-scenario/share"
 
 
 def test_safe_path_requires_absolute_by_default(tmp_path: Path) -> None:
@@ -61,6 +78,30 @@ def test_safe_path_rejects_parent_segments(tmp_path: Path) -> None:
     parent_path = tmp_path / ".." / "var"
     with pytest.raises(ValueError, match="SafePath"):
         safe_path(parent_path)
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("value", ["C:/file", "C:\\file", "z:/data"])
+def test_safe_path_rejects_windows_drive_paths_on_posix(value: str) -> None:
+    """A Windows drive prefix is relative on POSIX and must be rejected.
+
+    Rsync reads a leading ``drive:`` as a remote specification, so accepting it
+    as an absolute local path would hand the sink a remote operand.
+    """
+    with pytest.raises(ValueError, match="SafePath") as exc_info:
+        safe_path(value)
+    assert str(exc_info.value) == PathRejection.NOT_ABSOLUTE.value, (
+        "a drive-prefixed value must be rejected as non-absolute on POSIX"
+    )
+
+
+@_WINDOWS_ONLY
+@pytest.mark.parametrize("value", ["C:/file", "C:\\file"])
+def test_safe_path_accepts_native_windows_drive_paths(value: str) -> None:
+    """Host-native absolute detection still accepts drive paths on Windows."""
+    assert safe_path(value) == Path(value).as_posix(), (
+        "a native Windows drive path must normalize as before"
+    )
 
 
 @pytest.mark.parametrize(
@@ -131,10 +172,10 @@ def test_git_rev_parse_builder_outputs_args() -> None:
     assert cmd.argv == ("rev-parse", "main"), "git_rev_parse argv mismatch"
 
 
-def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
+def test_rsync_builder_outputs_args() -> None:
     """rsync_sync builds the expected argv ordering."""
-    source = tmp_path / "source"
-    destination = tmp_path / "destination"
+    source = f"{_PORTABLE_RSYNC_ROOT}/source"
+    destination = f"{_PORTABLE_RSYNC_ROOT}/destination"
     cmd = rsync_sync(
         source,
         destination,
@@ -153,8 +194,8 @@ def test_rsync_builder_outputs_args(tmp_path: Path) -> None:
         "--verbose",
         "--compress",
         "--",
-        source.as_posix(),
-        destination.as_posix(),
+        source,
+        destination,
     ), "rsync_sync argv mismatch"
 
 
