@@ -18,19 +18,18 @@ and its seven conflicts were resolved by hand (see `Progress` and
 rsync operands in the core builder"), replayed 38 commits with no conflict:
 that commit touches the builder library and only three documentation files this
 branch also edits, and `range-diff` reports all 38 as patch-identical. The
-candidate head is `633043701`, and the gate round recorded below predates it,
-so it certifies nothing about this head: a rebase or a new commit invalidates
-every earlier gate log. That head carries the split that brought
-`cuprum/_subprocess_execution.py` back under the 400-line module cap; its own
-full round is the one still owed. The draft PR is open as
-[#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
-milestones and one of the earlier rebased head — returned twenty-two findings
-in total: seventeen were applied and five rejected as describing code that does
-not exist in this tree (see `Decision log`). What remains is one gate round on
-this tree, its audit against the target head, the push, and marking the PR
-ready for review. Two splits keep the source inside the module cap: the direct
-run in `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly
-in `cuprum/_subprocess_outcome.py`.
+candidate head is `d95388a59`, and all six gates pass there with the tree clean
+and HEAD unchanged before and after each one; that round is the evidence the
+push rests on. The candidate carries the split that brought
+`cuprum/_subprocess_execution.py` back under the 400-line module cap. The draft
+PR is open as [#652](https://github.com/leynos/cuprum/pull/652). Four reviews —
+three milestones and one of the earlier rebased head — returned twenty-two
+findings in total: seventeen were applied and five rejected as describing code
+that does not exist in this tree (see `Decision log`). What remains is the
+audit against the target head, the push, and the final review request. Two
+splits keep the source inside the module cap: the direct run in
+`cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
+`cuprum/_subprocess_outcome.py`.
 
 ## Purpose / big picture
 
@@ -863,10 +862,19 @@ the issue was filed:
       diff, the same artefact the maturin memory records. The snapshot got a
       one-line sorted insert (223 entries, still sorted and unique), and
       `test_maturin_build.py` passes 6/6 with "1 snapshot passed".
-- [ ] Re-run `make test` on `e3e8bc0ba` so the Rust suite and the doctests are
-      observed at a head that carries the snapshot fix, then audit, push, and
-      update the PR body. `### Outcomes & retrospective` is written after that
-      round.
+- [x] (2026-10-22) Full gate round on `d95388a59`, all six green, HEAD and the
+      tracked-tree change count identical before and after every gate. `make
+      test` finally reached what the previous round could not: pytest 4233
+      passed and 105 skipped across the collected suite, `test_maturin_build`
+      passing at last with 29 snapshots passed, nextest 167/167 from 7
+      binaries, and the doctest step, whose three entries are deliberate
+      `.rs`-line ignores. `make lint` reached every chained sub-gate with none
+      aborting early, and the duplication gate still reports the same 68
+      allowed findings. The round recorded the two things the previous one had
+      to leave open, so the evidence for the candidate is now complete.
+- [ ] Audit the final target-versus-head diff, push over SSH with the lease
+      bound to the recorded remote head, update the PR body with this round's
+      results, and request the final `coderabbit review --agent`.
 
 ## Surprises & discoveries
 
@@ -2473,6 +2481,25 @@ refusal of its second half was the plan's own error — corrected in the change
 that threads the clock. The habit both reward is the one this plan has used
 throughout: read the route the code takes, not the route its prose says it
 takes, and re-check a refusal against the tree before recording it.
+
+Certifying the result took three rounds, and the first two were wasted for a
+reason worth naming. The round on `5ccaf3a35` was stopped because
+`make check-fmt` objected to the plan's own wrapping and the fix would have
+replaced the tree the round was certifying. The round on `7caf413e3` went red
+on the wheel snapshot and, because pytest is a prerequisite of the Rust target,
+left the Rust suite and the doctests unobserved — which is the part that
+matters, since a red gate hides the ones behind it. Then `e2c7592b5` landed on
+`main` while that round was running, so the head it had certified was already
+based on a superseded target. The lesson is not "gate later": it is that the
+unit of evidence is a head, not a branch. A gate log names one commit, and a
+commit, an amend, a rebase, or a new base replaces it, so work that will be
+rebased should be gated after the rebase and pushed without further commits.
+The third round ran on `d95388a59` with HEAD and the tracked-tree change count
+identical before and after every gate, and that is the only log set the push
+cites. The snapshot failure also produced the branch's last judgement call: the
+diff's `-` line was an artefact of syrupy eliding the middle of a long list,
+and building a wheel to compare entry sets proved it, where regenerating the
+snapshot would have hidden the question under 223 rewritten lines.
 
 ## Appendix — how to reproduce the hang by hand
 
