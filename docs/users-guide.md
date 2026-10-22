@@ -2266,8 +2266,12 @@ A run can exceed the deadline by the cleanup allowances and nothing else:
 Any run with `ProcessGroupPolicy.OWN_GROUP` — a command, `lines()`, or a
 pipeline — adds a bounded settlement wait of up to one second after it forcibly
 kills the group because a descendant adopted by an init process can take that
-long to disappear. Without a timeout configured (`timeout=None`), none of these
-bounds applies and behaviour is unchanged.
+long to disappear. Without a timeout configured (`timeout=None`), there is no
+run deadline for any of these bounds to be measured against and no expiry to
+report. A direct run's post-exit wait for its stdin writer is still bounded, by
+the shared settle window rather than by a deadline, because an unbounded wait
+there would hang on a descendant that inherited the run's stdin and never reads
+it; every other route behaves as it did before.
 
 With `lines()`, a caller that stops consuming is the thing that can keep a run
 open: the line queue is bounded, so a lagging consumer parks the reader, and

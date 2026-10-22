@@ -216,8 +216,8 @@ def _install_post_exit_probe(monkeypatch: pytest.MonkeyPatch) -> _CancellationPr
 
     Two routes reach a child that has already exited, and they do it through
     different names, so one patch cannot cover both. The streamed path settles
-    its writer from ``cuprum._subprocess_stream_run._await_stdin_writer``; the
-    direct path awaits it under the run's remaining deadline from
+    its writer from ``cuprum._subprocess_stream_post_exit._await_stdin_writer``;
+    the direct path awaits it under the run's remaining deadline from
     ``cuprum._subprocess_direct_run._await_writer_within_deadline``. The two
     live in different modules because the direct run was split out of the
     streamed one, so each name is patched where it is *resolved* — the module

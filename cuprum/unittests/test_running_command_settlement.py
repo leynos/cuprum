@@ -18,6 +18,8 @@ and the refusals a delivery can meet in
 from __future__ import annotations
 
 import asyncio
+import time
+import types
 import typing as typ
 
 import pytest
@@ -135,10 +137,17 @@ def test_line_stamps_are_measured_from_the_spawn(
     machine's uptime.
 
     One injected clock answers the start on its first reading and the stamp
-    thereafter. A start or a stamp taken from the real clock fails here, and
-    fails as a *value* rather than as a bound: the injected origin sits far
-    above any real reading, so the subtraction goes negative and the stamp
-    floors to ``0.0``.
+    thereafter. A stamp taken from the real clock fails here, and fails as a
+    *value* rather than as a bound: the injected origin sits far above any
+    real reading, so the subtraction goes negative and the stamp floors to
+    ``0.0``. The injected origin is what makes that discriminating — it is far
+    above the machine's uptime, so no real reading can be mistaken for it.
+
+    The injected clock replaces the ``time`` binding in ``_command_internals``
+    rather than ``perf_counter`` on the standard-library module. Patching the
+    shared module would inject the value into every caller in the process, so a
+    start or stamp read directly from ``time.perf_counter()`` would pass the
+    very assertions meant to catch it.
     """
     from cuprum import _command_internals
 
@@ -150,7 +159,11 @@ def test_line_stamps_are_measured_from_the_spawn(
         """Answer the injected start once, then the injected "now"."""
         return next(readings, clock_origin + elapsed)
 
-    monkeypatch.setattr(_command_internals.time, "perf_counter", observation_clock)
+    monkeypatch.setattr(
+        _command_internals,
+        "time",
+        types.SimpleNamespace(perf_counter=observation_clock, time=time.time),
+    )
     seen: list[LineEvent] = []
     catalogue, python_program = python_catalogue()
     builder = sh.make(python_program, catalogue=catalogue)

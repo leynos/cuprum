@@ -575,7 +575,7 @@ describes is unchanged.
 The addendum of 2026-10-11 established that a configured timeout bounds the
 stream collection, and traced that through the direct run. A pipeline reaches
 the same hazard by the same route and needed the same bound, in the one place
-its structure makes it easy to miss: a pipeline stamps its stages' output
+its structure makes it easy to miss: a pipeline starts its stages' output
 gathering *after* the stage wait has returned, so a stage that exits promptly
 hands the gathering no deadline at all. A last stage that spawns a
 ``SIGTERM``-immune descendant, inherits its pipes to it, and exits 0 is

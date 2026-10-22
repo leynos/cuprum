@@ -47,8 +47,9 @@ and each scenario recorded against each:
 
 The two scenarios also reach the writer through different names now that the
 direct run has been split into its own module: the streamed path settles from
-``cuprum._subprocess_stream_run._await_stdin_writer``, the direct path awaits
-from ``cuprum._subprocess_direct_run._await_writer_within_deadline``. Only the
+``cuprum._subprocess_stream_post_exit._await_stdin_writer``, while the direct
+path awaits it from
+``cuprum._subprocess_direct_run._await_writer_within_deadline``. Only the
 first scenario installs the post-exit probe, because only it needs to be told
 when the wait has begun; the second case is a deadline case and reaches its
 conclusion without instrumenting anything.
