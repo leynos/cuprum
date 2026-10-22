@@ -271,6 +271,10 @@ def test_bounded_payloads_keeps_none_placeholders_aligned_with_inputs() -> None:
         None,
         "second",
         None,
+    ), (
+        "every slot must keep the position of the task it was given, so an "
+        "absent stage stays absent and a present one does not shift: got "
+        f"{payloads!r}"
     )
     assert finished, "every present reader finished, so the wait did not expire"
 
