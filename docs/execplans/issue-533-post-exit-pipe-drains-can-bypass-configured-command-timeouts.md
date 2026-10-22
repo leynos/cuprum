@@ -19,14 +19,19 @@ rsync operands in the core builder"), replayed 38 commits with no conflict:
 that commit touches the builder library and only three documentation files this
 branch also edits, and `range-diff` reports all 38 as patch-identical. The
 candidate head is `d95388a59`, and all six gates pass there with the tree clean
-and HEAD unchanged before and after each one; that round is the evidence the
-push rests on. The candidate carries the split that brought
-`cuprum/_subprocess_execution.py` back under the 400-line module cap. The draft
-PR is open as [#652](https://github.com/leynos/cuprum/pull/652). Four reviews —
-three milestones and one of the earlier rebased head — returned twenty-two
-findings in total: seventeen were applied and five rejected as describing code
-that does not exist in this tree (see `Decision log`). What remains is the
-audit against the target head, the push, and the final review request. Two
+and HEAD unchanged before and after each one. The branch head is `c7fe5341a`,
+pushed to the remote branch over SSH with the lease bound to the previously
+recorded remote head `da5cbeaf7`; the remote head and the local head now agree.
+The final target-versus-head audit is clean: 43 commits ahead of `origin/main` =
+`e2c7592b5` and none behind, no merge commits in the range, no deleted files,
+and `git diff --check` reports nothing. The candidate carries the split that
+brought `cuprum/_subprocess_execution.py` back under the 400-line module cap.
+The draft PR is open as [#652](https://github.com/leynos/cuprum/pull/652). Four
+reviews — three milestones and one of the earlier rebased head — returned
+twenty-two findings in total: seventeen were applied and five rejected as
+describing code that does not exist in this tree (see `Decision log`). The PR
+body now cites the certifying round rather than a pending table. What remains
+is the final `coderabbit review --agent` request and marking the PR ready. Two
 splits keep the source inside the module cap: the direct run in
 `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
 `cuprum/_subprocess_outcome.py`.
@@ -872,9 +877,24 @@ the issue was filed:
       aborting early, and the duplication gate still reports the same 68
       allowed findings. The round recorded the two things the previous one had
       to leave open, so the evidence for the candidate is now complete.
-- [ ] Audit the final target-versus-head diff, push over SSH with the lease
-      bound to the recorded remote head, update the PR body with this round's
-      results, and request the final `coderabbit review --agent`.
+- [x] (2026-10-22) Re-ran the whole round on `c7fe5341a`, the head the push
+      would carry, rather than citing the `d95388a59` logs for it. Only a
+      plan document had changed since the previous certified head, but a gate
+      log names exactly one revision and the previous set named a different
+      one. All six green, HEAD and the tracked-tree change count identical
+      before and after every gate.
+- [x] (2026-10-22) Audited the final target-versus-head diff before publishing:
+      43 commits ahead of `origin/main` = `e2c7592b5` and none behind, no
+      merge commits in `origin/main..HEAD`, no deleted files under any path
+      filter, `git diff --check` silent. Pushed over SSH with
+      `--force-with-lease` bound to the previously recorded remote head
+      `da5cbeaf7`, refreshed the remote-tracking ref through an explicit
+      leading-`+` refspec, confirmed `ls-remote` and `rev-parse HEAD` agree on
+      `c7fe5341a`, and set the branch's upstream to `origin/`. The PR body's
+      gate table now carries this round's results instead of a pending row per
+      gate.
+- [ ] Request the final `coderabbit review --agent`, adjudicate whatever it
+      returns, and mark PR #652 ready for review.
 
 ## Surprises & discoveries
 
