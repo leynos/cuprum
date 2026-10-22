@@ -1156,8 +1156,9 @@ the issue was filed:
   over the same surface, and all three were right. Findings 1 and 3 are one
   concern stated twice — both post-exit deadline arms caught a `TimeoutError`
   raised by a stdin writer, because `TimeoutError` is an `OSError` subclass.
-  They are fixed once, at the shared `reap_descendant` helper all fourteen
-  post-exit tests reach, and at the two classification arms.
+  They are fixed once, at the shared `reap_descendant` helper every post-exit
+  test module's cleanup reaches — 25 call sites across eight modules — and at
+  the two classification arms.
 
   Finding 2 was the substantive one, and it was checked against the tree rather
   than accepted from the review text. Its premise — that
@@ -1195,7 +1196,48 @@ the issue was filed:
   wraps the rendezvous through the module's documented patch seam and fails the
   writer only after the real rendezvous returns, with an assertion that the
   flag was set so the case cannot silently collapse again. Fixed in
-  `78e4d2aed`, which is the head the six gates certify.
+  `78e4d2aed`. That commit is **not** gate-certified: the round run over it
+  failed `make lint` at `pylint-classic`, because the added reasoning pushed
+  `drain.py` and `coordinator.py` from 393 and 392 lines to 415 each, past the
+  400-line module cap. The fix is the split recorded below, and the gate
+  evidence for this arm is the round run over that split's commit.
+
+- [x] (2026-10-22) Split the two modules back under the cap rather than
+  suppressing `C0302`, which the repository forbids. Two cohesive units moved
+  out, each into a new module beside its peers, and no behaviour changed.
+  `_await_consumers` and `_first_reader_failure` became
+  `cuprum/_line_stream/reader_wait.py`, leaving `drain.py` to own *when* the
+  run stops waiting and the new module to own *what* it learned while waiting;
+  `drain.py` is 290 lines. `_finalize_line_stream_captures` became
+  `cuprum/_line_stream/captures.py`, which is the one cleanup a completed
+  `lines()` result owes; `coordinator.py` is 387 lines.
+
+  The seam was chosen by the patch surfaces, not by line count. Three names
+  could not move, and each is pinned for a different reason:
+  `_wait_for_line_stream_exit` by `test_line_stream_reader_failure.py`'s dotted
+  string `cuprum._line_stream.coordinator._await_exit_or_writer_failure`;
+  `_run_line_stream_teardown` and `_discard_drain` by
+  `test_line_stream_exit.py`, which patches `_shielded_cleanup` *in
+  coordinator's globals* and calls `_discard_drain` as a coordinator attribute;
+  and `_run_to_command_result` by `test_line_stream_coordinator_stateful.py`,
+  which assigns it onto the module object. `_coordinate_line_stream` therefore
+  had to stay with the last one, because it is the caller that resolves that
+  name from coordinator's globals — moving it would have silently un-patched
+  the stateful machine while its own import from the package still resolved.
+  That was verified directly (`.__globals__ is coordinator.__dict__`) before
+  the cut.
+
+  `test_line_stream_reader_failure.py`'s import was updated to the owning
+  module. It previously read
+  `from cuprum._line_stream.drain import _await_consumers`, which would have
+  kept passing only because `drain` happens to import the name for its own use
+  — a re-export patch seam that resolves to a name the consumer no longer
+  defines.
+
+  Verified at the tree: `make pylint-classic` 10.00/10 on both passes,
+  `make duplication` 68 allowed by reasoned exceptions, `make typecheck` clean,
+  the Skylos dead-code scan exit 0 with no findings, `make check-fmt` clean
+  over 1084 files, and the focused line-stream suites 677 passed / 35 skipped.
 
 ## Surprises & discoveries
 
@@ -2111,6 +2153,24 @@ the issue was filed:
   remainder arithmetic with a sentinel infinity (rejected: an infinite deadline
   is the unbounded await spelled differently, so the reviewer's finding would
   still hold).
+
+- Decision (EP-M1/EP-M2 follow-up, 2026-10-22): the `C0302` module-cap failure
+  is fixed by splitting two modules, not by suppressing the check or raising
+  the cap. Rationale: this repository forbids both, and the two files were
+  already at 393 and 392 lines before this branch's reasoning comments, so the
+  overrun is this branch's to absorb. The seam is the patch surface rather than
+  the line count: three names are pinned by tests through coordinator's globals
+  or by a dotted string, so the movable units were the reader wait (which the
+  drain's scope bounds but does not itself *wait* on) and the capture
+  finalisation (the one cleanup a completed `lines()` result owes).
+  `_coordinate_line_stream` stayed with `_run_to_command_result` because it is
+  the caller that resolves that name from coordinator's globals; moving it
+  would have silently un-patched `test_line_stream_coordinator_stateful.py`,
+  whose import from the package would still have resolved. Alternative
+  considered: extract the whole teardown trio into its own module (rejected:
+  all three resolve `_shielded_cleanup` and `_reconcile_run_tasks` from
+  coordinator's globals, so each move would either un-patch a live test seam or
+  require the test to patch two modules for one behaviour).
 
 - Decision (post-review, 2026-10-22): take the `lines()` start reference from
   `execution.observation.monotonic_clock()` rather than from the module-level

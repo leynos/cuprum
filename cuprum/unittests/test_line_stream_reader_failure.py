@@ -21,7 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum import RunOutputOptions, StdinStream, observe_line_stream
-from cuprum._line_stream.drain import _await_consumers
+from cuprum._line_stream.reader_wait import _await_consumers
 from cuprum._subprocess_rendezvous import (
     _await_exit_or_writer_failure as _real_rendezvous,
 )
