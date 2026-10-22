@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`rsync_sync()` refuses remote operands (breaking):** both operands are now
+  checked against rsync's own grammar as well as the generic safe-path policy.
+  A colon before the first `/` (`host:path`, `user@host:path`,
+  `host::module/path`, `[::1]:path`) and any `rsync://` prefix are rejected,
+  whether or not `allow_relative=True` is set. Previously those spellings
+  passed validation and rsync read them as a remote endpoint, so a value that
+  looked like a local path could start a network transfer. `safe_path()` also
+  decides absoluteness with the running host's grammar now, so a Windows drive
+  prefix is rejected on POSIX instead of being accepted as absolute.
+
 ## [0.2.0-beta2] - 2026-10-18
 
 _Applications upgrading from 0.1 should follow the

@@ -258,6 +258,26 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       Because this record is itself a Markdown edit, the Markdown-scoped gates
       are re-run against the record commit, so the full certification covers
       every file except this paragraph.
+- [x] (2026-10-22) Act on the pre-merge walkthrough's three non-passing rows.
+      All three were valid and are now addressed. (1) Testing — the row asked
+      for an end-to-end rsync through `run_sync()`, which was already provided
+      by `test_rsync_copies_option_shaped_relative_paths` in
+      `cuprum/unittests/test_builder_operand_separation.py` (a real rsync, a
+      real transfer, added by upstream #637); the missing half was the
+      rejection case, now `test_rsync_with_a_remote_looking_source_transfers_nothing`
+      in the same module. It places a recording `rsync` stub first on `PATH`
+      and asserts no call and no destination file, with
+      `allow_relative=True` so the rsync grammar layer is the one under test
+      rather than `safe_path()`'s absoluteness check. Non-vacuity: bypassing
+      the remote-grammar check in `_local_rsync_operand` makes it fail with
+      `DID NOT RAISE`. (2) User-facing documentation — a checklist row and a
+      `rsync_sync()` section now sit in `docs/v0-2-0-migration-guide.md`, and
+      an `[Unreleased]` `Fixed` entry records the change in `CHANGELOG.md`,
+      since the fix has not shipped in any tagged release. (3) Developer
+      documentation — `docs/cuprum-design.md` §11.3.1 now records the
+      local-only rsync decision, the remote grammar it rejects, and why a
+      remote transfer is an extension point. Focused suite at this tree: 4
+      passed in `test_builder_operand_separation.py`.
 
 ## Surprises & discoveries
 
@@ -469,9 +489,13 @@ Obligations, methods, and evidence:
 
 1. Invariant: on POSIX, `safe_path("C:/file")` and `safe_path("C:\\file")`
    raise `ValueError(PathRejection.NOT_ABSOLUTE.value)`. Method: named
-   regression test, POSIX-only, skipped on Windows. Non-vacuity: the same test
-   asserts a normal relative path is still rejected and a native absolute path
-   is accepted, so the skip is scoped, not the assertion.
+   regression test, POSIX-only, skipped on Windows. That test asserts only the
+   rejection code, so the non-vacuity evidence comes from its neighbours:
+   `test_safe_path_requires_absolute_by_default` establishes both that a normal
+   relative path is still rejected and that a native absolute path is accepted,
+   and `test_safe_path_accepts_native_windows_drive_paths` covers the Windows
+   side of the same pair. The skip therefore narrows which host runs the drive
+   assertion, not whether the surrounding policy is exercised at all.
 2. Invariant: on Windows, `safe_path("C:/file")` is accepted. Method: named
    test, Windows-only. Non-vacuity: the test asserts the returned value equals
    the POSIX-normalized spelling.
@@ -530,9 +554,18 @@ Obligations, methods, and evidence:
     interpreter. Source: `pathlib` documentation; exercised by both platform
     tests.
 
-Residual gaps: no live rsync is executed, so the tests establish the argv
-contract rather than observable remote traffic. The ticket's own reproduction
-is static, and the security scan did not run a live exploit.
+Residual gaps: the accepted-path evidence runs a live rsync, but the
+rejected-path evidence does not, because a rejection means no process may start.
+`test_rsync_with_a_remote_looking_source_transfers_nothing` in
+`cuprum/unittests/test_builder_operand_separation.py` therefore puts an
+executable stub named `rsync` first on `PATH` and asserts it was never called,
+which shows the rejection happens before the spawn rather than after it. It
+runs with `allow_relative=True`, because without it `safe_path()` rejects the
+spelling as non-absolute first and the remote-grammar layer is never reached.
+What remains unexercised is a real rsync receiving a remote operand, which is
+the behaviour the fix exists to prevent; observing it would require accepting
+the operand first. The ticket's own reproduction is static, and the security
+scan did not run a live exploit.
 
 Proof inventory: not applicable. This change introduces no CrossHair, Kani,
 Verus, or LemmaScript proof and materially changes no existing proof, harness,

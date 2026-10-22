@@ -2956,6 +2956,14 @@ extend. The following decisions guide the core builder set:
   leading `-`, `..`, `//`, `@{`, trailing `.lock`, and trailing `.`.
 - Builders validate inputs internally and expose `allow_relative` parameters
   on option dataclasses where relative paths are expected to be legitimate.
+- The rsync builders accept local operands only. `rsync_sync()` runs its
+  local-path check and then rejects rsync's remote operand grammar for both the
+  source and the destination: a colon before the first `/` (as in `host:path`,
+  `user@host:path`, `host::module/path`, and `[::1]:path`), and an `rsync://`
+  prefix in any letter case. `allow_relative=True` widens which *local*
+  spellings are accepted; it does not admit remote syntax. A remote transfer is
+  an explicit extension point and needs a custom builder, because the colon
+  grammar is rsync's own path syntax and no option separator disarms it.
 - `RsyncOptions` and `TarCreateOptions` bundle flag choices to keep builder
   function signatures short and lint-friendly. `TarCreateOptions.compression`
   is a single `Compression` enum (`NONE`, `GZIP`, `BZIP2`, `XZ`) rather than
