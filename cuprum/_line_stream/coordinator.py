@@ -33,6 +33,7 @@ from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._stream_drain import _drain_stream_consumers
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -96,6 +97,11 @@ async def _wait_for_line_stream_exit(
     ------
     asyncio.CancelledError
         If the caller cancels line iteration while the subprocess is running.
+    TimeoutError
+        When the run's configured deadline expires while the child is still
+        running. A stdin writer that failed with a ``TimeoutError`` of its own
+        raises that same exception here too, reconciled but untranslated: it is
+        the producer's error, not this run's deadline.
     """
     execution = run.execution
     try:
@@ -104,6 +110,23 @@ async def _wait_for_line_stream_exit(
             run.tasks.stdin_task,
         )
     except TimeoutError as exc:
+        # A ``TimeoutError`` can arrive here two ways, and only one of them is
+        # this run's deadline. The exit wait reports its own expiry as this
+        # type; so would a stdin writer that failed with one, because the
+        # rendezvous above re-raises a failed writer unchanged and
+        # ``TimeoutError`` is an ``OSError`` subclass. Identity is what tells
+        # them apart, and it is exact: the rendezvous raises the very object
+        # ``_stdin_writer_failure`` reads back off the task. Translating the
+        # writer's failure instead would report a deadline the caller never
+        # configured, which ``_handle_stream_timeout`` rejects as an invariant
+        # violation, so the caller would lose the producer's real error.
+        if _stdin_writer_failure(run.tasks.stdin_task) is exc:
+            await _cleanup_failed_line_stream_run(
+                run,
+                execution,
+                preserve=False,
+            )
+            raise
         run.telemetry.emit(LineStreamPhase.TIMEOUT, _LineStreamEventDetails(error=exc))
         stdout_drain, stderr_drain = await _cleanup_failed_line_stream_run(
             run,

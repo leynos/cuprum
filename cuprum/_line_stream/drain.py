@@ -15,6 +15,7 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._stream_drain import _decode_consumer_drains
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
 from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
@@ -84,12 +85,18 @@ async def _collect_line_stream_after_exit(
         ``.payload`` for the text and hands the whole record on, so a spilled
         capture's file is still reachable after the drain has been consumed.
 
-    A reader's own failure, and a caller's cancellation, propagate unchanged
-    once the run's tasks have been reconciled.
+    Raises
+    ------
+    TimeoutError
+        When this run's own configured budget expires during the collect, and
+        only then. A reader's own failure, a stdin writer's own
+        ``TimeoutError``, and a caller's cancellation propagate unchanged once
+        the run's tasks have been reconciled.
     """
     reader_failure: BaseException | None = None
+    deadline = asyncio.timeout(_deadline_for_collection(execution))
     try:
-        async with asyncio.timeout(_deadline_for_collection(execution)):
+        async with deadline:
             await _stop_idle_monitor(execution.idle)
             await _await_writer_within_scope(run)
             reader_failure = await _await_consumers(
@@ -97,6 +104,21 @@ async def _collect_line_stream_after_exit(
                 _deadline_for_collection(execution),
             )
     except TimeoutError as exc:
+        # A reader's own failure is returned rather than raised, so a reader
+        # cannot reach this arm. The writer's awaits report unchanged, and
+        # ``TimeoutError`` is an ``OSError`` subclass, so one it raised would
+        # otherwise be read as this run's deadline. The settle hands back the
+        # writer's own exception object, so identity — not the type — says
+        # which of the two this is. The scope's ``expired()`` is consulted
+        # first and wins: when it fired, the deadline was spent whether or not
+        # the writer happened to be failing as well, and the expiry is what a
+        # caller who configured ``timeout=`` is owed. It is also what keeps
+        # the spent-budget report ``_await_consumers`` raises distinct, since
+        # that route leaves no writer failure behind to point at.
+        writer_failure = _stdin_writer_failure(run.tasks.stdin_task)
+        if not deadline.expired() and writer_failure is exc:
+            await _settle_and_reconcile(run, pid, execution, preserve=False)
+            raise
         await _expire_line_stream(run, pid, execution, exc)
     except BaseException:
         await _settle_and_reconcile(run, pid, execution, preserve=False)

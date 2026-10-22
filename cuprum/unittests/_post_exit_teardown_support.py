@@ -373,10 +373,36 @@ def recorded_descendant(pid_file: Path) -> int | None:
         return None
 
 
+# How long a cleanup path waits for a just-spawned grandchild to record its pid.
+# Deliberately short: this runs in a ``finally``, possibly on the way out of an
+# already-failing test, so it must not delay a suite by more than a moment. A
+# healthy run never spends it — the test body waits for the file before
+# reaching cleanup, so the first read below succeeds and the loop is skipped.
+_CLEANUP_PID_GRACE_S = 2.0
+
+
+def _await_recorded_descendant(pid_file: Path) -> int | None:
+    """Read the recorded pid, giving a just-spawned grandchild a moment to write it."""
+    deadline = time.monotonic() + _CLEANUP_PID_GRACE_S
+    while True:
+        recorded = recorded_descendant(pid_file)
+        if recorded is not None or time.monotonic() >= deadline:
+            return recorded
+        time.sleep(0.05)
+
+
 def reap_descendant(pid_file: Path, descendant_pid: int | None) -> None:
-    """Force-kill the descendant so a failing test does not leak it."""
+    """Force-kill the descendant so a failing test does not leak it.
+
+    A cleanup path is reached both when the test ran to completion and when an
+    assertion failed first. In the second case the grandchild may only just have
+    been spawned, so the pid file it writes is not there yet — and the child
+    deliberately does not wait for it, so this is the only notice cleanup gets.
+    Reading once would then reap nothing and park a sleeper on the shared host
+    for its whole lifetime, which is a leak a failing test must not cause.
+    """
     if descendant_pid is None:
-        descendant_pid = recorded_descendant(pid_file)
+        descendant_pid = _await_recorded_descendant(pid_file)
     if descendant_pid is not None and process_is_running(descendant_pid):
         with contextlib.suppress(ProcessLookupError):
             os.kill(descendant_pid, signal.SIGKILL)
