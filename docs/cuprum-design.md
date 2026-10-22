@@ -391,6 +391,25 @@ reused sequentially or nested without sharing mutable token state, and keeps
 concurrent async task entries isolated. An out-of-order or foreign-manager exit
 raises `RuntimeError` before changing either context.
 
+For screen readers: The diagram shows a scope manager moving from prepared to
+active on entry. It permits nested or repeated entry. A LIFO exit restores the
+prepared state; an out-of-order exit reports an error and leaves the active
+context unchanged.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepared: scoped(config)
+    Prepared --> Active: __enter__()
+    Active --> Active: nested or reused __enter__()
+    Active --> Prepared: __exit__() in LIFO order
+    Active --> Error: out-of-order or foreign-manager __exit__()
+    Error --> Active: context unchanged
+    Prepared --> [*]
+```
+
+*Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
+restoration.*
+
 ### 5.4 Hooks
 
 Cuprum supports three “levels” of hooks, all backed by the same underlying
