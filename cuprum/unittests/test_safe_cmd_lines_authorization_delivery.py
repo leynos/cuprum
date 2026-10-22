@@ -15,8 +15,8 @@ import pytest
 
 from cuprum import ScopeConfig, scoped
 from cuprum.unittests._safe_cmd_lines_authorization_support import (
-    _SpawnRecorder,
     _line_stream_delivery,
+    _SpawnRecorder,
     _wait_for_delivery_threads_to_stop,
     spawn_recorder,
 )

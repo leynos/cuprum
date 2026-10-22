@@ -1,9 +1,10 @@
 """Shared seams for the deferred-authorization ``SafeCmd.lines()`` tests.
 
-The spawn seam is observed by patching the coordinator's ``_spawn_subprocess``
-global, which is the reference a line run resolves, and the delivery-worker
-helpers watch the daemon thread a bounded echo starts. Both belong here rather
-than in one test module because three modules exercise them.
+The spawn seam is observed by patching the ``spawn`` module's
+``_spawn_subprocess`` global, which is the reference ``_start_line_stream_run``
+resolves, and the delivery-worker helpers watch the daemon thread a bounded echo
+starts. Both belong here rather than in one test module because three modules
+exercise them.
 """
 
 from __future__ import annotations
@@ -34,9 +35,9 @@ class _SpawnRecorder:
 
     def __init__(self) -> None:
         """Start with no recorded calls."""
-        # The coordinator imports the spawn by name, so patching that global
-        # replaces the reference this recorder would otherwise call back into.
-        # Holding the defining module's function keeps the delegate real.
+        # ``spawn`` imports the spawn by name, so patching that global replaces
+        # the reference this recorder would otherwise call back into. Holding
+        # the defining module's function keeps the delegate real.
         from cuprum._subprocess_spawn import _spawn_subprocess
 
         self._real_spawn = _spawn_subprocess
@@ -62,11 +63,11 @@ class _SpawnRecorder:
 
 @pytest.fixture
 def spawn_recorder(monkeypatch: pytest.MonkeyPatch) -> _SpawnRecorder:
-    """Patch the coordinator's spawn seam with a recording delegate."""
-    from cuprum._line_stream import coordinator
+    """Patch the ``spawn`` module's spawn seam with a recording delegate."""
+    from cuprum._line_stream import spawn
 
     recorder = _SpawnRecorder()
-    monkeypatch.setattr(coordinator, "_spawn_subprocess", recorder)
+    monkeypatch.setattr(spawn, "_spawn_subprocess", recorder)
     return recorder
 
 

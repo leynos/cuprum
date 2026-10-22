@@ -32,7 +32,6 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
 
 
-
 @pytest.mark.parametrize(
     "denial",
     [
