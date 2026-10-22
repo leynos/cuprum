@@ -117,6 +117,11 @@ def _create_stage_capture_tasks(
             pid=process.pid,
             on_line=config.on_line,
             started_at=request.started_at,
+            # The observation's clock, which is where ``started_at`` is
+            # sampled from on this path once ``_spawn_pipeline_stages`` reads
+            # it; one callable for the reference and the reading keeps the
+            # stamp a duration under injection.
+            monotonic_clock=observation.monotonic_clock,
         ),
     )
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
@@ -148,6 +153,8 @@ def _create_stage_capture_tasks(
             pid=process.pid,
             on_line=config.on_line,
             started_at=request.started_at,
+            # Same clock as the stderr context above, for the same reason.
+            monotonic_clock=observation.monotonic_clock,
         ),
     )
 

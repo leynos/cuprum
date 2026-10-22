@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import time
+import types
 import typing as typ
 from collections import Counter
 
@@ -106,6 +108,71 @@ def _line_observation_pipeline() -> tuple[Pipeline, frozenset[Program]]:
     producer = python("-c", _LINE_OBSERVATION_PRODUCER)
     consumer = python("-c", _LINE_OBSERVATION_CONSUMER)
     return producer | consumer, frozenset([python_program])
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_line_stamps_read_the_stage_observation_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stage's stamps and its start reference come from one clock.
+
+    ``_spawn_pipeline_stages`` samples each stage's start reference and the
+    per-line callbacks subtract it when stamping. Both must read the stage
+    observation's ``monotonic_clock``: a reference taken from a module-level
+    ``perf_counter`` turns each stamp into a difference between two clocks
+    under injection, and a stamp read from the real clock floors to ``0.0``
+    when the injected reference sits above it.
+
+    One driven clock answers both readings, advancing by ``step`` on every
+    call from one origin far above any real reading. Any two readings are
+    therefore a whole number of steps apart, and no stamp can exceed the
+    widest gap between readings actually taken — an exact bound requiring no
+    tolerance, so a stamp that came from a clock reading in the millions
+    instead of the trillions cannot slip under it.
+    """
+    from cuprum import _pipeline_observation
+
+    clock_origin = 1e12
+    step = 0.25
+    readings: list[float] = []
+
+    def driven_clock() -> float:
+        """Answer the next reading of the injected clock."""
+        reading = clock_origin + step * len(readings)
+        readings.append(reading)
+        return reading
+
+    # The observation's clocks are resolved *by name* from its module, so the
+    # whole ``time`` binding is replaced rather than one attribute on the
+    # shared ``time`` module. Patching ``time.perf_counter`` itself would also
+    # reach any module-level ``import time`` in the spawn path and make this
+    # test vacuous.
+    monkeypatch.setattr(
+        _pipeline_observation,
+        "time",
+        types.SimpleNamespace(perf_counter=driven_clock, time=time.time),
+    )
+    events: list[LineEvent] = []
+    pipeline, allowlist = _line_observation_pipeline()
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = pipeline.run_sync(
+            output=RunOutputOptions(capture=False, echo=False, on_line=events.append),
+        )
+
+    assert result.ok is True, "the pipeline should succeed"
+    assert events, "the pipeline's observed streams must reach the line hook"
+    stamps = [event.at for event in events]
+    widest_gap = len(readings) - 1
+    step_counts = [stamp / step for stamp in stamps]
+    assert all(
+        0 < count <= widest_gap and count.is_integer() for count in step_counts
+    ), (
+        "both readings come from the driven clock, which starts far above any "
+        "real reading and advances in whole steps, so every stamp must be a "
+        f"positive whole number of steps no wider than the {widest_gap} gaps "
+        f"actually read; got {stamps!r}"
+    )
 
 
 @pytest.mark.usefixtures("stream_backend")

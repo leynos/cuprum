@@ -73,6 +73,11 @@ def _create_stream_callback(
         pid=pid,
         on_line=execution.on_line,
         started_at=execution.started_at,
+        # The same callable ``started_at`` was sampled from. Reading the stamp
+        # from any other clock would make ``at`` a difference between two
+        # clocks under injection, and floor every stamp to zero when the
+        # injected start sits above the real clock's reading.
+        monotonic_clock=execution.observation.monotonic_clock,
     )
     return _compose_line_callbacks(
         execution.observation,
