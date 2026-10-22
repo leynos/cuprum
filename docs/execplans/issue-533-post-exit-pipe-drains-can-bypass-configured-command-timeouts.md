@@ -719,6 +719,38 @@ the issue was filed:
       the tracking ref with a leading `+`, and confirmed the remote head with
       `git ls-remote` against `git rev-parse HEAD`; the branch's upstream now
       names `origin/`. The PR's CI is running at that head.
+- [x] (2026-10-22) A CodeRabbit review round on PR #652 raised three
+      findings, each adjudicated against the current tree rather than against
+      the wording of the finding.
+- [x] (2026-10-22) Finding 1 (start reference): applied the half that was
+      real. `_start_line_stream_run` now samples `started_at` from
+      `execution.observation.monotonic_clock()` instead of the module-level
+      `perf_counter`, matching `_sample_run_start` on the direct path, so the
+      post-exit deadline subtracts a reading taken from the clock it subtracts
+      from. Committed as `192d162a3` with a guard test that injects both
+      clocks; the guard was mutation-verified in both collection orders (see
+      the Surprises section for why the order matters).
+- [x] (2026-10-22) Finding 1 (line stamps): applied, after a first-round
+      refusal that was wrong. The finding asked that the observation clock be
+      threaded through `_LineEmissionContext` into `_stamp_line`.
+      `_stamp_line` is the *only* site that constructs a `LineEvent` in
+      production code, so the earlier answer — that the queue sink stamps it —
+      was false; the queue relays the already-stamped event. Corrected in the
+      same change that threads the clock: all four routes now read
+      `observation.monotonic_clock` for the start reference, the per-line
+      stamp, and the deadline, and each route has a mutation-verified guard.
+- [x] (2026-10-22) Finding 2: falsified as stated. It proposed calling
+      `_settle_owned_group_before_draining` above the direct run's writer
+      await, on the reading that the expiry route does not settle the group.
+      It does: `_cleanup_direct_run` cancels the writer and *then* settles the
+      group under one `_shielded_cleanup`. The claim came from the helper's
+      own docstring, which was wrong about both its routes and the direct
+      path's ordering; corrected in `70cf3564e`, with no production change.
+- [x] (2026-10-22) Finding 3: applied. The users' guide, the design document,
+      and ADR-021 all attributed the one-second `_POST_KILL_SETTLEMENT_S` wait
+      to pipelines alone; it is owed by any run that owns its group.
+      Committed as `0dabd1dc7`, with a new ADR addendum rather than an edit to
+      the accepted one.
 
 ## Surprises & discoveries
 
@@ -996,6 +1028,43 @@ the issue was filed:
   simplification because the deleted call and the added `asyncio.timeout` sat
   in different files after the module split. Splitting a module is exactly the
   operation that makes this kind of deletion invisible in review.
+
+- **A module-level `from time import perf_counter` binds at import time, and a
+  lazy import hides the patch from a regression test.** The guard for the
+  `lines()` start reference patches `_command_internals.time.perf_counter` and
+  expects the run to read the patch. While the production code was still the
+  mutant, the test passed when run alone and failed when run after a sibling
+  test. The difference was collection order: `lines()` imports
+  `cuprum._line_stream.spawn` lazily, so a lone run entered the module for the
+  first time *after* the patch was installed and the module-level
+  `from time import perf_counter` bound the patched lambda. A sibling having
+  touched the module first left it bound to the real clock. The test now
+  calls `importlib.import_module("cuprum._line_stream.spawn")` before
+  installing the patches, which makes it order-independent; `pyproject.toml`
+  configures no random ordering, so "runs alone" and "runs in the suite" are
+  genuinely different executions.
+
+- **The queue sink does not stamp `LineEvent.at`, and the first-round refusal
+  of finding 1 rested on the opposite belief.** `_stamp_line` is the only
+  production construction site of a `LineEvent`; the queue relays events that
+  have already been stamped, so the callback path and the queue path carry the
+  *same* value rather than two competing ones. Threading the observation clock
+  into `_LineEmissionContext` was therefore both safe and necessary: without
+  it, the stamp came from `cuprum.lines.perf_counter` while the start
+  reference and the deadline came from the injected clock, which under
+  injection is a difference between two clocks. `LineEvent.at`'s documented
+  contract was widened to say the stamp is read from the run's own clock.
+
+- **The line stream's exit event mixes two clocks, harmlessly in production.**
+  `duration_s` is `exited_at - started_at`, where `exited_at` comes from the
+  module-level, non-injectable `time.perf_counter` in
+  `cuprum/_subprocess_deadline.py` and `started_at` now comes from the
+  injectable observation clock. Both are `time.perf_counter` in production, so
+  the subtraction is a duration; only under clock injection does it become the
+  difference between two unrelated origins. Left as-is deliberately: the
+  alternative is threading the observation clock into the deadline module's
+  exit sampling, which is a wider change than this branch's scope and would
+  make a test-only artefact the reason for a production seam.
 
 ## Decision log
 
@@ -1540,6 +1609,47 @@ the issue was filed:
   is the unbounded await spelled differently, so the reviewer's finding would
   still hold).
 
+- Decision (post-review, 2026-10-22): take the `lines()` start reference from
+  `execution.observation.monotonic_clock()` rather than from the module-level
+  `perf_counter`, and inject that clock in the guard test. Rationale: the
+  post-exit deadline is `timeout - (observation.monotonic_clock() -
+  started_at)`, so a start from a different clock is not a duration under
+  injection. The same reasoning already governs the direct path's
+  `_sample_run_start`. Alternative considered: leave the start where it was
+  and treat the mismatch as test-only (rejected: the observation clock is
+  exactly the seam the existing deadline tests use, so a run under that seam
+  would compute a nonsense remainder — the fix is one line and makes the two
+  paths agree).
+
+- Decision (post-review, 2026-10-22): apply the half of the same finding that
+  asked for the observation clock to be threaded through
+  `_LineEmissionContext` and `_stamp_line`. Rationale: the start reference,
+  the per-line stamp, and the post-exit deadline must be readings of one
+  callable, or under injection the stamp is a difference between two clocks.
+  `_stamp_line` is the only production construction site of a `LineEvent`, so
+  the earlier belief that a queue sink stamped a second, competing value was
+  mistaken. Scope: three production construction sites and nineteen test
+  constructions, plus the handle and pipeline start samples, which had the
+  same defect on their own routes. Alternative considered: leave the stamp on
+  its own seam and treat the mismatch as test-only (rejected: the observation
+  clock is the seam the deadline tests inject, so a run under that seam would
+  stamp nonsense — the whole point of the finding).
+
+- Decision (post-review, 2026-10-22): reject finding 2's suggested production
+  change and fix the docstring instead. Rationale: settling above the direct
+  run's writer await would call `_settle_owned_group_before_draining` on the
+  success path, where the caller deliberately leaves descendants running, and
+  that contradicts what `run()` promises. The redundancy argument is the
+  weaker one and is not relied on: the expiry route already settles under
+  `_cleanup_direct_run`'s single shield, so an extra call there would be
+  redundant rather than harmful — `_members_remain_to_signal`'s probe vetoes
+  a second pass — but the success-path contract is decisive on its own. The
+  reviewer's premise was the helper's docstring, and the docstring was wrong
+  about both its routes and the direct path's ordering. Alternative
+  considered: apply the suggestion and rely on `_terminate_process`'s early
+  return for an exited child (rejected: the probe is an implementation detail
+  of the helper, not a licence to call it where it does not belong).
+
 ## Milestones
 
 Each milestone ends in a state that is coherent on its own: the repository
@@ -1997,10 +2107,13 @@ that cannot report it.
 Overshoot past the deadline is the cleanup allowances and nothing else:
 `cancel_grace` (0.5 s default), the 0.25 s capture EOF window once per
 capturing run, the 0.5 s stdin close for a run given `stdin` data, and the
-bounded one-second `_POST_KILL_SETTLEMENT_S` after an `OWN_GROUP` pipeline
-forcibly kills its group. No route needed a design change; the one deviation
-considered and recorded is the pipeline's deadline stamp, which is taken when
-collection begins rather than at spawn.
+bounded one-second `_POST_KILL_SETTLEMENT_S` after a run with
+`ProcessGroupPolicy.OWN_GROUP` forcibly kills its group — owed by a direct
+run, a streamed run, a `lines()` run, and a pipeline alike, because whether a
+run owes it is decided by the policy rather than by which entry point started
+it. No route needed a design change; the one deviation considered and
+recorded is the pipeline's deadline stamp, which is taken when collection
+begins rather than at spawn.
 
 The `INHERIT` arms discriminated as predicted, and that was the prediction
 worth testing: under `OWN_GROUP` the expiry's teardown can signal the group,
@@ -2025,6 +2138,18 @@ module's own argument. Second, a test helper extracted for a code-health score
 has to be shown still to bite — the two-cancellation case was re-run against a
 deliberately broken production shield and failed with its own message before
 the helper was kept.
+
+The review round that closed this branch added a third, sharper one: a
+reviewer's finding is a claim about the tree, not an instruction, and it can
+be wrong in a way that the code it cites is responsible for. Finding 2 asked
+for a settlement call that already existed; the reviewer had read
+`_settle_owned_group_before_draining`'s docstring, which claimed a route
+matrix the code did not implement. Acting on the suggestion would have
+double-settled the group and broken the success-path contract; the docstring
+was the defect. Finding 1 was right about half its proposal and wrong about
+the other half, and only checking where `at` is actually stamped separated
+them. The habit both reward is the one this plan has used throughout: read
+the route the code takes, not the route its prose says it takes.
 
 ## Appendix — how to reproduce the hang by hand
 
