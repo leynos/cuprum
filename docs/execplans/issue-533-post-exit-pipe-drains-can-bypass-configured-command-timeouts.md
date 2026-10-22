@@ -909,8 +909,19 @@ the issue was filed:
       deadline test modules pass 34 passed / 8 skipped. The decision and its
       head are recorded together so the gate round can run on one head with no
       plan edit after it.
-- [ ] Run the full gate round on the head carrying that fix, then request the
-      final `coderabbit review --agent`, adjudicate whatever it returns, and
+- [x] (2026-10-22) Full gate round on `58971f7ee`, the head carrying the
+      `_pipeline_payloads` fix. All six gates green, the log suffix is
+      `-58971f7ee.out`, and each log records its own `HEAD before`/`HEAD
+      after` with no tracked-tree change.
+- [x] (2026-10-22) Adjudicated the second CodeRabbit review, the
+      `CHANGES_REQUESTED` at `2026-10-22T04:32:30Z` (review `5609291319`).
+      CodeRabbit accepted all three verdicts, withdrew the group-before-writer
+      finding as based on a wrong premise, and confirmed no further changes
+      were needed. The reply is `pull/652#issuecomment-6332850782`; a
+      correction at `#issuecomment-6332863278` fixes a mistake in it — the
+      review was attached to `58971f7ee`, the current head, and the
+      `5da6d68fb..da5cbeaf7` range I quoted belonged to the earlier review.
+- [ ] Re-request a review once the CodeRabbit hourly allowance permits, then
       mark PR #652 ready for review.
 
 ## Surprises & discoveries
@@ -2556,6 +2567,22 @@ cites. The snapshot failure also produced the branch's last judgement call: the
 diff's `-` line was an artefact of syrupy eliding the middle of a long list,
 and building a wheel to compare entry sets proved it, where regenerating the
 snapshot would have hidden the question under 223 rewritten lines.
+
+- Decision (second CodeRabbit review, 2026-10-22): re-verify every finding
+  against the head named by the review's own `commit_id`, not against a range
+  read from somewhere else. The `CHANGES_REQUESTED` at `04:32:30Z` is review
+  `5609291319` on `58971f7ee` — the current head — while the
+  `5da6d68fb..da5cbeaf7` range belongs to review `5597711617` from the day
+  before. Quoting the wrong review's range made the exchange look like a
+  stale-head problem when it was not. The finding verdicts were unaffected,
+  because each was checked against the tree rather than against its range:
+  findings 1 and 3 were valid when raised and already closed by `eda2c9695` and
+  `81412e0cf` (branch-only commits, newer than `da5cbeaf7`), and finding 2's
+  test premise — "the `OWN_GROUP` arm does not assert reclamation" — is false
+  at every head, since the arm calls `assert_reclaimed` at
+  `test_run_no_stream_post_exit_deadline.py:246`. CodeRabbit withdrew finding 2
+  on that basis. Lesson for the next review round: a review has one commit, and
+  the range printed inside it belongs to whichever review printed it.
 
 ## Appendix — how to reproduce the hang by hand
 
