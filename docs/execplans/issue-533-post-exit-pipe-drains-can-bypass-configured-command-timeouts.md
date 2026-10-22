@@ -1038,11 +1038,11 @@ the issue was filed:
   `cuprum._line_stream.spawn` lazily, so a lone run entered the module for the
   first time *after* the patch was installed and the module-level
   `from time import perf_counter` bound the patched lambda. A sibling having
-  touched the module first left it bound to the real clock. The test now
-  calls `importlib.import_module("cuprum._line_stream.spawn")` before
-  installing the patches, which makes it order-independent; `pyproject.toml`
-  configures no random ordering, so "runs alone" and "runs in the suite" are
-  genuinely different executions.
+  touched the module first left it bound to the real clock. The test now calls
+  `importlib.import_module("cuprum._line_stream.spawn")` before installing the
+  patches, which makes it order-independent; `pyproject.toml` configures no
+  random ordering, so "runs alone" and "runs in the suite" are genuinely
+  different executions.
 
 - **The queue sink does not stamp `LineEvent.at`, and the first-round refusal
   of finding 1 rested on the opposite belief.** `_stamp_line` is the only
@@ -1050,10 +1050,10 @@ the issue was filed:
   have already been stamped, so the callback path and the queue path carry the
   *same* value rather than two competing ones. Threading the observation clock
   into `_LineEmissionContext` was therefore both safe and necessary: without
-  it, the stamp came from `cuprum.lines.perf_counter` while the start
-  reference and the deadline came from the injected clock, which under
-  injection is a difference between two clocks. `LineEvent.at`'s documented
-  contract was widened to say the stamp is read from the run's own clock.
+  it, the stamp came from `cuprum.lines.perf_counter` while the start reference
+  and the deadline came from the injected clock, which under injection is a
+  difference between two clocks. `LineEvent.at`'s documented contract was
+  widened to say the stamp is read from the run's own clock.
 
 - **The line stream's exit event mixes two clocks, harmlessly in production.**
   `duration_s` is `exited_at - started_at`, where `exited_at` comes from the
@@ -1612,43 +1612,43 @@ the issue was filed:
 - Decision (post-review, 2026-10-22): take the `lines()` start reference from
   `execution.observation.monotonic_clock()` rather than from the module-level
   `perf_counter`, and inject that clock in the guard test. Rationale: the
-  post-exit deadline is `timeout - (observation.monotonic_clock() -
-  started_at)`, so a start from a different clock is not a duration under
-  injection. The same reasoning already governs the direct path's
-  `_sample_run_start`. Alternative considered: leave the start where it was
-  and treat the mismatch as test-only (rejected: the observation clock is
-  exactly the seam the existing deadline tests use, so a run under that seam
-  would compute a nonsense remainder — the fix is one line and makes the two
-  paths agree).
+  post-exit deadline is
+  `timeout - (observation.monotonic_clock() - started_at)`, so a start from a
+  different clock is not a duration under injection. The same reasoning already
+  governs the direct path's `_sample_run_start`. Alternative considered: leave
+  the start where it was and treat the mismatch as test-only (rejected: the
+  observation clock is exactly the seam the existing deadline tests use, so a
+  run under that seam would compute a nonsense remainder — the fix is one line
+  and makes the two paths agree).
 
 - Decision (post-review, 2026-10-22): apply the half of the same finding that
-  asked for the observation clock to be threaded through
-  `_LineEmissionContext` and `_stamp_line`. Rationale: the start reference,
-  the per-line stamp, and the post-exit deadline must be readings of one
-  callable, or under injection the stamp is a difference between two clocks.
-  `_stamp_line` is the only production construction site of a `LineEvent`, so
-  the earlier belief that a queue sink stamped a second, competing value was
-  mistaken. Scope: three production construction sites and nineteen test
-  constructions, plus the handle and pipeline start samples, which had the
-  same defect on their own routes. Alternative considered: leave the stamp on
-  its own seam and treat the mismatch as test-only (rejected: the observation
-  clock is the seam the deadline tests inject, so a run under that seam would
-  stamp nonsense — the whole point of the finding).
+  asked for the observation clock to be threaded through `_LineEmissionContext`
+  and `_stamp_line`. Rationale: the start reference, the per-line stamp, and
+  the post-exit deadline must be readings of one callable, or under injection
+  the stamp is a difference between two clocks. `_stamp_line` is the only
+  production construction site of a `LineEvent`, so the earlier belief that a
+  queue sink stamped a second, competing value was mistaken. Scope: three
+  production construction sites and nineteen test constructions, plus the
+  handle and pipeline start samples, which had the same defect on their own
+  routes. Alternative considered: leave the stamp on its own seam and treat the
+  mismatch as test-only (rejected: the observation clock is the seam the
+  deadline tests inject, so a run under that seam would stamp nonsense — the
+  whole point of the finding).
 
 - Decision (post-review, 2026-10-22): reject finding 2's suggested production
   change and fix the docstring instead. Rationale: settling above the direct
   run's writer await would call `_settle_owned_group_before_draining` on the
   success path, where the caller deliberately leaves descendants running, and
-  that contradicts what `run()` promises. The redundancy argument is the
-  weaker one and is not relied on: the expiry route already settles under
+  that contradicts what `run()` promises. The redundancy argument is the weaker
+  one and is not relied on: the expiry route already settles under
   `_cleanup_direct_run`'s single shield, so an extra call there would be
-  redundant rather than harmful — `_members_remain_to_signal`'s probe vetoes
-  a second pass — but the success-path contract is decisive on its own. The
+  redundant rather than harmful — `_members_remain_to_signal`'s probe vetoes a
+  second pass — but the success-path contract is decisive on its own. The
   reviewer's premise was the helper's docstring, and the docstring was wrong
-  about both its routes and the direct path's ordering. Alternative
-  considered: apply the suggestion and rely on `_terminate_process`'s early
-  return for an exited child (rejected: the probe is an implementation detail
-  of the helper, not a licence to call it where it does not belong).
+  about both its routes and the direct path's ordering. Alternative considered:
+  apply the suggestion and rely on `_terminate_process`'s early return for an
+  exited child (rejected: the probe is an implementation detail of the helper,
+  not a licence to call it where it does not belong).
 
 ## Milestones
 
@@ -2108,12 +2108,14 @@ Overshoot past the deadline is the cleanup allowances and nothing else:
 `cancel_grace` (0.5 s default), the 0.25 s capture EOF window once per
 capturing run, the 0.5 s stdin close for a run given `stdin` data, and the
 bounded one-second `_POST_KILL_SETTLEMENT_S` after a run with
-`ProcessGroupPolicy.OWN_GROUP` forcibly kills its group — owed by a direct
-run, a streamed run, a `lines()` run, and a pipeline alike, because whether a
-run owes it is decided by the policy rather than by which entry point started
-it. No route needed a design change; the one deviation considered and
-recorded is the pipeline's deadline stamp, which is taken when collection
-begins rather than at spawn.
+`ProcessGroupPolicy.OWN_GROUP` forcibly kills its group — owed by a direct run,
+a streamed run, a `lines()` run, and a pipeline alike, because whether a run
+owes it is decided by the policy rather than by which entry point started it.
+Each reaches that wait by its own route: the shared helper for the first three,
+the handle coordinator's equivalent for an owned handle, and
+`_terminate_all_shielded` for a pipeline. No route needed a design change; the
+one deviation considered and recorded is the pipeline's deadline stamp, which
+is taken when collection begins rather than at spawn.
 
 The `INHERIT` arms discriminated as predicted, and that was the prediction
 worth testing: under `OWN_GROUP` the expiry's teardown can signal the group,
@@ -2140,16 +2142,17 @@ deliberately broken production shield and failed with its own message before
 the helper was kept.
 
 The review round that closed this branch added a third, sharper one: a
-reviewer's finding is a claim about the tree, not an instruction, and it can
-be wrong in a way that the code it cites is responsible for. Finding 2 asked
-for a settlement call that already existed; the reviewer had read
-`_settle_owned_group_before_draining`'s docstring, which claimed a route
-matrix the code did not implement. Acting on the suggestion would have
-double-settled the group and broken the success-path contract; the docstring
-was the defect. Finding 1 was right about half its proposal and wrong about
-the other half, and only checking where `at` is actually stamped separated
-them. The habit both reward is the one this plan has used throughout: read
-the route the code takes, not the route its prose says it takes.
+reviewer's finding is a claim about the tree, not an instruction, and it can be
+wrong in a way that the code it cites is responsible for. Finding 2 asked for a
+settlement call that already existed; the reviewer had read
+`_settle_owned_group_before_draining`'s docstring, which claimed a route matrix
+the code did not implement. Acting on the suggestion would have broken the
+success-path contract by signalling descendants the caller left running; the
+docstring was the defect. Finding 1 was right in full, and the first-round
+refusal of its second half was the plan's own error — corrected in the change
+that threads the clock. The habit both reward is the one this plan has used
+throughout: read the route the code takes, not the route its prose says it
+takes, and re-check a refusal against the tree before recording it.
 
 ## Appendix — how to reproduce the hang by hand
 
