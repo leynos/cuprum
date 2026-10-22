@@ -16,8 +16,6 @@ runner's own.
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
 import sys
 import typing as typ
 
@@ -25,6 +23,7 @@ import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
+from cuprum.unittests._post_exit_teardown_support import reap_descendant
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import (
     descendant_then_exit_argv,
@@ -49,30 +48,6 @@ pytestmark = _posix_only
 # is going to finish does so long before this, and a run that is not has
 # nothing left to wait for.
 _FAIL_FAST_RUN_BUDGET_S = 20.0
-
-
-def _recorded_descendant(pid_file: Path) -> int | None:
-    """Return the descendant's recorded pid, or ``None`` if it never wrote one."""
-    if not pid_file.exists():
-        return None
-    try:
-        return int(pid_file.read_text(encoding="utf-8").strip())
-    except ValueError:
-        return None
-
-
-def _reap_descendant(pid_file: Path, descendant_pid: int | None) -> None:
-    """Kill a descendant the run left behind, so a failure reaps what it found.
-
-    Resolves the pid from the file when the test never captured one, which is
-    the case when it failed before the wait returned. A failure here means the
-    descendant outlived its group teardown — the very thing under test — so it
-    is reaped before the failure is reported, rather than left running.
-    """
-    if descendant_pid is None:
-        descendant_pid = _recorded_descendant(pid_file)
-    if descendant_pid is not None and process_is_running(descendant_pid):
-        os.kill(descendant_pid, signal.SIGKILL)
 
 
 def _assert_descendant_reclaimed(descendant_pid: int, message: str) -> None:
@@ -154,7 +129,7 @@ def test_a_public_owned_pipeline_run_reaches_its_grandchildren(tmp_path: Path) -
                 "left behind, rather than leaving it holding the inherited pipes",
             )
         finally:
-            _reap_descendant(pid_file, grandchild_pid)
+            reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
 
@@ -209,7 +184,7 @@ def test_an_owned_failing_stage_reaches_the_descendant_it_left(tmp_path: Path) -
                 "had already exited when the failure latched",
             )
         finally:
-            _reap_descendant(pid_file, grandchild_pid)
+            reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
 
@@ -267,6 +242,6 @@ def test_an_owned_exited_sibling_still_reaches_the_descendant_it_left(
                 "its waiter had already completed when the sibling failed",
             )
         finally:
-            _reap_descendant(pid_file, grandchild_pid)
+            reap_descendant(pid_file, grandchild_pid)
 
     asyncio.run(run_case())
