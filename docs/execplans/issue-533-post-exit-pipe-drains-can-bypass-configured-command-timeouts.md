@@ -1097,6 +1097,23 @@ the issue was filed:
       cannot terminate, because each record is a commit and each commit needs
       a round; the plan stops at the first round whose head is a commit that
       does not itself carry a gate claim.
+- [x] (2026-10-22) Ran all six gates at `eab5a6671`, the commit that closed the
+      cycle above, and pushed it. Every log records
+      `head=head_after=eab5a6671` with `tree=tree_after=0` and `exit=0`:
+      `check-fmt` 0.82 s, `test` 441.54 s, `typecheck` 0.56 s, `lint`
+      113.85 s, `markdownlint` 17.77 s, `nixie` 0.47 s. The `test` figures
+      were re-derived here from the log rather than inherited: 22 pytest
+      invocations, 5655 passed / 125 skipped / 0 failed, zero `FAILED` lines;
+      nextest 167 run / 167 passed / 0 skipped over 7 binaries; doctests 3
+      ignored, 0 failed. `make lint` regenerated `typos.toml` and left it
+      byte-identical. The head was pushed over SSH, `ls-remote` and
+      `rev-parse HEAD` agree, the tracking ref was refreshed through a
+      leading-`+` refspec, and the branch's upstream was set to `origin/`.
+      The PR body cites the `-eab5a6671` logs, and GitHub Actions passed on
+      that head: 16 of 16 jobs in the main run succeeded, and the Rust
+      boundary run's four jobs succeeded. This is the terminal record: the
+      work is complete, so there is no further round to name.
+
 - [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
       `7459e3caf` and answered the fifth round on PR #652 (comment
       `6336469259`). The sixth round returned one finding over 53 reviewed
