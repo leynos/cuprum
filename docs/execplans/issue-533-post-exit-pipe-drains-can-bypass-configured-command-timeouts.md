@@ -1277,6 +1277,41 @@ the issue was filed:
   `untracked_after=0`, so the round is evidence for that one revision and no
   other.
 
+- [x] (2026-10-22) Cleared two CodeScene **Large Method** findings that arrived
+  on `c16236b86` after that round's reply was posted. Both are new code from
+  this branch, not inherited: `_wait_for_line_stream_exit` measured 76 lines and
+  `_collect_line_stream_after_exit` 74, against a threshold of 70. The
+  published recipe reproduces both figures exactly before the change, so the
+  finding was read against the real metric rather than estimated.
+
+  Three extractions, each at a seam that already existed rather than at a line
+  count. `_wait_for_line_stream_exit`'s failure arms became
+  `_await_line_stream_exit` (61 lines) — the wait and its reconciliation are
+  one responsibility, and the collection that follows a *clean* exit is another.
+  `_collect_line_stream_after_exit`'s success tail became
+  `_read_consumed_drains` (22 lines), the one route the settled drains travel
+  to their caller. That left `coordinator.py` at 416 lines against Pylint's
+  enforced 400-line cap, which the extraction itself had caused, so the result
+  assembly moved to a new `cuprum/_line_stream/result_assembly.py`: closing the
+  delivery worker, emitting the exit event, and reading the settled captures
+  touch no task the run still owns, which is what separates them from the wait.
+  It takes the exit-and-drain step as a parameter rather than importing it, so
+  `coordinator._run_to_command_result` — which
+  `test_line_stream_coordinator_stateful.py` patches at the module — keeps
+  owning the name its tests replace.
+
+  Module sizes after the change: `coordinator.py` 340, `drain.py` 306,
+  `result_assembly.py` 181. Every function in the three modules is now under 70
+  lines; the largest is `_collect_line_stream_after_exit` at 68.
+
+  Behaviour-preserving was checked rather than asserted. Swapping the two
+  drains in `_build_command_result` fails three tests in
+  `test_safe_cmd_lines.py`, so the positional contract the split moved is still
+  witnessed. The focused suites give 177 passed / 1 skipped on
+  `-k "line_stream or lines"`, `ruff check` and `ruff format --check` are clean
+  on the package, `ty check` on `cuprum/_line_stream/` passes, and Pylint
+  reports 10.00/10 on all three modules.
+
   The round before this one was red for two reasons worth keeping separate.
   `make test` failed on the maturin wheel snapshot, because the split added
   `captures.py` and `reader_wait.py` to the shipped file list and the snapshot

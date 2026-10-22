@@ -131,10 +131,26 @@ async def _collect_line_stream_after_exit(
         # replace the caller's real error with an invariant failure.
         await _settle_and_reconcile(run, pid, execution, preserve=False)
         raise reader_failure
-    # Every consumer is done by the time the block above returns a payload, so
-    # this resolves immediately. It is kept as the single route the drains
-    # travel to their caller, rather than a second one that could drift from
-    # the path a streamed run uses.
+    return await _read_consumed_drains(run, pid, execution)
+
+
+async def _read_consumed_drains(
+    run: _LineStreamRun,
+    pid: int | None,
+    execution: _SubprocessExecution,
+) -> _DrainPair:
+    """Read the drains of consumers that have already been awaited to completion.
+
+    Reached only on the settle path, after :func:`_collect_line_stream_after_exit`
+    has observed every consumer finish, so the gather below resolves at once. It
+    is kept as the single route the drains travel to their caller rather than a
+    second one that could drift from the path a streamed run uses.
+
+    Returns
+    -------
+    _DrainPair
+        The stdout and stderr drain results, records included, in that order.
+    """
     stdout_drain, stderr_drain = await _consumer_drains(
         run.tasks.consumers,
         _drain_context(execution, run.tasks, pid, preserve=True),
