@@ -156,11 +156,12 @@ class TestTheDetectorJob:
         minutes cost none. That saved seconds and cost a pull request 46 minutes
         on 2026-09-23 (run 35904789287), when the hosted queue held it while every
         Ubicloud job started. A fork's pull request takes the hosted arm, because
-        a fork cannot obtain an Ubicloud runner.
+        a fork cannot obtain an Ubicloud runner, and so does Dependabot's.
         """
         runner = " ".join(str(job(workflow_data, CHANGES_JOB).get("runs-on")).split())
         expected = (
-            "${{ github.event.pull_request.head.repo.fork "
+            "${{ (github.event.pull_request.head.repo.fork "
+            "|| github.event.pull_request.user.login == 'dependabot[bot]') "
             "&& 'ubuntu-latest' || 'ubicloud-standard-2' }}"
         )
 
