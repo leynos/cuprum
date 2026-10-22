@@ -278,6 +278,19 @@ and pass afterwards; `rsync_sync()` can never emit an operand that begins with
       local-only rsync decision, the remote grammar it rejects, and why a
       remote transfer is an extension point. Focused suite at this tree: 4
       passed in `test_builder_operand_separation.py`.
+- [x] (2026-10-22) Act on CodeRabbit's re-review of `28f0a35fe`. It withdrew
+      the four earlier findings and retained two precision points, both valid.
+      (1) The migration guide said the `ValueError` names "the operand and its
+      role"; the message identifies the source or destination role but does not
+      repeat the operand value, and an operand failing the generic check first
+      is rejected without the role-specific wording. Corrected. (2) The stub
+      test is construction-time evidence only: it calls `rsync_sync()` and
+      never `run_sync()`, so the untouched recording file shows no executable
+      ran, not that the execution boundary would have refused one. This
+      paragraph now says so and points at obligation 8 and the accepted-path
+      test for that boundary. CodeRabbit also noted that `CHANGES_REQUESTED` is
+      still the recorded provider state and advised awaiting the required
+      checks; both are tracked here rather than assumed resolved.
 
 ## Surprises & discoveries
 
@@ -558,8 +571,14 @@ Residual gaps: the accepted-path evidence runs a live rsync, but the
 rejected-path evidence does not, because a rejection means no process may start.
 `test_rsync_with_a_remote_looking_source_transfers_nothing` in
 `cuprum/unittests/test_builder_operand_separation.py` therefore puts an
-executable stub named `rsync` first on `PATH` and asserts it was never called,
-which shows the rejection happens before the spawn rather than after it. It
+executable stub named `rsync` first on `PATH` and asserts it recorded no
+invocation. This is construction-time rejection evidence: the test calls
+`rsync_sync()` and never `run_sync()`, so the untouched recording file shows no
+executable ran, not that the *execution* boundary would have refused one. The
+execution boundary itself is covered separately, by the existing factory-call
+assertions and by the production validation order that rejects both operands
+before `sh.make` is reached (obligation 8), and the accepted path is covered by
+the real transfer in `test_rsync_copies_option_shaped_relative_paths`. The test
 runs with `allow_relative=True`, because without it `safe_path()` rejects the
 spelling as non-absolute first and the remote-grammar layer is never reached.
 What remains unexercised is a real rsync receiving a remote operand, which is

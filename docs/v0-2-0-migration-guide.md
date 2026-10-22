@@ -294,11 +294,13 @@ accepted, such as `dir/file` or a Windows MSYS mount like `/cygdrive/c/data`,
 and never admits a remote endpoint.
 
 A call that previously reached the network this way now raises `ValueError`
-naming the operand and its role, before any command is constructed. Remote
-transfers are an explicit extension point: build the command yourself with
-`sh.make(RSYNC)` under a scope that allows `RSYNC`. A destination-only remote
-operand is rejected for the same reason as a source one, so a push and a pull
-both need that custom builder.
+before any command is constructed. The message identifies whether the source or
+the destination was rejected, but does not repeat the operand value; an operand
+that fails the generic check first is rejected without that role-specific
+wording. Remote transfers are an explicit extension point: build the command
+yourself with `sh.make(RSYNC)` under a scope that allows `RSYNC`. A
+destination-only remote operand is rejected for the same reason as a source
+one, so a push and a pull both need that custom builder.
 
 A local path that contains a colon still works when a directory separator
 precedes it, as in `dir/name:part`, because rsync reads a colon before the first
