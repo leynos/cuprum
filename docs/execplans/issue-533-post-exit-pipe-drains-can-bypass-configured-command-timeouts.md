@@ -14,16 +14,19 @@ and committed. The branch has been rebased twice. The first replay, onto
 = `9c9008351` ("Add bounded and file-backed capture policies per stream"),
 replayed the same 34 commits against `main`'s per-stream capture policy API,
 and its seven conflicts were resolved by hand (see `Progress` and
-`Decision log`). The candidate head is `2468a3cc5`, and the gate round recorded
-below predates it, so it certifies nothing about this head: a rebase
-invalidates every earlier gate log. The draft PR is open as
+`Decision log`). The candidate head is `676081c9e`, and the gate round recorded
+below predates it, so it certifies nothing about this head: a rebase or a new
+commit invalidates every earlier gate log. That head carries the split that
+brought `cuprum/_subprocess_execution.py` back under the 400-line module cap;
+its own full round is the one still owed. The draft PR is open as
 [#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
 milestones and one of the earlier rebased head — returned twenty-two findings
 in total: seventeen were applied and five rejected as describing code that does
 not exist in this tree (see `Decision log`). What remains is one gate round on
 this tree, its audit against the target head, the push, and marking the PR
-ready for review. The direct run was split into
-`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
+ready for review. Two splits keep the source inside the module cap: the direct
+run in `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly
+in `cuprum/_subprocess_outcome.py`.
 
 ## Purpose / big picture
 
@@ -790,8 +793,39 @@ the issue was filed:
       `cuprum/_subprocess_stream_post_exit.py`), and four new entries recorded
       for the capture-policy vocabulary, the `_PipelineOutputs` per-stream
       correction, and the run module's lost `_settle_stdin_writer` binding.
-      `### Outcomes & retrospective` remains to be revisited after the gate
-      round below.
+- [x] (2026-10-22) The gate round on `4952dd5dd` came back red on one genuine
+      finding and nothing else: `make lint` stopped at `pylint-classic` with
+      `C0302: Too many lines in module (425/400)` for
+      `cuprum/_subprocess_execution.py`. The module was exactly at 400 lines
+      on the target head, and this branch's post-exit deadline work is what
+      took it over. Because `python-lint`'s remaining prerequisites abort
+      before the recipe body runs, ruff, interrogate, both pylint passes'
+      second halves, ambrleaks,
+      Skylos, the duplication gate, Clippy, Whitaker, spelling, yamllint and
+      actionlint were all unobserved by that round — the finding is the only
+      thing it certified, and the rest had to be re-run rather than assumed.
+- [x] (2026-10-22) Resolved by splitting the *result* half of the module out,
+      not by suppressing the finding: `_DirectCompletion`,
+      `_build_command_result`, `_shared_result_fields` and the relay-fallback
+      flattening moved to `cuprum/_subprocess_outcome.py`, on the boundary the
+      module docstring already drew (orchestration owns *when* a run settles,
+      the new module owns *what* it reports). `_subprocess_execution` is 273
+      lines and re-exports the two names its own importers reach for.
+      `_process_handle/coordinator.py` and `_line_stream/coordinator.py` are
+      untouched. See `Decision log`.
+- [x] (2026-10-22) The duplication gate then paired the new module's
+      `TYPE_CHECKING` prologue with the 45-module import family. The existing
+      reasoned exception gained the member and a record of the widening: same
+      idiom, one more declarer, not copy-paste to extract.
+- [x] (2026-10-22) `docs/developers-guide.md` corrected in two places: the
+      stale claim that `_settle_owned_group_before_draining` lives in
+      `cuprum/_subprocess_wait.py` (ADR-007 moved it to
+      `cuprum/_subprocess_stream_post_exit.py`, and three shapes share it), and
+      a new paragraph placing `cuprum/_subprocess_outcome.py` beside the other
+      two module splits.
+- [ ] Re-run the full gate round on the new head, then audit, push, and answer
+      the three open CodeRabbit threads. `### Outcomes & retrospective` is
+      written after that round.
 
 ## Surprises & discoveries
 
@@ -1810,6 +1844,41 @@ the issue was filed:
   direct path, with a comment saying why, so the rebase needed no test change;
   it needed the *fact* recorded, because the pre-rebase seam was the run
   module's.
+
+- Decision (gate failure, 2026-10-22): split the direct run's *result*
+  assembly into `cuprum/_subprocess_outcome.py` rather than trimming comments
+  or raising the cap. Rationale: `cuprum/_subprocess_execution.py` was at
+  exactly 400 lines on `9c9008351`, and this branch's `TimeoutError` split
+  added 29. The module mixed two responsibilities that already had a stated
+  seam — deciding *when* a run settles (the spawn, the wait, the streamed
+  hand-off) and deciding *what* a settled run reports (`_DirectCompletion`,
+  `_build_command_result`, the TypedDict its `**` unpacking is checked
+  against). Splitting on that seam removes 152 lines and leaves a 273-line
+  orchestration module; trimming the explanation of a four-route `TimeoutError`
+  distinction, or asking for a cap exception, would have paid for a size rule
+  with the evidence a future reader needs. The orchestration module re-exports
+  `_DirectCompletion` and `_relay_fallbacks_for_result` so the two reporting
+  modules that import them by that name, and any test patching them there,
+  resolve unchanged. Considered and rejected: moving the builder into
+  `cuprum/_result_assembly.py` (that module documents itself as the *rules*,
+  shared by the single-command and per-stage paths, and the builder is the
+  single-command path's own construction); splitting the pipeline path's stage
+  builder alongside it in the same module (a real parallel, but one whose two
+  sides would then need a third name to say which builder is which, and the
+  gate did not report it); a new module for the relay-fallback flattening alone
+  (too small to be a module, and it belongs beside the record whose field it
+  fills).
+
+- Decision (gate failure, 2026-10-22): widen the duplication gate's import
+  family entry by one member rather than suppressing the scan or lowering its
+  surface. Rationale: the finding paired `cuprum/_subprocess_outcome.py`'s
+  `if typ.TYPE_CHECKING:` prologue with the 45 modules that already declare
+  theirs — the same recorded idiom, now with one more declarer, because the new
+  module is a split of a member. The entry's existing reason already argues
+  this class of pairing cannot be extracted; the change names the new module
+  and records which widening did what, so the next reader can tell the
+  pipeline-drain widening of forty-three→forty-five from this one of
+  forty-five→forty-six.
 
 ## Milestones
 
