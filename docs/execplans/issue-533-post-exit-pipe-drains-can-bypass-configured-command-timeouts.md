@@ -751,6 +751,23 @@ the issue was filed:
       to pipelines alone; it is owed by any run that owns its group.
       Committed as `0dabd1dc7`, with a new ADR addendum rather than an edit to
       the accepted one.
+- [x] (2026-10-22) The duplication gate red at `ac8744d1c` is resolved without
+      widening any exception. First moved the stage path's context
+      construction into a local helper; that fixed the reported family but
+      pulled the module's `if typ.TYPE_CHECKING:` block into the
+      repository-wide import family. A probe that stripped only the three new
+      type-only imports passed (`66 allowed by reasoned exceptions`), proving
+      the block was outside the family before this branch. The construction
+      then moved to `cuprum/_line_callbacks.py` as
+      `_compose_observation_line_callback`, sharing it at the layer that owns
+      the stamping seam. Committed as `4f45f7f37`; the gate reports
+      `66 allowed by reasoned exceptions`.
+- [x] (2026-10-22) The prep-cost spy in
+      `test_line_event_emission_prep_cost.py` was retargeted from the stage
+      module's now-absent `_compose_line_callbacks` binding to
+      `_line_callbacks._compose_line_callbacks`, where the shared seam lives.
+      Mutating the helper to compose a local closure makes the two pipeline
+      cases fail, so the pin still bites.
 
 ## Surprises & discoveries
 
@@ -1650,6 +1667,31 @@ the issue was filed:
   exited child (rejected: the probe is an implementation detail of the helper,
   not a licence to call it where it does not belong).
 
+- Decision (post-gate, 2026-10-22): move the stage path's
+  `_LineEmissionContext` construction into `cuprum/_line_callbacks.py` as
+  `_compose_observation_line_callback`, rather than recording a duplication
+  exception. Rationale: the gate first flagged the two mirrored constructions in
+  `cuprum/_pipeline_stage_streams.py`. Extracting them inside that module
+  fixed the family it reported, but the helper's type-only names — `cabc`,
+  `LineStreamName` and `_LineHookOutcome` — pushed that module's
+  `if typ.TYPE_CHECKING:` block past the line threshold at which the detector
+  pairs it with the repository-wide import family, which then reported a
+  thirty-three-location family at value `301.5`. A probe that stripped only the
+  three new type-only imports and re-ran the detector passed with
+  `66 allowed by reasoned exceptions`, which proves the block was outside the
+  family before this branch and that the change, not `main`, put it in.
+  Widening the thirty-seven-module exception would have recorded an
+  import-declaration idiom for a helper's annotations, and would have left the
+  duplicated construction in place. Moving the construction to the module that
+  owns the stamping seam removes the duplication instead: the sharing is now at
+  the correct architectural layer, and the one-clock rule holds by construction
+  because the helper takes the observation rather than a clock beside it.
+  Alternative considered: keep the local helper and add the module to the
+  import entry (rejected on both counts above). A second alternative — leaving
+  both inline constructions and suppressing the original two-location family —
+  was not available under the repository policy, which treats a new finding as
+  copy-paste until proven otherwise.
+
 ## Milestones
 
 Each milestone ends in a state that is coherent on its own: the repository
@@ -2125,6 +2167,18 @@ bounded the await but never settled what it stopped waiting for. The `INHERIT`
 arm is what separates a bound that was *entered* from one whose cleanup
 actually *completed*, and it is the arm that failed when the settlement half
 was deliberately removed.
+
+The clock work was one invariant discovered three times over: a start
+reference, a per-line `LineEvent.at` stamp, and a post-exit deadline arc are
+meaningful only when all three are readings of one callable. Each route was
+fixed separately before that was stated plainly, which is why the guards read
+the way they do — the injected origin sits far above any real `perf_counter`
+reading and advances in whole steps, so a stray real-clock read either floors
+to exactly `0.0` or lands on a value the injected clock's gaps cannot explain.
+That makes the assertions value-based rather than tolerance-based. The same
+invariant is what the final duplication decision rests on: the construction now
+lives beside the stamp that consumes it, so a caller cannot pass a start
+reference without the clock it was taken from.
 
 A future contributor should read `cuprum/_subprocess_stream_run.py` first: its
 module docstring states the shape all three routes now follow — every await
