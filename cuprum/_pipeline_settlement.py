@@ -174,12 +174,46 @@ async def _settle_gathered_outputs(
     )
 
 
+def _unobserved_pipeline_outputs(
+    spawn: _PipelineSpawnResult,
+) -> _PipelineOutputGather:
+    """Report the pipeline's readers as unobserved, for settlement to await.
+
+    The expiry route has no observation to make. Both ways it is reached have
+    already spent the run's budget — the stage wait consumed it, or the final
+    gather did — so a deadline-bound gather here would be handed a deadline
+    that has passed and could only report every reader unfinished. Awaiting
+    one anyway would also give a reader's own failure the chance to replace the
+    expiry the caller is owed, which is the opposite of the rule the success
+    route applies: there the failure ends the run, so it must be reported,
+    while here the run has already ended and settlement is what reads the
+    pipes.
+
+    What this reports instead is the same reader list with nothing observed,
+    so :func:`_settle_gathered_outputs` supplies the bounded EOF grace, cancels
+    whatever is left, and reads every payload from the settled tasks. The
+    ``finished=False`` is not a claim that a reader is stuck; it is what asks
+    a capturing settlement for that grace.
+
+    Returns
+    -------
+    _PipelineOutputGather
+        The readers, an absent observation for each, and a settlement that owes
+        the EOF grace.
+    """
+    tasks = _pipeline_output_tasks(spawn)
+    return _PipelineOutputGather(
+        tasks=tasks,
+        drains=(None,) * len(tasks),
+        finished=False,
+    )
+
+
 async def _expired_pipeline_outputs(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,
     *,
     pipe_tasks: list[asyncio.Task[None]],
-    deadline: float | None,
 ) -> _PipelineOutputs:
     """End an expired run and report what its readers had captured.
 
@@ -190,6 +224,11 @@ async def _expired_pipeline_outputs(
     group that holds the pipes — the inter-stage pumps are reconciled so no
     relay writes into a reader about to be cancelled, and only then are the
     readers settled.
+
+    No deadline is passed on, because there is none left to respect: see
+    :func:`_unobserved_pipeline_outputs`. The bound the caller configured has
+    already expired, and what remains is the bounded settlement that reads the
+    pipes the terminated stages have released.
 
     Returns
     -------
@@ -203,9 +242,8 @@ async def _expired_pipeline_outputs(
         observations=spawn.stages.observations,
     )
     await _reconcile_pipe_tasks(pipe_tasks)
-    gathered = await _gather_pipeline_outputs(spawn, deadline=deadline)
     stderr_by_stage, final_stdout = await _settle_gathered_outputs(
-        gathered,
+        _unobserved_pipeline_outputs(spawn),
         spawn=spawn,
         config=config,
     )

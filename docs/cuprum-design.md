@@ -2457,16 +2457,15 @@ sequenceDiagram
 
 - `cuprum/_pipeline_settlement.py` owns the one sequence that ends an expired
   pipeline and reports what its readers had captured: terminate the stages,
-  reconcile the inter-stage pumps, observe the readers under the remaining
-  deadline, and settle them. Observation and settlement are deliberately
-  separate steps there. Observation only *reports* that readers are still
-  unfinished, and settlement runs afterwards — which is what lets a reader
-  capture what its stage wrote before the terminal process group is torn down
-  and the reader cancelled. Both routes that can discover an expiry, the stage
-  wait and the final output gather, call this one sequence so they cannot drift
-  apart. The module is the pipeline counterpart of the `_stream_drain` entry
-  above: that one owns the direct run's two-stream drain, this one owns the
-  collection a pipeline runs after its stages have been waited on.
+  reconcile the inter-stage pumps, and settle the readers. Settlement supplies
+  its own bounded EOF grace there, because the expiry route has already spent
+  the run's budget and has no remaining deadline to observe under; see the
+  pipeline collection passage below. Both routes that can discover an expiry,
+  the stage wait and the final output gather, call this one sequence so they
+  cannot drift apart. The module is the pipeline counterpart of the
+  `_stream_drain` entry above: that one owns the direct run's two-stream drain,
+  this one owns the collection a pipeline runs after its stages have been
+  waited on.
 - `cuprum/_timeout_reporting.py` owns the two channels a timeout or teardown
   failure is reported on — the structured `cuprum.timeout` log record and the
   `timeout` / `teardown_error` observe events — and the `_report_*` helpers
@@ -2505,6 +2504,16 @@ cancels anything — the termination is what releases the pipes and lets a reade
 capture what its stage had already written. Both the wait-timeout route and the
 success route that discovers an unfinished gather call that one sequence, so a
 pipeline cannot report output that depends on which route ended it.
+
+The expiry route observes nothing. Both ways it is reached have already spent
+the run's budget — the stage wait consumed it, or the final gather did — so a
+second bounded wait could only report every reader unfinished, and would give a
+reader's own failure the chance to replace the expiry the caller is owed.
+`_unobserved_pipeline_outputs` therefore reports the readers with no
+observation and `finished=False`, and the settlement supplies the bounded EOF
+grace itself before cancelling and reading them. The success route keeps its
+deadline-bounded gather, because there the failure of a reader is what ends the
+run and must be reported.
 
 Pipeline startup is separated from pipeline termination for the same reason the
 single-command path separates them. `cuprum/_pipeline_spawn.py` starts the
@@ -3641,7 +3650,7 @@ line events, capture, and echo
 
 ```mermaid
 flowchart LR
-    decoded[Decoded output line] --> compose[_compose_line_callbacks]
+    decoded[Decoded output line] --> compose[_compose_observation_line_callback]
     compose --> observe[Observe hooks]
     compose --> hook[RunOutputOptions.on_line]
     compose --> queue[LineStream queue]

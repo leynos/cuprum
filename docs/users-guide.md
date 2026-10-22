@@ -2331,10 +2331,15 @@ reclaimed and the run reports `TimeoutExpired` just as it would have if the
 child itself had overrun.
 
 This holds for all three ways of running a command: `run()` / `run_sync()`,
-`lines()`, and `Pipeline.run()`. In every case the deadline is a single budget
+`lines()`, and `Pipeline.run()`. In every case, the deadline is a single budget
 for the whole run. Whatever the wait for the child leaves unused is what the
 collection that follows gets, so a run whose child exited promptly still ends
 at the configured deadline if its readers cannot finish.
+
+A pipeline starts that budget when output collection begins, so the time spent
+spawning its stages is not deducted from it. The deadline is therefore measured
+from slightly later than the moment `Pipeline.run()` was called, while a direct
+run or `lines()` measures it from before the child was spawned.
 
 A run can exceed the deadline by the cleanup allowances and nothing else:
 
