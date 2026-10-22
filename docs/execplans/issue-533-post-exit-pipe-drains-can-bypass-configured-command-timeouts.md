@@ -931,8 +931,53 @@ the issue was filed:
       `asyncio.to_thread(wait_for_pid_file, ...)`, the pattern the sibling
       owned-group tests already use. The other finding added a failure message
       to the payload-alignment assertion. Reply at `#issuecomment-6333121153`.
-- [ ] Run the full gate round on `3c438cd6f` and, if green, request another
-      review and mark PR #652 ready for review.
+- [x] (2026-10-22) Adjudicated the third CodeRabbit review, review
+      `5609732903` at `2026-10-22T05:41:30Z`, which left seven unresolved
+      threads. All seven were still valid against the code and are fixed in
+      `c5501c33e`; none was disputed or skipped. Two were test-quality
+      findings that had let the tests pass without witnessing the behaviour
+      they name. In `test_pipeline_post_exit_deadline.py`, the success route
+      asserted a bounded return but never asserted the descendant was
+      reclaimed, and its `RUN_BUDGET_S` was a harness bound of 12 s rather
+      than a measurement of settlement — a regression back to the old
+      unbounded drain could take 11 s and still pass. Replaced with a real
+      elapsed assertion against `DEADLINE_S + SETTLE_ALLOWANCE_S` (3 s) plus
+      `wait_for_pid_file` / `process_is_running` / `reap_descendant`; the
+      measured settlement is about 1.5 s, and the two module-level asserts
+      that encoded the old bound were deleted rather than retuned. In
+      `test_stdin_settle_cancellation.py`, the pid file was read once after
+      the child exited. The child spawns its grandchild and exits without
+      waiting, so that read could see the file before the write and hand
+      `reap_descendant` a `None`; it now awaits `wait_for_pid_file` through
+      `asyncio.to_thread`, as its siblings do. The three code findings were
+      all genuine and none was cosmetic.
+      `_await_consumers` attributed simultaneous reader failures by set
+      iteration, so the error a caller read depended on task hashing; the
+      fix records completion order through done callbacks registered before
+      the wait. Red-then-green was proven twice: with the old shape the new
+      test reports `['stderr', 'stdout']` across 25 trials, and with the fix
+      it reports one answer. The pipeline expiry route re-observed readers
+      under an already-expired deadline, which could replace the expiry the
+      caller is owed with a reader's own failure; `_unobserved_pipeline_outputs`
+      now reports `finished=False` so the settlement supplies its own EOF
+      grace, and `deadline` is gone from both `_expired_pipeline_outputs` and
+      `_PipelineExpiry` rather than left there as an unused figure the next
+      reader would treat as a bound. `_create_stream_callback` rebuilt the
+      emission context that `_compose_observation_line_callback` exists to
+      bind, so it could pair the start reference with a different clock; it
+      now routes through the helper. The doc finding was a real overclaim:
+      `docs/users-guide.md` said a pipeline's deadline starts at spawn. It
+      starts when collection begins, so spawn time is *not* deducted, and the
+      page now says so. The design
+      document, Figure 15's node label, and the developers' guide were
+      brought in line with the same three code changes.
+- [x] (2026-10-22) Full gate round on `c5501c33e`'s parent tree, `46dbb51e`
+      with the ten changes dirty: check-fmt, test (5822 passed / 125 skipped
+      across 22 sessions, Rust doctests green), typecheck, and lint all exit
+      0. The dirty-tree round is the one that certifies the commit, since the
+      commit is exactly that tree.
+- [ ] Request another `coderabbit review --agent` on `c5501c33e` and, if it
+      does not raise a further round, mark PR #652 ready for review.
 
 ## Surprises & discoveries
 
