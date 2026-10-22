@@ -36,8 +36,11 @@ records the head, the tree-change count, the exit code, and the elapsed time.
 That head was pushed to the remote branch over SSH and the remote head and the
 local head agree. The PR body cites that round rather than a pending table. The
 review round that followed it is fixed in the commit carrying this paragraph,
-which has its own gate round; that round's logs are suffixed with the short SHA
-of that commit, as every earlier round's are.
+and the round that certifies that commit runs at its clean head with the logs
+named `/tmp/<gate>-cuprum-<branch>-<short-sha>.out`, each recording its own
+head and tree-change count. Certifying the committed head rather than the tree
+it was built from is what keeps a log's filename and its header from
+disagreeing.
 
 CodeRabbit has reviewed this branch repeatedly, and each round's finding count
 is recorded beside its adjudication in `Progress` rather than totalled here:
