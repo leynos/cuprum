@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import types
 
 import pytest
 
@@ -269,10 +270,17 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     )
     # Both stage start references are read from the stage observation's own
     # callables. The observation builder installs them from this module, so
-    # patch the clocks where it resolves them; patching ``_pipeline_spawn``
-    # would no longer reach the sample, which is the point of the change.
-    monkeypatch.setattr(_pipeline_observation.time, "perf_counter", monotonic_clock)
-    monkeypatch.setattr(_pipeline_observation.time, "time", wall_clock)
+    # replace this module's ``time`` binding rather than attributes on the
+    # standard-library module: patching the shared module would hand the
+    # injected readings to every caller in the process, and any of them that
+    # reads a clock would append to a sequence this test asserts exactly.
+    # Patching ``_pipeline_spawn`` would no longer reach the sample, which is
+    # the point of the change.
+    monkeypatch.setattr(
+        _pipeline_observation,
+        "time",
+        types.SimpleNamespace(perf_counter=monotonic_clock, time=wall_clock),
+    )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(
         _pipeline_stage_streams,

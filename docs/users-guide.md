@@ -1548,6 +1548,13 @@ consuming. A line already yielded is never taken back; once the deadline
 expires, iteration ends with `TimeoutExpired` and whatever had been captured
 stays available on the exception.
 
+A caller that has stopped iterating is a suspended coroutine, so nothing can be
+raised _into_ it at the deadline. The expiry is recorded when it happens and is
+observed when the caller next asks for an item: an idle consumer is not woken
+at the deadline, and the exception arrives on the next `async for` step, not
+from the line it has already received. Consuming promptly is therefore what
+makes the timeout prompt.
+
 ### Handle a slow command
 
 Pass `timeout` to `run()` or `run_sync()` and catch `TimeoutExpired`, which
