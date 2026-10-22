@@ -1156,9 +1156,21 @@ the issue was filed:
   over the same surface, and all three were right. Findings 1 and 3 are one
   concern stated twice — both post-exit deadline arms caught a `TimeoutError`
   raised by a stdin writer, because `TimeoutError` is an `OSError` subclass.
-  They are fixed once, at the shared `reap_descendant` helper every post-exit
-  test module's cleanup reaches — 25 call sites across eight modules — and at
-  the two classification arms.
+  They are fixed once, at the two classification arms. A third concern in the
+  same round was separate and is described below.
+
+  The third concern is genuinely about a helper, but a test one: the cleanup
+  path most post-exit tests reach read the descendant's pid file once, so a
+  test that failed before its child wrote that file reaped nothing and parked
+  a sleeper on the shared host for its whole lifetime. Fixed in `78e4d2aed` by
+  giving the read a short grace. A first draft of this entry credited the
+  classification fix to that helper, which is a test-cleanup utility and
+  cannot host a production arm; the two concerns were one paragraph apart and
+  a sentence was merged across them. It also counted the helper's reach as 25
+  call sites across eight modules, which was wrong twice: it is **21 call
+  sites across seven modules**, and an eighth module held a *local copy*
+  rather than reaching the shared helper. That copy is fixed separately in
+  `24c78a8ea` and recorded in its own `Progress` bullet.
 
   Finding 2 was the substantive one, and it was checked against the tree rather
   than accepted from the review text. Its premise — that
@@ -1238,6 +1250,22 @@ the issue was filed:
   `make duplication` 68 allowed by reasoned exceptions, `make typecheck` clean,
   the Skylos dead-code scan exit 0 with no findings, `make check-fmt` clean
   over 1084 files, and the focused line-stream suites 677 passed / 35 skipped.
+
+- [x] (2026-10-22) Unified the one module that kept a local reaper instead of
+  reaching the shared one. `test_pipeline_process_group_run.py` defined
+  `_reap_descendant` and `_recorded_descendant` privately, and the pid file was
+  read once; the shared helper's grace was therefore absent from it. Its three
+  call sites all pass a pid that is `None` when the test failed before the
+  pid-file wait returned, and two of them resolve that pid through
+  `wait_for_pid_file`, which can raise before assigning — so the leaking branch
+  is reachable, not theoretical. Its own docstring already promised to resolve
+  the pid "when it failed before the wait returned", which is how the gap
+  survived review: the prose described the shared behaviour the code did not
+  implement. The module now imports the shared helper, `os` and `signal` are
+  gone, and the three tests pass. Fixed in `24c78a8ea`, with
+  `make pylint-classic` at 10.00/10 on both passes and `make duplication`
+  still 68 allowed. This is what makes the shared helper's reach uniform; the
+  figures are 21 call sites across seven modules plus these three.
 
 ## Surprises & discoveries
 
