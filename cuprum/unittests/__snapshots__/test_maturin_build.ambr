@@ -46,6 +46,7 @@
       'cuprum/_line_stream/drain.py',
       'cuprum/_line_stream/line_queue.py',
       'cuprum/_line_stream/reader_wait.py',
+      'cuprum/_line_stream/result_assembly.py',
       'cuprum/_line_stream/spawn.py',
       'cuprum/_line_stream/telemetry.py',
       'cuprum/_observability.py',

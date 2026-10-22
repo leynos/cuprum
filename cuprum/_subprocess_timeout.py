@@ -20,7 +20,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _StreamPayload
+    from cuprum._subprocess_wait_types import _StreamPayload, _StreamPayloadPair
 
 
 class _SubprocessInvariantError(_ExecutionInvariantError):
@@ -228,6 +228,105 @@ def _handle_subprocess_timeout(
     )
 
 
+class _SettledExit(typ.Protocol):
+    """The exit facts a completion record carries once its run has settled.
+
+    A protocol rather than a required base class so the records the three
+    completion paths already return — the direct run's
+    :class:`~cuprum._subprocess_outcome._DirectCompletion`, the line stream's
+    settled drains, and the handle's outcome — can be reported without each
+    growing an inheritance relationship to a reporting helper.
+
+    The members are read-only properties, not plain annotations. Every record
+    that satisfies this protocol is a frozen dataclass, and a writable member
+    would make the protocol invariant in its type: a frozen ``exit_code: int``
+    is not assignable to a member that promises to accept writes of ``int``.
+    """
+
+    @property
+    def exit_code(self) -> int:
+        """The child's exit code, or the signal that ended it, negated."""
+
+    @property
+    def exited_at(self) -> float:
+        """The monotonic instant the child's exit was observed."""
+
+
+def _emit_run_exit_event(
+    execution: _SubprocessExecution,
+    settled: _SettledExit,
+    *,
+    pid: int | None,
+    resource_usage: ChildResourceUsage | None = None,
+) -> None:
+    """Emit the exit event for a run the caller has just finished timing.
+
+    The three completion paths — direct, streamed, and handle — all report the
+    same facts about the child, and each would otherwise rebuild the details
+    record. Naming them once here keeps the event's shape in step with the
+    reader that projects it, and makes the optional measurement an explicit
+    omission rather than a field a caller might forget to pass.
+
+    The time base is read from the stamped execution bundle rather than taken
+    as an argument. ``_start_owned_process`` stamps the bundle with exactly the
+    reference the run was timed from, so the event's duration is measured
+    against the same clock as the result's — a second, separately passed
+    reference is what would let the two disagree.
+
+    ``resource_usage`` stays ``None`` when the caller obtained no measurement;
+    the event then reports it as unavailable instead of as a measured zero.
+    """
+    _emit_exit_event(
+        execution.observation,
+        _ExitEventDetails(
+            pid=pid,
+            exit_code=settled.exit_code,
+            started_at=execution.started_at,
+            exited_at=settled.exited_at,
+            resource_usage=resource_usage,
+        ),
+    )
+
+
+def _translate_run_timeout(
+    execution: _SubprocessExecution,
+    process: asyncio.subprocess.Process,
+    payloads: _StreamPayloadPair,
+    exc: TimeoutError | _SubprocessTimeoutError,
+) -> typ.NoReturn:
+    """Report a run's expiry from the run's own fields.
+
+    Every caller reporting a live run's expiry has the same values to hand —
+    the execution bundle, the process, the run's own time base, and the two
+    payloads captured so far — and each would otherwise rebuild the same
+    context. Building that record here keeps the field-to-field agreement in
+    one place, so a run cannot be reported with another run's exit clock or
+    with one stream's output in the other's slot.
+
+    The payloads arrive in the stdout-then-stderr order every pair in this
+    library uses, so a caller that captured nothing passes ``(None, None)`` and
+    cannot accidentally transpose the two.
+
+    Raises
+    ------
+    TimeoutExpired
+        A timeout always ends the call this way. It is raised by
+        :func:`_raise_timeout_expired`, which this helper reaches through
+        :func:`_handle_subprocess_timeout`, so the linter cannot see the
+        ``raise`` in this frame.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _raise_timeout_expired below
+    _handle_subprocess_timeout(
+        _SubprocessTimeoutContext(
+            execution=execution,
+            process=process,
+            started_at=execution.started_at,
+            stdout_text=payloads[0],
+            stderr_text=payloads[1],
+        ),
+        exc,
+    )
+
+
 def _handle_stream_timeout(
     exc: TimeoutError,
     *,
@@ -263,6 +362,7 @@ def _handle_stream_timeout(
 
 __all__ = [
     "_ExitEventDetails",
+    "_SettledExit",
     "_SubprocessInvariantError",
     "_SubprocessTimeoutContext",
     "_SubprocessTimeoutDetails",
@@ -270,10 +370,12 @@ __all__ = [
     "_TimeoutContext",
     "_TimeoutFallback",
     "_emit_exit_event",
+    "_emit_run_exit_event",
     "_get_exit_code",
     "_handle_stream_timeout",
     "_handle_subprocess_timeout",
     "_raise_timeout_expired",
     "_require_timeout",
     "_resolve_timeout_payload",
+    "_translate_run_timeout",
 ]

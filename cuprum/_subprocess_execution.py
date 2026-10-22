@@ -62,11 +62,9 @@ from cuprum._subprocess_streams import (
     _StreamConsumerSpawnContext as _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_timeout import (
-    _emit_exit_event,
-    _ExitEventDetails,
-    _handle_subprocess_timeout,
-    _SubprocessTimeoutContext,
+    _emit_run_exit_event,
     _SubprocessTimeoutError,
+    _translate_run_timeout,
 )
 from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout as _wait_for_exit_code_within_timeout,
@@ -116,7 +114,6 @@ async def _await_direct_completion(
     execution: _SubprocessExecution,
     *,
     pid: int | None,
-    started_at: float,
 ) -> _DirectCompletion:
     """Wait for the child to settle and report how it ended as one record."""
     # The direct path captures nothing; the stream path overwrites these values.
@@ -149,14 +146,10 @@ async def _await_direct_completion(
                 execution,
             )
     except _SubprocessTimeoutError as exc:
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=execution,
-                process=process,
-                started_at=started_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-            ),
+        _translate_run_timeout(
+            execution,
+            process,
+            (stdout_text, stderr_text),
             exc,
         )
     except TimeoutError as exc:
@@ -169,14 +162,10 @@ async def _await_direct_completion(
             # exit wait re-raises the bare ``TimeoutError`` on both the
             # non-positive and the elapsed positive deadline routes.
             raise
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=execution,
-                process=process,
-                started_at=started_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-            ),
+        _translate_run_timeout(
+            execution,
+            process,
+            (stdout_text, stderr_text),
             exc,
         )
     finally:
@@ -213,22 +202,17 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandRes
         process,
         execution,
         pid=pid,
-        started_at=started_at,
     )
 
     rusage = _wait4_spawn.resource_usage_for(process, run_start.rusage_before)
-    _emit_exit_event(
-        execution.observation,
-        _ExitEventDetails(
-            pid=pid,
-            exit_code=completion.exit_code,
-            started_at=started_at,
-            exited_at=completion.exited_at,
-            # The same measurement the returned result carries, so a consumer
-            # reading the event stream sees the figures the caller sees rather
-            # than having to correlate an event with a result object.
-            resource_usage=rusage,
-        ),
+    # The same measurement the returned result carries, so a consumer reading
+    # the event stream sees the figures the caller sees rather than having to
+    # correlate an event with a result object.
+    _emit_run_exit_event(
+        execution,
+        completion,
+        pid=pid,
+        resource_usage=rusage,
     )
     return _build_command_result(
         execution,

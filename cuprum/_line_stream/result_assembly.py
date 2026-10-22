@@ -23,11 +23,9 @@ from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import (
-    _emit_exit_event,
-    _ExitEventDetails,
-    _handle_subprocess_timeout,
-    _SubprocessTimeoutContext,
+    _emit_run_exit_event,
     _SubprocessTimeoutError,
+    _translate_run_timeout,
 )
 from cuprum.line_stream_events import LineStreamPhase
 
@@ -81,10 +79,6 @@ async def _assemble_line_stream_result(
         The completed run's exit code, captured text, and relay diagnostics.
     """
     execution = run.execution
-    # The run's own bundle is also the instant the duration and the exit event
-    # are measured from, and it only ever exists on the execution the spawn
-    # helper stamped.
-    started_at = execution.started_at
     settled = await _await_settled_drains(run, wait)
     await _shielded_cleanup(
         _close_delivery_worker(
@@ -93,14 +87,10 @@ async def _assemble_line_stream_result(
         ),
     )
     run.telemetry.emit(LineStreamPhase.COMPLETED)
-    _emit_exit_event(
-        execution.observation,
-        _ExitEventDetails(
-            pid=run.process.pid,
-            exit_code=settled.exit_code,
-            started_at=started_at,
-            exited_at=settled.exited_at,
-        ),
+    _emit_run_exit_event(
+        execution,
+        settled,
+        pid=run.process.pid,
     )
     return _build_command_result(run, settled)
 
@@ -133,14 +123,10 @@ async def _await_settled_drains(
         # reader's own failure — an ``on_line`` hook using ``asyncio.timeout``
         # internally, say — and must reach the caller unchanged rather than be
         # reported as this run's deadline.
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=run.execution,
-                process=run.process,
-                started_at=run.execution.started_at,
-                stdout_text=None,
-                stderr_text=None,
-            ),
+        _translate_run_timeout(
+            run.execution,
+            run.process,
+            (None, None),
             exc,
         )
     await _finalize_line_stream_captures(run, stdout_drain, stderr_drain)
