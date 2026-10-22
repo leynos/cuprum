@@ -140,20 +140,17 @@ def _gha_sink(*, force: bool = False) -> tuple[GitHubActionsSink, io.StringIO]:
 def _open_gha_session(
     argv: tuple[str, ...],
     *,
-    force: bool = True,
-    emit_group: bool = True,
-    emit_annotation: bool = True,
-    argv_title: bool = False,
+    sink_options: _GitHubActionsSinkOptionsKwargs | None = None,
 ) -> tuple[GitHubActionsSession, io.StringIO]:
     """Open one forced-active adapter session and return it with its buffer."""
     buffer = io.StringIO()
     options: _GitHubActionsSinkOptionsKwargs = {
-        "force": force,
-        "emit_group": emit_group,
-        "emit_annotation": emit_annotation,
+        "force": True,
+        "emit_group": True,
+        "emit_annotation": True,
     }
-    if argv_title:
-        options["argv_title"] = True
+    if sink_options is not None:
+        options.update(sink_options)
     sink = GitHubActionsSink(
         typ.cast("typ.IO[str]", buffer),
         **options,
@@ -518,7 +515,7 @@ def test_argv_title_opt_in_joins_arguments_and_keeps_annotation_bounded() -> Non
     token = "cuprum-sentinel-token-0000"  # ruff: ignore[hardcoded-password-string] - synthetic regression value, never a real credential.
     session, buffer = _open_gha_session(
         ("deploy", "--token", token),
-        argv_title=True,
+        sink_options={"argv_title": True},
     )
 
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
@@ -569,7 +566,7 @@ def test_emit_group_false_suppresses_group_framing() -> None:
     nothing to show for it. The annotation is a separate toggle and still
     fires.
     """
-    session, buffer = _open_gha_session(("false",), emit_group=False)
+    session, buffer = _open_gha_session(("false",), sink_options={"emit_group": False})
 
     assert not buffer.getvalue(), (
         f"a group-less session must open nothing; got {buffer.getvalue()!r}"
@@ -589,7 +586,9 @@ def test_emit_group_false_suppresses_group_framing() -> None:
 
 def test_emit_group_false_keeps_the_log_destination() -> None:
     """A group-less session still hands the run its configured destination."""
-    session, buffer = _open_gha_session(("echo", "hi"), emit_group=False)
+    session, buffer = _open_gha_session(
+        ("echo", "hi"), sink_options={"emit_group": False}
+    )
 
     session.log.write("framed output\n")
 
@@ -608,7 +607,9 @@ def test_emit_annotation_false_suppresses_every_error(
     non-zero exit: an implementation that suppressed only the success path
     would still be caught here.
     """
-    session, buffer = _open_gha_session(("deploy",), emit_annotation=False)
+    session, buffer = _open_gha_session(
+        ("deploy",), sink_options={"emit_annotation": False}
+    )
 
     session.close(SessionOutcome(outcome, exit_code=3))
 
@@ -645,8 +646,7 @@ def test_toggles_compose_independently(
     """
     session, buffer = _open_gha_session(
         ("false",),
-        emit_group=emit_group,
-        emit_annotation=emit_annotation,
+        sink_options={"emit_group": emit_group, "emit_annotation": emit_annotation},
     )
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
 
