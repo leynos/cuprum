@@ -9,25 +9,21 @@ Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await), EP-M2 (t
 `lines()` post-exit drain and the four-layer `TimeoutError` misclassification
 it exposed), EP-M3 (the pipeline's post-exit collection) and EP-M4
 (documentation and full validation) are all implemented, tested Red-then-Green,
-and committed. The branch has since been rebased onto `origin/main` =
-`5da6d68fb`; all 14 commits replayed, and the two contract collisions the
-rebase exposed were adjudicated in favour of this issue's premise (see
-`Decision log`). The gate round at `905a49569` is green: `check-fmt`,
-`typecheck`, `lint` with all eleven stages observed (`ruff`, `interrogate`,
-classic and DF12 `pylint`, `ambrleaks`, `Skylos`, the `nose` duplication gate,
-Clippy, Whitaker, spelling, `yamllint`, `actionlint`), `markdownlint`, `nixie`,
-and `make test` with 5219 Python tests passed across 22 sessions, 167 Rust
-tests passed and doctests clean. The draft PR is open as
+and committed. The branch has been rebased twice. The first replay, onto
+`origin/main` = `5da6d68fb`, is described below; the second, onto `origin/main`
+= `9c9008351` ("Add bounded and file-backed capture policies per stream"),
+replayed the same 34 commits against `main`'s per-stream capture policy API,
+and its seven conflicts were resolved by hand (see `Progress` and
+`Decision log`). The candidate head is `2468a3cc5`, and the gate round recorded
+below predates it, so it certifies nothing about this head: a rebase
+invalidates every earlier gate log. The draft PR is open as
 [#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
-milestones and one of the rebased head — returned twenty-two findings in total:
-seventeen were applied and five rejected as describing code that does not exist
-in this tree (see `Decision log`). The review of the rebased head found that
-the direct path had lost the settle-window fallback `main` applies to a run
-with no `timeout=`; that regression is fixed, pinned by a new test, and
-recorded in `Surprises & discoveries`. What remains is the gate round for that
-fix, its commit and push, and marking the PR ready for review. The direct run
-was split into `cuprum/_subprocess_direct_run.py` to stay inside the 400-line
-module cap.
+milestones and one of the earlier rebased head — returned twenty-two findings
+in total: seventeen were applied and five rejected as describing code that does
+not exist in this tree (see `Decision log`). What remains is one gate round on
+this tree, its audit against the target head, the push, and marking the PR
+ready for review. The direct run was split into
+`cuprum/_subprocess_direct_run.py` to stay inside the 400-line module cap.
 
 ## Purpose / big picture
 
@@ -768,8 +764,62 @@ the issue was filed:
       `_line_callbacks._compose_line_callbacks`, where the shared seam lives.
       Mutating the helper to compose a local closure makes the two pipeline
       cases fail, so the pin still bites.
+- [x] (2026-10-22) Rebased onto a second, newer `origin/main` at
+      `9c9008351` ("Add bounded and file-backed capture policies per stream
+      (#443) (#635)"), because `main` had advanced past the `5da6d68fb` this
+      branch was first replayed onto. Old head `3a17dc4fa`; old base
+      `5da6d68fb`; all 34 commits replayed, none dropped or emptied.
+      Recovery refs `refs/recovery/20261022-gh533/{old-head,old-base,target,
+      remote-branch-head}` retained. New head `2468a3cc5`.
+- [x] (2026-10-22) Seven replay conflicts resolved by hand, each by reading
+      the replayed commit, its parent and the accumulated result rather than
+      by choosing a side: replays 12 (`_pipeline_settlement.py`,
+      `_pipeline_stream_results.py`, `pyproject.toml`,
+      `test_pipeline_stream_results.py`), 16 (`_subprocess_stream_run.py`,
+      `_stdin_run_cancellation_support.py`), 22 (`_line_stream/drain.py`,
+      `_subprocess_execution.py`), 23 and 28 and 30
+      (`_line_stream/drain.py`, `_subprocess_wait.py`). See `Decision log`
+      for what each resolution had to preserve.
+- [x] (2026-10-22) The rebase was run with
+      `-c core.attributesFile=/dev/null`, repeated on every
+      `git rebase --continue`, because the host's global Git attributes select
+      a `weave` merge driver for `*.py`. See `Surprises & discoveries`.
+- [x] (2026-10-22) `Decision log` reconciled with the new base: the pre-rebase
+      helper-home decision marked **superseded** (the split stands, the owner
+      does not — `main`'s ADR-007 moved the helper to
+      `cuprum/_subprocess_stream_post_exit.py`), and four new entries recorded
+      for the capture-policy vocabulary, the `_PipelineOutputs` per-stream
+      correction, and the run module's lost `_settle_stdin_writer` binding.
+      `### Outcomes & retrospective` remains to be revisited after the gate
+      round below.
 
 ## Surprises & discoveries
+
+- **The host's Git attributes replace Python's merge driver.** The rebase
+  initially ran through a `weave` merge driver selected by the host's global
+  attributes file, which silently dropped re-imports this branch's split
+  depends on: replays 2 and 5 both produced a tree in which
+  `cuprum._subprocess_stream_run` no longer bound `_settle_stdin_writer` or
+  `_settle_owned_group_before_draining`, without reporting a conflict, so the
+  tests patching those names would have patched dead bindings. The replay was
+  restarted against the built-in merge backend by passing
+  `-c core.attributesFile=/dev/null` on the initial `git rebase` *and* on every
+  `git rebase --continue`, because each continuation starts a fresh Git process
+  that reads the attributes again. The lesson is that a clean replay exit is
+  not evidence the merge backend was the documented one; confirm which driver
+  ran before trusting a conflict-free result.
+
+- **A docstring correction can be the only thing a later commit carries, and
+  the helper it describes may have moved.** Replay 28 was twenty lines of prose
+  about `_settle_owned_group_before_draining`: which routes call it, and in
+  what order the direct path uses it. On the rebased tree the helper lives in
+  `cuprum._subprocess_stream_post_exit` — `main`'s ADR-007 split put it there,
+  and this branch's plan had decided the opposite before the rebase — so the
+  commit applied to a location that no longer exists, and the correct
+  resolution was to rewrite the docstring at the helper's new home rather than
+  retain a second copy in `_subprocess_wait`. Replay 30 then corrected the
+  caller count from four to three, and again the edit belonged at the new home.
+  Prose commits are as exposed to a relocation as code commits are.
 
 - **Declaring a module in `EXTENSION_TEST_TARGETS` also declares it for
   Windows.** The list reads like "the modules that need the compiled
@@ -1350,7 +1400,15 @@ the issue was filed:
   considered: leaving it in the streamed module and having the direct run
   import it (rejected: an inverted dependency between two sibling shapes), and
   duplicating it (rejected: two copies of a teardown invariant is how they
-  drift). Date: 2026-10-16.
+  drift). Date: 2026-10-16. **Superseded on the second rebase (2026-10-22):**
+  the split half of this decision stands and the helper half does not. `main`
+  has since split the streamed run's post-exit phase into
+  `cuprum/_subprocess_stream_post_exit.py` (ADR-007), and the helper now lives
+  there with two other callers beside it. The direct-run module meanwhile sits
+  *below* the post-exit module in the import order — it imports the helper from
+  it — so the "neither shape should import the other" reasoning still holds,
+  just with a different owner for the shared rule. See the rebase decision
+  entries at the end of this log.
 
 - Decision: parametrize the direct-run module over all four entrypoints
   (`run`, `run_bytes`, `run_sync`, `run_bytes_sync`), while stating in the
@@ -1691,6 +1749,67 @@ the issue was filed:
   both inline constructions and suppressing the original two-location family —
   was not available under the repository policy, which treats a new finding as
   copy-paste until proven otherwise.
+
+- Decision (rebase onto `9c9008351`, 2026-10-22): accept `main`'s home for
+  `_settle_owned_group_before_draining` —
+  `cuprum/_subprocess_stream_post_exit.py` — rather than the plan's pre-rebase
+  assumption that it lives beside the other wait helpers in
+  `cuprum/_subprocess_wait.py`. Rationale: `main`'s ADR-007 split made the
+  post-exit phase a module of its own, and the helper is the phase's, not the
+  exit wait's. The rebased branch follows it there: the line drain imports it
+  from the post-exit module, and the two replays whose docstring correction had
+  been written against `_subprocess_wait` had that correction re-applied at the
+  new home. What the branch must *not* do is keep a second definition in the
+  old module: replays 28 and 30 both conflicted because the child's side of the
+  hunk still declared the helper body there, and taking it would have left two
+  live definitions and an `__all__` entry for a name no call path resolves. The
+  helper's own docstring now names its three callers and the two neighbouring
+  shapes that answer the same question without calling it, which is the fact
+  the conflict exposed.
+
+- Decision (rebase onto `9c9008351`, 2026-10-22): express the branch's
+  post-exit deadlines in `main`'s capture-policy vocabulary rather than
+  carrying the pre-rebase `capture=` flag through. Rationale: `main` replaced
+  the single boolean with a resolved policy per stream, so a `_DrainContext`
+  now carries `captures: tuple[CapturePolicy | None, CapturePolicy | None]` and
+  a `capturing` property, and a drain result is a `_CapturedDrain` with
+  `.payload` and `.capture` beside each other. The branch's own contributions
+  were three: `_drain_context(...)` reads `execution.capture_stdout` and
+  `capture_stderr` instead of one flag; `_expire_line_stream` reports
+  `stdout_drain.payload` and `stderr_drain.payload` off the returned
+  `_DrainPair` instead of unpacking a `(text, text)` tuple; and
+  `_pipeline_settlement` and `_pipeline_records` carry per-stream policies
+  through `_PipelineOutputs`. The partial-capture case is what makes the
+  per-stream shape load-bearing rather than cosmetic: a run can bound one
+  stream and spill the other, so a single flag cannot say which of the two
+  payloads a `TimeoutExpired` should report.
+
+- Decision (rebase onto `9c9008351`, 2026-10-22): keep the `_PipelineOutputs`
+  per-stream correction as its own change, separate from the deadline work that
+  motivated it. Rationale: the deadline path needs to answer two separate
+  questions — whether the final stage's stdout is worth reporting as the
+  expired run's `output`, and whether the stages' stderr is worth joining for
+  its `stderr` — and those answers differ exactly when the caller bounded one
+  stream and not the other. Folding the correction into the deadline commit
+  would have made a pure type change unreviewable inside a behavioural one, and
+  `main`'s own record docstring states the same reasoning, so the two sides
+  agree on the shape and the branch's commit only carries the deadline that
+  reads it.
+
+- Decision (rebase onto `9c9008351`, 2026-10-22): record that
+  `cuprum/_subprocess_stream_run.py` no longer binds `_settle_stdin_writer`,
+  and rely on the test probe patching the *resolution* site instead. Rationale:
+  `main`'s post-exit split moved `_await_stdin_writer` into
+  `cuprum/_subprocess_stream_post_exit.py`, and that module resolves
+  `_settle_stdin_writer` from its own globals. A test that patched the run
+  module's copy would add a name no call path reads and pass vacuously — the
+  patched function would never be entered.
+  `cuprum/unittests/_stdin_run_cancellation_support.py` already patches the
+  post-exit module's binding for the streamed path and
+  `cuprum/_subprocess_direct_run.py`'s `_await_writer_within_deadline` for the
+  direct path, with a comment saying why, so the rebase needed no test change;
+  it needed the *fact* recorded, because the pre-rebase seam was the run
+  module's.
 
 ## Milestones
 
