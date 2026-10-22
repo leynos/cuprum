@@ -18,26 +18,45 @@ and its seven conflicts were resolved by hand (see `Progress` and
 rsync operands in the core builder"), replayed 38 commits with no conflict:
 that commit touches the builder library and only three documentation files this
 branch also edits, and `range-diff` reports all 38 as patch-identical. The
-candidate head is `d95388a59`, and all six gates pass there with the tree clean
-and HEAD unchanged before and after each one. The branch head is `c7fe5341a`,
-pushed to the remote branch over SSH with the lease bound to the previously
-recorded remote head `da5cbeaf7`; the remote head and the local head now agree.
-The final target-versus-head audit is clean: 43 commits ahead of `origin/main` =
+final target-versus-head audit is clean: 52 commits ahead of `origin/main` =
 `e2c7592b5` and none behind, no merge commits in the range, no deleted files,
-and `git diff --check` reports nothing. The candidate carries the split that
-brought `cuprum/_subprocess_execution.py` back under the 400-line module cap.
-The draft PR is open as [#652](https://github.com/leynos/cuprum/pull/652). Four
-reviews — three milestones and one of the earlier rebased head — returned
-twenty-two findings in total: seventeen were applied and five rejected as
-describing code that does not exist in this tree (see `Decision log`). The PR
-body now cites the certifying round rather than a pending table. The one
-unresolved review thread — CodeScene's Bumpy Road Ahead on
-`_pipeline_payloads`, a function this branch introduces — was actioned by
-flattening the function rather than suppressing the marker (see
-`Decision log`), and the three deadline test modules pass with 34 passed and 8
-skipped. What remains is the gate round on that head, the final
-`coderabbit review --agent` request, and marking the PR ready. Two splits keep
-the source inside the module cap: the direct run in
+and `git diff --check` reports nothing. That base is still the remote `main`,
+so the comparison is against the current target rather than a stale local copy.
+The candidate carries the split that brought `cuprum/_subprocess_execution.py`
+back under the 400-line module cap. The PR is open as
+[#652](https://github.com/leynos/cuprum/pull/652). The one review thread
+CodeScene raised, a Bumpy Road Ahead on `_pipeline_payloads`, a function this
+branch introduces, was actioned by flattening the function rather than
+suppressing the marker (see `Decision log`).
+
+The last certified round is the one whose logs carry the `-a2e63ffbb` suffix:
+all six gates exit zero there, with the tree clean and HEAD unchanged before
+and after each one, and each log at `/tmp/<gate>-cuprum-<branch>-a2e63ffbb.out`
+records the head, the tree-change count, the exit code, and the elapsed time.
+That head was pushed to the remote branch over SSH and the remote head and the
+local head agree. The PR body cites that round rather than a pending table. The
+review round that followed it is fixed in the commit carrying this paragraph,
+which has its own gate round; that round's logs are suffixed with the short SHA
+of that commit, as every earlier round's are.
+
+CodeRabbit has reviewed this branch repeatedly, and each round's finding count
+is recorded beside its adjudication in `Progress` rather than totalled here:
+the EP-M2 milestone review returned ten, of which eight were applied and two
+rejected; a second EP-M2 review returned three, one applied and two rejected;
+the post-rebase review of `720bd430a` returned three, all applied; the
+EP-M3/EP-M4 milestone review returned six, five applied and one rejected; the
+PR #652 round returned three, two applied and one falsified; the review of
+`80ab1f4fe` returned two, both applied; review `5609732903` returned seven, all
+applied; the review of `deb83403a` returned ten, which fold into eight distinct
+concerns, all applied, though one sub-proposal within them — flipping
+`clock_origin` to a negative value — was rejected as wrong for this tree; and
+the review of `a2e63ffbb` returned seven over 53 reviewed files, all still
+valid and fixed in the commit that follows it. Each rejection was re-verified
+against the tree at the head that carried it rather than inherited from the
+round before. Each earlier head, including `c7fe5341a` and `d95388a59`, remains
+recorded in the dated `Progress` entries; none of them is the current candidate.
+
+Two splits keep the source inside the module cap: the direct run in
 `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
 `cuprum/_subprocess_outcome.py`.
 
@@ -1003,7 +1022,27 @@ the issue was filed:
       flooring to `0.0`. Both origins stay at `1e12`, with the comments
       rewritten to say why a value above the machine's uptime is what makes
       the test discriminating.
-- [ ] Run the full gate round on the fourth round's tree, commit it, push,
+- [x] (2026-10-22) Adjudicated the fifth CodeRabbit review of `a2e63ffbb`,
+      which returned seven findings over 53 reviewed files. All seven were
+      still valid against the tree and all seven are fixed; none was disputed.
+      Four of the seven restate two concerns: the plan's opening still named
+      `c7fe5341a` as the branch head and left gate/commit/push/PR-readiness
+      open, and the acceptance criteria said "no skips" while this plan records
+      eight Rust arms, and "five gate targets" while the command list has six.
+      Both are corrected here, and the finding counts are now enumerated per
+      round rather than totalled, because a hand-summed total had already
+      drifted from the per-round records. The users' guide gained the one
+      thing the `lines()` timeout section did not say: an idle consumer is a
+      suspended coroutine, so the expiry is recorded at the deadline and
+      observed on the next `async for` step rather than raised into a caller
+      that is not asking. EP-M1's Step 2 now names `_cleanup_direct_run`, which
+      composes the writer reclaim and the group settlement under a single
+      `_shielded_cleanup`; the step previously named the writer cancellation
+      alone, which would have prescribed the exact two-shield shape the
+      `Decision log` forbids. The lifecycle test's clock patch moved from
+      `_pipeline_observation.time`'s attributes to the module's `time` binding,
+      matching `test_pipeline_stdio_policy.py`.
+- [ ] Run the full gate round on the fifth round's tree, commit it, push,
       reply to the review, and mark PR #652 ready for review.
 
 ## Surprises & discoveries
@@ -2138,10 +2177,16 @@ EP-M1 relocated to `cuprum/_subprocess_direct_run.py`, see the split decision in
    bound but no bound, so the literal instruction removed the settle window
    `main` still applies on that route. A run with no `timeout=` keeps
    `_settle_stdin_writer` — see `Decision log` and `Surprises & discoveries`.
-2. On expiry, cancel the writer through
-   `_shielded_cleanup(_cancel_stdin_writer(stdin_task))`, then settle the owned
-   group and reconcile with an *empty* consumer bundle, so the group teardown
-   that releases the descendant runs before the exception propagates.
+2. On expiry, reclaim the writer and settle the owned group under **one**
+   shield, through `_cleanup_direct_run`, then reconcile with an *empty*
+   consumer bundle, so the group teardown that releases the descendant runs
+   before the exception propagates. Two sequential `_shielded_cleanup` calls
+   are not one shielded sequence: a cancellation arriving during the first
+   would exit before the second was awaited and leave the group unsettled.
+   `_cleanup_direct_run` composes both steps into a single shielded coroutine
+   for exactly that reason, and the plan's `Constraints` and `Decision log`
+   require it. **Amended after review:** the step originally named the writer
+   cancellation alone.
 3. Preserve the existing behaviour on the cancellation and error routes: the
    same cleanup, then re-raise unchanged.
 4. Report expiry without mistaking a cancellation for one. The plan named the
@@ -2546,11 +2591,13 @@ make markdownlint
 make nixie
 ```
 
-Expected: each focused module reports a non-zero collected count, no skips on
-this POSIX host, and no test over the 10 s tolerance; `make test` reports no
-failures and no warnings; and the five gate targets each exit zero. The
-Markdown pair is included because the change surface touches `docs/`, and
-`make lint` already depends on `make spelling` but not on `markdownlint`.
+Expected: each focused module reports a non-zero collected count; the eight
+Rust-parametrized arms may skip when the Rust extension is unavailable, which
+is the one expected skip on this host, and there must be zero unexpected skips;
+no test may run over the 10 s tolerance; `make test` reports no failures and no
+warnings; and the six gate targets each exit zero. The Markdown pair is
+included because the change surface touches `docs/`, and `make lint` already
+depends on `make spelling` but not on `markdownlint`.
 
 Gate runs are delegated to the `scrutineer` subagent, which runs them
 sequentially and writes one log per gate under `/tmp`. A gate log certifies the
