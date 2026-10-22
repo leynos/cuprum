@@ -1083,10 +1083,20 @@ the issue was filed:
       0 failed. `make lint` regenerated `typos.toml` and left it
       byte-identical, so the tree stayed clean. The PR body now cites the
       `-82baebde0` round and the sixth-round reply is comment `6336964023`.
-- [ ] Record this round in the plan. That edit is again a commit, so it moves
-      the head and the round above stops being the latest: the gate round that
-      follows this edit is the one the PR body must cite, and it must run with
-      the tree clean at a head that does not change under it.
+- [x] (2026-10-22) Ran all six gates at `fd6c27926`, the commit that recorded
+      the round above, and closed the record-this-round item with this entry
+      rather than with another cycle. Every log records
+      `head=head_after=fd6c27926` with `tree=tree_after=0` and `exit=0`:
+      `check-fmt` 0 s, `test` 430 s, `typecheck` 0 s, `lint` 113 s,
+      `markdownlint` 17 s, `nixie` 1 s. The `test` figures were again
+      re-derived from the log: 22 pytest invocations, 5655 passed / 125
+      skipped / 0 failed; nextest 167/167 over 7 binaries; doctests 3
+      ignored, 0 failed. This entry is part of the commit it describes, so
+      the `fd6c27926` logs certify the commit *before* it; the PR body cites
+      the round that follows this one. Repeating the record-then-regate cycle
+      cannot terminate, because each record is a commit and each commit needs
+      a round; the plan stops at the first round whose head is a commit that
+      does not itself carry a gate claim.
 - [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
       `7459e3caf` and answered the fifth round on PR #652 (comment
       `6336469259`). The sixth round returned one finding over 53 reviewed
