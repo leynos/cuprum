@@ -16,11 +16,11 @@ replayed the same 34 commits against `main`'s per-stream capture policy API,
 and its seven conflicts were resolved by hand (see `Progress` and
 `Decision log`). The third, onto `origin/main` = `e2c7592b5` ("Reject remote
 rsync operands in the core builder"), replayed 38 commits with no conflict:
-that commit touches the builder library and only three documentation files
-this branch also edits, and `range-diff` reports all 38 as patch-identical.
-The candidate head is `633043701`, and the gate round recorded below predates
-it, so it certifies nothing about this head: a rebase or a new commit
-invalidates every earlier gate log. That head carries the split that brought
+that commit touches the builder library and only three documentation files this
+branch also edits, and `range-diff` reports all 38 as patch-identical. The
+candidate head is `633043701`, and the gate round recorded below predates it,
+so it certifies nothing about this head: a rebase or a new commit invalidates
+every earlier gate log. That head carries the split that brought
 `cuprum/_subprocess_execution.py` back under the 400-line module cap; its own
 full round is the one still owed. The draft PR is open as
 [#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
@@ -1899,20 +1899,20 @@ the issue was filed:
   forty-five→forty-six.
 
 - Decision (rebase, 2026-10-22): rebase a third time onto `origin/main` =
-  `e2c7592b5` immediately, rather than gate and push the head already
-  prepared. Rationale: that commit landed while the previous round was
-  running, so a push would have published a branch based on a superseded
-  `main` and CI would have tested the merge ref, not the ref the review sees.
-  The replay was cheap to verify: 38 commits, no conflict, every one
-  patch-identical under `range-diff`, and a content-only comparison of the two
-  branch patches (target-to-old-head versus new-target-to-new-head) showed
-  zero differences once hunk offsets and index lines were excluded. The new
-  base changes `cuprum/builders/args.py` and `cuprum/builders/rsync.py` plus
-  three documentation files this branch also edits — but in different
-  sections, which is why the replay was clean. The in-flight gate round was
-  stopped rather than allowed to finish: a log whose `HEAD after` stamp names
-  a tree the rebase has replaced certifies nothing, and the rule is that the
-  round must run on the candidate that will be pushed.
+  `e2c7592b5` immediately, rather than gate and push the head already prepared.
+  Rationale: that commit landed while the previous round was running, so a push
+  would have published a branch based on a superseded `main` and CI would have
+  tested the merge ref, not the ref the review sees. The replay was cheap to
+  verify: 38 commits, no conflict, every one patch-identical under
+  `range-diff`, and a content-only comparison of the two branch patches
+  (target-to-old-head versus new-target-to-new-head) showed zero differences
+  once hunk offsets and index lines were excluded. The new base changes
+  `cuprum/builders/args.py` and `cuprum/builders/rsync.py` plus three
+  documentation files this branch also edits — but in different sections, which
+  is why the replay was clean. The in-flight gate round was stopped rather than
+  allowed to finish: a log whose `HEAD after` stamp names a tree the rebase has
+  replaced certifies nothing, and the rule is that the round must run on the
+  candidate that will be pushed.
 
 ## Milestones
 
