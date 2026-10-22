@@ -3497,12 +3497,40 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.lines()` stream at the seam that implements deferred authorization. A
+prepared stream is not permission to run: the first `__anext__()` under a
+denying scope refuses it and raises `ForbiddenProgramError` without spawning
+anything. An allowed pull instead passes through
+`_refresh_line_stream_execution()`, which re-checks the allowlist and
+re-resolves the deadline in the task that pulls the event, before
+`_start_line_stream_run()` spawns the subprocess and its consumers. Once
+streaming, the run ends either by publishing the `CommandResult` or by closing
+through `aclose()` or cancellation.
+
+Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+through deferred authorization and spawning to completion or close
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepared: SafeCmd.lines()
+    Prepared --> Refused: first __anext__() under denying scope
+    Refused --> [*]: ForbiddenProgramError
+    Prepared --> Authorized: _refresh_line_stream_execution()
+    Authorized --> Running: _start_line_stream_run()
+    Running --> Streaming: subprocess spawned
+    Streaming --> Completed: CommandResult published
+    Completed --> [*]
+    Streaming --> Closed: aclose() or cancellation
+    Closed --> [*]
+```
+
 For screen readers: The following flowchart shows how each decoded output line
 is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 15: Line observation fan-out from decoded output to lifecycle events,
+Figure 16: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3531,7 +3559,7 @@ the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 16: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 17: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -4829,7 +4857,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 17: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 18: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -4859,7 +4887,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 18: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 19: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid
