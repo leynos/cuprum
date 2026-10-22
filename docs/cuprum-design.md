@@ -410,6 +410,11 @@ stateDiagram-v2
 *Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
 restoration.*
 
+Line-execution denial coverage stays in `test_safe_cmd_lines.py` and reuses the
+shared `python_builder` fixture from
+`cuprum.unittests._safe_cmd_lines_support`, registered in the root
+`conftest.py`.
+
 ### 5.4 Hooks
 
 Cuprum supports three “levels” of hooks, all backed by the same underlying
