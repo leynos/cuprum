@@ -63,7 +63,9 @@ After this change a caller of `SafeCmd.run()`, `SafeCmd.lines()`, or
 whatever output the run had already read. The overshoot past the deadline is
 bounded by the existing cleanup allowances and nothing else: the teardown grace
 (`cancel_grace`), the capture end-of-file grace (`_CAPTURE_EOF_GRACE_S`, 0.25
-s) and the stdin close grace (`_CLOSE_GRACE_S`, 0.5 s).
+s), the stdin close grace (`_CLOSE_GRACE_S`, 0.5 s), and — for a run that owns
+its process group — the bounded one-second `_POST_KILL_SETTLEMENT_S` wait after
+the group is forcibly killed.
 
 This plan fixes all three public routes. It is written so that someone with
 only this file, the working tree, and no memory of the investigation can finish
@@ -920,7 +922,8 @@ the issue was filed:
       were needed. The reply is `pull/652#issuecomment-6332850782`; a
       correction at `#issuecomment-6332863278` fixes a mistake in it — the
       review was attached to `58971f7ee`, the current head, and the
-      `5da6d68fb..da5cbeaf7` range I quoted belonged to the earlier review.
+      `5da6d68fb..da5cbeaf7` range quoted in the reply belonged to the
+      earlier review.
 - [x] (2026-10-22) Requested a full review of `80ab1f4fe`; CodeRabbit returned
       two fresh, test-only findings, both genuine. Fixed in `3c438cd6f`. The
       cleanup race it caught is the more valuable of the two: the child in
@@ -976,8 +979,32 @@ the issue was filed:
       across 22 sessions, Rust doctests green), typecheck, and lint all exit
       0. The dirty-tree round is the one that certifies the commit, since the
       commit is exactly that tree.
-- [ ] Request another `coderabbit review --agent` on `c5501c33e` and, if it
-      does not raise a further round, mark PR #652 ready for review.
+- [x] (2026-10-22) Adjudicated the fourth CodeRabbit review, of `deb83403a`.
+      It returned ten findings over 53 reviewed files, which reduce to eight
+      distinct concerns once the two restatements are folded in; all eight
+      were still valid against the code and are fixed, and none was disputed.
+      Five were stale prose: the plan quoted the overshoot allowances without
+      the owned-group `_POST_KILL_SETTLEMENT_S`, the users' guide said no
+      bound applies at `timeout=None` when the direct run's stdin wait is
+      still bounded by the shared settle window, two test docstrings named
+      `cuprum._subprocess_stream_run._await_stdin_writer` after the split
+      moved it to `_subprocess_stream_post_exit`, the ADR addendum said a
+      pipeline "stamps" its stages' output when the gathering is what starts
+      late, and one Progress entry used the first person. The other three
+      replaced the two clock tests' patch target. Patching `perf_counter` on
+      the standard-library `time` module reached every caller in the process,
+      so a start or stamp read directly from `time.perf_counter()` received
+      the injected value and passed the very assertion meant to catch it;
+      both tests now replace the `time` binding in `_command_internals`. The
+      reviewer also proposed flipping `clock_origin` to a negative value, and
+      that part was wrong: `_line_callbacks.py` takes
+      `max(0.0, monotonic_clock() - started_at)`, so a negative origin makes
+      a stray real reading appear as a large *positive* stamp rather than
+      flooring to `0.0`. Both origins stay at `1e12`, with the comments
+      rewritten to say why a value above the machine's uptime is what makes
+      the test discriminating.
+- [ ] Run the full gate round on the fourth round's tree, commit it, push,
+      reply to the review, and mark PR #652 ready for review.
 
 ## Surprises & discoveries
 

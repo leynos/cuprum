@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import types
 import typing as typ
 
 from cuprum import RunOutputOptions
@@ -78,16 +80,22 @@ def test_lines_stamp_events_from_the_observation_clock(
     therefore floors to ``0.0``. So each of the two ways to split the clock —
     a start from elsewhere, or a stamp from elsewhere — fails on its own.
 
-    The clock is installed on ``_command_internals.time``, the construction
-    site that resolves the observation's ``monotonic_clock``. Patching the
-    ``_StageObservation`` field default would not reach the run: it binds at
-    class creation, before any test patches anything.
+    The clock is installed by replacing ``_command_internals.time``, the
+    construction site that resolves the observation's ``monotonic_clock``,
+    with a namespace of this test's own. Patching ``perf_counter`` on the
+    standard-library module instead would reach every caller in the process:
+    a start or stamp read directly from ``time.perf_counter()`` would receive
+    the injected value too, so the split-clock regression this test exists to
+    catch would pass. Patching the ``_StageObservation`` field default would
+    not reach the run either: it binds at class creation, before any test
+    patches anything.
     """
     from cuprum import _command_internals
 
     # Deliberately above any real ``perf_counter`` reading (the machine's
     # uptime, in seconds), so a stray real reading cannot be mistaken for the
-    # injected one.
+    # injected one: a real stamp reads *below* this origin and floors to
+    # ``0.0``, and a real deadline read leaves no time at all.
     clock_origin = 1e12
     readings = iter([clock_origin])
 
@@ -95,7 +103,11 @@ def test_lines_stamp_events_from_the_observation_clock(
         """Answer the injected start once, then the injected "now"."""
         return next(readings, clock_origin + 3.25)
 
-    monkeypatch.setattr(_command_internals.time, "perf_counter", observation_clock)
+    monkeypatch.setattr(
+        _command_internals,
+        "time",
+        types.SimpleNamespace(perf_counter=observation_clock, time=time.time),
+    )
     command = python_builder("-c", "print('clock')")
 
     async def collect() -> tuple[list[LineEvent], object]:
