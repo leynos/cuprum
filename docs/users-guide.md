@@ -2347,7 +2347,7 @@ A run can exceed the deadline by the cleanup allowances and nothing else:
 
 Any run with `ProcessGroupPolicy.OWN_GROUP` — a command, `lines()`, or a
 pipeline — adds a bounded settlement wait of up to one second after it forcibly
-kills the group, because a descendant adopted by an init process can take that
+kills the group because a descendant adopted by an init process can take that
 long to disappear. Without a timeout configured (`timeout=None`), none of these
 bounds applies and behaviour is unchanged.
 
