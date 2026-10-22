@@ -842,8 +842,31 @@ the issue was filed:
       branch also edits, and none of its hunks neighbours this branch's. The
       in-flight round was stopped rather than allowed to certify a tree the
       rebase replaced.
-- [ ] Re-run the full gate round on `633043701`, then audit, push, and update
-      the PR body. `### Outcomes & retrospective` is written after that round.
+- [x] (2026-10-22) Full gate round on `7caf413e3`, five of six gates green:
+      `check-fmt` (1082 ruff files, 100 Markdown files unchanged), `typecheck`
+      (both `ty` runs), `lint` (every sub-gate reached: pylint 10.00/10 twice,
+      interrogate 100%, DF12 10.00/10, ambrleaks, Skylos, duplication with 68
+      reasoned exceptions, rustdoc + Clippy, Whitaker, yamllint, actionlint),
+      `markdownlint` (0 issues, spelling included), and `nixie`. `make test`
+      failed on `test_maturin_wheel_build_snapshot`: the new
+      `cuprum/_subprocess_outcome.py` is packaged but was missing from the
+      wheel manifest. The Rust suite and the doctest step never ran, because
+      pytest is a prerequisite of `test-rust` and the recipe aborted.
+- [x] (2026-10-22) Adjudicated the snapshot's second diff line before
+      touching it. The elided diff also showed `- cuprum/sh/pipeline_output.py`,
+      which reads as a dropped module — and `cuprum/sh/pipeline.py` imports
+      three names from it, so a wheel without it would fail on import. A fresh
+      `maturin build` of this tree contains that file; comparing the built
+      wheel's entry set against the snapshot's shows exactly one difference in
+      either direction, `_subprocess_outcome.py`, and nothing missing from the
+      wheel. So that line was a display shift in the elided middle of the
+      diff, the same artefact the maturin memory records. The snapshot got a
+      one-line sorted insert (223 entries, still sorted and unique), and
+      `test_maturin_build.py` passes 6/6 with "1 snapshot passed".
+- [ ] Re-run `make test` on `e3e8bc0ba` so the Rust suite and the doctests are
+      observed at a head that carries the snapshot fix, then audit, push, and
+      update the PR body. `### Outcomes & retrospective` is written after that
+      round.
 
 ## Surprises & discoveries
 
@@ -1913,6 +1936,27 @@ the issue was filed:
   allowed to finish: a log whose `HEAD after` stamp names a tree the rebase has
   replaced certifies nothing, and the rule is that the round must run on the
   candidate that will be pushed.
+
+- Decision (snapshot, 2026-10-22): prove the wheel manifest regression before
+  editing `cuprum/unittests/__snapshots__/test_maturin_build.ambr`, rather than
+  refresh the snapshot and move on. Rationale: the failing diff showed two
+  lines, `+ cuprum/_subprocess_outcome.py` and
+  `- cuprum/sh/pipeline_output.py`. The first is the module this branch adds
+  and is expected. The second is not: `cuprum/sh/pipeline.py` imports
+  `PipelineOutput` and two siblings from that module, so if the entry really
+  had left the wheel the package would fail at import, and the fix would be a
+  packaging bug rather than a stale snapshot. Building a wheel with
+  `maturin build --locked` and comparing its entry set against the snapshot
+  settled it in one step — nothing present in the snapshot is missing from the
+  wheel, and `_subprocess_outcome.py` is the only addition in either direction.
+  The `-` line was the elided middle of syrupy's diff showing a neighbouring
+  context line as though it were removed, the artefact the maturin snapshot
+  memory already records. The fix is therefore one sorted insertion, not a
+  regeneration: regenerating would have rewritten all 223 entries and destroyed
+  the snapshot's value as a reviewable record of what the wheel contains. The
+  insertion was made by hand and checked — 223 entries, still sorted, no
+  duplicates — then `test_maturin_build.py` was run on its own to confirm 6
+  passed with 1 snapshot passed.
 
 ## Milestones
 
