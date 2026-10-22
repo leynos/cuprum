@@ -921,8 +921,18 @@ the issue was filed:
       correction at `#issuecomment-6332863278` fixes a mistake in it — the
       review was attached to `58971f7ee`, the current head, and the
       `5da6d68fb..da5cbeaf7` range I quoted belonged to the earlier review.
-- [ ] Re-request a review once the CodeRabbit hourly allowance permits, then
-      mark PR #652 ready for review.
+- [x] (2026-10-22) Requested a full review of `80ab1f4fe`; CodeRabbit returned
+      two fresh, test-only findings, both genuine. Fixed in `3c438cd6f`. The
+      cleanup race it caught is the more valuable of the two: the child in
+      `test_stdin_settle_cancellation.py` spawns its grandchild and exits
+      without waiting, so a single `recorded_descendant` read could return
+      `None` and leave `reap_descendant` with nothing to kill, parking a
+      sleeper on the host for its whole lifetime. The read now waits via
+      `asyncio.to_thread(wait_for_pid_file, ...)`, the pattern the sibling
+      owned-group tests already use. The other finding added a failure message
+      to the payload-alignment assertion. Reply at `#issuecomment-6333121153`.
+- [ ] Run the full gate round on `3c438cd6f` and, if green, request another
+      review and mark PR #652 ready for review.
 
 ## Surprises & discoveries
 
@@ -2583,6 +2593,20 @@ snapshot would have hidden the question under 223 rewritten lines.
   `test_run_no_stream_post_exit_deadline.py:246`. CodeRabbit withdrew finding 2
   on that basis. Lesson for the next review round: a review has one commit, and
   the range printed inside it belongs to whichever review printed it.
+
+- Decision (third CodeRabbit review, 2026-10-22): fix both new findings, and
+  fix only the one cleanup site the finding names. The review's second finding
+  is a genuine leak rather than a style point: `_EXITS_AND_HOLDS_STDIN` spawns
+  its grandchild and exits immediately, so the pid file's existence is not
+  guaranteed by the time the cancelled run returns, and `reap_descendant`
+  treats an absent file as "nothing to reap". The sibling read in
+  `test_the_direct_run_expiry_reports_the_configured_timeout` stays a single
+  read: that case waits out a 1.0 s `TimeoutExpired` before returning, which
+  gives the grandchild far longer than the write needs, and adding a blocking
+  poll there would spend a bounded test's budget on a wait the scenario has
+  already served. Rationale for recording the asymmetry rather than making the
+  two uniform: the reviewer asked for a fix where the race exists, and widening
+  it to a test that cannot hit it would be change for symmetry's sake.
 
 ## Appendix — how to reproduce the hang by hand
 
