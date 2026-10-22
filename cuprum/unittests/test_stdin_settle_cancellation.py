@@ -90,6 +90,7 @@ from cuprum.unittests._stdin_run_cancellation_support import (
     _settlement_outcome,
 )
 from tests.helpers.catalogue import python_builder as build_python_builder
+from tests.helpers.timeouts import wait_for_pid_file
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -276,7 +277,15 @@ def test_cancelling_after_child_exit_reclaims_the_writer(
             # so a census taken after it returns could not see a stranded
             # writer even if there was one.
             _assert_teardown_is_complete(_record_aftermath(probe))
-            grandchild_pid = recorded_descendant(pid_file)
+            # The child spawns the grandchild and exits without waiting for it,
+            # so the pid file may not exist yet when the run returns. Waiting
+            # here rather than reading once is what keeps ``finally`` from
+            # silently reaping nothing and parking a sleeper on the host.
+            grandchild_pid = await asyncio.to_thread(
+                wait_for_pid_file,
+                pid_file,
+                context=("the grandchild a cancelled run leaves holding its stdin"),
+            )
         finally:
             # ``INHERIT`` is the default, and this run owns no group to settle:
             # the grandchild the child spawned is nobody's to reap but the
