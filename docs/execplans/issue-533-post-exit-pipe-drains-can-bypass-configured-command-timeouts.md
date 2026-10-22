@@ -54,12 +54,16 @@ applied; the review of `deb83403a` returned ten, which fold into eight distinct
 concerns, all applied, though one sub-proposal within them — flipping
 `clock_origin` to a negative value — was rejected as wrong for this tree; and
 the review of `a2e63ffbb` returned seven over 53 reviewed files, all still
-valid and fixed in the commit that follows it; and the review of `7459e3caf`
+valid and fixed in the commit that follows it; the review of `7459e3caf`
 returned one over the same 53 files, also valid and fixed in the commit that
-follows it. Each rejection was re-verified against the tree at the head that
-carried it rather than inherited from the round before. Each earlier head,
-including `c7fe5341a` and `d95388a59`, remains recorded in the dated `Progress`
-entries; none of them is the current candidate.
+follows it; the review of `d9db359cf` returned one, valid and fixed in
+`c09ae8e1e`, which is documentation only; and the review of `9d6a8428d`
+returned three, all valid and fixed in `78e4d2aed`, with the round's drain-only
+premise extended to the exit wait whose arm an ordinary run actually reaches.
+Each rejection was re-verified against the tree at the head that carried it
+rather than inherited from the round before. Each earlier head, including
+`c7fe5341a` and `d95388a59`, remains recorded in the dated `Progress` entries;
+none of them is the current candidate.
 
 Two splits keep the source inside the module cap: the direct run in
 `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
@@ -1147,7 +1151,77 @@ the issue was filed:
       `rev-parse HEAD` agreeing, and its GitHub Actions runs are
       `39765094520` (CI) and `39765094495` (Rust boundary).
 
+- [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
+  `9d6a8428d` and answered the eighth round. The round returned three findings
+  over the same surface, and all three were right. Findings 1 and 3 are one
+  concern stated twice — both post-exit deadline arms caught a `TimeoutError`
+  raised by a stdin writer, because `TimeoutError` is an `OSError` subclass.
+  They are fixed once, at the shared `reap_descendant` helper all fourteen
+  post-exit tests reach, and at the two classification arms.
+
+  Finding 2 was the substantive one, and it was checked against the tree rather
+  than accepted from the review text. Its premise — that
+  `_collect_line_stream_after_exit` classifies the expiry by exception type,
+  while `_collect_stream_output` classifies it by its scope's `expired()` — is
+  exactly right. What the review could not see is that the drain is not where
+  an ordinary run first meets the failure. Instrumenting both arms of a writer
+  that fails with a `TimeoutError` showed the exit wait's arm firing and the
+  drain's never firing: the exit rendezvous re-raises a failed writer
+  unchanged, one level above the drain. So the finding is valid *and* there is
+  a sibling defect the round did not name, at
+  `cuprum/_line_stream/coordinator.py`. Fixing only the drain would have left
+  the reported shape broken and the new regression test passing for the wrong
+  reason.
+
+  Both arms now classify by identity rather than type, which is exact: the
+  rendezvous raises the very object `_stdin_writer_failure` reads back off the
+  task. The drain additionally consults its scope's `expired()` first and lets
+  that win, because an expiry that fired was the run's deadline whether or not
+  the writer was also failing — and that precedence keeps `_await_consumers`'
+  spent-budget report distinct, since it leaves no writer failure to point at.
+  A first draft of the drain used
+  `not expired() or writer_failure is not None`, gated on
+  `execution.timeout is None`; it was replaced because that disjunct still
+  reported a writer failure as the deadline whenever a `timeout=` *was*
+  configured.
+
+  The two regression cases are kept separate so each names its arm, and each
+  was proven to bite only its own fix: removing the drain arm fails only the
+  after-exit case, and removing the exit-wait arm fails only the before-exit
+  case. Reaching the drain took a third attempt worth recording. A writer that
+  waits for `process.returncode` still loses, because that attribute is set
+  before the exit wait resolves, so the case collapsed silently into the
+  exit-wait one and passed with the drain fix reverted. The drain case now
+  wraps the rendezvous through the module's documented patch seam and fails the
+  writer only after the real rendezvous returns, with an assertion that the
+  flag was set so the case cannot silently collapse again. Fixed in
+  `78e4d2aed`, which is the head the six gates certify.
+
 ## Surprises & discoveries
+
+- **A task-list item's content column is 2, not the width of its marker.** A
+  `- [x]` item renders its `[x]` as a checkbox, so the item's content begins at
+  the `-` indent rather than after the whole marker. Continuation lines
+  indented to the marker's visual width — 6 spaces — are therefore 4 spaces
+  beyond the content column, which CommonMark reads as an *indented code
+  block*. The eighth round's `Progress` entry did exactly that for its second
+  and later paragraphs, and `make markdownlint` then reported the file's one
+  legitimate fenced block as an MD046 violation: MD046's `consistent` mode
+  adopts the *first* block token it sees, so one accidental indented block
+  retroactively makes every fenced block in the file wrong. The reported line
+  is a victim, not the cause — the offending block sits in `Progress` and the
+  line named is in the validation section more than a thousand lines later.
+  Continuing a list paragraph after a blank line needs only the item's own
+  2-space content indent, which is what the rest of this file already uses.
+
+- **A passing regression test can be reaching the wrong arm.** The first
+  version of the writer-`TimeoutError` case passed with *and* without the drain
+  fix, because the exception was consumed one level up at the exit wait. A test
+  that passes for the wrong reason is worse than no test: it certifies a fix
+  that is not on the path it names. Instrumenting both arms is what showed the
+  route, and proving each case bites only its own fix is what showed the
+  rebuild had landed on the right one. The same trap applies to any test whose
+  failure is an exception identity the codebase raises in more than one place.
 
 - **The host's Git attributes replace Python's merge driver.** The rebase
   initially ran through a `weave` merge driver selected by the host's global
