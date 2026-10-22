@@ -1124,6 +1124,29 @@ the issue was filed:
       a plan edit moves the head, so a fixed name in the prose goes stale on the
       edit that follows it.
 
+- [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
+      `d9db359cf` and answered the seventh round on PR #652 (comment
+      `6338816985`). The round returned one finding over 51 reviewed files, at
+      `docs/users-guide.md:2353-2354`, and it was right: the pipeline-timeout
+      passage said an expiring `OWN_GROUP` run reclaims a descendant "exactly
+      as it is for a single command", which is true only of a descendant still
+      in the group. Teardown is `os.killpg(process.pid, group_signal)`
+      (`cuprum/_group_teardown.py:349`), and `cuprum/_process_group.py`
+      records why that cannot be extended: a `killpg` names a bare
+      process-group number, and the kernel offers no way to ask whether the
+      group holding it is this run's. A descendant that calls `setsid()` or
+      `setpgid()` has left the group and is out of reach. The sentence now
+      states the bound and defers to `docs/users-guide.md:2425`, which already
+      says containment of an actively escaping process needs a supervisor, a
+      cgroup, or a container. A first draft restated that bound at the sentence
+      instead; it was replaced once the existing passage was found, because two
+      copies of one guarantee drift apart. Fixed in `c09ae8e1e`, which is
+      documentation only and is certified by `make markdownlint` (0 issues),
+      `make nixie` and `make check-fmt` at that head with `tree=0` before and
+      after each. That head was pushed over SSH with `ls-remote` and
+      `rev-parse HEAD` agreeing, and its GitHub Actions runs are
+      `39765094520` (CI) and `39765094495` (Rust boundary).
+
 ## Surprises & discoveries
 
 - **The host's Git attributes replace Python's merge driver.** The rebase
