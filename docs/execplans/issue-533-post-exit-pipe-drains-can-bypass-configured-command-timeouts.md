@@ -1072,10 +1072,21 @@ the issue was filed:
       top. Refreshed the tracking ref through an explicit leading-`+` refspec,
       confirmed `ls-remote` and `rev-parse HEAD` agree, and set the branch's
       upstream to `origin/`.
-- [ ] Record this round in the plan and the PR body, then run the six-gate
-      round the edit requires. That edit is itself a commit, so it moves the
-      head: the logs above certify the tree they ran on, and the PR body must
-      cite the round that follows this edit rather than any earlier one.
+- [x] (2026-10-22) Committed the sixth round's fix as `82baebde0`, ran all six
+      gates at that clean head, and pushed it. Every log records
+      `head=head_after=82baebde0` with `tree=tree_after=0` and `exit=0`
+      (`/tmp/<gate>-cuprum-<branch>.out`): `check-fmt` 0 s, `test` 447 s,
+      `typecheck` 0 s, `lint` 114 s, `markdownlint` 18 s, `nixie` 1 s. The
+      `test` figures were re-derived here rather than taken from the runner:
+      22 pytest invocations, 5655 passed / 125 skipped / 0 failed; nextest
+      167 run / 167 passed / 0 skipped over 7 binaries; doctests 3 ignored,
+      0 failed. `make lint` regenerated `typos.toml` and left it
+      byte-identical, so the tree stayed clean. The PR body now cites the
+      `-82baebde0` round and the sixth-round reply is comment `6336964023`.
+- [ ] Record this round in the plan. That edit is again a commit, so it moves
+      the head and the round above stops being the latest: the gate round that
+      follows this edit is the one the PR body must cite, and it must run with
+      the tree clean at a head that does not change under it.
 - [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
       `7459e3caf` and answered the fifth round on PR #652 (comment
       `6336469259`). The sixth round returned one finding over 53 reviewed
