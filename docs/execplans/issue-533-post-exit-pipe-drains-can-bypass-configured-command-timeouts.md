@@ -1267,6 +1267,34 @@ the issue was filed:
   68 allowed. This is what makes the shared helper's reach uniform; the figures
   are 21 call sites across seven modules plus these three.
 
+- [x] (2026-10-22) Full gate round on `c16236b86`, all six green. This is the
+  first round that certifies the split, and it certifies the reaper unification
+  and both repairs from the round before it as well: `make check-fmt` 0 (2 s,
+  1084 files), `make test` 0 (499 s, 0 `FAILED`, 0 `ERROR`), `make typecheck` 0
+  (1 s, both `ty check` scopes clean), `make lint` 0 (114 s),
+  `make markdownlint` 0 (18 s), `make nixie` 0 (<1 s). Every log recorded
+  `head=c16236b86` before and after with `tracked_changes_after=0` and
+  `untracked_after=0`, so the round is evidence for that one revision and no
+  other.
+
+  The round before this one was red for two reasons worth keeping separate.
+  `make test` failed on the maturin wheel snapshot, because the split added
+  `captures.py` and `reader_wait.py` to the shipped file list and the snapshot
+  still held the pre-split set; the split commit had never been gate-certified,
+  so nothing had noticed. `make lint` failed at `spelling` on one non-oxendict
+  spelling in this plan — the `-ise` form of "finalization", which the
+  correction table reports as an error. Both are fixed at `c16236b86`, the
+  snapshot by regeneration rather than by hand-editing the `.ambr`.
+
+  This round also closed a gap in the round before it: that round stopped at
+  `spelling`, so `yamllint --strict` and `actionlint -shellcheck=` were
+  **unobserved**, not passing. Both executed here and passed, as did the whole
+  remaining chain — `pylint-classic` and the DF12 pylint at 10.00/10,
+  `interrogate` at 100.0%, Skylos, the duplication gate, Rustdoc and Clippy
+  under `-D warnings`, Whitaker, and `ambrleaks`. `typos.toml` is regenerated
+  by both `lint` and `markdownlint` and was unchanged afterwards, so the
+  regeneration is idempotent at this head.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
