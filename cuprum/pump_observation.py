@@ -14,11 +14,11 @@ See :mod:`cuprum.pump_events` for the event types this channel carries.
 from __future__ import annotations
 
 import contextlib
-import inspect
 import logging
 import typing as typ
 from contextvars import ContextVar
 
+import cuprum._hook_disposal as hook_disposal
 from cuprum._scope_registration import _TokenTupleRegistration
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 
@@ -239,33 +239,16 @@ def _discard_hook_result(result: object, event: PumpEvent) -> None:
             "cuprum_result_type": type(result).__name__,
         },
     )
-    _close_returned_coroutine(result, event)
-
-
-def _close_returned_coroutine(result: object, event: PumpEvent) -> None:
-    """Close ``result`` if it is a coroutine, reporting a failure from cleanup.
-
-    A coroutine the hook already started runs its ``finally`` blocks here, so
-    closing it can raise. An :class:`Exception` follows the channel's policy
-    and is reported rather than interrupting emission to later hooks; a
-    shutdown signal still propagates.
-    """
-    if not inspect.iscoroutine(result):
-        return
-    try:
-        result.close()
-    except Exception as exc:
-        _LOGGER.warning(
-            "pump_observer_disposal_failed phase=%s error=%s",
-            event.phase,
-            type(exc).__name__,
-            exc_info=True,
-            extra={
-                "cuprum_action": "pump_observer_disposal_failed",
-                "cuprum_phase": event.phase,
-                "cuprum_error_type": type(exc).__name__,
-            },
-        )
+    hook_disposal._close_returned_coroutine(
+        result,
+        hook_disposal._HookDisposalContext(
+            logger=_LOGGER,
+            action="pump_observer_disposal_failed",
+            message="pump_observer_disposal_failed phase=%s error=%s",
+            message_args=(event.phase,),
+            extra_fields={"cuprum_phase": event.phase},
+        ),
+    )
 
 
 __all__ = [
