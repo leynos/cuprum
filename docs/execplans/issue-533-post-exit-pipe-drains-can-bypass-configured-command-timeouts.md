@@ -29,18 +29,18 @@ CodeScene raised, a Bumpy Road Ahead on `_pipeline_payloads`, a function this
 branch introduces, was actioned by flattening the function rather than
 suppressing the marker (see `Decision log`).
 
-The last certified round is the one whose logs carry the `-a2e63ffbb` suffix:
-all six gates exit zero there, with the tree clean and HEAD unchanged before
-and after each one, and each log at `/tmp/<gate>-cuprum-<branch>-a2e63ffbb.out`
-records the head, the tree-change count, the exit code, and the elapsed time.
-That head was pushed to the remote branch over SSH and the remote head and the
-local head agree. The PR body cites that round rather than a pending table. The
-review round that followed it is fixed in the commit carrying this paragraph,
-and the round that certifies that commit runs at its clean head with the logs
-named `/tmp/<gate>-cuprum-<branch>-<short-sha>.out`, each recording its own
-head and tree-change count. Certifying the committed head rather than the tree
-it was built from is what keeps a log's filename and its header from
-disagreeing.
+Every gate round is recorded in `Progress` beside the head it ran at, and the
+`Progress` record — not this paragraph — is the source of truth for which round
+is the latest. Each round runs all six gates to exit zero with the tree clean
+and HEAD unchanged before and after each one, and each log at
+`/tmp/<gate>-cuprum-<branch>-<short-sha>.out` records the head, the tree-change
+count, the exit code, and the elapsed time. The PR body cites the most recent
+complete round recorded there rather than a pending table. Naming a log for its
+head, and having the log record that head, is what keeps a filename and its
+header from disagreeing: a plan-only edit therefore changes the head, so it is
+certified by the round that follows it and not by the round that preceded it.
+An earlier draft of this paragraph named a fixed head and had to be corrected
+each time the plan advanced; pointing at the record avoids that.
 
 CodeRabbit has reviewed this branch repeatedly, and each round's finding count
 is recorded beside its adjudication in `Progress` rather than totalled here:
@@ -54,10 +54,12 @@ applied; the review of `deb83403a` returned ten, which fold into eight distinct
 concerns, all applied, though one sub-proposal within them — flipping
 `clock_origin` to a negative value — was rejected as wrong for this tree; and
 the review of `a2e63ffbb` returned seven over 53 reviewed files, all still
-valid and fixed in the commit that follows it. Each rejection was re-verified
-against the tree at the head that carried it rather than inherited from the
-round before. Each earlier head, including `c7fe5341a` and `d95388a59`, remains
-recorded in the dated `Progress` entries; none of them is the current candidate.
+valid and fixed in the commit that follows it; and the review of `7459e3caf`
+returned one over the same 53 files, also valid and fixed in the commit that
+follows it. Each rejection was re-verified against the tree at the head that
+carried it rather than inherited from the round before. Each earlier head,
+including `c7fe5341a` and `d95388a59`, remains recorded in the dated `Progress`
+entries; none of them is the current candidate.
 
 Two splits keep the source inside the module cap: the direct run in
 `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
@@ -1070,11 +1072,19 @@ the issue was filed:
       top. Refreshed the tracking ref through an explicit leading-`+` refspec,
       confirmed `ls-remote` and `rev-parse HEAD` agree, and set the branch's
       upstream to `origin/`.
-- [ ] Record this round in the plan and the PR body. That edit is itself a
-      commit, so it invalidates the `4b3d8c787` logs above: the next gate round
-      runs on the commit that carries it, and the PR body cites that round.
-- [ ] Request `coderabbit review --agent` on the pushed head and answer the
-      fifth round's threads on the PR, then mark PR #652 ready for review.
+- [ ] Record this round in the plan and the PR body, then run the six-gate
+      round the edit requires. That edit is itself a commit, so it moves the
+      head: the logs above certify the tree they ran on, and the PR body must
+      cite the round that follows this edit rather than any earlier one.
+- [x] (2026-10-22) Requested `coderabbit review --agent` on the pushed head
+      `7459e3caf` and answered the fifth round on PR #652 (comment
+      `6336469259`). The sixth round returned one finding over 53 reviewed
+      files, and it was right: this plan's opening still named `a2e63ffbb` as
+      the last certified round, when `7459e3caf` is later and its six logs all
+      exit zero at that head with `tree=0` before and after. The paragraph now
+      points at the `Progress` record instead of naming a head, and records why:
+      a plan edit moves the head, so a fixed name in the prose goes stale on the
+      edit that follows it.
 
 ## Surprises & discoveries
 
