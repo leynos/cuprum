@@ -1045,8 +1045,36 @@ the issue was filed:
       `Decision log` forbids. The lifecycle test's clock patch moved from
       `_pipeline_observation.time`'s attributes to the module's `time` binding,
       matching `test_pipeline_stdio_policy.py`.
-- [ ] Run the full gate round on the fifth round's tree, commit it, push,
-      reply to the review, and mark PR #652 ready for review.
+- [x] (2026-10-22) Committed the fifth round's fixes as `8a80bccbe`. The
+      round that certified that commit's tree ran while the three files were
+      still uncommitted: all six gates exit 0 with `head=a2e63ffbb` and
+      `tree=3` recorded at both ends of every log, 5655 passed / 125 skipped /
+      0 failed across 22 pytest invocations, nextest 167/167, doctests 0
+      failed with 3 ignored. That log set certifies the *tree*; a comment
+      claiming a head for it would be the stale-filename mistake this plan
+      already records, so the filenames carry no SHA.
+- [x] (2026-10-22) Committed one further plan correction, `4b3d8c787`, after
+      noticing that the opening claimed the certifying round's logs would be
+      SHA-suffixed "as every earlier round's are" when only the two most
+      recent rounds had done that.
+- [x] (2026-10-22) Re-ran all six gates at the clean head `4b3d8c787`, with
+      the tracked-tree change count 0 before and after each one
+      (`/tmp/<gate>-cuprum-<branch>-4b3d8c787.out`): `check-fmt` 0 s, `test`
+      426 s, `typecheck` 1 s, `lint` 110 s, `markdownlint` 18 s, `nixie` 1 s,
+      every one exit 0. `make test` again reported 5655 passed / 125 skipped /
+      0 failed over 22 sessions, nextest 167/167, and doctests 0 failed with
+      3 ignored. `make lint` regenerated `typos.toml` and left it
+      byte-identical, so the tree stayed clean.
+- [x] (2026-10-22) Pushed `8a80bccbe` over SSH with the lease bound to the
+      previously recorded remote head `a2e63ffbb`, then pushed `4b3d8c787` on
+      top. Refreshed the tracking ref through an explicit leading-`+` refspec,
+      confirmed `ls-remote` and `rev-parse HEAD` agree, and set the branch's
+      upstream to `origin/`.
+- [ ] Record this round in the plan and the PR body. That edit is itself a
+      commit, so it invalidates the `4b3d8c787` logs above: the next gate round
+      runs on the commit that carries it, and the PR body cites that round.
+- [ ] Request `coderabbit review --agent` on the pushed head and answer the
+      fifth round's threads on the PR, then mark PR #652 ready for review.
 
 ## Surprises & discoveries
 
