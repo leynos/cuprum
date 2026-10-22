@@ -2354,9 +2354,12 @@ preserving the `SafeCmd.run()` execution contract:
   `stdin` data. A pipeline takes no stdin, so it owes only the first two. Every
   run that owns its process group owes one more allowance on an expiry route:
   the `_POST_KILL_SETTLEMENT_S` wait of up to one second that `_process_group`
-  applies after forcibly killing the group, which
-  `_settle_owned_group_before_draining` reaches for a direct run, a streamed
-  run, a `lines()` run, and a pipeline alike. A run that inherits its caller's
+  applies after forcibly killing the group. Every owning teardown reaches that
+  wait, but not through one helper: a direct run, a streamed run, and a
+  `lines()` run call `_settle_owned_group_before_draining`, the owned handle
+  has its own equivalent in `cuprum._process_handle.coordinator`, and a
+  pipeline reaches the same wait through `_terminate_all_shielded`, because it
+  owns several stage groups rather than one. A run that inherits its caller's
   group settles nothing and owes no such wait.
 
 For screen readers: The following sequence diagram shows how

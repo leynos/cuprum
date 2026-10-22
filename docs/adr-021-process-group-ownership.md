@@ -620,9 +620,11 @@ it attributes the one-second `_POST_KILL_SETTLEMENT_S` wait to pipelines alone.
 That attribution is too narrow, and the sentence is left in place because
 accepted ADR text is append-only.
 
-`_settle_owned_group_before_draining` is the helper that reaches the wait, and
-the direct run, the streamed run, a `lines()` run, and a pipeline all call it on
-their expiry, failure, or cancellation routes. Whether a run owes the wait is
+The direct run, the streamed run, and a `lines()` run call
+`_settle_owned_group_before_draining` on their expiry, failure, or cancellation
+routes. The owned handle has its own equivalent helper, and a pipeline reaches
+the same wait through `_terminate_all_shielded`; no single helper spans all of
+them. Whether a run owes the wait is
 decided by `ProcessGroupPolicy`, not by which entry point started it: a run
 that owns its group settles that group after forcibly killing it, and a run
 that inherits its caller's group settles nothing. A direct run that takes
