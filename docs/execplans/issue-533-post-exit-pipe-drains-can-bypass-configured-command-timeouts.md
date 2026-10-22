@@ -1330,6 +1330,41 @@ the issue was filed:
   by both `lint` and `markdownlint` and was unchanged afterwards, so the
   regeneration is idempotent at this head.
 
+- [x] (2026-10-22) Resolved the two findings left open against `328ed9aed`, in
+  one commit at `b490ca9f5`.
+
+  The duplication finding named the paired import blocks of
+  `cuprum/_line_stream/result_assembly.py` and
+  `cuprum/_subprocess_execution.py`. The copy-paste underneath was three
+  constructions of `_SubprocessTimeoutContext` and three of
+  `_ExitEventDetails`, so both records are now built once in
+  `cuprum/_subprocess_timeout.py`, by `_translate_run_timeout` and
+  `_emit_run_exit_event`. The commit message records why the time base comes
+  from the stamped bundle and why `_SettledExit` uses properties. The
+  consolidation then moved `cuprum/_subprocess_timeout.py` into the
+  forty-six-module type-checking-guard family; the entry was widened to
+  forty-seven and its reason extended, which is that entry's documented remedy
+  for an import declaration.
+
+  The maturin snapshot was regenerated after proving the delta, not before.
+  `--snapshot-update` produced a one-line diff — `+ result_assembly.py` and no
+  deletion — which independently confirms that the
+  `- _tracing_native_pump_cleanup.py` in the failure output was syrupy's
+  truncated-window rendering rather than a packaging change.
+
+  Verified at the new head before committing: `ruff check` and
+  `ruff format --check` clean on all four source files and the snapshot
+  fixtures; `make typecheck` 0, both `ty check` scopes clean;
+  `make duplication` 0, "68 allowed by reasoned exceptions"; full unit suite
+  `4236 passed, 105 skipped` in 320 s with 29 snapshots passed. Module sizes are
+  `_subprocess_timeout.py` 381, `_subprocess_execution.py` 258,
+  `result_assembly.py` 167, `coordinator.py` 307 — all under the 400-line cap.
+
+  Not yet observed at `b490ca9f5`: the six-gate round. The round on `c16236b86`
+  certifies that revision only, and this commit changes four modules and a gate
+  configuration, so a fresh round is required before the push is treated as
+  evidence-backed.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
@@ -1711,6 +1746,34 @@ the issue was filed:
   alternative is threading the observation clock into the deadline module's
   exit sampling, which is a wider change than this branch's scope and would
   make a test-only artefact the reason for a production seam.
+
+- **A `-` line in a syrupy diff is not evidence that an item is absent.** The
+  regenerated maturin snapshot reported
+  `+ cuprum/_line_stream/result_assembly.py` beside
+  `- cuprum/adapters/_tracing_native_pump_cleanup.py`, and the second line was
+  false: the entry is present at line 148 of the `.ambr` file, once, and the
+  wheel built by the failing test itself contains it. `syrupy.utils.qdiff`
+  diffs only a window around the *first* differing line — `adjust_lines`
+  narrows both operands to `[first - limit, first + limit]` and inserts
+  ellipsis markers — before handing the truncated windows to `ndiff`. A single
+  inserted entry shifts the remainder, so `ndiff` re-aligns inside the elided
+  region and invents a removal that no operand contains. The authoritative
+  check is `difflib.unified_diff` over the two raw serialized strings; run that
+  way the pair produced exactly one hunk, the insertion, and no removal. The
+  same artefact is recorded against an earlier head with different names, which
+  is what makes it a rendering behaviour rather than a fact about this tree.
+
+- **A consolidation can be correct at the call sites and still move a module
+  into a duplication family.** Extracting `_translate_run_timeout` and
+  `_emit_run_exit_event` removed the paired import bundles the gate had named,
+  but the new type-only import of `_StreamPayloadPair` took
+  `cuprum/_subprocess_timeout.py`'s `if typ.TYPE_CHECKING:` block past the
+  token threshold at which the detector pairs it with the forty-six-module
+  guard family. The finding names an import declaration, which is the one thing
+  that cannot be factored into a helper; the family's own recorded remedy is to
+  add the module and extend the reason. Worth checking for explicitly: the gate
+  went from red to green on the previous round of the same work, so the second
+  appearance came from the *fix*, not from the original defect.
 
 ## Decision log
 
@@ -2498,6 +2561,41 @@ the issue was filed:
   (34 passed, 8 skipped). Noted for the next round: this decision belongs to
   the same head as the source change, so the gate round must run on that head
   and no later plan edit may follow it.
+
+- Decision (duplication gate, 2026-10-22): consolidate the three
+  `_SubprocessTimeoutContext` constructions and the three `_ExitEventDetails`
+  constructions into `cuprum/_subprocess_timeout.py`, rather than record a
+  reasoned exception for the import blocks the gate named. Rationale: the gate
+  reported the import lists, but the copy-paste underneath was six
+  constructions of two records from the same fields. Both consolidations land
+  in the module that already owns timeout translation and exit-event
+  accounting, so neither adds a layer. Two details are load-bearing.
+  `_emit_run_exit_event` reads its time base from the stamped execution bundle
+  instead of accepting one: every caller passed exactly the reference
+  `_start_owned_process` stamps, so taking it from the bundle removes a
+  parameter that could disagree and retires `_await_direct_completion`'s
+  `started_at` argument, which was only ever forwarded.
+  `_translate_run_timeout` takes the two payloads as one stdout-then-stderr
+  pair, so the line stream's "captured nothing" call is `(None, None)` and
+  cannot transpose the streams. `_SettledExit` declares its members as
+  read-only properties: a plain annotation makes a protocol invariant in that
+  member, and `ty` rejected the frozen `_DirectCompletion` because a frozen
+  `exit_code: int` does not accept writes of `int`. First attempt used plain
+  annotations and failed typecheck with three diagnostics; the fix is the
+  property form, which is how `cuprum._rusage._Wait4Usage` already declares its
+  members.
+
+- Decision (snapshot, 2026-10-22): regenerate
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr` with
+  `--snapshot-update` rather than hand-insert the one entry, which is the
+  opposite of the earlier decision recorded above. Rationale: that decision
+  hand-edited because the only genuine drift was one insertion and the file
+  held 223 entries; the same reasoning applies here, but the regeneration was
+  run first to prove the delta and it produced a one-line diff — a single
+  insertion and no deletion, which is itself the evidence that the apparent
+  removal of `_tracing_native_pump_cleanup.py` is the syrupy window artefact.
+  Keeping the tool's output when it is provably one line is safer than
+  hand-editing the same one line, and the diff remains as reviewable as before.
 
 ## Milestones
 
