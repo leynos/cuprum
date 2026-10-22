@@ -9,16 +9,20 @@ Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await), EP-M2 (t
 `lines()` post-exit drain and the four-layer `TimeoutError` misclassification
 it exposed), EP-M3 (the pipeline's post-exit collection) and EP-M4
 (documentation and full validation) are all implemented, tested Red-then-Green,
-and committed. The branch has been rebased twice. The first replay, onto
+and committed. The branch has been rebased three times. The first replay, onto
 `origin/main` = `5da6d68fb`, is described below; the second, onto `origin/main`
 = `9c9008351` ("Add bounded and file-backed capture policies per stream"),
 replayed the same 34 commits against `main`'s per-stream capture policy API,
 and its seven conflicts were resolved by hand (see `Progress` and
-`Decision log`). The candidate head is `676081c9e`, and the gate round recorded
-below predates it, so it certifies nothing about this head: a rebase or a new
-commit invalidates every earlier gate log. That head carries the split that
-brought `cuprum/_subprocess_execution.py` back under the 400-line module cap;
-its own full round is the one still owed. The draft PR is open as
+`Decision log`). The third, onto `origin/main` = `e2c7592b5` ("Reject remote
+rsync operands in the core builder"), replayed 38 commits with no conflict:
+that commit touches the builder library and only three documentation files
+this branch also edits, and `range-diff` reports all 38 as patch-identical.
+The candidate head is `633043701`, and the gate round recorded below predates
+it, so it certifies nothing about this head: a rebase or a new commit
+invalidates every earlier gate log. That head carries the split that brought
+`cuprum/_subprocess_execution.py` back under the 400-line module cap; its own
+full round is the one still owed. The draft PR is open as
 [#652](https://github.com/leynos/cuprum/pull/652). Four reviews — three
 milestones and one of the earlier rebased head — returned twenty-two findings
 in total: seventeen were applied and five rejected as describing code that does
@@ -823,9 +827,23 @@ the issue was filed:
       `cuprum/_subprocess_stream_post_exit.py`, and three shapes share it), and
       a new paragraph placing `cuprum/_subprocess_outcome.py` beside the other
       two module splits.
-- [ ] Re-run the full gate round on the new head, then audit, push, and answer
-      the three open CodeRabbit threads. `### Outcomes & retrospective` is
-      written after that round.
+- [x] (2026-10-22) The three open CodeRabbit threads on `da5cbeaf` answered
+      and resolved. The clock finding was applied earlier on this branch
+      (`spawn.py:103`, `_line_callbacks.py:103` and `:302`); the
+      settle-before-writer finding was rejected with the success-path contract
+      from the direct-run module and the ADR-021 addendum; the settlement
+      allowance had already been widened by `15c63a51a`, and the one
+      actionable part left — the comma before an essential `because` — was
+      fixed in `e884bdf0b`.
+- [x] (2026-10-22) Rebased onto `origin/main` = `e2c7592b5`, which advanced
+      while the round above was running. All 38 commits replayed with no
+      conflict and `range-diff` reports every one patch-identical; the new
+      base touches the builder library plus three documentation files this
+      branch also edits, and none of its hunks neighbours this branch's. The
+      in-flight round was stopped rather than allowed to certify a tree the
+      rebase replaced.
+- [ ] Re-run the full gate round on `633043701`, then audit, push, and update
+      the PR body. `### Outcomes & retrospective` is written after that round.
 
 ## Surprises & discoveries
 
@@ -1879,6 +1897,22 @@ the issue was filed:
   and records which widening did what, so the next reader can tell the
   pipeline-drain widening of forty-three→forty-five from this one of
   forty-five→forty-six.
+
+- Decision (rebase, 2026-10-22): rebase a third time onto `origin/main` =
+  `e2c7592b5` immediately, rather than gate and push the head already
+  prepared. Rationale: that commit landed while the previous round was
+  running, so a push would have published a branch based on a superseded
+  `main` and CI would have tested the merge ref, not the ref the review sees.
+  The replay was cheap to verify: 38 commits, no conflict, every one
+  patch-identical under `range-diff`, and a content-only comparison of the two
+  branch patches (target-to-old-head versus new-target-to-new-head) showed
+  zero differences once hunk offsets and index lines were excluded. The new
+  base changes `cuprum/builders/args.py` and `cuprum/builders/rsync.py` plus
+  three documentation files this branch also edits — but in different
+  sections, which is why the replay was clean. The in-flight gate round was
+  stopped rather than allowed to finish: a log whose `HEAD after` stamp names
+  a tree the rebase has replaced certifies nothing, and the rule is that the
+  round must run on the candidate that will be pushed.
 
 ## Milestones
 
