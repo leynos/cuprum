@@ -7322,6 +7322,26 @@ with a narrow `float-equality-comparison` suppression because the point is that
 `0.0` survives resolution unchanged; the short scoped deadline cases use
 `pytest.approx` instead.
 
+Every pre-flight refusal that decides whether options can become a line
+iteration at all lives in `_reject_line_iteration_conflicts` in
+`cuprum/sh/line_options.py`, which `lines()` calls before it builds the lazy
+execution. Add a new refusal there rather than inline in `SafeCmd.lines`: the
+bounded-capture rule shows why the placement matters, because it would
+otherwise fire only when the first event was pulled, after the caller had
+already begun consuming.
+
+The authorization tests live in `test_safe_cmd_lines_authorization.py` (the
+denial, hand-off, allowed-run, and deadline cases) and
+`test_safe_cmd_lines_authorization_delivery.py` (the delivery-worker and
+stale-preparation cases), with their shared spy and helpers in
+`_safe_cmd_lines_authorization_support.py`. That module is registered in the
+root `conftest.py` as a `pytest_plugins` entry, exactly like
+`_safe_cmd_lines_support`. Pytest 9 accepts plugin declarations only in the
+repository-root conftest, so a test module must not import a fixture from the
+support module: import only the helpers it calls and let the plugin supply
+`spawn_recorder`. Annotation-only names such as `_SpawnRecorder` belong in the
+test module's `TYPE_CHECKING` block.
+
 ### The per-stream line-event emitter
 
 `_LineEventEmitter` in `cuprum/_line_callbacks.py` is a frozen slotted private
