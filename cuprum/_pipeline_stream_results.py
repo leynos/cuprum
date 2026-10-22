@@ -18,6 +18,7 @@ payload would discard a record naming a file nobody could then remove.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 import typing as typ
 
@@ -232,24 +233,53 @@ def _pipeline_payloads(
     tuple[tuple[_CapturedDrain | None, ...], _CapturedDrain | None]
         The per-stage stderr results and the final stage's stdout result.
     """
-    decoded: list[_CapturedDrain | None] = []
-    for index, task in enumerate(tasks):
-        observed = payloads[index]
-        if task is None or observed is not None:
-            decoded.append(observed)
-        else:
-            # A stage's stderr slot indexes the stderr policy, and the final
-            # stdout slot always indexes the stdout one, whichever position it
-            # occupies in this flat list.
-            stream = 0 if index == len(tasks) - 1 else 1
-            decoded.append(
-                _decode_consumer_result(
-                    by_task.get(task),
-                    stream=stream,
-                    context=context,
-                )
-            )
-    return tuple(decoded[:-1]), decoded[-1]
+    slots = _SlotContext(payloads, tasks, by_task, context)
+    decoded = tuple(
+        _slot_payload(index, task, slots) for index, task in enumerate(tasks)
+    )
+    return decoded[:-1], decoded[-1]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _SlotContext:
+    """The shared inputs one slot decode reads, so the slot helper stays narrow.
+
+    Grouping these keeps :func:`_slot_payload` to the two values that actually
+    vary per slot — the index and the task — rather than passing the whole
+    settlement result through every call.
+    """
+
+    payloads: cabc.Sequence[_CapturedDrain | None]
+    tasks: list[_StreamConsumerTask | None]
+    by_task: cabc.Mapping[
+        _StreamConsumerTask,
+        _CapturedDrain | BaseException | None,
+    ]
+    context: _DrainContext
+
+
+def _slot_payload(
+    index: int,
+    task: _StreamConsumerTask | None,
+    slots: _SlotContext,
+) -> _CapturedDrain | None:
+    """Decode one slot, keeping an observed result in preference to a settled one."""
+    observed = slots.payloads[index]
+    if task is None or observed is not None:
+        return observed
+    return _decode_consumer_result(
+        slots.by_task.get(task),
+        stream=_slot_stream(index, slots.tasks),
+        context=slots.context,
+    )
+
+
+def _slot_stream(index: int, tasks: list[_StreamConsumerTask | None]) -> int:
+    """Which capture policy a flat slot indexes: stdout for the last, else stderr."""
+    # A stage's stderr slot indexes the stderr policy, and the final stdout slot
+    # always indexes the stdout one, whichever position it occupies in this
+    # flat list.
+    return 0 if index == len(tasks) - 1 else 1
 
 
 async def _await_pipeline_eof_grace(
