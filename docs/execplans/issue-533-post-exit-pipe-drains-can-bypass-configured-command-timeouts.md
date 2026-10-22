@@ -1269,6 +1269,24 @@ the issue was filed:
 
 ## Surprises & discoveries
 
+- **A docstring that describes the fixed behaviour can conceal the unfixed
+  copy.** The local reaper's docstring promised to resolve the pid "when it
+  failed before the wait returned" — precisely what the shared helper had just
+  been changed to do — while its body still read the file once. Reading the
+  prose made the duplicate look like it was already correct, and only comparing
+  the two *bodies* showed the divergence. When one implementation is fixed and
+  a copy exists elsewhere, the copy's comments are not evidence about the copy;
+  the mechanism is. This is the same failure as a passing test that reaches the
+  wrong arm: a statement of intent standing in for the behaviour.
+
+- **A claim about reach is a claim about call sites, and copies break it.** The
+  round-8 entry stated that the shared helper was reached by "25 call sites
+  across eight modules". Counting invocations per file reproduced 25, which is
+  how the error survived: eight modules *name* a reaper, but one of them names
+  its own. Counting *imports* of the shared helper is what separates reach from
+  coincidence, and it gives seven. Any statement of the form "every X now does
+  Y" needs to be checked against the definition sites, not the use sites.
+
 - **A task-list item's content column is 2, not the width of its marker.** A
   `- [x]` item renders its `[x]` as a checkbox, so the item's content begins at
   the `-` indent rather than after the whole marker. Continuation lines
