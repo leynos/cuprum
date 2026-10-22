@@ -2208,7 +2208,7 @@ the issue was filed:
   the line count: three names are pinned by tests through coordinator's globals
   or by a dotted string, so the movable units were the reader wait (which the
   drain's scope bounds but does not itself *wait* on) and the capture
-  finalisation (the one cleanup a completed `lines()` result owes).
+  finalization (the one cleanup a completed `lines()` result owes).
   `_coordinate_line_stream` stayed with `_run_to_command_result` because it is
   the caller that resolves that name from coordinator's globals; moving it
   would have silently un-patched `test_line_stream_coordinator_stateful.py`,
