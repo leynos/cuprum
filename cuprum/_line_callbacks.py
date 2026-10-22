@@ -73,6 +73,29 @@ class _LineEmissionContext:
     monotonic_clock: cabc.Callable[[], float] = perf_counter
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StageStreamCallbacks:
+    """The per-stream values a caller supplies; the clock is not one of them.
+
+    Attributes
+    ----------
+    pid:
+        Subprocess identifier attached to observe events; ``None`` before
+        spawn.
+    on_line:
+        The caller's line callback, when one is registered.
+    started_at:
+        Monotonic reference the ``at`` stamps are measured from. It must be a
+        reading of the observation's own clock, which is why the composing
+        helper takes the observation rather than a clock alongside it.
+
+    """
+
+    pid: int | None
+    on_line: _LineHookFn | None
+    started_at: float
+
+
 def _stamp_line(line: str, *, context: _LineEmissionContext) -> LineEvent:
     """Build a ``LineEvent`` stamped with the elapsed monotonic time."""
     return LineEvent(
@@ -248,6 +271,37 @@ def _compose_line_callbacks(
         return context.on_line(_stamp_line(line, context=context))
 
     return emit_line
+
+
+def _compose_observation_line_callback(
+    observation: _StageObservation,
+    stream: LineStreamName,
+    context: _StageStreamCallbacks,
+) -> cabc.Callable[[str], _LineHookOutcome] | None:
+    """Compose one stream's callbacks, taking its clock from the observation.
+
+    Every production path samples its start reference from the observation's
+    ``monotonic_clock`` and subtracts it when stamping, and the post-exit
+    deadline is read from the same callable. Building the emission context
+    here is what keeps that one-clock rule true by construction: a caller
+    supplies the start reference and nothing else, so it cannot pair that
+    reference with a different clock.
+
+    Returns
+    -------
+    collections.abc.Callable[[str], _LineHookOutcome] | None
+        The composed callback, or ``None`` when nothing observes this stream.
+    """
+    return _compose_line_callbacks(
+        observation,
+        _LineEmissionContext(
+            stream=stream,
+            pid=context.pid,
+            on_line=context.on_line,
+            started_at=context.started_at,
+            monotonic_clock=observation.monotonic_clock,
+        ),
+    )
 
 
 def _chain_line_hooks(
