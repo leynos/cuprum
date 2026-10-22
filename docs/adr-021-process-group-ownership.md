@@ -624,13 +624,12 @@ The direct run, the streamed run, and a `lines()` run call
 `_settle_owned_group_before_draining` on their expiry, failure, or cancellation
 routes. The owned handle has its own equivalent helper, and a pipeline reaches
 the same wait through `_terminate_all_shielded`; no single helper spans all of
-them. Whether a run owes the wait is
-decided by `ProcessGroupPolicy`, not by which entry point started it: a run
-that owns its group settles that group after forcibly killing it, and a run
-that inherits its caller's group settles nothing. A direct run that takes
-`stdin` and expires while its writer is still parked owes it for the same
-reason a pipeline does — the descendant holding the pipe has to go before the
-writer can be reclaimed.
+them. Whether a run owes the wait is decided by `ProcessGroupPolicy`, not by
+which entry point started it: a run that owns its group settles that group
+after forcibly killing it, and a run that inherits its caller's group settles
+nothing. A direct run that takes `stdin` and expires while its writer is still
+parked owes it for the same reason a pipeline does — the descendant holding the
+pipe has to go before the writer can be reclaimed.
 
 The success path is deliberately excluded, and that exclusion is what the
 earlier wording obscured. A run whose child exited within its budget and whose
