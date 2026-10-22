@@ -20,8 +20,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, observe_line_stream
+from cuprum import RunOutputOptions, StdinStream, observe_line_stream
 from cuprum._line_stream.drain import _await_consumers
+from cuprum._subprocess_rendezvous import (
+    _await_exit_or_writer_failure as _real_rendezvous,
+)
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -35,6 +38,31 @@ if typ.TYPE_CHECKING:
 
 class _ReaderTimeoutError(TimeoutError):
     """Sentinel reader failure that is also a ``TimeoutError``."""
+
+
+class _WriterTimeoutError(TimeoutError):
+    """Sentinel stdin-writer failure that is also a ``TimeoutError``."""
+
+    def __init__(self, *, after_exit: bool = False) -> None:
+        """Name which route raised the sentinel.
+
+        The message lives on the class rather than at each raise site so the
+        sentinel stays a plain marker: what a test asserts about is the
+        exception's identity, not its text.
+        """
+        super().__init__(
+            "writer timed out after the exit settled"
+            if after_exit
+            else "writer timed out"
+        )
+
+
+# RUF029: ``StdinStream`` requires an async iterable, and the reader that
+# drives it is a real coroutine; nothing here ever pulls a chunk because
+# every patched writer fails first.
+async def _no_chunks() -> cabc.AsyncIterator[bytes]:  # ruff: ignore[unused-async]
+    """Yield nothing: the patched writer fails before it pulls a chunk."""
+    yield b""
 
 
 # How many times the simultaneous-failure trial is repeated. Two readers that
@@ -158,6 +186,137 @@ def test_lines_reader_timeout_is_not_reported_as_the_run_deadline(
     assert reconciled <= set(phases), (
         f"a reader failure must still reconcile the run, got {phases!r}"
     )
+
+
+def _assert_writer_failure_survives(
+    seen: cabc.Sequence[LineStreamEvent],
+    caught: pytest.ExceptionInfo[_WriterTimeoutError],
+) -> None:
+    """Assert the run reported the writer's error rather than a deadline.
+
+    The exception identity is what makes this an attribution assertion rather
+    than a type one: the sentinel is raised from the writer and must arrive at
+    the caller as that same object, not as anything a timeout path built.
+    """
+    assert isinstance(caught.value, _WriterTimeoutError), (
+        f"the caller must receive the writer's own exception, got {caught.value!r}"
+    )
+    phases = [event.phase for event in seen]
+    assert LineStreamPhase.TIMEOUT not in phases, (
+        f"a writer failure must not report the run's deadline, got {phases!r}"
+    )
+    assert set(phases) >= {
+        LineStreamPhase.TEARDOWN_STARTED,
+        LineStreamPhase.TEARDOWN_COMPLETED,
+    }, f"a writer failure must still reconcile the run, got {phases!r}"
+
+
+def test_lines_writer_timeout_before_exit_is_not_the_run_deadline(
+    python_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A writer failure raised before the exit is reported unchanged.
+
+    This is the exit wait's arm. The exit rendezvous re-raises a failed writer
+    unchanged, and a ``TimeoutError`` is an ``OSError`` subclass, so the arm
+    that translates this run's expiry saw the producer's error instead. No
+    ``timeout=`` is configured, so the translation had no deadline to report
+    and replaced the caller's real error with an invariant failure.
+    """
+
+    # RUF029: the seam this replaces is awaited by the spawn path, so the
+    # double must be a coroutine function even though it awaits nothing.
+    async def _fail_before_writing(  # ruff: ignore[unused-async]
+        *_: object,
+        **__: object,
+    ) -> None:
+        """Fail the writer with a ``TimeoutError`` before it writes anything."""
+        raise _WriterTimeoutError
+
+    monkeypatch.setattr(
+        "cuprum._subprocess_stdin_stream._write_stdin_stream",
+        _fail_before_writing,
+    )
+    command = python_builder("-c", "print('reader')")
+    seen: list[LineStreamEvent] = []
+
+    async def collect() -> None:
+        """Iterate until the writer's failure ends the run."""
+        async for _event in command.lines(stdin=StdinStream(_no_chunks())):
+            pass
+
+    with (
+        observe_line_stream(seen.append),
+        pytest.raises(_WriterTimeoutError) as caught,
+    ):
+        asyncio.run(collect())
+
+    _assert_writer_failure_survives(seen, caught)
+
+
+def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
+    python_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A writer failure raised after the exit is reported unchanged.
+
+    This is the drain's arm, and it needs the failure to arrive late. The exit
+    rendezvous returns the child's result without consulting a writer that is
+    still pending, so a writer which fails only after that point is left to the
+    post-exit settle — which re-raises it inside the drain's deadline scope.
+
+    The rendezvous is wrapped rather than merely raced, because a writer that
+    waits for the child's own ``returncode`` still loses: the return code is
+    set before the exit wait resolves, so that writer is already failed by the
+    time the rendezvous looks and this case would silently collapse into the
+    one above. The wrapper sets its flag *after* the real rendezvous returns,
+    which is the earliest moment the drain owns the writer.
+    """
+    rendezvous_returned = asyncio.Event()
+
+    async def _fail_after_rendezvous(*_: object, **__: object) -> None:
+        """Fail the writer once the exit rendezvous has handed the run on."""
+        await rendezvous_returned.wait()
+        raise _WriterTimeoutError(after_exit=True)
+
+    async def _record_rendezvous(
+        exit_wait: cabc.Coroutine[typ.Any, typ.Any, tuple[int, float]],
+        stdin_task: asyncio.Task[None] | None,
+    ) -> tuple[int, float]:
+        """Delegate to the real rendezvous, then hand the run to the drain."""
+        result = await _real_rendezvous(exit_wait, stdin_task)
+        rendezvous_returned.set()
+        return result
+
+    monkeypatch.setattr(
+        "cuprum._subprocess_stdin_stream._write_stdin_stream",
+        _fail_after_rendezvous,
+    )
+    # Resolved in the coordinator's globals, which is the seam the module
+    # documents for tests: the drain reaches the writer through them.
+    monkeypatch.setattr(
+        "cuprum._line_stream.coordinator._await_exit_or_writer_failure",
+        _record_rendezvous,
+    )
+    command = python_builder("-c", "print('reader')")
+    seen: list[LineStreamEvent] = []
+
+    async def collect() -> None:
+        """Iterate until the writer's failure ends the run."""
+        async for _event in command.lines(stdin=StdinStream(_no_chunks())):
+            pass
+
+    with (
+        observe_line_stream(seen.append),
+        pytest.raises(_WriterTimeoutError) as caught,
+    ):
+        asyncio.run(collect())
+
+    assert rendezvous_returned.is_set(), (
+        "the writer must fail after the exit rendezvous, or this case does not "
+        "reach the drain's arm"
+    )
+    _assert_writer_failure_survives(seen, caught)
 
 
 def test_run_reader_timeout_is_not_reported_as_the_run_deadline(
