@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import dataclasses as dc
-import inspect
 import logging
 import time
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._hook_disposal import _close_returned_coroutine, _HookDisposalContext
 from cuprum._scope_registration import _IdentityTupleRegistration
 from cuprum.stream_events import (
     StreamOperation,
@@ -146,7 +146,13 @@ def _emit_stream_operation_event(
     *,
     hooks: tuple[StreamOperationHook, ...],
 ) -> None:
-    """Deliver an event without allowing observer failures to affect streams."""
+    """Deliver an event without allowing ordinary observer failures to affect streams.
+
+    Hook exceptions and ordinary exceptions raised while closing a returned
+    native coroutine are reported at ``WARNING`` with tracebacks and absorbed,
+    so later hooks still receive the event. Shutdown and cancellation signals
+    propagate unchanged.
+    """
     for hook in hooks:
         try:
             result = hook(event)
@@ -181,8 +187,16 @@ def _discard_hook_result(result: object, event: StreamOperationEvent) -> None:
             "cuprum_result_type": type(result).__name__,
         },
     )
-    if inspect.iscoroutine(result):
-        result.close()
+    _close_returned_coroutine(
+        result,
+        _HookDisposalContext(
+            logger=_LOGGER,
+            action="stream_operation_observer_disposal_failed",
+            message="stream_operation_observer_disposal_failed operation=%s error=%s",
+            message_args=(event.operation,),
+            extra_fields={"cuprum_operation": str(event.operation)},
+        ),
+    )
 
 
 __all__ = [
