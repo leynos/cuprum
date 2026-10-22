@@ -16,10 +16,6 @@ import pytest
 from cuprum import ScopeConfig, before, observe, scoped
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext, LineStream
-from cuprum.unittests._safe_cmd_lines_authorization_support import (
-    _SpawnRecorder,
-    spawn_recorder,
-)
 from tests.helpers.catalogue import build_python_catalogue_env
 from tests.helpers.timeouts import child_argv, pending_tasks
 
@@ -30,6 +26,9 @@ if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
     from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.unittests._safe_cmd_lines_authorization_support import (
+        _SpawnRecorder,
+    )
 
 
 @pytest.mark.parametrize(

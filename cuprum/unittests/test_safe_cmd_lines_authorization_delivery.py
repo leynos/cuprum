@@ -16,9 +16,7 @@ import pytest
 from cuprum import ScopeConfig, scoped
 from cuprum.unittests._safe_cmd_lines_authorization_support import (
     _line_stream_delivery,
-    _SpawnRecorder,
     _wait_for_delivery_threads_to_stop,
-    spawn_recorder,
 )
 from tests.helpers.catalogue import build_python_catalogue_env
 from tests.helpers.timeouts import child_argv
@@ -29,6 +27,9 @@ if typ.TYPE_CHECKING:
     from cuprum._bounded_delivery import _DeliveryDestination
     from cuprum.echo_events import EchoStream
     from cuprum.lines import LineEvent
+    from cuprum.unittests._safe_cmd_lines_authorization_support import (
+        _SpawnRecorder,
+    )
 
 
 def test_lines_stale_preparation_cannot_outlive_the_consuming_deadline(
@@ -142,10 +143,7 @@ def test_lines_delivery_worker_survives_an_allowed_run(
         max_queued_bytes: int,
     ) -> bounded_delivery._DeliveryWorker:
         """Record the created worker while preserving its behaviour."""
-        worker = original_worker(
-            typ.cast("dict[EchoStream, _DeliveryDestination]", destinations),
-            max_queued_bytes,
-        )
+        worker = original_worker(destinations, max_queued_bytes)
         workers.append(worker)
         return worker
 
