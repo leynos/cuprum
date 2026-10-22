@@ -7310,6 +7310,15 @@ nor a caller `on_line` needs the stream. Both guards exist to keep the
 zero-callback drain path at its previous cost: a stream nobody observes must
 prepare nothing. Preserve them when touching the composition.
 
+Callers reach the composition through `_compose_observation_line_callback`
+rather than by building `_LineEmissionContext` themselves. It takes the
+observation, the stream name, and a `_StageStreamCallbacks` carrying the pid,
+the caller's `on_line`, and the start reference, and binds
+`observation.monotonic_clock` as the stamp's clock itself. That is the
+one-clock rule made structural: a caller supplies the start reference and
+cannot pair it with a different clock, so every `LineEvent.at` is a difference
+of two readings of the same callable.
+
 See [Cuprum design](cuprum-design.md) §8.1.3 for the accepted rationale.
 
 ### The construction-share gate, and why it is not monotonic

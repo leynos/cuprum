@@ -73,10 +73,7 @@ from cuprum.sh import (
     StdinStream,
     TimeoutExpired,
 )
-from cuprum.unittests._post_exit_teardown_support import (
-    reap_descendant,
-    recorded_descendant,
-)
+from cuprum.unittests._post_exit_teardown_support import reap_descendant
 from cuprum.unittests._stdin_run_cancellation_support import (
     _CANCEL_GRACE_S,
     _FINALIZED,
@@ -341,7 +338,16 @@ def test_a_child_that_never_reads_ends_the_run_on_its_deadline(
                 "remaining budget reported as the timeout would make one field "
                 f"mean two things; got {raised.value.timeout!r}"
             )
-            grandchild_pid = recorded_descendant(pid_file)
+            # Waiting rather than reading once: the child exits as soon as it
+            # has spawned the grandchild, and the grandchild writes its pid only
+            # after its interpreter has started. A single read can therefore
+            # find no file, leave ``finally`` nothing to reap, and park a
+            # sleeper on the shared host for its whole lifetime.
+            grandchild_pid = await asyncio.to_thread(
+                wait_for_pid_file,
+                pid_file,
+                context="the grandchild a direct run leaves holding its stdin",
+            )
         finally:
             # ``INHERIT`` is the default and this run owns no group, so the
             # grandchild outlives it by design and must be reaped here.

@@ -31,6 +31,7 @@ import asyncio
 import collections.abc as cabc
 import sys
 import threading
+import time
 import typing as typ
 
 import pytest
@@ -78,12 +79,17 @@ _posix_only = pytest.mark.skipif(
 
 pytestmark = _posix_only
 
-# The deadline a run is given. It is comfortably below ``RUN_BUDGET_S`` so the
-# elapsed assertion can tell "returned on its own deadline" apart from "the
-# test harness gave up", and high enough that a stage which exits promptly is
-# never mistaken for one that overran.
+# The deadline a run is given.
 DEADLINE_S = 1.0
-RUN_BUDGET_S = 20.0
+
+# What an expired run may spend past its deadline before it must have returned.
+# The expiry is not the end of the work: the stages are then terminated (a
+# cancel grace of 0.1 s, then SIGKILL), the inter-stage pumps are reconciled,
+# and a capturing settlement gives the remaining readers a 0.25 s EOF grace —
+# about 1.5 s in total, measured. This leaves room for that plus spawn cost on
+# a loaded runner while still failing a settlement that outlasts its budget by
+# seconds, which the old 12 s harness bound could not.
+SETTLE_ALLOWANCE_S = 3.0
 
 # The outer bound the test itself applies. It only fires if the run under test
 # has already failed: a bounded run returns in about a second.
@@ -97,13 +103,6 @@ type _PipelineRunFn = cabc.Callable[
     [Pipeline, _RunKwargs],
     tuple[TimeoutExpired, set[asyncio.Task[object]]],
 ]
-
-assert RUN_BUDGET_S > DEADLINE_S, (
-    f"RUN_BUDGET_S={RUN_BUDGET_S} must exceed DEADLINE_S={DEADLINE_S}"
-)
-assert RUN_BUDGET_S > _HARNESS_BUDGET_S, (
-    f"RUN_BUDGET_S={RUN_BUDGET_S} must exceed the harness bound {_HARNESS_BUDGET_S}"
-)
 
 
 def _run_async(
@@ -254,13 +253,32 @@ def _run_to_deadline(
     policy: ProcessGroupPolicy,
     capture: bool,
 ) -> tuple[TimeoutExpired, set[asyncio.Task[object]]]:
-    """Run *pipeline* under a deadline and require it to expire."""
+    """Run *pipeline* under a deadline, require it to expire, and time it.
+
+    The timing is the assertion that the settlement was *bounded* rather than
+    merely finite. ``run`` already refuses to outlast its own harness bound, but
+    a bound of several seconds beyond the configured deadline accepts exactly
+    the regression this module exists to catch — a retreat to the old unbounded
+    drain — so the settled figure is measured here instead.
+
+    Returns
+    -------
+    tuple[TimeoutExpired, set[asyncio.Task[object]]]
+        The expiry that ended the run, and any tasks it left pending.
+    """
     kwargs: _RunKwargs = {
         "timeout": DEADLINE_S,
         "output": RunOutputOptions(capture=capture),
         "context": _context(policy),
     }
-    return run(pipeline, kwargs)
+    started = time.monotonic()
+    outcome = run(pipeline, kwargs)
+    elapsed = time.monotonic() - started
+    assert elapsed < DEADLINE_S + SETTLE_ALLOWANCE_S, (
+        f"an expired run must settle within its {DEADLINE_S}s deadline plus "
+        f"the {SETTLE_ALLOWANCE_S}s cleanup allowance, took {elapsed:.2f}s"
+    )
+    return outcome
 
 
 def test_success_route_drain_is_bounded_by_the_configured_deadline(
@@ -280,6 +298,7 @@ def test_success_route_drain_is_bounded_by_the_configured_deadline(
     python = sh.make(python_program, catalogue=catalogue)
     pid_file = tmp_path / "success-descendant.pid"
     pipeline = _pipeline(python, pid_file, blocks=False)
+    descendant: int | None = None
 
     try:
         with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
@@ -289,16 +308,24 @@ def test_success_route_drain_is_bounded_by_the_configured_deadline(
                 policy=ProcessGroupPolicy.OWN_GROUP,
                 capture=True,
             )
+            descendant = wait_for_pid_file(
+                pid_file,
+                context="the success-route group reclamation",
+            )
 
         assert expired.timeout == DEADLINE_S, (
             f"the expiry must report the configured timeout {DEADLINE_S!r}, "
             f"got {expired.timeout!r}"
         )
         assert not leaked, f"the run left pending tasks behind: {leaked!r}"
+        assert not process_is_running(descendant), (
+            f"an owning run must reclaim descendant pid {descendant}, "
+            "even when every stage exited on its own"
+        )
     finally:
         # ``None`` makes the reaper read the pid file itself, so a run that
         # failed before recording a descendant still exits through one path.
-        reap_descendant(pid_file, None)
+        reap_descendant(pid_file, descendant)
 
 
 def test_wait_timeout_drain_is_bounded_and_reclaims_an_owned_group(

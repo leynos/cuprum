@@ -219,13 +219,19 @@ def _final_stage_stdout(outputs: _PipelineOutputs) -> _StreamPayload | None:
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineExpiry:
-    """Everything one deadline expiry owes: the run, its budget, and its cause."""
+    """Everything one deadline expiry owes: the run, its tasks, and its cause.
+
+    No deadline is carried. Both routes that construct this have already spent
+    the run's budget — the stage wait consumed it, or the final gather did — so
+    there is nothing left to bound settlement with; the settlement supplies its
+    own EOF grace. Keeping the spent figure here would invite a later reader to
+    treat it as a bound.
+    """
 
     parts: tuple[SafeCmd, ...]
     spawn: _PipelineSpawnResult
     config: _PipelineRunConfig
     pipe_tasks: list[asyncio.Task[None]]
-    deadline: float | None
     cause: BaseException | None
 
 
@@ -255,7 +261,6 @@ async def _report_pipeline_expiry(expiry: _PipelineExpiry) -> typ.NoReturn:
         expiry.spawn,
         expiry.config,
         pipe_tasks=expiry.pipe_tasks,
-        deadline=expiry.deadline,
     )
     timeout = expiry.config.timeout
     if timeout is None:
@@ -297,7 +302,6 @@ async def _collect_pipeline_inputs(
                 spawn=spawn,
                 config=config,
                 pipe_tasks=pipe_tasks,
-                deadline=timeout_deadline,
                 cause=exc,
             ),
         )
@@ -329,7 +333,6 @@ async def _collect_pipeline_inputs(
                 spawn=spawn,
                 config=config,
                 pipe_tasks=pipe_tasks,
-                deadline=timeout_deadline,
                 cause=None,
             ),
         )
