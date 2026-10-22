@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import typing as typ
 
 from cuprum import RunOutputOptions
@@ -56,53 +55,47 @@ def test_line_event_queue_is_finite() -> None:
     )
 
 
-def test_lines_stamp_events_from_the_spawn_clock(
+def test_lines_stamp_events_from_the_observation_clock(
     monkeypatch: pytest.MonkeyPatch,
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """Line stamps and the post-exit deadline read one and the same clock.
+    """Line stamps, start reference, and deadline all read one clock.
 
-    The start reference is sampled from the observation's injectable clock —
-    the callable ``_deadline_for_collection`` later subtracts it from — rather
-    than from a module-level ``perf_counter``. Two things are asserted, and
-    neither is reachable by a coincidence of the machine's own uptime:
+    One injected clock serves the whole run: its first reading becomes the
+    start reference, and every later reading the stamp and the post-exit
+    deadline are computed against. Two things are asserted, and neither is
+    reachable by a coincidence of the machine's own uptime:
 
-    * the stamp is the difference between the injected "now" and the injected
-      start, which can only hold if the start came from the injected clock;
-    * a short run completes inside its deadline. The injected origin sits far
+    * the stamp is the injected elapsed time, which can only hold if the start
+      reference and the stamping read came from the same callable;
+    * the run completes inside its deadline. The injected origin sits far
       above the machine's uptime, so a start taken from the real clock would
-      sit far below "now" and compute an elapsed time larger than the whole
-      timeout, which the post-exit drain reports as ``TimeoutExpired``.
+      compute an elapsed time larger than the whole timeout, which the
+      post-exit drain reports as ``TimeoutExpired``.
 
-    Neither assertion can catch the regression on its own. The stamp is
-    floored at zero, so a start from the real clock yields ``0.0`` rather than
-    a negative ``at``: the completion assertion is what fails, not the stamp.
-    Conversely a start above "now" would make the deadline comfortable while
-    leaving the stamp wrong. Asserting both is what makes either way of taking
-    the wrong reading fail.
+    A stamp read from some *other* clock fails the first assertion instead: it
+    subtracts the injected origin from a real reading, which is negative and
+    therefore floors to ``0.0``. So each of the two ways to split the clock —
+    a start from elsewhere, or a stamp from elsewhere — fails on its own.
 
-    The line clock is injected in ``_line_callbacks``, where the stamping read
-    lives. The start clock is injected in ``_command_internals``: both clocks
-    are resolved at the observation's construction site, so patching that
-    module's ``time`` is what reaches the run; the ``_StageObservation`` field
-    default binds at class creation and would ignore the patch.
+    The clock is installed on ``_command_internals.time``, the construction
+    site that resolves the observation's ``monotonic_clock``. Patching the
+    ``_StageObservation`` field default would not reach the run: it binds at
+    class creation, before any test patches anything.
     """
-    from cuprum import _command_internals, _line_callbacks
-
-    # Imported *before* the clocks are patched, and deliberately so. A module
-    # source that still reads a module-level ``perf_counter`` binds it with
-    # ``from time import perf_counter`` at import time; importing it here, once
-    # the patch is installed, would bind the patch itself and let the
-    # regression pass. ``lines()`` imports this module lazily, so the test must
-    # not rely on a neighbouring test having imported it first.
-    importlib.import_module("cuprum._line_stream.spawn")
+    from cuprum import _command_internals
 
     # Deliberately above any real ``perf_counter`` reading (the machine's
-    # uptime, in seconds). A start taken from the real clock would then sit far
-    # *below* "now", making elapsed time enormous rather than merely wrong.
+    # uptime, in seconds), so a stray real reading cannot be mistaken for the
+    # injected one.
     clock_origin = 1e12
-    monkeypatch.setattr(_command_internals.time, "perf_counter", lambda: clock_origin)
-    monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: clock_origin + 3.25)
+    readings = iter([clock_origin])
+
+    def observation_clock() -> float:
+        """Answer the injected start once, then the injected "now"."""
+        return next(readings, clock_origin + 3.25)
+
+    monkeypatch.setattr(_command_internals.time, "perf_counter", observation_clock)
     command = python_builder("-c", "print('clock')")
 
     async def collect() -> tuple[list[LineEvent], object]:
@@ -114,8 +107,8 @@ def test_lines_stamp_events_from_the_spawn_clock(
     events, result = asyncio.run(collect())
 
     assert [event.at for event in events] == [3.25], (
-        "line timestamps must be measured from the start reference the spawn "
-        f"sampled from the observation clock, got {events!r}"
+        "line timestamps must be measured from the observation clock the "
+        f"start reference was sampled from, got {events!r}"
     )
     assert result is not None, (
         "a run whose post-exit drain stays inside its deadline must complete "

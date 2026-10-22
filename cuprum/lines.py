@@ -39,9 +39,11 @@ class LineEvent:
     stream:
         Which stream the line arrived on: ``"stdout"`` or ``"stderr"``.
     at:
-        Monotonic seconds since the command started, read from the
-        :func:`time.perf_counter` clock at the moment the line was decoded.
-        Values are only comparable within one command's run.
+        Monotonic seconds since the command started, read from the run's own
+        monotonic clock at the moment the line was decoded. That is the same
+        clock its start reference and its deadline are measured with, so a
+        run driven by an injected clock stamps consistently with it. Values
+        are only comparable within one command's run.
     text:
         Decoded line content without its line terminator.
 

@@ -58,11 +58,17 @@ async def _settle_owned_group_before_draining(
     would spend the bounded capture grace on readers that cannot reach EOF and
     then discard output the descendant was still producing.
 
-    So the group is settled before the drain that follows, and it lives here
-    rather than beside any one run shape because four of them call it: the
-    streamed run before its gather, the owned-handle path before its gather,
-    the line stream before its post-exit drain, and the direct run when its
-    writer could not be reclaimed in time.
+    So the group is settled on every teardown that would otherwise be blocked
+    by it, and it lives here rather than beside any one run shape because
+    three of them call it: the streamed run before its gather, the line stream
+    before its post-exit drain, and the direct run's teardown — which reclaims
+    its writer first and settles the group second, hence the ordering note
+    below. Two neighbouring shapes answer the same question without calling
+    it. The owned handle has its own helper in
+    :mod:`cuprum._process_handle.coordinator`, which takes the handle's record
+    rather than a bundle; pipelines reach the capped wait through
+    ``_terminate_all_shielded``, because they own several stage groups rather
+    than one.
 
     Only the exit paths that are already tearing a run down settle. The
     success path of a direct run, whose child exited within its budget and

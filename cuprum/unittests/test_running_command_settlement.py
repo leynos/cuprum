@@ -18,7 +18,6 @@ and the refusals a delivery can meet in
 from __future__ import annotations
 
 import asyncio
-import time
 import typing as typ
 
 import pytest
@@ -123,16 +122,35 @@ def test_a_refusing_after_hook_settles_the_run_as_its_error() -> None:
     )
 
 
-def test_line_stamps_are_measured_from_the_spawn() -> None:
-    """Every line's ``at`` is seconds since the command started, not uptime.
+def test_line_stamps_are_measured_from_the_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every line's ``at`` is a duration read from the run's own clock.
 
     The start instant travels on the bundle the child is spawned with, because
     the stream callbacks read it from there rather than from the record the
-    handle holds. Left at its zero default, each stamp would be read from the
-    machine's monotonic clock instead — a value in the millions of seconds, so
-    a caller comparing two events could not tell a command that had just
-    started from one that had been running for a very long time.
+    handle holds. Both that reference and the stamping read must come from the
+    same callable, so the handle samples the observation's monotonic clock
+    rather than this module's ``perf_counter`` — and asserts nothing about the
+    machine's uptime.
+
+    One injected clock answers the start on its first reading and the stamp
+    thereafter. A start or a stamp taken from the real clock fails here, and
+    fails as a *value* rather than as a bound: the injected origin sits far
+    above any real reading, so the subtraction goes negative and the stamp
+    floors to ``0.0``.
     """
+    from cuprum import _command_internals
+
+    clock_origin = 1e12
+    elapsed = 2.5
+    readings = iter([clock_origin])
+
+    def observation_clock() -> float:
+        """Answer the injected start once, then the injected "now"."""
+        return next(readings, clock_origin + elapsed)
+
+    monkeypatch.setattr(_command_internals.time, "perf_counter", observation_clock)
     seen: list[LineEvent] = []
     catalogue, python_program = python_catalogue()
     builder = sh.make(python_program, catalogue=catalogue)
@@ -146,20 +164,11 @@ def test_line_stamps_are_measured_from_the_spawn() -> None:
             )
             await handle.wait()
 
-    # Bounding the stamps by the case's own duration is a tighter and more
-    # honest check than any fixed ceiling: the spawn happens inside the window
-    # this span measures, so no honest stamp can exceed it.
-    before = time.perf_counter()
     asyncio.run(run_case())
-    elapsed = time.perf_counter() - before
 
     assert seen, "the child's output must reach the registered line hook"
-    stamps = [event.at for event in seen]
-    assert all(stamp >= 0.0 for stamp in stamps), (
-        f"a line stamp is a duration and cannot be negative, got {stamps!r}"
-    )
-    assert all(stamp <= elapsed for stamp in stamps), (
-        "every stamp is measured from the spawn, so none can exceed the time "
-        f"this case took ({elapsed:.3f}s); a larger value means the stream "
-        f"callbacks never received the spawn's start instant, got {stamps!r}"
+    assert [event.at for event in seen] == [elapsed], (
+        "every stamp is the injected clock's reading minus the start the same "
+        f"clock supplied; a value of 0.0 means one of the two came from "
+        f"elsewhere, got {[event.at for event in seen]!r}"
     )

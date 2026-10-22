@@ -32,7 +32,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 from cuprum._pipeline_types import _EventDetails
 from cuprum._subprocess_spawn import (
@@ -171,7 +170,11 @@ async def _start_handle_run(
         Whatever the ``start`` emission or the task attachment raised, once the
         child has been terminated and reaped.
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission or the attachment raised
-    started_at = perf_counter()
+    # Read from the observation rather than this module's clock: the bundle's
+    # line callbacks subtract this reference from that same callable when
+    # stamping each ``LineEvent``, so a reference from a different clock would
+    # turn every stamp into a difference between two clocks under injection.
+    started_at = execution.observation.monotonic_clock()
     wall_clock_started_at = execution.observation.wall_clock()
     # Set on the bundle before the spawn, because the record this returns is
     # what the spawn was driven with and the line callbacks built from the

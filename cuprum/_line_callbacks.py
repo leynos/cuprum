@@ -5,7 +5,7 @@ pipeline path (``cuprum._pipeline_stage_streams``) turn one decoded line into
 the same set of fan-outs: the observe-hook emission that already exists, and
 the caller's ``on_line`` callback with a stamped ``LineEvent``. Owning that
 composition here keeps the two paths from growing divergent closures and keeps
-the stamping seam — the ``perf_counter`` clock read relative to a start
+the stamping seam — a reading of the run's monotonic clock relative to its start
 reference — in one place.
 
 When nothing observes lines (no observe hooks, no ``on_line``), composition
@@ -42,20 +42,6 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
 
 
-def _stamp_line(
-    line: str,
-    *,
-    stream: LineStreamName,
-    started_at: float,
-) -> LineEvent:
-    """Build a ``LineEvent`` stamped with the elapsed monotonic time."""
-    return LineEvent(
-        stream=stream,
-        at=max(0.0, perf_counter() - started_at),
-        text=line,
-    )
-
-
 @dc.dataclass(frozen=True, slots=True)
 class _LineEmissionContext:
     """Per-stream fan-out context shared by both consumption paths.
@@ -71,6 +57,12 @@ class _LineEmissionContext:
         The caller's line callback, when one is registered.
     started_at:
         Monotonic reference the ``at`` stamps are measured from.
+    monotonic_clock:
+        The clock the stamps are read from. It must be the same callable
+        ``started_at`` was sampled from, and the same one the post-exit
+        deadline subtracts it from, or the difference is not a duration.
+        Production paths pass the run's observation clock; the default keeps
+        the historical seam for constructions that supply none.
 
     """
 
@@ -78,6 +70,16 @@ class _LineEmissionContext:
     pid: int | None
     on_line: _LineHookFn | None
     started_at: float
+    monotonic_clock: cabc.Callable[[], float] = perf_counter
+
+
+def _stamp_line(line: str, *, context: _LineEmissionContext) -> LineEvent:
+    """Build a ``LineEvent`` stamped with the elapsed monotonic time."""
+    return LineEvent(
+        stream=context.stream,
+        at=max(0.0, context.monotonic_clock() - context.started_at),
+        text=line,
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -243,13 +245,7 @@ def _compose_line_callbacks(
             emitter.emit_line(line)
         if context.on_line is None:
             return None
-        return context.on_line(
-            _stamp_line(
-                line,
-                stream=context.stream,
-                started_at=context.started_at,
-            ),
-        )
+        return context.on_line(_stamp_line(line, context=context))
 
     return emit_line
 
