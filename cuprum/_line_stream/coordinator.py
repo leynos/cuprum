@@ -22,11 +22,9 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._capture_cleanup import (
-    _cleanup_capture_sinks,
-    _finalize_capture_handles,
-)
+from cuprum._capture_cleanup import _cleanup_capture_sinks
 from cuprum._delivery_lifecycle import _close_delivery_worker
+from cuprum._line_stream.captures import _finalize_line_stream_captures
 from cuprum._line_stream.drain import _collect_line_stream_after_exit
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
@@ -303,32 +301,6 @@ async def _coordinate_line_stream(
     # cancelling this coordinator.
     await queue.put(result)
     result_future.set_result(result)
-
-
-async def _finalize_line_stream_captures(
-    run: _LineStreamRun,
-    stdout_drain: _CapturedDrain,
-    stderr_drain: _CapturedDrain,
-) -> None:
-    """Close the spill files a completed ``lines()`` run still owns.
-
-    ``run()`` closes its handles right after collecting the streams, and the
-    ``lines()`` success path reaches the same place — every consumer has
-    settled and the drain results are in hand — so it owes the same removal.
-    Without this, a ``FileBackedCapture`` would return a record reporting
-    ``owned=True`` for a file that outlives the run, with nothing left to
-    remove it.
-
-    Shielded because the drains are already settled: a cancellation landing
-    between the collect and the close would leave the file on disk while the
-    caller was still about to be handed the result.
-    """
-    await _shielded_cleanup(
-        _finalize_capture_handles(
-            (stdout_drain, stderr_drain),
-            run.tasks.captures,
-        )
-    )
 
 
 async def _run_to_command_result(
