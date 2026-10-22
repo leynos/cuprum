@@ -30,9 +30,14 @@ The draft PR is open as [#652](https://github.com/leynos/cuprum/pull/652). Four
 reviews — three milestones and one of the earlier rebased head — returned
 twenty-two findings in total: seventeen were applied and five rejected as
 describing code that does not exist in this tree (see `Decision log`). The PR
-body now cites the certifying round rather than a pending table. What remains
-is the final `coderabbit review --agent` request and marking the PR ready. Two
-splits keep the source inside the module cap: the direct run in
+body now cites the certifying round rather than a pending table. The one
+unresolved review thread — CodeScene's Bumpy Road Ahead on
+`_pipeline_payloads`, a function this branch introduces — was actioned by
+flattening the function rather than suppressing the marker (see
+`Decision log`), and the three deadline test modules pass with 34 passed and 8
+skipped. What remains is the gate round on that head, the final
+`coderabbit review --agent` request, and marking the PR ready. Two splits keep
+the source inside the module cap: the direct run in
 `cuprum/_subprocess_direct_run.py`, and the direct run's result assembly in
 `cuprum/_subprocess_outcome.py`.
 
@@ -893,8 +898,20 @@ the issue was filed:
       `c7fe5341a`, and set the branch's upstream to `origin/`. The PR body's
       gate table now carries this round's results instead of a pending row per
       gate.
-- [ ] Request the final `coderabbit review --agent`, adjudicate whatever it
-      returns, and mark PR #652 ready for review.
+- [x] (2026-10-22) Adjudicated the PR's one unresolved review thread before
+      requesting another review. It is CodeScene's Bumpy Road Ahead on
+      `_pipeline_payloads` in `cuprum/_pipeline_stream_results.py`, which the
+      thread calls a *new* issue — confirmed by checking that
+      `origin/main`'s copy of the module has no such function. Two nested
+      conditional blocks per function is the threshold, and the slot loop
+      nested one inside another. Flattened into `_slot_payload` plus a frozen
+      `_SlotContext` and a `_slot_stream` predicate; ruff clean, and the three
+      deadline test modules pass 34 passed / 8 skipped. The decision and its
+      head are recorded together so the gate round can run on one head with no
+      plan edit after it.
+- [ ] Run the full gate round on the head carrying that fix, then request the
+      final `coderabbit review --agent`, adjudicate whatever it returns, and
+      mark PR #652 ready for review.
 
 ## Surprises & discoveries
 
@@ -1985,6 +2002,25 @@ the issue was filed:
   insertion was made by hand and checked — 223 entries, still sorted, no
   duplicates — then `test_maturin_build.py` was run on its own to confirm 6
   passed with 1 snapshot passed.
+
+- Decision (CodeScene review, 2026-10-22): flatten `_pipeline_payloads` in
+  `cuprum/_pipeline_stream_results.py` rather than suppress the code-health
+  thread. Rationale: the thread names the function this branch introduced in
+  `cc0c63efe` — `git show origin/main:` on that module has no
+  `_pipeline_payloads` at all — so it is a new finding about new code, not a
+  pre-existing marker the branch happened to inherit. CodeScene's Bumpy Road
+  Ahead counts nested-conditional blocks per function, and the loop nested an
+  `if` around the stream-index selection inside its `else`. The fix splits the
+  per-slot decode into `_slot_payload`, passes the shared inputs as a frozen
+  `_SlotContext` (which also keeps the helper inside the positional-argument
+  limit), and moves the stdout-versus-stderr index rule into `_slot_stream` so
+  each helper makes one decision. Suppressing the marker was available in the
+  thread's own footer and was rejected: the branch's other new modules carry no
+  such marker, and a suppression would hide the next nesting the function
+  grows. Behaviour is unchanged and the three deadline test modules still pass
+  (34 passed, 8 skipped). Noted for the next round: this decision belongs to
+  the same head as the source change, so the gate round must run on that head
+  and no later plan edit may follow it.
 
 ## Milestones
 
