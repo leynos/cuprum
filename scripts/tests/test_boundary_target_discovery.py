@@ -169,11 +169,16 @@ def test_disabled_automatic_targets_are_not_checked(
     root = copy_boundary_repository(tmp_path) / "rust"
     crate = root / "cuprum-streams"
     target_path = _write_target(crate, target)
+    # The build script is governed by `build`, not by any auto-target switch,
+    # so it must survive every case. Without it, disabling `autolib` would
+    # leave the crate with no target root at all, which the policy rejects.
+    survivor = _write_target(crate, "build.rs")
     _set_package_field(crate / "Cargo.toml", f"{switch} = false")
 
     roots = safe_target_roots(root)
 
     assert target_path not in roots, f"{switch} = false must disable {target}"
+    assert survivor in roots, f"{switch} = false must leave the build script"
     check_safe_policy(root)
 
 
@@ -313,6 +318,9 @@ def test_unreadable_automatic_target_directory_fails_closed(
     """Directory access failure must not be treated as an empty target set."""
     root = copy_boundary_repository(tmp_path) / "rust"
     directory = root / "cuprum-streams/tests"
+    # The crate keeps no integration tests, so create the directory: the case
+    # is an existing directory that cannot be read, not a missing one.
+    directory.mkdir(exist_ok=True)
     original_iterdir = Path.iterdir
 
     def iterdir(path: Path) -> object:

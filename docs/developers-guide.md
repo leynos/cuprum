@@ -902,8 +902,8 @@ every placement contract read the other. New workflow readers use it too.
 The coverage lanes also carry four nested timeout tiers, and the whole suite
 runs under the outermost of them.
 [Coverage timeout tiers](coverage-timeout-tiers.md) records each tier, the
-value it holds, and why the compile-driven `trybuild` tests need one of their
-own.
+value it holds, and why no Rust test is bounded by a nested build
+([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
 
 ### Concurrency
 
@@ -4717,12 +4717,11 @@ trade for a check this narrow. CI's `lint-test` job installs the target and
 runs it on every pull request, which is where it has to hold.
 
 This is the only check in the repository that reads the `#[cfg(windows)]`
-branches with warnings denied. A trybuild case cannot substitute for it:
-trybuild compiles its fixtures for the host target, so on a Linux runner it
-selects the Unix stream module and does not compile the Windows module. The
-Windows exports are in `stream_pyfunctions_windows.rs`, selected by
-`#[cfg(windows)]` at `rust/cuprum-rust/src/lib.rs:52-62`, so Linux coverage
-excludes those lines.
+branches with warnings denied. A doctest cannot substitute for it: rustdoc
+compiles doctests for the host target, so on a Linux runner it selects the Unix
+stream module and does not compile the Windows module. The Windows exports are
+in `stream_pyfunctions_windows.rs`, selected by `#[cfg(windows)]` at
+`rust/cuprum-rust/src/lib.rs:52-62`, so Linux coverage excludes those lines.
 
 ## Rust FD-borrow ownership contract
 
@@ -4750,7 +4749,7 @@ path and its caller must establish the mode at creation, duplication, or
 handoff. `synchronous_pipe` is the safe construction path for Cuprum-created
 anonymous pipes, whose `CreatePipe` endpoints have synchronous semantics. These
 APIs and the adapter are in
-`rust/cuprum-native-io/src/windows.rs:16-59,91-105,141-165`; the foreign-handle
+`rust/cuprum-native-io/src/windows.rs:16-59,91-105,173-197`; the foreign-handle
 obligations are recorded by `borrow_reader` and `adopt_writer` in
 `rust/cuprum-native-io/src/lib.rs:76-129`.
 
@@ -4864,11 +4863,9 @@ The pump helpers `step` and `apply_write` in
 `rust/cuprum-streams/src/pump_machine.rs` take `const fn` for the same lint
 reason. `const` qualifies how a function may be called, not who may call it, so
 neither helper widens its visibility and the pump contract is unchanged. The
-compile-fail case `tests/ui/fail/pump_transition_unreachable.rs` still pins the
-encapsulation boundary: it fails if either item is widened, even to
-`pub(crate)`. Because the committed `.stderr` fixture quotes the definition
-line, the added keyword changed that expectation; the private-function
-diagnostic it asserts is the same.
+compile-fail doctests on the `mod pump_machine` declaration in
+`rust/cuprum-streams/src/lib.rs` still pin the encapsulation boundary: each
+fails if its item is widened, even to `pub(crate)`.
 
 ### Native boundary verification
 
@@ -5187,13 +5184,13 @@ looked like it was guarding against.
 
 That encapsulation is what the proptests and Kani proofs assume rather than
 establish — neither can observe a transition it cannot spell — so it is pinned
-separately by the compile-fail case
-`rust/cuprum-streams/tests/ui/fail/pump_transition_unreachable.rs`. That case
-includes `src/pump_machine.rs` as a child module, reproducing the relationship
-`lib.rs` has with it, and asserts the compiler's refusal of an attempt to build
-a `Transition::Wrote` and pass it to `step` from the parent. Widening either
-item, even to `pub(crate)`, changes the diagnostic and fails the case, so the
-"`advance` is the only constructor" claim cannot quietly stop being true.
+separately by the compile-fail doctests on the `mod pump_machine` declaration in
+`rust/cuprum-streams/src/lib.rs`. Each includes `src/pump_machine.rs` as a
+child module, reproducing the relationship `lib.rs` has with it; one asserts
+the compiler's refusal to build a `Transition::Wrote` from the parent and the
+other its refusal to name `step`. Widening either item, even to `pub(crate)`,
+fails its doctest, so the "`advance` is the only constructor" claim cannot
+quietly stop being true.
 
 Whether the write *ran* is what the tests assert, not merely its effect: a
 dropped precondition would leave the resulting state identical and differ only
@@ -7039,70 +7036,68 @@ A full mutmut pass runs it as well, through the same `also_copy` entry that puts
 - the triggers keep the daily 08:20 UTC schedule and a plain
   `workflow_dispatch` with no inputs.
 
-## Compile-time UI tests (trybuild)
+## Compile-time contracts
 
-The Rust crates use [trybuild](https://github.com/dtolnay/trybuild) to validate
-contracts that hold at compile time and so cannot be observed by a runtime
-test. PyO3 macro behaviour remains in `rust/cuprum-rust/tests/ui/`; the safe
-stream crate keeps encapsulation and writer-lifetime probes, including the pump
-machine's private `Transition`, in `rust/cuprum-streams/tests/ui/`. Each
-crate's UI directory contains:
+Some Rust contracts hold only at compile time, so no runtime test can observe
+them. They are compiled inside the ordinary build graph rather than by a nested
+Cargo build, because a nested build inside a timed test queues behind the
+host-wide compiler admission pool, and no per-test timeout can bound that queue.
+[ADR-027](adr-027-compile-contracts-in-the-build-graph.md) records the
+decision and the `trybuild` timeouts that prompted it.
 
-- `tests/ui/pass/` — Rust files that **must compile** without error.
-- `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
-matching the corresponding `.stderr` file.
+- **Compile-pass cases** are ordinary doctests. The `PyO3` macro shapes,
+  including the const-evaluable availability marker, are doctests on the
+  extension's `#[pymodule]` and on `is_available` in
+  `rust/cuprum-rust/src/lib.rs`. Do not move them into an integration test: an
+  integration-test binary that references the extension crate fails to link,
+  because `PyO3`'s `extension-module` feature leaves the Python C-API symbols
+  unresolved.
+- **Compile-fail cases** are `compile_fail,EXXXX` doctests. Rustdoc compiles
+  each one against the libraries the test build already produced, and
+  `make test` runs them after nextest.
 
-The PyO3 pass fixtures include
-`rust/cuprum-rust/tests/ui/pass/const_availability_export.rs`; the safe stream
-fixtures include the `Transition` and writer-lifetime probes.
+Every compile-fail doctest must:
 
-Run compile-time UI tests with:
+- name the error code it expects, so it cannot pass because of an unrelated
+  error; and
+- share its doc comment with a positive control, a doctest of the same shape
+  without the violation that must compile, so a broken include or import cannot
+  make the negative case pass vacuously.
+
+Where one diagnostic could mask another, give each guarded item its own
+negative case. The pump machine's privacy contract on the `mod pump_machine`
+declaration in `rust/cuprum-streams/src/lib.rs` is the worked example: one case
+probes `Transition` and another probes `step`, so widening either item, even to
+`pub(crate)`, fails its own doctest while the other still reports `E0603`. A
+case that pins an encapsulation boundary must include the real module with
+`#[path]` rather than restating its shape, because a handwritten copy would
+only prove the copy private. Such a doctest cannot live in the file it
+includes, because rustc rejects a module that includes itself, so place it on
+the parent's module declaration.
+
+`cuprum/unittests/test_compile_contracts_build_graph.py` enforces these rules.
+It refuses a `trybuild` dependency or lockfile entry and any Rust source that
+starts a nested `cargo` or `rustc`, and it pins the inventory of compile-fail
+doctests, so add a contract and its inventory entry in the same change.
+
+Doctests in a module compiled only under `cfg(windows)`, such as the
+synchronous-handle pair on `read_once` in
+`rust/cuprum-native-io/src/windows.rs`, are collected only on Windows. The
+`rust-boundaries.yml` native matrix runs `cargo test --doc` for the native
+crates on Windows, Linux, and macOS for that reason. Before committing such a
+pair, check both snippets against the Windows target, for example as a
+temporary example built with
+`cargo check --target x86_64-pc-windows-msvc --example <name>`.
+
+Run the doctests with:
 
 ```bash
-cd rust && cargo test compile_time_ui
+cd rust && cargo test --workspace --doc --all-features
 ```
 
-Committed `.stderr` fixtures must be regenerated with Rust 1.85.0, the
-minimum-supported Rust compiler version used by CI. Update them after a PyO3 or
-compiler upgrade:
-
-```bash
-cd rust && TRYBUILD=overwrite cargo +1.85.0 test compile_time_ui
-```
-
-Inspect the updated `.stderr` files before committing to confirm that each fail
-test still represents a genuine compile-time error.
-
-A fail case that pins an encapsulation boundary must include the real module
-under test with `#[path]` rather than restating its shape, because a
-handwritten copy would only prove the copy private.
-
-Such a fixture may legitimately need to silence a lint the throwaway crate
-trybuild builds cannot configure — that crate inherits no `[lints]` table, so
-the workspace's `check-cfg = ["cfg(kani)"]` does not apply and the included
-module's `#[cfg(kani)]` gates would otherwise bury the expected diagnostic in
-`unexpected_cfgs` noise. Scope that suppression to the item that needs it:
-
-- Do not use a crate-level inner attribute (`#![allow(...)]` or
-  `#![expect(...)]`). It suppresses the lint for the probe code as well as the
-  included module, so a diagnostic the case ought to report can vanish
-  unnoticed. There are no crate-level `allow` or `expect` attributes anywhere in
-  `rust/`, and no fixture needs the first one.
-- Put an outer `#[expect(<lint>, reason = "...")]` on the `#[path]` module
-  declaration instead, next to the `#[path]` attribute itself. Prefer `expect`
-  over `allow`: if the production module later drops the gates that provoke the
-  lint, an unfulfilled expectation fails the build rather than leaving a stale
-  suppression behind.
-- Every suppression carries a `reason` string naming the constraint, per the
-  repository-wide rule that lint suppressions are tightly scoped and explained.
-
-`tests/ui/fail/pump_transition_unreachable.rs` is the worked example.
-
-Before committing one, verify it is not vacuous: weaken the production item it
-guards, confirm the case then fails, and restore. Re-run that check after any
-change to the fixture's attributes or structure, not only after a change to the
-item under test — narrowing a suppression can alter which diagnostics reach the
-`.stderr` fixture.
+Before committing a new compile-fail case, verify that it is not vacuous:
+weaken the item it guards, confirm that its doctest then fails, and restore the
+item.
 
 ## Design decisions
 

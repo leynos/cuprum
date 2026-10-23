@@ -17,6 +17,57 @@ mod lib_tests;
 pub mod loom_support;
 #[cfg(test)]
 mod ownership_tests;
+/// The pump machine's transition boundary.
+///
+/// [`pump_machine`]'s `step` omits a `writer_open` check because a
+/// `Transition::Wrote` can only exist for a chunk read while the writer was
+/// open: `advance` is its only constructor. That holds only while `Transition`
+/// and `step` stay private to the module, so these doctests pin it. Each
+/// includes the module source as a child module, so the probe sits in the
+/// module's parent — exactly the relationship this crate root has with
+/// `pump_machine`, and exactly where a future caller would sit. The doctests
+/// live here rather than in `pump_machine.rs` because a file cannot include
+/// itself as a module.
+///
+/// The positive control shows the parent can reach the `pub(crate)` items, so
+/// the include itself resolves:
+///
+/// ```
+/// #[path = "pump_machine.rs"]
+/// mod pump_machine;
+///
+/// fn main() {
+///     let _state = pump_machine::PumpState::start();
+///     let _write = pump_machine::WriteEvent::Complete { bytes: 1 };
+/// }
+/// ```
+///
+/// Each private item then gets its own negative case, so widening either one —
+/// even to `pub(crate)` — makes its doctest fail while the other still
+/// reports `E0603`. Fabricating the combination the machine forbids, a write
+/// recorded for an iteration whose writer had already latched closed, needs
+/// the private transition type:
+///
+/// ```compile_fail,E0603
+/// #[path = "pump_machine.rs"]
+/// mod pump_machine;
+///
+/// fn main() {
+///     let write = pump_machine::WriteEvent::Complete { bytes: 1 };
+///     let _ = pump_machine::Transition::Wrote(write);
+/// }
+/// ```
+///
+/// and applying any transition needs the private applicator:
+///
+/// ```compile_fail,E0603
+/// #[path = "pump_machine.rs"]
+/// mod pump_machine;
+///
+/// fn main() {
+///     let _apply = pump_machine::step;
+/// }
+/// ```
 mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;
