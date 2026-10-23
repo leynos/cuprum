@@ -1605,10 +1605,10 @@ from a worker thread; marshal back to the execution loop first.
 
 `SessionStart` remains unchanged. Single-command sessions pass the full argv to
 sinks; pipeline sessions pass an empty argv tuple. Custom sinks own the
-disclosure policy for command-session argv. The GitHub Actions adapter does not
-render `SessionStart.argv` unless `argv_title=True`: an explicit `title` wins.
-Otherwise, the adapter uses a plain space-joined argv only for that opt-in,
-then falls back to `start.label`. Its annotation title is
+disclosure policy for command-session argv. The GitHub Actions adapter renders
+`SessionStart.argv` only when `argv_title=True`, and an explicit `title` wins
+over that opt-in. With the opt-in, the group title is the plain space-joined
+argv. Otherwise, the group title is `start.label`. Its annotation title is
 `title or start.label`; pipelines use `pipeline` as their default label. Since
 the group header is written before the child starts and independently of echo
 and capture, argv titles can disclose secrets to job-log readers.
