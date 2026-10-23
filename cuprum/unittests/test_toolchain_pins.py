@@ -228,6 +228,43 @@ def test_nose_detector_pin_is_synchronized_across_all_three_sites() -> None:
     _assert_pins_agree(_read_nose_pin_sites(repo_root()), "nose")
 
 
+def _read_modern_stable_pin_sites(root: pth.Path) -> dict[str, str]:
+    """Read the modern compiler pin from Makefile, CI, and the guide."""
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    match = re.search(
+        r"^override MODERN_STABLE_TOOLCHAIN := (\S+)$", makefile, re.MULTILINE
+    )
+    assert match is not None, "Makefile must own the explicit modern stable pin"
+
+    environment = _workflow_job(root, "modern-stable").get("env")
+    assert isinstance(environment, dict), "modern-stable must declare its toolchain pin"
+    ci_pin = environment.get("MODERN_STABLE_TOOLCHAIN")
+    assert isinstance(ci_pin, str), "CI must pin MODERN_STABLE_TOOLCHAIN"
+
+    guide = (root / "docs/developers-guide.md").read_text(encoding="utf-8")
+    guide_match = re.search(
+        r"Modern-stable validation is pinned to Rust/Cargo `([\d.]+)`\.", guide
+    )
+    assert guide_match is not None, "the developer guide must publish the modern pin"
+    return {"Makefile": match.group(1), "ci.yml": ci_pin, "guide": guide_match.group(1)}
+
+
+def test_modern_stable_pin_agrees_across_make_ci_and_developer_guide() -> None:
+    """Keep the independent validation compiler pin synchronized everywhere."""
+    root = repo_root()
+    pins = _read_modern_stable_pin_sites(root)
+    _assert_pins_agree(pins, "modern stable")
+    make_pin = pins["Makefile"]
+    assert make_pin != "1.98.0", "Rust 1.98.0 has a known vtable miscompilation"
+    assert make_pin != _read_makefile_pin(root, "MSRV_TOOLCHAIN"), (
+        "modern stable must remain distinct from the published MSRV toolchain"
+    )
+    rust_toolchain = (root / "rust/rust-toolchain.toml").read_text(encoding="utf-8")
+    assert make_pin not in rust_toolchain, (
+        "the modern validation pin must not replace the workspace toolchain"
+    )
+
+
 def _expanded_make_recipes(
     root: pth.Path,
     *,

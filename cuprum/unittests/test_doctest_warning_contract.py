@@ -27,6 +27,7 @@ WARNING_DOCTEST = """//! Warning-bearing doctest fixture.
 /// ```
 pub struct WarningFixture;
 """
+CARGO_COMMAND_TIMEOUT_SECONDS = 7200
 
 
 def _run_doctests(
@@ -58,6 +59,7 @@ def _run_doctests(
         cwd=crate,
         env=environment,
         text=True,
+        timeout=CARGO_COMMAND_TIMEOUT_SECONDS,
     )
 
 
@@ -67,8 +69,8 @@ def _diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
 
 
 # Both Cargo routes wait for shared compiler admission as well as compiling.
-# Keep a finite budget without treating a normal queue as a hung unit test.
-@pytest.mark.timeout(1200)
+# Keep a generous finite budget for normal queueing and cold toolchain work.
+@pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
 @pytest.mark.skipif(
     sys.platform != "linux", reason="the production doctest warning route is Linux-only"
 )

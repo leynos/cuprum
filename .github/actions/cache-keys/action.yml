@@ -30,11 +30,18 @@ inputs:
       between jobs that compile the same way, so each shape gets its own
       family and its own single writer. `debug` is an unoptimized
       `maturin develop` build, `release` is the same build with `--release`,
-      `coverage` is the instrumented `cargo llvm-cov` build, and `lint` is the
-      Cranelift-backed lint build, and `loom` is the `--cfg loom` model
-      build. See docs/ci-cache-ownership.md.
+      `coverage` is the instrumented `cargo llvm-cov` build, `lint` is the
+      Cranelift-backed lint build, `loom` is the `--cfg loom` model build, and
+      `modern-stable` is the explicitly selected stable validation build.
+      See docs/ci-cache-ownership.md.
     required: false
     default: debug
+  compiler-version:
+    description: >-
+      Explicit compiler version appended to the modern-stable cache shape.
+      It must be supplied only when compiler-shape is modern-stable.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -45,6 +52,7 @@ runs:
         UBUNTU_RELEASE: ${{ inputs.ubuntu-release }}
         PYTHON_VERSION: ${{ inputs.python-version }}
         COMPILER_SHAPE: ${{ inputs.compiler-shape }}
+        COMPILER_VERSION: ${{ inputs.compiler-version }}
         RUNNER_ENVIRONMENT: ${{ runner.environment }}
         # The Cargo families follow the resolved dependency graph and the
         # toolchain that compiled it. `target` is deliberately absent from
@@ -72,8 +80,9 @@ runs:
         # and never absorb a new object. Each writing run publishes a fresh
         # entry seeded from the newest entry the prefix matches.
         # The compiler cache is scoped by everything that decides whether one
-        # job's objects can serve another's. Two dimensions beyond the image
-        # scope matter here, and both were measured on 2026-09-04.
+        # job's objects can serve another's. The interpreter and build shape
+        # were measured on 2026-09-04; modern-stable also carries its explicit
+        # Rust version so a toolchain bump cannot restore stale output.
         #
         # The interpreter: `pyo3` is declared with `extension-module` and
         # without `abi3`, so the extension is compiled against one specific
@@ -86,7 +95,18 @@ runs:
         # The build shape: an optimized build, an instrumented build and an
         # unoptimized one produce different objects from the same source, so
         # they cannot share an entry either.
-        sccache_prefix="sccache-${image_scope}-py${PYTHON_VERSION}-${COMPILER_SHAPE}-"
+        compiler_version_scope=''
+        if [ "${COMPILER_SHAPE}" = modern-stable ]; then
+          if ! [[ "${COMPILER_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "modern-stable compiler shape needs an exact compiler-version" >&2
+            exit 1
+          fi
+          compiler_version_scope="-rust${COMPILER_VERSION}"
+        elif [ -n "${COMPILER_VERSION}" ]; then
+          echo "compiler-version is only valid with the modern-stable shape" >&2
+          exit 1
+        fi
+        sccache_prefix="sccache-${image_scope}-py${PYTHON_VERSION}-${COMPILER_SHAPE}${compiler_version_scope}-"
         {
           printf 'CARGO_CACHE_PREFIX=cargo-%s-\n' "${scope}"
           printf 'CARGO_CACHE_KEY=cargo-%s-%s\n' "${scope}" "${CARGO_HASH}"

@@ -1215,6 +1215,41 @@ single invocation rather than editing the committed profile. Pass
 `--config 'profile.dev.incremental=true'`, or set `CARGO_PROFILE_DEV_DEBUG=2`
 in the environment.
 
+## Modern-stable Rust validation
+
+Modern-stable validation is pinned to Rust/Cargo `1.99.1`. The Makefile owns
+this selection independently of `rust/rust-toolchain.toml`, which continues to
+pin Rust `1.85.0`. CI installs the modern toolchain with the minimal profile
+and Clippy without changing the default toolchain. A modern-stable pass does
+not prove the MSRV, and `--locked` does not change that.
+
+`make modern-stable-check` verifies the pin, then runs workspace check, Clippy,
+tests, documentation, and doctests in that order.
+`make modern-stable-extension` verifies the pin, rebuilds the PyO3 extension
+through Maturin, and runs the existing extension-gated suite.
+`make modern-stable` runs those two aggregates sequentially. Cargo work uses
+the dedicated `rust/target/modern-stable` directory and `--locked`; the route
+retains `-C codegen-units=1` as its only Rust compiler flag.
+
+The check, Clippy, test, and Maturin routes use `CARGO_BUILD_WARNINGS=deny` on
+Cargo 1.97 or later. Cargo applies that setting to warnings from local
+packages; the rustdoc probe also found that it makes a warn-level Rustdoc lint
+on a local package fatal. This observation does not broaden the migration:
+modern documentation and doctest commands keep `RUSTDOC_FLAGS`, including
+`-D warnings`, and omit Cargo's warning variable. The nightly doctest route
+retains its separate nightly-only flags. Existing dev-fast, MSRV, Whitaker,
+release, coverage, verification, and wheel routes keep their current toolchain
+and warning policy. The Linux dev-fast warning policy is unchanged.
+
+The observed negative controls and the route inventory live in
+[`modern-stable-validation.md`](modern-stable-validation.md). A toolchain bump
+must update the Makefile pin, the `modern-stable` CI job, this guide, the
+toolchain-pin contract, and the version scope in the shared compiler-cache
+renderer together. The Cargo registry key remains unchanged. The evidence
+document must record the new compiler and Cargo versions and rerun the warning,
+cache-freshness, extension, and lockfile controls. This Linux route is
+POSIX-oriented; it does not add Windows or macOS runtime evidence.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member

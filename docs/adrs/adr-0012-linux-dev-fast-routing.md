@@ -64,6 +64,12 @@ for release, coverage, verification, Whitaker, MSRV checks, and macOS and
 Windows. Every workspace member inherits Rust 1.85.0, and `make msrv-check`
 compiles every target at that version without the fragment.
 
+The independent `modern-stable` validation route is fragment-free and selects
+Rust/Cargo `1.99.1` explicitly. It does not change the workspace's Rust 1.85.0
+source contract or replace the MSRV check. Its Cargo warning-policy migration
+is recorded in [modern-stable validation](modern-stable-validation.md); the
+dev-fast route continues to use its existing `-D warnings` compiler flags.
+
 ## Consequences
 
 Contributors gain faster Linux debug builds after installing the explicit

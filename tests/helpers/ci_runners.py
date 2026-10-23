@@ -156,6 +156,7 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "lint-test",
         "typecheck-test",
         "extension-tests",
+        "modern-stable",
         "coverage",
         "benchmark-ratchet",
         "changes",
@@ -178,6 +179,7 @@ FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "lint-test",
         "typecheck-test",
         "extension-tests",
+        "modern-stable",
         "coverage",
         "benchmark-ratchet",
         "changes",
@@ -233,6 +235,7 @@ CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "lint-test",
         "typecheck-test",
         "extension-tests",
+        "modern-stable",
         "coverage",
         "benchmark-ratchet",
         "loom-smoke",
@@ -244,7 +247,13 @@ CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 #: `UV_CACHE_DIR=.uv-cache` and `UV_TOOL_DIR=.uv-tools`, so uv's standard
 #: directories stay empty and the worktree-local pair must be cached too.
 MAKE_DRIVEN_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("typecheck-test", "extension-tests", "coverage", "benchmark-ratchet"),
+    "ci.yml": (
+        "typecheck-test",
+        "extension-tests",
+        "modern-stable",
+        "coverage",
+        "benchmark-ratchet",
+    ),
     "coverage-main.yml": ("coverage-upload",),
 }
 MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
@@ -266,6 +275,7 @@ SCCACHE_JOBS: typ.Final = (
     ("rust-boundaries.yml", "verus"),
     ("ci.yml", "lint-test"),
     ("ci.yml", "extension-tests"),
+    ("ci.yml", "modern-stable"),
     ("ci.yml", "coverage"),
     ("ci.yml", "loom-smoke"),
     ("ci.yml", "benchmark-ratchet"),
@@ -302,6 +312,7 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
     "SCCACHE_CACHE_KEY": (
         ("ci.yml", "benchmark-ratchet"),
         ("ci.yml", "extension-tests"),
+        ("ci.yml", "modern-stable"),
         ("ci.yml", "lint-test"),
         ("ci.yml", "typecheck-test"),
         ("loom.yml", "loom"),
@@ -347,6 +358,10 @@ CACHE_FAMILY_WRITERS: typ.Final[
     ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "debug")): (
         "ci.yml",
         "extension-tests",
+    ),
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "modern-stable", "1.99.1")): (
+        "ci.yml",
+        "modern-stable",
     ),
     ("SCCACHE_CACHE_KEY", "self-hosted", ("3.14", "debug")): (
         "ci.yml",

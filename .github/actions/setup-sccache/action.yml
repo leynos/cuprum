@@ -49,9 +49,11 @@ inputs:
   cache-size:
     description: >-
       Ceiling for the cache directory. The archive is restored and re-saved
-      whole, so this bounds the transfer as well as the disk. The default holds
-      two build shapes: the debug and cranelift objects the lint and test gates
-      produce, and the instrumented objects the coverage gate produces.
+      whole, so this bounds the transfer as well as the disk. The default
+      4 GiB ceiling is shared by the debug and Cranelift objects from lint and
+      test, the explicitly pinned modern-stable objects, and the instrumented
+      objects from coverage. These shapes share the cap rather than reserving
+      separate space.
     required: false
     default: 4G
 outputs:
