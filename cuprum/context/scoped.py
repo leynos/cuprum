@@ -53,6 +53,7 @@ class _ScopedContext:
         try:
             _reset_scoped_entry(self)
         except RuntimeError:
+            # Rejected exits require a lifecycle record before the error propagates.
             _log_scope_transition("exit", "rejected", context)
             raise
         _log_scope_transition("exit", "success", context)

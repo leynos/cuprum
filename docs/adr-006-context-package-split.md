@@ -70,6 +70,10 @@ package-level exports remain the public import path. New scoped-context
 behaviour belongs in `scoped.py`, while registration handles and factories
 remain in `registration.py`.
 
+A rejected exit emits a warning lifecycle record before propagating its
+required LIFO or context error. This is an intentional exception to the
+single-boundary logging rule.
+
 The line-iteration regression uses the shared `python_builder` fixture from
 `cuprum.unittests._safe_cmd_lines_support`. This keeps catalogue setup aligned
 with the repository's established command-builder test path.
