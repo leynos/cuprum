@@ -29,6 +29,36 @@ if typ.TYPE_CHECKING:
     )
 
 
+def _prepare_then_consume(
+    command: SafeCmd,
+    prepare_scope: ScopeConfig,
+    consume_scope: ScopeConfig,
+) -> CommandResult | None:
+    """Build a stream in *prepare_scope*, then pull it in *consume_scope*.
+
+    The preparing scope is left before the pull, not merely nested inside it:
+    ``narrow()`` layers an inner scope's hooks onto the outer set, so a nested
+    pair would let the preparing hooks fire legitimately and hide a stream that
+    carried them itself.
+
+    Returns
+    -------
+    CommandResult | None
+        The stream's result after the enumeration completes.
+    """
+
+    async def collect() -> CommandResult | None:
+        with scoped(prepare_scope):
+            stream = command.lines()
+        with scoped(consume_scope):
+            async with stream:
+                async for _event in stream:
+                    pass
+        return stream.result
+
+    return asyncio.run(collect())
+
+
 def test_lines_run_the_consuming_scopes_hooks(
     spawn_recorder: _SpawnRecorder,
 ) -> None:
@@ -76,29 +106,19 @@ def test_lines_run_the_consuming_scopes_hooks(
         """Collect the lifecycle events the consuming scope observes."""
         observed.append(event)
 
-    async def collect() -> CommandResult | None:
-        """Prepare in one hook scope, then consume in a different one."""
-        with scoped(
+    with scoped(ScopeConfig(allowlist=frozenset([runtime.program]))):
+        result = _prepare_then_consume(
+            command,
             ScopeConfig(
                 before_hooks=(prepared_before,),
                 after_hooks=(prepared_after,),
-            )
-        ):
-            stream = command.lines()
-        with scoped(
+            ),
             ScopeConfig(
                 before_hooks=(consumed_before,),
                 after_hooks=(consumed_after,),
                 observe_hooks=(consume_events,),
-            )
-        ):
-            async with stream:
-                async for _event in stream:
-                    pass
-        return stream.result
-
-    with scoped(ScopeConfig(allowlist=frozenset([runtime.program]))):
-        result = asyncio.run(collect())
+            ),
+        )
 
     assert result is not None, "the run must publish a result"
     assert not prepared_calls, (
