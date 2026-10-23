@@ -92,8 +92,9 @@ _FORKEXPRESSION = re.compile(
 #: The estate's hosted-arm expression: the fork test or the Dependabot author
 #: test, read by position like the fork-only form. The author literal is exact.
 _HOSTED_EXPRESSION = re.compile(
-    r"\A\s*\(\s*(?P<fork_ref>[A-Za-z_][\w.-]*)"
-    r"\s*\|\|\s*(?P<author_ref>[A-Za-z_][\w.-]*)\s*==\s*'dependabot\[bot\]'\s*\)"
+    r"\A\s*\(\s*(?P<fork_ref>" + re.escape(FORK_FIELD) + r")"
+    r"\s*\|\|\s*(?P<author_ref>" + re.escape(AUTHOR_FIELD) + r")"
+    r"\s*==\s*'dependabot\[bot\]'\s*\)"
     r"\s*&&\s*'(?P<fork_arm>[^']+)'"
     r"\s*\|\|\s*'(?P<owned_arm>[^']+)'\s*\Z"
 )

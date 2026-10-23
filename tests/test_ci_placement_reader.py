@@ -119,16 +119,28 @@ def test_the_hosted_expression_reads_the_fork_and_author_tests(
     )
 
 
-def test_an_actor_test_is_not_the_author_test(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "expression",
+    [
+        HOSTED_EXPRESSION.replace(reader.AUTHOR_FIELD, "github.actor"),
+        HOSTED_EXPRESSION
+        .replace(reader.FORK_FIELD, "TMP")
+        .replace(reader.AUTHOR_FIELD, reader.FORK_FIELD)
+        .replace("TMP", reader.AUTHOR_FIELD),
+    ],
+    ids=["actor-for-author", "fields-swapped"],
+)
+def test_only_the_exact_hosted_condition_is_modelled(
+    monkeypatch: pytest.MonkeyPatch, expression: str
 ) -> None:
-    """Refuse `github.actor` as a stand-in for the pull request's author."""
-    actor = HOSTED_EXPRESSION.replace(reader.AUTHOR_FIELD, "github.actor")
-    _declare(monkeypatch, {"runs-on": actor, "steps": []})
-    placed = reader.placement("w.yml", "j")
-    assert placed.references != frozenset({reader.FORK_FIELD, reader.AUTHOR_FIELD}), (
-        "an actor test must be distinguishable from the author test"
-    )
+    """Refuse `github.actor` and a swapped pair of fields.
+
+    The roles of the two references matter: with the fields swapped every
+    pull request has a truthy author login and would take the hosted arm.
+    """
+    _declare(monkeypatch, {"runs-on": expression, "steps": []})
+    with pytest.raises(AssertionError, match="cannot model"):
+        reader.placement("w.yml", "j")
 
 
 def test_a_hyphenated_condition_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
