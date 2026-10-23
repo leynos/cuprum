@@ -68,8 +68,10 @@ class ScopedEntryMachine(RuleBasedStateMachine):
         entered = entry.enter_context(self._managers[name])
         self._stack.append((name, parent, entered, entry))
         requested = _SCOPE_CONFIGS[name].allowlist
-        assert entered.allowlist == _expected_allowlist(parent, requested)
-        assert current_context() is entered
+        assert entered.allowlist == _expected_allowlist(parent, requested), (
+            "Entry policy must match the parent/requested policy intersection."
+        )
+        assert current_context() is entered, "Entry must activate the entered context."
 
     @precondition(lambda self: bool(self._stack))
     @rule()
@@ -77,7 +79,9 @@ class ScopedEntryMachine(RuleBasedStateMachine):
         """Exit the top entry and restore its exact parent context."""
         _name, parent, _entered, entry = self._stack.pop()
         entry.close()
-        assert current_context() is parent
+        assert current_context() is parent, (
+            "Exit must restore the exact parent context."
+        )
 
     @precondition(lambda self: bool(self._stack))
     @rule(data=st.data())
@@ -91,21 +95,29 @@ class ScopedEntryMachine(RuleBasedStateMachine):
         with pytest.raises(RuntimeError, match="LIFO order"):
             self._managers[foreign_name].__exit__(None, None, None)
 
-        assert current_context() is active_context
+        assert current_context() is active_context, (
+            "Rejected foreign-manager exit must preserve the active context."
+        )
 
     @invariant()
     def active_context_matches_stack(self) -> None:
         """Keep the context bound to the latest successful entry."""
         expected = self._baseline if not self._stack else self._stack[-1][2]
-        assert current_context() is expected
+        assert current_context() is expected, (
+            "Active context must match the latest successful stack entry."
+        )
 
     def teardown(self) -> None:
         """Unwind entries left by the final generated action."""
         while self._stack:
             _name, parent, _entered, entry = self._stack.pop()
             entry.close()
-            assert current_context() is parent
-        assert current_context() is self._baseline
+            assert current_context() is parent, (
+                "Teardown must restore each entry's parent context."
+            )
+        assert current_context() is self._baseline, (
+            "Teardown must restore the baseline context."
+        )
 
 
 def test_scoped_entry_state_machine() -> None:
