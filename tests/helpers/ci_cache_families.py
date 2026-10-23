@@ -4,6 +4,7 @@ Every cache key in this repository renders from ``.github/actions/cache-keys``,
 so five jobs can hold five save steps that all name ``SCCACHE_CACHE_KEY`` and
 still write five disjoint archives: the rendered key carries the runner lane,
 the interpreter, and the build shape, none of which appear in the ``env`` name.
+The modern-stable compiler family also carries its exact Rust version.
 Counting writers by ``env`` name therefore either forbids a legitimate split or
 permits a genuine collision, depending on which way the manifest is written.
 
@@ -29,7 +30,7 @@ import typing as typ
 from tests.helpers.ci_documents import require
 from tests.helpers.ci_leg_matrix import admits, matrix_legs
 from tests.helpers.ci_placement import placement
-from tests.helpers.ci_workflows import save_steps, step_inputs, steps
+from tests.helpers.ci_workflows import job_env, save_steps, step_inputs, steps
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -44,7 +45,8 @@ CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 #: archive holds uv's interpreter-specific environments. Compiler output is
 #: narrower still: even on the stable ABI, the pyo3 build script rebuilds for
 #: each interpreter, so an object compiled under one CPython serves no other,
-#: and an optimized or instrumented object serves no unoptimized build.
+#: and an optimized or instrumented object serves no unoptimized build. The
+#: modern-stable family additionally names its exact Rust version.
 KEY_SCOPES: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "CARGO_CACHE_KEY": (),
     "TOOL_CACHE_KEY": ("python-version",),
@@ -111,13 +113,27 @@ def _lane(workflow_name: str, job_name: str) -> str:
     return LANE_OF_LABEL[str(label)]
 
 
-def _resolve(value: object, leg: cabc.Mapping[str, object], message: str) -> str:
+def _resolve(
+    value: object,
+    leg: cabc.Mapping[str, object],
+    message: str,
+    *,
+    environment: cabc.Mapping[str, object] | None = None,
+) -> str:
     """Render one ``cache-keys`` input against a matrix leg."""
     text = str(value)
     match = _EXPRESSION.match(text)
     if match is None:
         return text
     body = match.group("body").strip()
+    if body.startswith("env.") and environment is not None:
+        name = body.removeprefix("env.")
+        require(
+            condition=name in environment,
+            message=f"{message}: job declares no environment value {name!r}",
+        )
+        return str(environment[name])
+
     reference = _MATRIX_REFERENCE.fullmatch(body)
     require(
         condition=reference is not None,
@@ -219,6 +235,33 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
             scope = tuple(
                 _resolve(inputs[name], leg, message) for name in KEY_SCOPES[key_name]
             )
+            if key_name == "SCCACHE_CACHE_KEY":
+                compiler_shape = inputs.get("compiler-shape")
+                compiler_version = inputs.get("compiler-version")
+                if compiler_shape == "modern-stable":
+                    require(
+                        condition=isinstance(compiler_version, str)
+                        and bool(compiler_version),
+                        message=(
+                            f"{message}: modern-stable compiler cache must declare "
+                            "its explicit compiler-version"
+                        ),
+                    )
+                    scope += (
+                        _resolve(
+                            compiler_version,
+                            leg,
+                            message,
+                            environment=job_env(workflow_name, job_name),
+                        ),
+                    )
+                else:
+                    require(
+                        condition=not compiler_version,
+                        message=(
+                            f"{message}: compiler-version only scopes modern-stable"
+                        ),
+                    )
             family = CacheFamily(key_name, lane, scope)
             # Rejected here rather than deduplicated by the set. Two save steps
             # in one job that render the same family are the same collision the

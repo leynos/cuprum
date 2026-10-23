@@ -53,11 +53,11 @@ def test_ci_does_not_build_tools_from_source() -> None:
 
 
 def test_no_workflow_installs_cargo_nextest() -> None:
-    """Leave the nextest install to the coverage action that now needs it.
+    """Use one pinned prebuilt installer for the modern validation job.
 
-    The matrix jobs stopped running the Rust suite, so an installer here would
-    be an unused download whose failure mode nothing in this repository
-    exercises.
+    The ordinary Rust matrix no longer runs the Rust suite, so nextest belongs
+    only on the one modern-stable job that invokes it. That route must install
+    an official checksum-verified binary and never build the tool from source.
 
     Checked structurally rather than by one literal string. A `tool:` input
     naming either spelling, a different installer action, or a shell command
@@ -73,8 +73,45 @@ def test_no_workflow_installs_cargo_nextest() -> None:
             offenders.extend(
                 _nextest_installers(workflow_name, str(job_name)),
             )
-    assert not offenders, (
-        f"only the shared coverage action may install cargo-nextest; found {offenders}"
+    assert offenders == [
+        "ci.yml:modern-stable:Install pinned prebuilt cargo-nextest"
+    ], f"only the modern stable job may install cargo-nextest, found {offenders}"
+
+
+def test_modern_stable_installs_the_pinned_nextest_release_from_checksums() -> None:
+    """Verify nextest is a cached-or-prebuilt binary, never a Cargo build."""
+    step = next(
+        step
+        for step in steps("ci.yml", "modern-stable")
+        if step.get("name") == "Install pinned prebuilt cargo-nextest"
+    )
+    script = step.get("run")
+    assert isinstance(script, str), "the nextest installer must run a shell script"
+    version = re.search(r"(?m)^\s*readonly CARGO_NEXTEST_VERSION='([^']+)'", script)
+    checksums = dict(
+        re.findall(
+            r"(?m)^\s*readonly CARGO_NEXTEST_(ARCHIVE|BINARY)_SHA256='([0-9a-f]+)'",
+            script,
+        )
+    )
+    assert version is not None, "the nextest installer must declare its version"
+    assert version.group(1) == "0.9.120", (
+        "the nextest installer must pin the reviewed binary release"
+    )
+    assert set(checksums) == {"ARCHIVE", "BINARY"}, (
+        "the nextest installer must verify both archive and binary checksums"
+    )
+    assert checksums.get("ARCHIVE") == (
+        "a5b1c12500c47e27af4baf533c917bf1b38e9bf2e6ffb063dfa1de6e75aa8726"
+    ), "the nextest archive must retain its reviewed checksum"
+    assert checksums.get("BINARY") == (
+        "8d717594668f0ec817405b9526cb657ca40fc888068277004860d0f253837d14"
+    ), "the nextest binary must retain its reviewed checksum"
+    assert script.index("sha256sum --check") < script.index("tar --extract"), (
+        "the downloaded nextest archive must be verified before extraction"
+    )
+    assert "cargo install" not in script, (
+        "CI must use the prebuilt nextest binary rather than source-building it"
     )
 
 

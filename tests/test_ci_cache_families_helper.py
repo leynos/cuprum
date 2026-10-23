@@ -66,7 +66,20 @@ def test_a_matrix_reference_the_leg_lacks_is_a_contract_failure(name: str) -> No
 def test_a_non_matrix_expression_is_a_contract_failure() -> None:
     """Reject an expression this reader cannot evaluate rather than guess at it."""
     with pytest.raises(AssertionError, match="cannot resolve"):
-        families._resolve("${{ env.SOMETHING }}", {}, MESSAGE)
+        families._resolve("${{ github.ref }}", {}, MESSAGE)
+
+
+def test_an_environment_reference_resolves_from_the_job_environment() -> None:
+    """Render an explicitly supplied job-level pin in the compiler cache key."""
+    resolved = families._resolve(
+        "${{ env.MODERN_STABLE_TOOLCHAIN }}",
+        {},
+        MESSAGE,
+        environment={"MODERN_STABLE_TOOLCHAIN": "1.99.1"},
+    )
+    assert resolved == "1.99.1", (
+        "the job-level modern compiler pin must resolve into its cache key"
+    )
 
 
 @SETTINGS

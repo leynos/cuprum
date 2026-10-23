@@ -1000,6 +1000,208 @@ jobs:
           mode: report
           vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
+  modern-stable:
+    name: Modern stable Rust validation
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+    timeout-minutes: 90
+    env:
+      MODERN_STABLE_TOOLCHAIN: '1.99.1'
+      CUPRUM_REQUIRE_MODERN_STABLE: '1'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free preinstalled toolchains the job does not use
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -m /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
+          df -m /
+
+      - name: Start resource sampler
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: start
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+
+      - name: Compute cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+          generation: ${{ env.CACHE_GENERATION }}
+          ubuntu-release: ${{ env.UBUNTU_RELEASE }}
+          compiler-shape: modern-stable
+          compiler-version: ${{ env.MODERN_STABLE_TOOLCHAIN }}
+
+      - name: Restore the Cargo registry
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Restore the installed tools
+        id: tool-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/bin
+            ~/.cache/uv
+            ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
+          restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
+
+      - name: Restore the modern stable compiler cache
+        id: sccache-dir
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
+
+      - name: Record cache observations
+        if: always()
+        shell: bash
+        env:
+          CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+          TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### Cache observations\n\n'
+            printf '| cache | key | hit |\n| --- | --- | --- |\n'
+            printf '| registry | %s | %s |\n' \
+              "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
+            printf '| tools | %s | %s |\n' \
+              "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
+            printf '| modern stable sccache | %s | %s |\n' \
+              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up sccache
+        id: sccache
+        uses: ./.github/actions/setup-sccache
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Install project Rust toolchain
+        uses: leynos/shared-actions/.github/actions/setup-rust@6cec89bac47a21cf756d68d638a9a510998e57f8
+        with:
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
+          install-binstall: 'false'
+
+      - name: Install modern stable Rust toolchain
+        run: >-
+          rustup toolchain install "${MODERN_STABLE_TOOLCHAIN}"
+          --profile minimal --component clippy
+
+      - name: Install pinned prebuilt cargo-nextest
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly CARGO_NEXTEST_VERSION='0.9.120'
+          readonly CARGO_NEXTEST_ARCHIVE_SHA256='a5b1c12500c47e27af4baf533c917bf1b38e9bf2e6ffb063dfa1de6e75aa8726'
+          readonly CARGO_NEXTEST_BINARY_SHA256='8d717594668f0ec817405b9526cb657ca40fc888068277004860d0f253837d14'
+          readonly CARGO_NEXTEST_ASSET="cargo-nextest-${CARGO_NEXTEST_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          readonly CARGO_NEXTEST_RELEASE_BASE='https://github.com/nextest-rs/nextest/releases/download'
+          readonly CARGO_NEXTEST_URL="${CARGO_NEXTEST_RELEASE_BASE}/cargo-nextest-\
+          ${CARGO_NEXTEST_VERSION}/${CARGO_NEXTEST_ASSET}"
+          readonly CARGO_BIN="${CARGO_HOME:-${HOME}/.cargo}/bin"
+          readonly CARGO_NEXTEST="${CARGO_BIN}/cargo-nextest"
+          mkdir -p "${CARGO_BIN}"
+          if [ ! -f "${CARGO_NEXTEST}" ] || \
+            ! printf '%s  %s\n' "${CARGO_NEXTEST_BINARY_SHA256}" "${CARGO_NEXTEST}" | sha256sum --check --status; then
+            readonly STAGING="$(mktemp -d)"
+            trap 'rm -rf "${STAGING}"' EXIT
+            readonly ARCHIVE="${STAGING}/${CARGO_NEXTEST_ASSET}"
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --max-filesize 209715200 "${CARGO_NEXTEST_URL}" --output "${ARCHIVE}"
+            printf '%s  %s\n' "${CARGO_NEXTEST_ARCHIVE_SHA256}" "${ARCHIVE}" | sha256sum --check --status
+            readonly MEMBER="$(tar --list --gzip --file "${ARCHIVE}" | awk '/(^|\/)cargo-nextest$/ { print; exit }')"
+            test -n "${MEMBER}"
+            tar --extract --gzip --file "${ARCHIVE}" --directory "${STAGING}" "${MEMBER}"
+            readonly BINARY="${STAGING}/${MEMBER}"
+            printf '%s  %s\n' "${CARGO_NEXTEST_BINARY_SHA256}" "${BINARY}" | sha256sum --check --status
+            install --mode 0755 "${BINARY}" "${CARGO_NEXTEST}"
+          fi
+          "${CARGO_NEXTEST}" --version
+          echo "${CARGO_BIN}" >> "${GITHUB_PATH}"
+
+      - name: Build Python environment
+        run: CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make build
+
+      - name: Fetch locked Rust dependencies
+        run: >-
+          CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
+          RUSTUP_TOOLCHAIN=1.85.0 cargo fetch --locked
+          --manifest-path rust/cuprum-rust/Cargo.toml
+
+      - name: Run modern stable validation and fixture contracts
+        env:
+          CARGO_BUILD_JOBS: ${{ env.LINUX_RUNNER_VCPUS }}
+          TEST_JOBS: ${{ env.LINUX_RUNNER_VCPUS }}
+        run: |
+          set -euo pipefail
+          make modern-stable
+          make test-modern-stable-contract
+          git diff --exit-code -- rust/Cargo.lock
+
+      - name: Record compiler-cache effectiveness
+        if: always() && steps.sccache.outputs.status != 'fallback'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Save the modern stable compiler cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.sccache-dir.outputs.cache-hit != 'true' &&
+          steps.sccache.outputs.status != 'fallback'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      - name: Report peak resource use
+        if: always()
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: report
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+
   extension-tests-windows:
     name: Extension-gated tests (Windows Python/Rust boundary)
     runs-on: windows-2022
