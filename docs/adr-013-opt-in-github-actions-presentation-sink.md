@@ -101,10 +101,10 @@ Framing order per run:
 4. At teardown the session releases the lease before writing `::endgroup::`,
    so the runner processes the endgroup command itself.
 5. A failed outcome emits exactly one `::error::` annotation after the lease
-   release. Its title is `title or` the bounded run label; its message contains
-   bounded categorical detail (`timeout`) or the outcome value. The message
-   never includes exception text or argv, and argv titles require explicit
-   opt-in.
+   release. Its title is the explicit non-empty `title` when provided;
+   otherwise, it is the bounded run label. Its message contains bounded
+   categorical detail (`timeout`) or the outcome value. The message never
+   includes exception text or argv, and argv titles require explicit opt-in.
 
 The execution layer opens the session before the subprocess starts and
 finalizes the run's `_SinkBracket` on every terminal path — success, non-zero

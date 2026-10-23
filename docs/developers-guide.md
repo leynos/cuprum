@@ -1603,11 +1603,6 @@ from a worker thread; marshal back to the execution loop first.
 
 ### Presentation-sink session lifecycle
 
-When `RunOutputOptions.sink` is set, both runners owe the sink's session a
-close on every terminal path. The shared mechanics live in
-`cuprum/_sink_lifecycle.py`; the contract (see
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)):
-
 `SessionStart` remains unchanged. Single-command sessions pass the full argv to
 sinks; pipeline sessions pass an empty argv tuple. Custom sinks own the
 disclosure policy for command-session argv. The GitHub Actions adapter does not
@@ -1617,6 +1612,11 @@ then falls back to `start.label`. Its annotation title is
 `title or start.label`; pipelines use `pipeline` as their default label. Since
 the group header is written before the child starts and independently of echo
 and capture, argv titles can disclose secrets to job-log readers.
+
+When `RunOutputOptions.sink` is set, both runners owe the sink's session a
+close on every terminal path. The shared mechanics live in
+`cuprum/_sink_lifecycle.py`; the contract (see
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)):
 
 - `_SinkBracket.open` opens the session *before* any subprocess starts — from
   `_command_session_start` for a single command and from

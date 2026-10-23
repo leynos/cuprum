@@ -263,10 +263,10 @@ class GitHubActionsSession:
     def _emit_error_annotation(self, outcome: SessionOutcome) -> None:
         """Write one ``::error::`` workflow command for a failed run.
 
-        The title is the session's bounded annotation label — never the argv
-        a group may be titled with — and the message is the categorical
-        detail, so neither argument values nor exception text reach the
-        workflow log.
+        The title is the explicit non-empty title after configured redaction,
+        or the session's bounded annotation label when no title is set. It is
+        independent of an argv-derived group title. The message contains only
+        categorical detail, never exception text.
         """
         title = _escape_property(self._annotation_label)
         detail = outcome.detail or outcome.outcome.value
@@ -376,7 +376,6 @@ class GitHubActionsSink:
             emit_group=self.emit_group,
             emit_annotation=self.emit_annotation,
         )
-        # An argv-derived group title must never broaden the annotation label.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
             log,
