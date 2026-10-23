@@ -46,11 +46,11 @@ class SessionStart:
         metadata, not from argv, so secrets never reach it.
     argv:
         The full command vector (program followed by arguments) the run will
-        execute. Adapters that frame a run per command — for example a GitHub
-        Actions group titled with the program args — use this directly. It is
-        caller-controlled input: an adapter that surfaces it verbatim opts the
-        caller into displaying it (GitHub Actions groups are visible in the
-        workflow log regardless, because echoed child output is shown there).
+        execute. Adapters that frame a run per command may use this directly.
+        The GitHub Actions adapter uses it for a group title only when
+        ``argv_title=True`` and no explicit ``title`` is set. It is
+        caller-controlled input: an adapter that surfaces it opts the caller
+        into displaying it.
 
     """
 

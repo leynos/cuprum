@@ -23,10 +23,15 @@ _POLICY = RedactionPolicy(literals=(_SENTINEL,))
 def test_group_titles_redact_only_when_configured(
     redaction: RedactionPolicy | None,
 ) -> None:
-    """Configured titles hide argv values while defaults retain existing framing."""
+    """Configured policy redacts argv titles after explicit opt-in."""
     buffer = io.StringIO()
     start = SessionStart(label="project: cat", argv=("cat", _SENTINEL))
-    sink = GitHubActionsSink(buffer, force=True, redaction=redaction)
+    sink = GitHubActionsSink(
+        buffer,
+        force=True,
+        argv_title=True,
+        redaction=redaction,
+    )
 
     session = sink.open_session(start)
     assert session is not None, "a forced sink must activate"
@@ -35,7 +40,7 @@ def test_group_titles_redact_only_when_configured(
     rendered = buffer.getvalue()
     expected_value = "[REDACTED]" if redaction is _POLICY else _SENTINEL
     assert rendered.startswith(f"::group::cat {expected_value}\n"), (
-        "only an active configured policy must change the argv-derived title"
+        "an explicitly enabled argv title is redacted only by its policy"
     )
     annotation = next(
         line for line in rendered.splitlines() if line.startswith("::error ")
@@ -56,7 +61,12 @@ def test_redaction_precedes_workflow_command_escaping() -> None:
     policy = RedactionPolicy(
         patterns=(re.compile(re.escape(raw_value)),), mask="masked%\r\n"
     )
-    sink = GitHubActionsSink(buffer, force=True, redaction=policy)
+    sink = GitHubActionsSink(
+        buffer,
+        force=True,
+        argv_title=True,
+        redaction=policy,
+    )
     session = sink.open_session(
         SessionStart(label="project: cat,step%", argv=("cat", raw_value))
     )
@@ -80,6 +90,7 @@ def test_failed_title_redaction_writes_nothing() -> None:
     sink = GitHubActionsSink(
         buffer,
         force=True,
+        argv_title=True,
         redaction=RedactionPolicy(patterns=(re.compile(r"."),)),
     )
 
@@ -124,6 +135,7 @@ def test_annotation_only_does_not_redact_an_unused_argv_title() -> None:
         buffer,
         force=True,
         emit_group=False,
+        argv_title=True,
         redaction=_POLICY,
     )
 

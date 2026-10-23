@@ -1603,6 +1603,16 @@ from a worker thread; marshal back to the execution loop first.
 
 ### Presentation-sink session lifecycle
 
+`SessionStart` remains unchanged. Single-command sessions pass the full argv to
+sinks; pipeline sessions pass an empty argv tuple. Custom sinks own the
+disclosure policy for command-session argv. The GitHub Actions adapter renders
+`SessionStart.argv` only when `argv_title=True`, and an explicit `title` wins
+over that opt-in. With the opt-in, the group title is the plain space-joined
+argv. Otherwise, the group title is `start.label`. Its annotation title is
+`title or start.label`; pipelines use `pipeline` as their default label. Since
+the group header is written before the child starts and independently of echo
+and capture, argv titles can disclose secrets to job-log readers.
+
 When `RunOutputOptions.sink` is set, both runners owe the sink's session a
 close on every terminal path. The shared mechanics live in
 `cuprum/_sink_lifecycle.py`; the contract (see
@@ -1631,8 +1641,9 @@ close on every terminal path. The shared mechanics live in
   a completed run's exit code and `_outcome_for_error` maps timeout,
   cancellation, and earlier failures. A pipeline reports its first failing
   stage's exit code through `_pipeline_result_outcome`
-  (`cuprum/_pipeline_sink.py`). Only categorical detail reaches the adapter;
-  exception text and argv never do.
+  (`cuprum/_pipeline_sink.py`). Only categorical detail reaches the terminal
+  outcome; `SessionStart` still carries argv, and each adapter decides what to
+  project from it.
 - The close runs before the shielded task drain, deliberately: the drain can
   aggregate a failing after-hook or observe task into a `BaseExceptionGroup`,
   so closing afterwards would record the aggregate in place of the precise
@@ -2797,11 +2808,12 @@ the policy immediately before projection: structured logging before message and
 record construction, and tracing before attribute and span-event construction.
 `logging_hook()` applies it to the argv-derived start message.
 `GitHubActionsSink` applies it to every enabled emitted group or annotation
-title, including explicit titles, argv-derived group titles, and bounded
-fallback annotation labels. Disabled title outputs do not invoke redaction;
-mirrored child output remains unchanged. Custom observation consumers opt in by
-wrapping the hook with `redacting_hook(consumer, policy)` before registering it
-with `observe()`.
+title, including explicit titles, bounded fallback labels, and argv-derived
+group titles when `argv_title=True` is set. A group otherwise uses the bounded
+run label; an explicit title wins over the argv opt-in. Disabled title outputs
+do not invoke redaction; mirrored child output remains unchanged. Custom
+observation consumers opt in by wrapping the hook with
+`redacting_hook(consumer, policy)` before registering it with `observe()`.
 
 A failure in a configured rule raises `RedactionError`; export code propagates
 it and never retries with raw text. This follows the existing observer error

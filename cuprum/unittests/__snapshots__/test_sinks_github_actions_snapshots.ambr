@@ -1,0 +1,27 @@
+# serializer version: 1
+# name: test_title_command_variants_match_snapshot
+  dict({
+    'annotation_only': list([
+      '::error title=project%3A program::exit_nonzero',
+    ]),
+    'argv_title': list([
+      '::group::deploy --mode safe',
+      '::error title=project%3A program::exit_nonzero',
+    ]),
+    'default': list([
+      '::group::project: program',
+      '::error title=project%3A program::exit_nonzero',
+    ]),
+    'explicit_title': list([
+      '::group::Safe operation',
+      '::error title=Safe operation::exit_nonzero',
+    ]),
+    'group_only': list([
+      '::group::project: program',
+    ]),
+    'pipeline': list([
+      '::group::pipeline',
+      '::error title=pipeline::exit_nonzero',
+    ]),
+  })
+# ---

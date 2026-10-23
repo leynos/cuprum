@@ -2112,7 +2112,9 @@ The flags are independent, and both default to `False`:
 
 - `group=True` frames the run in a `::group::` / `::endgroup::` pair and
   protects echoed output with a stop-commands lease, so child output cannot
-  inject workflow commands. A pipeline receives one group for the whole run.
+  inject workflow commands. A single command's group title defaults to its
+  bounded run label, `"<project>: <program>"`; a pipeline receives one group
+  titled `pipeline` for the whole run.
 - `annotate_failure=True` writes one `::error::` annotation when the run ends
   in a non-zero exit, a timeout, or an error. On its own it frames no group and
   takes no lease: echoed output keeps its usual destinations, and child output
@@ -2141,7 +2143,19 @@ framing locally, `emit_group=False` / `emit_annotation=False` to switch off
 either half of the frame, or `redaction=policy` to mask group and annotation
 titles (see [Keep secrets out of telemetry](#keep-secrets-out-of-telemetry)).
 The flags have no redaction setting, and redaction never alters the mirrored
-child output.
+child output. The default single-command title is the bounded run label
+`"<project>: <program>"`; an explicit `title` takes precedence over
+`argv_title=True`. Pipelines continue to use `pipeline` by default.
+
+The group header is written before the child starts, regardless of `echo` or
+`capture`. `argv_title=True` writes the full program and every argument to the
+job log, joined with plain spaces, without shell quoting. Arguments may contain
+secrets, so enable this only when that disclosure is intentional. A
+caller-provided `title`, project name and program name also enter workflow
+logs. Workflow-command escaping protects the command syntax; it does not redact
+values. See the
+[structured logging argv warning](#keep-secrets-out-of-telemetry) for the same
+disclosure concern in telemetry records.
 
 <!-- tested-example: github-actions-sink -->
 
@@ -2162,6 +2176,36 @@ result = python("-c", "print('building')").run_sync(
 assert result.ok and result.stdout == "building\n"
 assert workflow_log.getvalue().startswith("::group::Build")
 ```
+
+To use command arguments as a group title, opt in explicitly:
+
+<!-- tested-example: github-actions-argv-title -->
+
+```python
+import io
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="ci-argv")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+workflow_log = io.StringIO()
+sink = GitHubActionsSink(workflow_log, argv_title=True, force=True)
+command = python("-c", "print('building')", "--target", "release")
+result = command.run_sync(output=RunOutputOptions(echo=False, sink=sink))
+assert result.ok
+assert workflow_log.getvalue().splitlines()[0] == (
+    f"::group::{' '.join(command.argv_with_program)}"
+)
+```
+
+That title includes every argument, including credentials if they are present.
+Caller-provided titles and the project and program names in the default label
+also enter workflow logs. Escaping does not redact them; configure
+`redaction=policy` or use safe values. Structured logging and tracing have the
+same argv disclosure risk; see
+[Keep secrets out of telemetry](#keep-secrets-out-of-telemetry).
 
 #### Keep blocking writes off the run loop
 

@@ -135,3 +135,17 @@ notes, or caller tag values.
   or custom observation export must receive a policy or a redacting wrapper.
 - A rule failure propagates through the existing observe-hook error path and
   can fail a command call before, during, or after child execution.
+
+### Amendment (2026-10-19): bounded GitHub Actions group titles
+
+Security finding `csf_0258c8ba4380b545fdf90ac9`, tracked in
+[issue #535](https://github.com/leynos/cuprum/issues/535), showed that the
+group header writes its title to the job log before the child starts,
+regardless of echo or capture settings. The adapter now uses the bounded run
+label by default; only `argv_title=True` opts into the complete, space-joined
+argument vector. An explicit `title` takes precedence and is itself written to
+the log. Redaction still applies to each title the sink emits before
+workflow-command escaping. Escaping protects workflow syntax and does not
+redact values. The accepted outcome's reference to argv-derived group titles
+means only titles explicitly emitted through `argv_title=True`; it does not
+describe the default group title.

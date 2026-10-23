@@ -1,0 +1,320 @@
+"""Real-child tests for GitHub Actions output convenience flags."""
+
+from __future__ import annotations
+
+import asyncio
+import collections.abc as cabc
+from pathlib import Path
+
+import pytest
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
+from cuprum._sink_lifecycle import _run_label
+from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
+from cuprum.sinks.github_actions import _escape_property
+from cuprum.unittests.test_sinks_end_to_end import (
+    _ON_CI,
+    _annotations,
+    _flags_output,
+    _python_command,
+    _stop_token,
+)
+from tests.helpers.catalogue import python_catalogue
+
+_PipelineRunner = cabc.Callable[[Pipeline, RunOutputOptions], PipelineResult]
+
+
+def _run_pipeline_sync(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> PipelineResult:
+    """Run a pipeline through its synchronous entry point."""
+    return pipeline.run_sync(output=output)
+
+
+def _run_pipeline_async(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> PipelineResult:
+    """Run a pipeline through its asynchronous entry point."""
+    return asyncio.run(pipeline.run(output=output))
+
+
+def test_flags_annotate_async_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The async command entry point applies both convenience flags."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("raise SystemExit(5)")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = asyncio.run(
+            command.run(
+                output=_flags_output(group=True, annotate_failure=True),
+            )
+        )
+
+    value = capsys.readouterr().err
+    assert result.exit_code == 5, f"the failing run must report 5; got {result!r}"
+    assert value.count("::group::") == 1, "the async run must open one group"
+    assert value.count("::endgroup::") == 1, "the async run must close one group"
+    assert _annotations(value) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "the async run must annotate its categorical failure"
+
+
+def test_flags_annotate_non_zero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``annotate_failure`` alone annotates, and frames no group.
+
+    The annotation toggle is independent of the group toggle, so this is the
+    combination that buys a run-summary entry without collapsible logs: the
+    output is otherwise untouched, and the run's arguments appear nowhere at
+    all.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
+    command, allowlist = _python_command("raise SystemExit(3)", secret)
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(output=_flags_output(annotate_failure=True))
+
+    value = capsys.readouterr().err
+    assert result.exit_code == 3, f"the failing run must report 3; got {result!r}"
+    assert "::group::" not in value, f"annotate-only must frame no group; got {value!r}"
+    assert _annotations(value) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "the annotation names the program and no arguments"
+    assert secret not in value, (
+        f"a group-less run must not publish argv anywhere; got {value!r}"
+    )
+
+
+def test_annotation_only_preserves_echo_destinations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An annotation-only session leaves stdout and stderr echo in place."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command(
+        "import sys; print('child stdout'); print('child stderr', file=sys.stderr); "
+        "raise SystemExit(6)"
+    )
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(
+            output=RunOutputOptions(echo=True, annotate_failure=True),
+        )
+
+    value = capsys.readouterr()
+    assert result.exit_code == 6, f"the failing run must report 6; got {result!r}"
+    assert value.out == "child stdout\n", (
+        f"stdout echo must keep its original destination; got {value.out!r}"
+    )
+    assert value.err.startswith("child stderr\n"), (
+        f"stderr echo must keep its original destination; got {value.err!r}"
+    )
+    assert "::group::" not in value.err, (
+        f"annotation-only output must not open a group; got {value.err!r}"
+    )
+    assert "::stop-commands::" not in value.err, (
+        f"annotation-only output must not open a stop-commands lease; got {value.err!r}"
+    )
+    assert _annotations(value.err) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "the workflow annotation remains on the parent's stderr"
+
+
+def test_flags_annotate_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A timed-out run annotates with the categorical ``timeout`` detail.
+
+    The detail is the category, never the exception text or the command's
+    arguments, so a run that fails by running too long reports that fact and
+    nothing more.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command(
+        "import time; time.sleep(30)",
+        "--token=s3cret-token-9f2aXq7",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        pytest.raises(sh.TimeoutExpired),
+    ):
+        command.run_sync(output=_flags_output(annotate_failure=True), timeout=0.5)
+
+    value = capsys.readouterr().err
+    assert _annotations(value) == [
+        f"title={_escape_property(_run_label(command))}::timeout",
+    ], "a timeout must annotate with its categorical detail"
+    assert "s3cret-token-9f2aXq7" not in value, (
+        f"neither exception text nor argv may reach the annotation; got {value!r}"
+    )
+
+
+def test_flags_annotate_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A run that never spawns annotates with the categorical ``error`` detail."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    _, python_program = python_catalogue()
+    python_path = Path(python_program)
+    absent_path = python_path.with_name(f"{python_path.name}.does-not-exist")
+    absent_program = Program(str(absent_path))
+    absent = sh.make(
+        absent_program,
+        catalogue=ProgramCatalogue.from_programs(
+            absent_program,
+            name="absent-program",
+        ),
+    )("-c", "pass")
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([absent_program]))),
+        pytest.raises(FileNotFoundError),
+    ):
+        absent.run_sync(output=_flags_output(annotate_failure=True))
+
+    value = capsys.readouterr().err
+    assert _annotations(value) == [
+        f"title={_escape_property(_run_label(absent))}::error",
+    ], "an internal error reports its category and no exception text"
+
+
+def test_flags_leave_default_output_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Options carrying the flags switched off are inert, byte for byte.
+
+    The comparison is against the *same* run built with the flags absent
+    entirely, so this asserts the acceptance criterion directly rather than
+    asserting a shape that merely looks unflagged. ``echo=True`` still mirrors
+    to stdout in both cases: the flags are presentation-only, so they must not
+    redirect a run's own destinations, let alone its capture.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("print('inside the group')")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        flagged_off = command.run_sync(output=_flags_output())
+    defaulted = capsys.readouterr()
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        unflagged_result = command.run_sync(output=RunOutputOptions(echo=True))
+    unflagged = capsys.readouterr()
+
+    assert flagged_off.ok is True, (
+        f"the flagged-off run must succeed; got {flagged_off.exit_code}"
+    )
+    assert unflagged_result.ok is True, (
+        f"the unflagged run must succeed; got {unflagged_result.exit_code}"
+    )
+    # Only the outcome-bearing fields: two runs of one command differ in
+    # ``pid``, ``started_at``, and ``duration`` whatever the options say.
+    observed = ("program", "argv", "exit_code", "stdout", "stderr")
+    assert [getattr(flagged_off, field) for field in observed] == [
+        getattr(unflagged_result, field) for field in observed
+    ], "the flags switched off must leave the result unchanged"
+    assert (defaulted.out, defaulted.err) == (unflagged.out, unflagged.err), (
+        f"flags off must write byte-for-byte what an unflagged run writes; "
+        f"got {(defaulted.out, defaulted.err)!r} and "
+        f"{(unflagged.out, unflagged.err)!r}"
+    )
+    assert "::" not in defaulted.err, (
+        f"flags off must write no workflow commands; got {defaulted.err!r}"
+    )
+
+
+def test_flags_stop_commands_neutralize_child_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A child cannot close the group the flags opened, or spoof an annotation.
+
+    The lease is the reason the flags can claim the framing is injection-safe,
+    so it is asserted through the flag path rather than only through a
+    hand-built sink.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command(
+        "print('::endgroup::'); print('::error title=child::spoofed')",
+    )
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(output=_flags_output(group=True))
+
+    value = capsys.readouterr().err
+    assert result.ok is True, f"the framed run must still succeed; got {result!r}"
+    assert result.stdout == "::endgroup::\n::error title=child::spoofed\n", (
+        f"capture must be unchanged by the lease; got {result.stdout!r}"
+    )
+    release = f"::{_stop_token(value)}::\n"
+    assert value.index("::error title=child::spoofed") < value.index(release), (
+        "the child's spoofed annotation must precede the lease release"
+    )
+    assert value.index("::endgroup::\n") < value.index(release), (
+        "the child's spoofed endgroup must precede the lease release"
+    )
+    assert value.index(release) < value.rindex("::endgroup::\n"), (
+        "the session's own endgroup must follow the lease release"
+    )
+
+
+@pytest.mark.parametrize(
+    ("run_pipeline", "failure_code"),
+    [
+        pytest.param(_run_pipeline_sync, 4, id="sync"),
+        pytest.param(_run_pipeline_async, 7, id="async"),
+    ],
+)
+def test_flags_annotate_pipeline_as_single_group(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    run_pipeline: _PipelineRunner,
+    failure_code: int,
+) -> None:
+    """Both pipeline entry points frame one group and annotate its failure.
+
+    The adapter opens one session per run and a pipeline *is* one run, so the
+    group count is one and not one per stage — the reading the ExecPlan records
+    for the ticket's "one group per command" criterion. The parameter table
+    preserves each entry point's distinct execution path and child exit code.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", "print('piped')")
+    failing = python(
+        "-c",
+        f"import sys; sys.stdin.read(); raise SystemExit({failure_code})",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = run_pipeline(
+            producer | failing,
+            _flags_output(group=True, annotate_failure=True),
+        )
+
+    value = capsys.readouterr().err
+    codes = [stage.exit_code for stage in result.stages]
+    assert codes == [0, failure_code], (
+        f"both stages must report their own exit code; got {codes}"
+    )
+    assert value.count("::group::") == 1, (
+        f"one pipeline opens one group, not one per stage; got {value!r}"
+    )
+    assert value.startswith("::group::pipeline\n"), (
+        f"a pipeline titles its group 'pipeline'; got {value!r}"
+    )
+    assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
+        f"the annotation must report the pipeline's categorical outcome; got {value!r}"
+    )

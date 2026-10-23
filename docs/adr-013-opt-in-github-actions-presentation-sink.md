@@ -269,3 +269,26 @@ explicit even if it came from another object's flag-generated adapter; its
 concrete type does not determine precedence. The default adapter does not
 serialize concurrent sessions, so grouped commands that write to the same
 parent stderr must run sequentially to keep their workflow frames intact.
+
+### Amendment (2026-10-19): bounded group titles by default
+
+Security finding `csf_0258c8ba4380b545fdf90ac9`, tracked in
+[issue #535](https://github.com/leynos/cuprum/issues/535), showed that
+argv-derived group titles could put secret-bearing arguments in a job log
+before the child started. The group header is written while opening the
+session, regardless of echo or capture settings. Keep `SessionStart` and the
+lifecycle bracket unchanged; the adapter now uses the bounded run label unless
+the caller sets `argv_title=True` or supplies `title`. A supplied title takes
+precedence over the argv opt-in. The annotation title remains
+`title or start.label`, and a pipeline's default label remains `pipeline`.
+
+This amendment supersedes the single-command argv-title default described in
+the accepted decision driver and framing order item 1. The remaining accepted
+framing decisions are unchanged.
+
+`argv_title=True` deliberately publishes the complete program and argument
+vector joined with plain spaces, without shell quoting. Caller-supplied titles,
+project names and program names also enter workflow logs. Workflow-command
+escaping protects the command syntax; it does not redact values. Callers that
+put sensitive values in any of these fields must configure a redaction policy
+or choose safe labels.
