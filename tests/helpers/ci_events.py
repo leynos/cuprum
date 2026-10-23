@@ -38,6 +38,15 @@ OWNED_PULL_REQUEST: typ.Final = {
     "fork": False,
     "ref": "refs/pull/1/merge",
 }
+#: A pull request Dependabot opened from a branch of this repository. The fork
+#: field is false and the author login names the bot, which is what takes the
+#: hosted arm.
+DEPENDABOT_PULL_REQUEST: typ.Final = {
+    "event_name": "pull_request",
+    "fork": False,
+    "author": "dependabot[bot]",
+    "ref": "refs/pull/1/merge",
+}
 #: A push to the default branch. There is no pull-request payload, so the fork
 #: field is absent, which GitHub evaluates as falsy.
 PUSH_TO_MAIN: typ.Final = {
@@ -135,10 +144,11 @@ def _select(
         return tuple(sorted(placed.labels))
     if placed.kind == "literal":
         return (typ.cast("str", placed.owned),)
-    # The fork fallback. GitHub evaluates the condition against the event
-    # payload: absent on a push, false on an owned pull request, true on a
-    # fork's. Only a truthy value takes the hosted arm.
-    takes_fork_arm = bool(event.get("fork"))
+    # The hosted arm. GitHub evaluates the condition against the event
+    # payload: the fork field is absent on a push, false on an owned pull
+    # request and true on a fork's, and the author login is that of the pull
+    # request's opener. A fork, or the Dependabot author, takes the hosted arm.
+    takes_fork_arm = bool(event.get("fork")) or event.get("author") == "dependabot[bot]"
     return (typ.cast("str", placed.fork if takes_fork_arm else placed.owned),)
 
 

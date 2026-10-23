@@ -21,6 +21,7 @@ import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
 from tests.helpers.ci_events import (
+    DEPENDABOT_PULL_REQUEST,
     FORK_PULL_REQUEST,
     OWNED_PULL_REQUEST,
     PUSH_TO_MAIN,
@@ -58,6 +59,7 @@ MINIMUM_REVIEWED_LANES: typ.Final = 4
 PULL_REQUEST_ONLY_LANE: typ.Final = ("ci.yml", "coverage")
 EVENTS: typ.Final = {
     "fork": FORK_PULL_REQUEST,
+    "dependabot": DEPENDABOT_PULL_REQUEST,
     "owned": OWNED_PULL_REQUEST,
     "push": PUSH_TO_MAIN,
 }
@@ -94,6 +96,14 @@ def _fork_pull_request(selection: dict[str, object]) -> None:
     """Resolve the schedule for a pull request from a fork."""
     selection["scheduled"] = schedule(
         typ.cast("str", selection["workflow"]), FORK_PULL_REQUEST
+    )
+
+
+@when("a pull request is opened by Dependabot from a branch of this repository")
+def _dependabot_pull_request(selection: dict[str, object]) -> None:
+    """Resolve the schedule for a pull request Dependabot opened."""
+    selection["scheduled"] = schedule(
+        typ.cast("str", selection["workflow"]), DEPENDABOT_PULL_REQUEST
     )
 
 
@@ -274,6 +284,11 @@ def test_an_owned_pull_request_keeps_the_paid_lane() -> None:
 @scenario(FEATURE, "a fork's pull request selects only runners a fork can obtain")
 def test_a_fork_pull_request_is_schedulable() -> None:
     """A fork's pull request never waits on a runner it cannot be given."""
+
+
+@scenario(FEATURE, "Dependabot's pull request selects only hosted runners")
+def test_a_dependabot_pull_request_takes_the_hosted_arm() -> None:
+    """Run the Dependabot pull-request scenario."""
 
 
 @scenario(FEATURE, "a push to the default branch takes the owned arm")
