@@ -13,9 +13,45 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from cuprum.sinks._github_actions_titles import _session_titles
-from cuprum.sinks.base import SessionStart
+from cuprum.sinks import SessionOutcome, TerminalOutcome
 from cuprum.sinks.github_actions import _escape_data, _escape_property
+from cuprum.unittests.test_sinks_github_actions import _open_gha_session
+
+
+def _assert_session_commands(
+    argv: tuple[str, ...],
+    *,
+    group_title: str,
+    annotation_title: str,
+    argv_title: bool = False,
+    title: str | None = None,
+) -> None:
+    """Assert the adapter emits the expected escaped group and annotation."""
+    if title is not None:
+        session, buffer = _open_gha_session(
+            argv,
+            sink_options={"title": title, "argv_title": argv_title},
+        )
+    elif argv_title:
+        session, buffer = _open_gha_session(
+            argv,
+            sink_options={"argv_title": True},
+        )
+    else:
+        session, buffer = _open_gha_session(argv)
+
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
+    output = buffer.getvalue()
+    expected_group = f"::group::{_escape_data(group_title)}"
+    assert output.split("\n", maxsplit=1)[0] == expected_group, (
+        f"expected group command {expected_group!r}; got {output!r}"
+    )
+    expected_annotation = (
+        f"::error title={_escape_property(annotation_title)}::exit_nonzero\n"
+    )
+    assert expected_annotation in output, (
+        f"expected annotation command {expected_annotation!r}; got {output!r}"
+    )
 
 
 def _unescape_data(value: str) -> str:
@@ -80,31 +116,26 @@ def test_session_titles_keep_argv_out_of_default_titles(
     argv: tuple[str, ...],
     title: str,
 ) -> None:
-    """Only explicit options may put argv into a group title."""
-    start = SessionStart(label="project: program", argv=argv)
-
-    default = _session_titles(start, None, argv_title=False)
-    assert default.group == start.label, (
-        f"default group titles must use the bounded label; got {default.group!r}"
-    )
-    assert default.annotation == start.label, (
-        "default annotation titles must use the bounded label; "
-        f"got {default.annotation!r}"
+    """Only explicit options may put argv into emitted workflow commands."""
+    label = "project: program"
+    _assert_session_commands(
+        argv,
+        group_title=label,
+        annotation_title=label,
     )
 
-    opted_in = _session_titles(start, None, argv_title=True)
-    expected_argv_title = " ".join(argv) if argv else start.label
-    assert opted_in.group == expected_argv_title, (
-        f"argv titles must use the explicit opt-in; got {opted_in.group!r}"
-    )
-    assert opted_in.annotation == start.label, (
-        f"argv opt-in must not change annotation titles; got {opted_in.annotation!r}"
+    expected_argv_title = " ".join(argv) if argv else label
+    _assert_session_commands(
+        argv,
+        group_title=expected_argv_title,
+        annotation_title=label,
+        argv_title=True,
     )
 
-    overridden = _session_titles(start, title, argv_title=True)
-    assert overridden.group == title, (
-        f"an explicit title must take precedence over argv; got {overridden.group!r}"
-    )
-    assert overridden.annotation == (title or start.label), (
-        "annotation titles must retain the explicit-title fallback rule"
+    _assert_session_commands(
+        argv,
+        group_title=title,
+        annotation_title=title or label,
+        argv_title=True,
+        title=title,
     )
