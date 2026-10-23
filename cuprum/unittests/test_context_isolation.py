@@ -7,9 +7,13 @@ import concurrent.futures
 import threading
 import typing as typ
 
+import pytest
+
+from cuprum import sh
 from cuprum.catalogue import ECHO, LS, ProgramCatalogue
 from cuprum.context import (
     EnvMode,
+    ForbiddenProgramError,
     ScopeConfig,
     current_context,
     env,
@@ -287,3 +291,70 @@ def test_a_child_scope_binding_leaves_sibling_bindings_intact() -> None:
         ) == ("/opt/tools/outer-echo", "/opt/tools/ls"), (
             "leaving the inner scope must restore the outer binding"
         )
+
+
+def test_one_preconstructed_manager_intersects_concurrent_task_parents() -> None:
+    """Concurrent entries use their task-local parent policies and tokens."""
+    manager = scoped(ScopeConfig(allowlist=frozenset([ECHO, LS])))
+    echo_command = sh.make(ECHO)("echo")
+    ls_command = sh.make(LS)()
+    original = current_context()
+
+    async def task_worker(parent_program: Program) -> tuple[bool, bool]:
+        """Enter the shared manager and reject the excluded command."""
+        with scoped(
+            ScopeConfig(allowlist=frozenset([parent_program]))
+        ) as parent_context:
+            with manager as context:
+                await asyncio.sleep(0)
+                assert context.allowlist == frozenset([parent_program]), (
+                    "each task entry must intersect with its own parent allowlist"
+                )
+                excluded_command = (
+                    ls_command if parent_program is ECHO else echo_command
+                )
+                with pytest.raises(ForbiddenProgramError):
+                    await excluded_command.run()
+            parent_was_restored = current_context() is parent_context
+        task_context_was_restored = current_context() is original
+        return parent_was_restored, task_context_was_restored
+
+    async def run_tasks() -> tuple[tuple[bool, bool], tuple[bool, bool]]:
+        """Overlap both entries of the shared manager across tasks."""
+        results = await asyncio.gather(task_worker(ECHO), task_worker(LS))
+        return results[0], results[1]
+
+    assert asyncio.run(run_tasks()) == ((True, True), (True, True)), (
+        "each task must restore its parent and then its original context"
+    )
+    assert current_context() is original, (
+        "concurrent task entries must not change the caller's context"
+    )
+
+
+def test_manager_reuse_in_distinct_tasks_uses_the_new_parent() -> None:
+    """A later task cannot inherit a previous task's broader policy."""
+    manager = scoped(ScopeConfig(allowlist=frozenset([ECHO, LS])))
+    original = current_context()
+
+    async def enter_under(allowlist: frozenset[Program] | None) -> frozenset[Program]:
+        """Return the manager allowlist under one task's parent policy."""
+        with scoped(ScopeConfig(allowlist=allowlist)), manager as context:
+            await asyncio.sleep(0)
+            return context.allowlist
+
+    async def run_tasks() -> tuple[frozenset[Program], frozenset[Program]]:
+        """Run the shared manager in separate broad and narrow tasks."""
+        broad_task = asyncio.create_task(enter_under(None))
+        broad = await broad_task
+        narrow_task = asyncio.create_task(enter_under(frozenset([ECHO])))
+        narrow = await narrow_task
+        return broad, narrow
+
+    assert asyncio.run(run_tasks()) == (
+        frozenset([ECHO, LS]),
+        frozenset([ECHO]),
+    ), "each reuse must derive its allowlist from the task's own parent"
+    assert current_context() is original, (
+        "task reuse must not change the caller's context"
+    )

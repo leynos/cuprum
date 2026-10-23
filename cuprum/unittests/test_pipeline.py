@@ -129,6 +129,39 @@ def test_pipeline_run_sync_enforces_scoped_allowlist() -> None:
         pipeline.run_sync()
 
 
+def test_pipeline_preconstructed_scope_rejects_before_stage_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prepared manager cannot widen policy or start a forbidden stage."""
+    import cuprum._pipeline_internals as pipeline_internals
+
+    echo = sh.make(ECHO)
+    ls = sh.make(LS)
+    pipeline = echo("hello") | ls()
+    manager = scoped(ScopeConfig(allowlist=frozenset([ECHO, LS])))
+    spawn_attempts: list[bool] = []
+
+    def fail_if_spawning(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        """Fail if allowlist rejection reaches the process-spawn boundary."""
+        spawn_attempts.append(True)
+        pytest.fail("a forbidden pipeline must fail before stage spawning")
+
+    monkeypatch.setattr(
+        pipeline_internals,
+        "_spawn_pipeline_processes",
+        fail_if_spawning,
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))),
+        manager,
+        pytest.raises(ForbiddenProgramError, match="ls"),
+    ):
+        pipeline.run_sync()
+
+    assert not spawn_attempts, "a forbidden pipeline must fail before any stage spawns"
+
+
 def _run_test_pipeline(
     stages_exit_codes: list[int],
 ) -> PipelineResult:

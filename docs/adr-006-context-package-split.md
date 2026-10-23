@@ -63,7 +63,17 @@ ______________________________________________________________________
 `_ScopedContext` and `scoped` now live in `cuprum/context/scoped.py`. This
 module derives a scope from either `ScopeConfig` or a `ProgramCatalogue` and
 uses the context-state helpers to activate and restore the narrowed
-`CuprumContext`. `registration.py` re-exports `scoped` for compatibility; the
+`CuprumContext`. The context-local entry stack and its token operations also
+belong in `state.py`; `scoped.py` retains manager lifecycle and policy
+derivation. `registration.py` re-exports `scoped` for compatibility; the
 package-level exports remain the public import path. New scoped-context
 behaviour belongs in `scoped.py`, while registration handles and factories
 remain in `registration.py`.
+
+A rejected exit emits a warning lifecycle record before propagating its
+required LIFO or context error. This is an intentional exception to the
+single-boundary logging rule.
+
+The line-iteration regression uses the shared `python_builder` fixture from
+`cuprum.unittests._safe_cmd_lines_support`. This keeps catalogue setup aligned
+with the repository's established command-builder test path.

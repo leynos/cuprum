@@ -384,9 +384,50 @@ command execution in a logical scope:
 Internally, a `ContextVar[CuprumContext]` holds the current context. Public APIs
 (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled way.
 
-Contexts are nested: entering a new `with sh.scoped(ScopeConfig(...))` creates
-a derived context, and exiting restores the previous one. This behaves
-correctly across threads and async tasks.
+Each `scoped()` entry derives its context from the context active at entry,
+then restores that exact parent on exit. The context-state module holds an
+immutable last in, first out (LIFO) stack of `(manager, token)` entries in a
+`ContextVar`. This lets one manager be reused sequentially or nested without
+sharing mutable token state, and keeps concurrent async task entries isolated.
+An out-of-order, foreign-manager, or foreign-context exit raises `RuntimeError`
+before changing either context.
+
+For screen readers: The diagram shows a scope manager moving from prepared to
+active on entry. It permits nested or repeated entry. An inner LIFO exit
+restores the outer active context. An outermost LIFO exit restores the prepared
+state. An out-of-order, foreign-manager, or foreign-context exit by an active
+manager reports an error and leaves the active context unchanged. Calling
+`__exit__()` on a prepared manager while another scope is active is also
+rejected; the manager, entry stack and active context remain unchanged.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepared: scoped(config)
+    Prepared --> Active: __enter__()
+    Active --> Active: nested or reused __enter__()
+    Active --> Active: inner __exit__() in LIFO order
+    Active --> Prepared: outermost __exit__() in LIFO order
+    Active --> Error: out-of-order, foreign-manager, or foreign-context __exit__()
+    Prepared --> Error: unmatched __exit__() during another active scope
+    Error --> Active: context unchanged
+    Error --> Prepared: manager and context unchanged
+    Prepared --> [*]
+```
+
+*Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
+restoration.*
+
+Scope lifecycle records use `DEBUG` for entry and successful exit, and
+`WARNING` for a rejected exit. Their structured fields identify the operation,
+transition, outcome, restriction state and allowlist cardinality. They omit
+manager representations, restoration tokens and program names.
+
+These checks guard different boundaries. Entry-time narrowing prevents a
+preconstructed scope manager from widening the context it enters. Deferred
+line-stream authorization runs on the first pull because `SafeCmd.lines()` does
+not spawn until then; it checks the context of the task that consumes the
+stream. Keep both checks so an earlier, broader manager or prepared stream
+cannot evade the context active when execution begins.
 
 ### 5.4 Hooks
 
@@ -1006,7 +1047,7 @@ from cmds import GIT
 
 
 async def deploy():
-    async with sh.scoped(
+    with sh.scoped(
         ScopeConfig(
             allowlist=frozenset([GIT]),
             before_hooks=(audit_hook,),
@@ -1019,13 +1060,14 @@ async def deploy():
 
 `sh.scoped` semantics:
 
-- Derive a new context from the current one.
-- Optionally **narrow** the allowlist to the provided set (typically an
-  intersection with the parent’s allowlist; exact rule is to be defined but
-  must never silently introduce programs unknown to the baseline configuration
-  in “safe” mode).
+- Derive a new context from the context active at each entry.
+- Intersect the provided allowlist with a restricted parent's allowlist. An
+  unrestricted empty parent can establish a base allowlist; a restricted empty
+  parent remains empty.
 - Extend hooks with the provided `before`/`after` lists.
 - Restore the previous context on exit.
+- Require nested entries to exit in LIFO order. Use `allow()` for explicit
+  widening.
 
 #### 6.2.5 Hooks via `sh.before` / `sh.after`
 

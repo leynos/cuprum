@@ -1,40 +1,46 @@
-"""Create narrowed execution contexts from configuration or catalogues.
+"""Create entry-time narrowed execution contexts from configuration or catalogues.
 
 ``scoped`` accepts either a ``ScopeConfig`` or a ``ProgramCatalogue`` and
-returns a context manager that activates a narrowed ``CuprumContext``. The
-context-state helpers set the context on entry and restore its previous value
-on exit, including when the managed block raises.
+returns a context manager that derives and activates a narrowed
+``CuprumContext`` on each entry. A context-local entry stack pairs each use with
+its own restoration token, including when a manager is reused or nested.
 """
 
 from __future__ import annotations
 
+import logging
 import typing as typ
 
 from cuprum.catalogue import (
     ProgramCatalogue,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 from cuprum.context.core import CuprumContext, ScopeConfig
-from cuprum.context.state import _reset_context, _set_context, current_context
+from cuprum.context.state import (
+    _push_scoped_entry,
+    _reset_scoped_entry,
+    _set_context,
+    current_context,
+)
 
-if typ.TYPE_CHECKING:
-    from contextvars import Token
+_logger = logging.getLogger(__name__)
 
 
 class _ScopedContext:
-    """Context manager for entering a scoped execution context."""
+    """Context manager that derives its execution policy on each entry."""
 
-    __slots__ = ("_ctx", "_token")
+    __slots__ = ("_config",)
 
     def __init__(self, config: ScopeConfig) -> None:
-        """Narrow the current context with ``config`` for later entry."""
-        parent = current_context()
-        self._ctx = parent.narrow(config)
-        self._token: Token[CuprumContext] | None = None
+        """Store the validated configuration for later entry."""
+        self._config = config
 
     def __enter__(self) -> CuprumContext:
-        """Activate the scoped context and return it."""
-        self._token = _set_context(self._ctx)
-        return self._ctx
+        """Narrow the active context, install it, and return the result."""
+        context = current_context().narrow(self._config)
+        token = _set_context(context)
+        _push_scoped_entry(self, token)
+        _log_scope_transition("enter", "success", context)
+        return context
 
     def __exit__(
         self,
@@ -42,9 +48,35 @@ class _ScopedContext:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Restore the previous context on scope exit."""
-        if self._token is not None:
-            _reset_context(self._token)
+        """Restore this entry's parent context in last-in, first-out order."""
+        context = current_context()
+        try:
+            _reset_scoped_entry(self)
+        except RuntimeError:
+            # Rejected exits require a lifecycle record before the error propagates.
+            _log_scope_transition("exit", "rejected", context)
+            raise
+        _log_scope_transition("exit", "success", context)
+
+
+def _log_scope_transition(
+    transition: typ.Literal["enter", "exit"],
+    outcome: typ.Literal["success", "rejected"],
+    context: CuprumContext,
+) -> None:
+    """Emit a scope lifecycle record without policy or token contents."""
+    log = _logger.warning if outcome == "rejected" else _logger.debug
+    log(
+        "Scoped context lifecycle transition",
+        extra={
+            "cuprum_action": "scope_lifecycle",
+            "operation": "scoped_context",
+            "transition": transition,
+            "outcome": outcome,
+            "restricted_state": context._allowlist_is_restricted,
+            "policy_cardinality": len(context.allowlist),
+        },
+    )
 
 
 def scoped(
@@ -67,7 +99,17 @@ def scoped(
     Returns
     -------
     _ScopedContext
-        A context manager that narrows the current context.
+        A reusable context manager that narrows the context active at entry.
+
+    Raises
+    ------
+    TypeError
+        If neither, or both, ``config`` and ``catalogue`` are supplied.
+
+    Notes
+    -----
+    Each entry derives policy from the context active at that moment. Nested and
+    sequential entries are safe, and each entry must exit in LIFO order.
 
     Example
     -------
@@ -76,11 +118,6 @@ def scoped(
     >>> catalogue = ProgramCatalogue.from_programs(ECHO)
     >>> with scoped(catalogue=catalogue) as ctx:
     ...     assert ctx.is_allowed(ECHO)
-
-    Raises
-    ------
-    TypeError
-        If neither, or both, ``config`` and ``catalogue`` are supplied.
     """
     if config is not None:
         if catalogue is not None:
