@@ -9,6 +9,7 @@ the scope that happened to be active when the stream was built.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -179,22 +180,46 @@ def test_lines_allowed_by_the_consuming_scope_runs_once(
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _DeadlineCase:
+    """One row of the deadline-precedence table.
+
+    The three values travel together because they only mean anything as a set:
+    a row is "these two inputs must resolve to this deadline". Keeping them in
+    one object also keeps the test signature about the fixtures it needs rather
+    than about how many columns the table happens to have.
+    """
+
+    explicit: float | None
+    context_timeout: float | None
+    expected: float
+
+
 @pytest.mark.parametrize(
-    ("explicit", "context_timeout", "expected"),
+    "case",
     [
-        pytest.param(None, None, 30.0, id="explicit-none-falls-through"),
-        pytest.param(7.0, None, 7.0, id="explicit-timeout-wins"),
-        pytest.param(None, 11.0, 11.0, id="context-timeout-wins-over-scope"),
-        pytest.param(7.0, 11.0, 7.0, id="explicit-wins-over-context"),
+        pytest.param(
+            _DeadlineCase(None, None, 30.0),
+            id="explicit-none-falls-through",
+        ),
+        pytest.param(
+            _DeadlineCase(7.0, None, 7.0),
+            id="explicit-timeout-wins",
+        ),
+        pytest.param(
+            _DeadlineCase(None, 11.0, 11.0),
+            id="context-timeout-wins-over-scope",
+        ),
+        pytest.param(
+            _DeadlineCase(7.0, 11.0, 7.0),
+            id="explicit-wins-over-context",
+        ),
     ],
 )
 def test_lines_resolve_the_deadline_when_consumed(
     python_builder: cabc.Callable[..., SafeCmd],
     spawn_recorder: _SpawnRecorder,
-    *,
-    explicit: float | None,
-    context_timeout: float | None,
-    expected: float,
+    case: _DeadlineCase,
 ) -> None:
     """The timeout is re-resolved for the consuming scope, not the building one.
 
@@ -210,11 +235,11 @@ def test_lines_resolve_the_deadline_when_consumed(
     value beats ``ExecutionContext.timeout``, which beats the consuming scope.
     """
     command = python_builder("-c", "pass")
-    context = ExecutionContext(timeout=context_timeout)
+    context = ExecutionContext(timeout=case.context_timeout)
 
     async def collect() -> None:
         """Build in one scope, then consume in another."""
-        stream = command.lines(timeout=explicit, context=context)
+        stream = command.lines(timeout=case.explicit, context=context)
         async with stream:
             with scoped(ScopeConfig(timeout=30.0)):
                 async for _event in stream:
@@ -228,8 +253,9 @@ def test_lines_resolve_the_deadline_when_consumed(
         f"{len(spawn_recorder.executions)}"
     )
     resolved = spawn_recorder.executions[0].timeout
-    assert resolved == expected, (
-        f"the spawn must receive the resolved deadline {expected!r}, got {resolved!r}"
+    assert resolved == case.expected, (
+        f"the spawn must receive the resolved deadline {case.expected!r}, "
+        f"got {resolved!r}"
     )
 
 

@@ -3502,11 +3502,15 @@ For screen readers: The following state diagram shows the lifecycle of a
 prepared stream is not permission to run: the first `__anext__()` under a
 denying scope refuses it and raises `ForbiddenProgramError` without spawning
 anything. An allowed pull instead passes through
-`_refresh_line_stream_execution()`, which re-checks the allowlist and
-re-resolves the deadline in the task that pulls the event, before
-`_start_line_stream_run()` spawns the subprocess and its consumers. Once
-streaming, the run ends either by publishing the `CommandResult` or by closing
-through `aclose()` or cancellation.
+`_refresh_line_stream_execution()`, which re-checks the allowlist in the task
+that pulls the event and re-resolves every decision the preparing scope made on
+the caller's behalf: the deadline, the executable binding, and the environment
+policy. Re-resolving the binding is what stops a stream prepared under one
+binding from executing outside the consuming scope's binding; re-resolving the
+environment policy keeps the events the run emits describing the policy it
+actually ran under. Only then does `_start_line_stream_run()` spawn the
+subprocess and its consumers. Once streaming, the run ends either by publishing
+the `CommandResult` or by closing through `aclose()` or cancellation.
 
 Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
 through deferred authorization and spawning to completion or close

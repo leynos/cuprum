@@ -158,7 +158,7 @@ async def _iter_line_events(
     # this generator's reconcile drains.
     try:
         execution.observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
+        for hook in execution.observation.hooks.before_hooks:
             hook(execution.cmd)
         coordinator = asyncio.create_task(
             _drive_line_stream(execution, queue, result_future)
@@ -170,7 +170,7 @@ async def _iter_line_events(
             else:
                 break
         result = await result_future
-        _publish_line_completion(tracking, execution, result)
+        _publish_line_completion(execution, result)
         yield result
     except BaseException as error:
         # Broader than ``Exception`` on purpose: the teardown classifies what
@@ -197,12 +197,11 @@ async def _iter_line_events(
 
 
 def _publish_line_completion(
-    tracking: _ExecutionTracking,
     execution: _SubprocessExecution,
     result: CommandResult,
 ) -> None:
-    """Run completion hooks and publish the terminal observation for a line run."""
-    for hook in tracking.execution_hooks.after_hooks:
+    """Run the refreshed completion hooks and publish the terminal event."""
+    for hook in execution.observation.hooks.after_hooks:
         hook(execution.cmd, result)
     outcome = _outcome_for_result(result)
     execution.observation.emit_terminal(

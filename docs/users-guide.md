@@ -449,10 +449,11 @@ is available after iteration finishes.
 Breaking out of the loop does not stop the child: close the stream with
 `async with cmd.lines() as stream:` or `await stream.aclose()` to guarantee
 teardown. The stream is prepared eagerly and run lazily, so leaving the
-creating task does not by itself authorize the run: the allowlist and timeout
-in force when the first event is pulled govern it. Pipelines have no `lines()`
-method; `on_line` on a pipeline run observes final-stage stdout and every
-stage's stderr. Interior stdout feeds the next stage instead.
+creating task does not by itself authorize the run: the allowlist, the timeout,
+the executable binding, and the environment policy in force when the first
+event is pulled govern it. Pipelines have no `lines()` method; `on_line` on a
+pipeline run observes final-stage stdout and every stage's stderr. Interior
+stdout feeds the next stage instead.
 
 Line observation decodes for display, so an undecodable byte in text mode
 raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
@@ -1506,13 +1507,32 @@ After a loop that runs to completion, `stream.result` holds the same
 
 `lines()` is lazy: it validates the program and resolves the deadline when the
 stream is built, but it does not plan or spawn the child until the first event
-is requested. Because those two moments can sit in different scopes, the
-allowlist and the timeout are checked again in the task that pulls the first
-event. A program forbidden by the scope that iterates the stream raises
-`ForbiddenProgramError` then — with no plan or start event, no before hook, and
-no child — and `stream.result` stays `None`. Preparing a stream is not, by
-itself, permission to run the program, and the timeout it was prepared with
-does not outlive the scope that supplied it.
+is requested. Because those two moments can sit in different scopes, every
+decision the building scope made on the caller's behalf is made again in the
+task that pulls the first event. A program forbidden by the scope that iterates
+the stream raises `ForbiddenProgramError` then — with no plan or start event,
+no before hook, and no child — and `stream.result` stays `None`. Preparing a
+stream is not, by itself, permission to run the program, and the timeout it was
+prepared with does not outlive the scope that supplied it.
+
+The same applies to the executable binding and the environment policy, because
+a scope can change more than whether a program may run. If the consuming scope
+binds the program to a different file, the stream runs _that_ file: the
+prepared binding is discarded rather than reaching the spawn as the child's
+executable. `CommandResult.resolved_path` and the `cuprum.resolved_path` span
+attribute report the consuming scope's binding accordingly. The environment
+overlay and mode are likewise re-read, so the `env_mode` and `env` values on the
+`plan`, line, and terminal events describe the policy the run actually used.
+The child's own environment already came from the consuming scope at the spawn;
+without this the events would have described a policy the run never had.
+
+Registered hooks are re-collected in the consuming scope for the same reason. A
+`before`, `after`, or `observe` hook registered around the constructing scope
+does not run for a stream that is pulled after that scope has exited: the hooks
+that fire are the ones registered where the first event is requested, and the
+events describe the same set. Hooks an inner scope inherits through nesting
+still apply, because registration layers onto the outer set; it is only the
+hooks of a scope the caller has since _left_ that are dropped.
 
 An unterminated line reaches `lines()` in bounded fragments too, exactly as it
 reaches `on_line`: each event carries at most `max_line_chars` decoded
@@ -1668,9 +1688,10 @@ supplies the second without changing the first.
 Inside the scope, the logical program runs the bound executable while the
 allowlist, project metadata, and telemetry go on carrying the logical name. The
 binding is a scope, so nested scopes override only the program they name, and
-nothing leaks to a sibling scope, thread, or task.
-`CommandResult.resolved_path` reports what actually ran and is `None` when
-nothing was bound.
+nothing leaks to a sibling scope, thread, or task. A
+[prepared line stream](#stream-lines-as-they-arrive) is bound by the scope that
+pulls its first event, not the one that built it. `CommandResult.resolved_path`
+reports what actually ran and is `None` when nothing was bound.
 
 A binding never widens the allowlist. Binding an unlisted program and running
 it still raises `ForbiddenProgramError`, and the resolver is not called.
