@@ -192,6 +192,25 @@ def test_a_project_absent_from_pypi_reads_as_an_empty_index(
     assert written == {"attempts": "1", "status": "404", "remaining": "true"}
 
 
+def test_stage_pypi_requires_the_provenance_directory(
+    tmp_path: pth.Path,
+) -> None:
+    """The CLI cannot stage carried assets without verifier output input."""
+    link_scripts(tmp_path)
+    _touch(tmp_path / "dist" / "publish", *_ARTEFACTS)
+    (tmp_path / "assets.json").write_text('{"assets": []}', encoding="utf-8")
+    completed = run_bash(
+        "python3 -m scripts.release_assets_cli stage-pypi "
+        "--publish dist/publish --assets assets.json --github-files github-files",
+        tmp_path,
+    )
+
+    assert completed.returncode == 1, "stage-pypi must reject a missing provenance path"
+    assert "::error title=release-assets::--provenance is required for stage-pypi" in (
+        completed.stderr
+    ), "the CLI must explain that stage-pypi requires provenance records"
+
+
 def test_a_transient_failure_is_retried_and_counted(tmp_path: pth.Path) -> None:
     """A 503 then a 429 then a 200 succeeds on the third attempt."""
     fake, completed, written = _fetch_and_skip(tmp_path, "503,429,200")

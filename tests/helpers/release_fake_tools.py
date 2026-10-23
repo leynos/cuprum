@@ -7,9 +7,12 @@ checked-in step scripts execute unchanged against state the test controls:
 
 - ``FAKE_GITHUB_ASSETS``: a directory holding one file per release asset.
 - ``FAKE_PYPI_FILES``: a directory holding one file per PyPI file.
+- ``FAKE_ATTESTATIONS``: JSON records for repository build attestations.
 - ``FAKE_CALLS``: a file each call appends its argument vector to, as JSON.
 - ``FAKE_CURL_STATUSES``: comma-separated HTTP statuses the index returns in
   turn; the last repeats. Defaults to ``200``.
+- ``FAKE_ATTEST_FAIL``: optional stderr text that makes verification fail.
+- ``FAKE_GH_VERSION``: the fake GitHub CLI version; defaults to ``2.102.0``.
 
 Like the real services, neither stand-in ever overwrites a file it holds: a
 second upload of an existing asset name fails, as ``gh`` does without
@@ -28,6 +31,8 @@ from pathlib import Path
 #: Where the fake PyPI index says each file can be downloaded from.
 FILES_URL = "https://files.example.test/packages/"
 _INDEX_URL = "https://pypi.org/simple/cuprum/"
+_MIN_RELEASE_ARGUMENTS = 2
+_MIN_ATTESTATION_ARGUMENTS = 3
 
 
 def _digest(path: Path) -> str:
@@ -81,9 +86,77 @@ def _gh_download(args: list[str]) -> int:
     return 0
 
 
-def gh(args: list[str]) -> int:
-    """Serve the ``gh release`` calls the release workflow makes."""
-    command = args[1] if len(args) > 1 else ""
+def _option(args: list[str], name: str) -> str | None:
+    """Return the value following one option, if both are present."""
+    try:
+        position = args.index(name)
+    except ValueError:
+        return None
+    return args[position + 1] if position + 1 < len(args) else None
+
+
+def _gh_attestation_verify(args: list[str]) -> int:
+    """Verify fake digest records against the workflow's identity policy."""
+    if failure := os.environ.get("FAKE_ATTEST_FAIL"):
+        print(failure, file=sys.stderr)
+        return 1
+
+    asset = Path(args[2])
+    digest = _digest(asset)
+    records_path = Path(os.environ["FAKE_ATTESTATIONS"])
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records = records if isinstance(records, list) else []
+    digest_matches = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and isinstance(record.get("sha256"), str)
+        and record["sha256"].lower() == digest
+    ]
+    if not digest_matches:
+        print(f"No attestations found for sha256 {digest}", file=sys.stderr)
+        return 1
+
+    repository = _option(args, "--repo")
+    signer_workflow = _option(args, "--signer-workflow")
+    source_ref = _option(args, "--source-ref")
+    verified = [
+        record
+        for record in digest_matches
+        if record.get("repository") == repository
+        and record.get("signer_workflow") == signer_workflow
+        and record.get("source_ref") == source_ref
+        and (
+            "--deny-self-hosted-runners" not in args
+            or record.get("self_hosted") is False
+        )
+    ]
+    if not verified:
+        print("No attestations satisfy the verification policy", file=sys.stderr)
+        return 1
+
+    result = [
+        {
+            "verificationResult": {
+                "statement": {
+                    "subject": [
+                        {
+                            "name": record.get("subject_name"),
+                            "digest": {"sha256": record["sha256"]},
+                        }
+                    ]
+                }
+            }
+        }
+        for record in verified
+    ]
+    print(json.dumps(result))
+    return 0
+
+
+def _gh_release(args: list[str]) -> int:
+    """Serve the supported release subcommands."""
+    command = args[1]
     if command == "view":
         print(_assets_json())
         return 0
@@ -91,7 +164,31 @@ def gh(args: list[str]) -> int:
         return _gh_upload(args[3:])
     if command == "download":
         return _gh_download(args)
-    return 0
+    if command in {"create", "edit"}:
+        return 0
+    return _unsupported_gh_operation(args[:2])
+
+
+def _unsupported_gh_operation(args: list[str]) -> int:
+    """Reject an operation the checked-in release workflow does not use."""
+    operation = " ".join(args)
+    print(f"unsupported fake gh operation: {operation}", file=sys.stderr)
+    return 2
+
+
+def gh(args: list[str]) -> int:
+    """Serve only the GitHub CLI operations the release workflow uses."""
+    if args == ["--version"]:
+        print(f"gh version {os.environ.get('FAKE_GH_VERSION', '2.102.0')} (fake)")
+        return 0
+    if (
+        args[:2] == ["attestation", "verify"]
+        and len(args) >= _MIN_ATTESTATION_ARGUMENTS
+    ):
+        return _gh_attestation_verify(args)
+    if len(args) < _MIN_RELEASE_ARGUMENTS or args[0] != "release":
+        return _unsupported_gh_operation(args)
+    return _gh_release(args)
 
 
 def _next_status() -> str:

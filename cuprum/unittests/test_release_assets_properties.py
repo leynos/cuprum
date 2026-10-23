@@ -11,6 +11,7 @@ overwrite anything.
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import typing as typ
 from pathlib import Path
@@ -100,12 +101,31 @@ def _stage(
 ) -> State:
     """Write this run's files and GitHub's carried bytes; return the state."""
     publish, carried = root / "publish", root / "carried"
+    provenance = root / "provenance"
     publish.mkdir()
     carried.mkdir()
+    provenance.mkdir()
     for name in local:
         (publish / name).write_bytes(f"local {name}".encode())
     for name, content in github.items():
         (carried / name).write_bytes(content)
+        (provenance / f"{name}.json").write_text(
+            json.dumps([
+                {
+                    "verificationResult": {
+                        "statement": {
+                            "subject": [
+                                {
+                                    "name": name,
+                                    "digest": {"sha256": _digest(content)},
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]),
+            encoding="utf-8",
+        )
     return State(
         publish,
         {
@@ -126,7 +146,11 @@ def test_staging_for_pypi_leaves_exactly_the_canonical_missing_bytes(
     with tempfile.TemporaryDirectory() as scratch:
         state = _stage(Path(scratch), local, dict.fromkeys(on_pypi, b"pypi"), github)
 
-        remaining = stage_pypi(state, Path(scratch) / "carried")
+        remaining = stage_pypi(
+            state,
+            Path(scratch) / "carried",
+            Path(scratch) / "provenance",
+        )
 
         left = {path.name: path.read_bytes() for path in state.publish.iterdir()}
     assert set(left) == local - on_pypi

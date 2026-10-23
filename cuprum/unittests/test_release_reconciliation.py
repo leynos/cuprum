@@ -79,6 +79,7 @@ def _draft_and_publish_pypi(fake: FakeRelease) -> None:
     """Run the snapshot, the PyPI staging, and the modelled PyPI upload."""
     draft, env = _job_directory(fake, "draft-release")
     _step("draft-release", "Snapshot the release assets", draft, env)
+    _step("draft-release", "Verify carried asset provenance", draft, env)
     pypi, env = _job_directory(fake, "publish-pypi")
     shutil.copytree(draft / "github-state", pypi / "github-state")
     _step("publish-pypi", "Fetch the PyPI index", pypi, env)
@@ -114,6 +115,7 @@ def fake(tmp_path: pth.Path) -> FakeRelease:
     release = fake_release(tmp_path)
     (release.pypi / _PYPI_ONLY).write_bytes(b"pypi")
     (release.github / _GITHUB_ONLY).write_bytes(b"github")
+    release.add_attestation(release.github / _GITHUB_ONLY)
     (release.pypi / _BOTH).write_bytes(b"both")
     (release.github / _BOTH).write_bytes(b"both")
     return release
@@ -132,6 +134,51 @@ def test_every_name_converges_on_its_canonical_bytes(fake: FakeRelease) -> None:
     }
     assert _holdings(fake.pypi) == expected
     assert _holdings(fake.github) == {**expected, _BUNDLE: b"bundle"}
+
+
+def test_verified_prior_run_asset_is_published_to_pypi(fake: FakeRelease) -> None:
+    """A tag-bound prior attestation permits interrupted-run carryover."""
+    _draft_and_publish_pypi(fake)
+
+    assert (fake.pypi / _GITHUB_ONLY).read_bytes() == b"github", (
+        "PyPI must receive the bytes from the approved prior release"
+    )
+    assert any(call[:2] == ["attestation", "verify"] for call in fake.calls("gh")), (
+        "the draft job must verify the carried asset before PyPI staging"
+    )
+
+
+def test_unverified_differing_asset_stops_before_pypi_upload(
+    tmp_path: pth.Path,
+) -> None:
+    """An untrusted GitHub asset fails staging before either destination writes."""
+    fake = fake_release(tmp_path)
+    (fake.github / _GITHUB_ONLY).write_bytes(b"untrusted carried bytes")
+    draft, env = _job_directory(fake, "draft-release")
+    _step("draft-release", "Snapshot the release assets", draft, env)
+    _step("draft-release", "Verify carried asset provenance", draft, env)
+
+    pypi, env = _job_directory(fake, "publish-pypi")
+    shutil.copytree(draft / "github-state", pypi / "github-state")
+    _step("publish-pypi", "Fetch the PyPI index", pypi, env)
+    local_bytes = _local(_GITHUB_ONLY)
+    completed = run_bash(
+        step_script("publish-pypi", "Skip artefacts already on PyPI"),
+        pypi,
+        env,
+    )
+
+    assert completed.returncode != 0, "unverified release bytes must stop staging"
+    assert _GITHUB_ONLY in completed.stderr, (
+        "the staging failure must name the unverified release asset"
+    )
+    assert "delete the GitHub Release asset and rerun" in completed.stderr, (
+        "the staging failure must explain the recovery action"
+    )
+    assert (pypi / "dist" / "publish" / _GITHUB_ONLY).read_bytes() == local_bytes, (
+        "failed provenance validation must preserve this run's local bytes"
+    )
+    assert not (fake.pypi / _GITHUB_ONLY).exists(), "PyPI receives no bytes"
 
 
 def test_each_destination_is_sent_only_what_it_lacks(fake: FakeRelease) -> None:

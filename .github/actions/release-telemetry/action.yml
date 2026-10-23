@@ -10,7 +10,9 @@ inputs:
     description: The release phase, from the writer's closed vocabulary
     required: true
   steps:
-    description: Whitespace-separated category=outcome pairs, the action last
+    description: >-
+      Whitespace-separated failure-category=outcome pairs; the carried-asset
+      verifier maps to attestation, and the action is last.
     required: true
   job-status:
     description: The caller's job.status when the record is written

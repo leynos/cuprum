@@ -49,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--index", type=Path)
     parser.add_argument("--github-files", type=Path)
+    parser.add_argument("--provenance", type=Path)
     parser.add_argument("--bundles", type=Path)
     parser.add_argument("--output", type=Path)
     return parser
@@ -72,7 +73,14 @@ def _carryover(state: State, args: argparse.Namespace) -> None:
 
 def _stage_pypi(state: State, args: argparse.Namespace) -> None:
     """Stage PyPI's upload set and report whether anything remains."""
-    write_output("remaining", value=stage_pypi(state, _path(args, "github_files")))
+    write_output(
+        "remaining",
+        value=stage_pypi(
+            state,
+            _path(args, "github_files"),
+            _path(args, "provenance"),
+        ),
+    )
 
 
 def _stage_github(state: State, args: argparse.Namespace) -> None:
