@@ -34,6 +34,7 @@
       'cuprum/_event_taxonomy.py',
       'cuprum/_execution_tracking.py',
       'cuprum/_group_teardown.py',
+      'cuprum/_hook_disposal.py',
       'cuprum/_idle_diagnostic.py',
       'cuprum/_idle_heartbeat.py',
       'cuprum/_line_callbacks.py',

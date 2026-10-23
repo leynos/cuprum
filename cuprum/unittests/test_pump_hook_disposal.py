@@ -8,54 +8,19 @@ an ordinary exception is reported and absorbed, and a shutdown signal travels.
 
 from __future__ import annotations
 
+import inspect
 import logging
-import types
-import typing as typ
 
 import pytest
 
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome, observe_pump
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from cuprum.unittests._hook_disposal_test_helpers import (
+    _started_coroutine_raising,
+    hook_returning,
+)
 
 _LOGGER_NAME = "cuprum.pump_observation"
-
-
-@types.coroutine
-def _suspend() -> cabc.Generator[None, None, None]:
-    """Yield once so the awaiting coroutine is left suspended."""
-    yield
-
-
-def _started_coroutine_raising(
-    error: BaseException,
-) -> cabc.Coroutine[object, object, None]:
-    """Return a started coroutine whose ``finally`` raises ``error`` on close."""
-
-    async def body() -> None:
-        """Suspend inside ``try`` so closing runs the ``finally`` block."""
-        try:
-            await _suspend()
-        finally:
-            raise error
-
-    coro = body()
-    coro.send(None)
-    return coro
-
-
-def _hook_returning(
-    coro: cabc.Coroutine[object, object, None],
-) -> cabc.Callable[[PumpEvent], None]:
-    """Build a hook that wrongly returns ``coro`` instead of awaiting it."""
-
-    def hook(_event: PumpEvent) -> None:
-        """Return the started coroutine, which the contract does not allow."""
-        return typ.cast("None", coro)
-
-    return hook
 
 
 def test_a_failing_disposal_is_reported_and_later_hooks_still_run(
@@ -67,7 +32,7 @@ def test_a_failing_disposal_is_reported_and_later_hooks_still_run(
 
     with (
         caplog.at_level(logging.WARNING, logger=_LOGGER_NAME),
-        observe_pump(_hook_returning(coro)),
+        observe_pump(hook_returning(coro)),
         observe_pump(received.append),
     ):
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
@@ -84,6 +49,9 @@ def test_a_failing_disposal_is_reported_and_later_hooks_still_run(
     assert disposal[0].__dict__["cuprum_error_type"] == "RuntimeError", (
         "the disposal report must name the error raised during close"
     )
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED, (
+        "the returned coroutine must be closed after its finally block fails"
+    )
 
 
 @pytest.mark.parametrize(
@@ -97,5 +65,8 @@ def test_a_shutdown_signal_raised_during_disposal_still_travels(
     """Disposal honours the same shutdown contract as the hook call itself."""
     coro = _started_coroutine_raising(signal)
 
-    with observe_pump(_hook_returning(coro)), pytest.raises(type(signal)):
+    with observe_pump(hook_returning(coro)), pytest.raises(type(signal)):
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED, (
+        "the returned coroutine must be closed before its fatal signal propagates"
+    )

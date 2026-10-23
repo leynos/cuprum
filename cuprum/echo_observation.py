@@ -12,11 +12,11 @@ See :mod:`cuprum.echo_events` for the event types this channel carries.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum._hook_disposal import _close_returned_coroutine, _HookDisposalContext
 from cuprum._scope_registration import _TokenTupleRegistration
 
 if typ.TYPE_CHECKING:
@@ -105,7 +105,10 @@ def _emit_echo_event(event: EchoEvent) -> None:
     paths whose contract is that they must complete: propagating would let
     registering a metrics backend turn a run that would have captured its
     output into one that fails — a change in execution behaviour caused by
-    observing it. The failure is recorded, not swallowed.
+    observing it. The failure is recorded, not swallowed. A non-``None`` return
+    is warned about; native coroutines are closed, and an ordinary exception
+    from ``close()`` is reported at ``WARNING`` and absorbed so later hooks
+    still receive the event.
 
     Anything that is not an :class:`Exception` — ``SystemExit``,
     ``KeyboardInterrupt``, ``asyncio.CancelledError`` — propagates untouched.
@@ -159,8 +162,16 @@ def _discard_echo_hook_result(result: object, event: EchoEvent) -> None:
             "cuprum_result_type": type(result).__name__,
         },
     )
-    if inspect.iscoroutine(result):
-        result.close()
+    _close_returned_coroutine(
+        result,
+        _HookDisposalContext(
+            logger=_LOGGER,
+            action="echo_observer_disposal_failed",
+            message="echo_observer_disposal_failed stream=%s error=%s",
+            message_args=(event.stream,),
+            extra_fields={"cuprum_stream": str(event.stream)},
+        ),
+    )
 
 
 __all__ = [
