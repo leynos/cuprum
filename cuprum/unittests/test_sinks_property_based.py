@@ -10,6 +10,8 @@ hold for the example values.
 
 from __future__ import annotations
 
+import typing as typ
+
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -17,29 +19,19 @@ from cuprum.sinks import SessionOutcome, TerminalOutcome
 from cuprum.sinks.github_actions import _escape_data, _escape_property
 from cuprum.unittests.test_sinks_github_actions import _open_gha_session
 
+if typ.TYPE_CHECKING:
+    from cuprum.sinks._github_actions_options import _GitHubActionsSinkOptionsKwargs
+
 
 def _assert_session_commands(
     argv: tuple[str, ...],
     *,
     group_title: str,
     annotation_title: str,
-    argv_title: bool = False,
-    title: str | None = None,
+    sink_options: _GitHubActionsSinkOptionsKwargs | None = None,
 ) -> None:
     """Assert the adapter emits the expected escaped group and annotation."""
-    if title is not None:
-        session, buffer = _open_gha_session(
-            argv,
-            sink_options={"title": title, "argv_title": argv_title},
-        )
-    elif argv_title:
-        session, buffer = _open_gha_session(
-            argv,
-            sink_options={"argv_title": True},
-        )
-    else:
-        session, buffer = _open_gha_session(argv)
-
+    session, buffer = _open_gha_session(argv, sink_options=sink_options)
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
     output = buffer.getvalue()
     expected_group = f"::group::{_escape_data(group_title)}"
@@ -129,13 +121,12 @@ def test_session_titles_keep_argv_out_of_default_titles(
         argv,
         group_title=expected_argv_title,
         annotation_title=label,
-        argv_title=True,
+        sink_options={"argv_title": True},
     )
 
     _assert_session_commands(
         argv,
         group_title=title,
         annotation_title=title or label,
-        argv_title=True,
-        title=title,
+        sink_options={"title": title, "argv_title": True},
     )
