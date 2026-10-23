@@ -33,11 +33,11 @@ asynchronous, so the framing close must survive cancellation and be idempotent.
 ## Decision drivers
 
 - Keep the feature opt-in per invocation, with no behaviour change by default.
-- Give each group a bounded run label by default, with an explicit opt-in for
-  command-line titles when CI callers need them.
+- Title each group with the command's program arguments, as CI callers read
+  collapsed groups by their command line.
 - Prevent child output from injecting workflow commands into the log.
-- Emit exactly one error annotation per failed run. Keep its message bounded
-  and categorical rather than including exception text or argument values.
+- Emit exactly one error annotation per failed run, carrying only bounded,
+  categorical detail rather than exception text or argument values.
 - Preserve capture and the returned result on every path, including timeout and
   cancellation teardown.
 - Keep protocol knowledge (workflow-command syntax) inside the adapter, so the
@@ -87,11 +87,9 @@ implements the adapter; `RunOutputOptions.sink` carries the opt-in on both
 
 Framing order per run:
 
-1. `::group::<title>` opens the group before the subprocess starts. A
-   single-command group defaults to the bounded run label
-   (`"<project>: <program>"`); an explicit `title` wins, while
-   `argv_title=True` opts into a plain space-joined argv title. Pipelines
-   default to `pipeline`.
+1. `::group::<title>` opens the group before the subprocess starts, titled
+   with the program arguments for single commands (the adapter's `title`
+   override wins; pipelines default to `pipeline`).
 2. A fresh stop-commands bracket — `::stop-commands::<token>` with a
    cryptographically random per-session token — opens immediately after the
    group command, so the runner processes the group command itself and then
@@ -101,10 +99,9 @@ Framing order per run:
 4. At teardown the session releases the lease before writing `::endgroup::`,
    so the runner processes the endgroup command itself.
 5. A failed outcome emits exactly one `::error::` annotation after the lease
-   release. Its title is the explicit non-empty `title` when provided;
-   otherwise, it is the bounded run label. Its message contains bounded
-   categorical detail (`timeout`) or the outcome value. The message never
-   includes exception text or argv, and argv titles require explicit opt-in.
+   release. The title is the bounded run label; the message is the categorical
+   detail (`timeout`) or the outcome value. Exception text and argv never reach
+   it.
 
 The execution layer opens the session before the subprocess starts and
 finalizes the run's `_SinkBracket` on every terminal path — success, non-zero
@@ -284,6 +281,10 @@ lifecycle bracket unchanged; the adapter now uses the bounded run label unless
 the caller sets `argv_title=True` or supplies `title`. A supplied title takes
 precedence over the argv opt-in. The annotation title remains
 `title or start.label`, and a pipeline's default label remains `pipeline`.
+
+This amendment supersedes the single-command argv-title default described in
+the accepted decision driver and framing order item 1. The remaining accepted
+framing decisions are unchanged.
 
 `argv_title=True` deliberately publishes the complete program and argument
 vector joined with plain spaces, without shell quoting. Caller-supplied titles,

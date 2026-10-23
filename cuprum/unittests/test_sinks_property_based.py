@@ -13,6 +13,8 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+from cuprum.sinks._github_actions_titles import _session_titles
+from cuprum.sinks.base import SessionStart
 from cuprum.sinks.github_actions import _escape_data, _escape_property
 
 
@@ -69,4 +71,40 @@ def test_escape_property_masks_the_property_delimiters(*, value: str) -> None:
     )
     assert escaped == (_escape_data(value).replace(":", "%3A").replace(",", "%2C")), (
         "property escaping is data escaping plus the two delimiters"
+    )
+
+
+@given(argv=st.lists(st.text()).map(tuple), title=st.text())
+def test_session_titles_keep_argv_out_of_default_titles(
+    *,
+    argv: tuple[str, ...],
+    title: str,
+) -> None:
+    """Only explicit options may put argv into a group title."""
+    start = SessionStart(label="project: program", argv=argv)
+
+    default = _session_titles(start, None, argv_title=False)
+    assert default.group == start.label, (
+        f"default group titles must use the bounded label; got {default.group!r}"
+    )
+    assert default.annotation == start.label, (
+        "default annotation titles must use the bounded label; "
+        f"got {default.annotation!r}"
+    )
+
+    opted_in = _session_titles(start, None, argv_title=True)
+    expected_argv_title = " ".join(argv) if argv else start.label
+    assert opted_in.group == expected_argv_title, (
+        f"argv titles must use the explicit opt-in; got {opted_in.group!r}"
+    )
+    assert opted_in.annotation == start.label, (
+        f"argv opt-in must not change annotation titles; got {opted_in.annotation!r}"
+    )
+
+    overridden = _session_titles(start, title, argv_title=True)
+    assert overridden.group == title, (
+        f"an explicit title must take precedence over argv; got {overridden.group!r}"
+    )
+    assert overridden.annotation == (title or start.label), (
+        "annotation titles must retain the explicit-title fallback rule"
     )

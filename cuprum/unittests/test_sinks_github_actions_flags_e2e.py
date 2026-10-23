@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc as cabc
 from pathlib import Path
 
 import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
-from cuprum.sh import RunOutputOptions
+from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions
 from cuprum.sinks.github_actions import _escape_property
 from cuprum.unittests.test_sinks_end_to_end import (
     _ON_CI,
@@ -19,6 +20,24 @@ from cuprum.unittests.test_sinks_end_to_end import (
     _stop_token,
 )
 from tests.helpers.catalogue import python_catalogue
+
+_PipelineRunner = cabc.Callable[[Pipeline, RunOutputOptions], PipelineResult]
+
+
+def _run_pipeline_sync(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> PipelineResult:
+    """Run a pipeline through its synchronous entry point."""
+    return pipeline.run_sync(output=output)
+
+
+def _run_pipeline_async(
+    pipeline: Pipeline,
+    output: RunOutputOptions,
+) -> PipelineResult:
+    """Run a pipeline through its asynchronous entry point."""
+    return asyncio.run(pipeline.run(output=output))
 
 
 def test_flags_annotate_async_run(
@@ -250,30 +269,46 @@ def test_flags_stop_commands_neutralize_child_output(
     )
 
 
-def test_flags_frame_pipeline_as_single_group(
+@pytest.mark.parametrize(
+    ("run_pipeline", "failure_code"),
+    [
+        pytest.param(_run_pipeline_sync, 4, id="sync"),
+        pytest.param(_run_pipeline_async, 7, id="async"),
+    ],
+)
+def test_flags_annotate_pipeline_as_single_group(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    run_pipeline: _PipelineRunner,
+    failure_code: int,
 ) -> None:
-    """A flagged pipeline emits one group for the whole pipeline.
+    """Both pipeline entry points frame one group and annotate its failure.
 
     The adapter opens one session per run and a pipeline *is* one run, so the
     group count is one and not one per stage — the reading the ExecPlan records
-    for the ticket's "one group per command" criterion.
+    for the ticket's "one group per command" criterion. The parameter table
+    preserves each entry point's distinct execution path and child exit code.
     """
     monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     producer = python("-c", "print('piped')")
-    failing = python("-c", "import sys; sys.stdin.read(); raise SystemExit(4)")
+    failing = python(
+        "-c",
+        f"import sys; sys.stdin.read(); raise SystemExit({failure_code})",
+    )
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = (producer | failing).run_sync(
-            output=_flags_output(group=True, annotate_failure=True),
+        result = run_pipeline(
+            producer | failing,
+            _flags_output(group=True, annotate_failure=True),
         )
 
     value = capsys.readouterr().err
     codes = [stage.exit_code for stage in result.stages]
-    assert codes == [0, 4], f"both stages must report their own exit code; got {codes}"
+    assert codes == [0, failure_code], (
+        f"both stages must report their own exit code; got {codes}"
+    )
     assert value.count("::group::") == 1, (
         f"one pipeline opens one group, not one per stage; got {value!r}"
     )
@@ -282,35 +317,4 @@ def test_flags_frame_pipeline_as_single_group(
     )
     assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
         f"the annotation must report the pipeline's categorical outcome; got {value!r}"
-    )
-
-
-def test_flags_annotate_async_pipeline(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The async pipeline entry point applies both convenience flags."""
-    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    producer = python("-c", "print('piped')")
-    failing = python("-c", "import sys; sys.stdin.read(); raise SystemExit(7)")
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = asyncio.run(
-            (producer | failing).run(
-                output=_flags_output(group=True, annotate_failure=True),
-            )
-        )
-
-    value = capsys.readouterr().err
-    assert [stage.exit_code for stage in result.stages] == [0, 7], (
-        "the async pipeline must retain its stage outcomes"
-    )
-    assert value.count("::group::") == 1, "one pipeline opens one group"
-    assert value.startswith("::group::pipeline\n"), (
-        f"the async pipeline group must use its aggregate label; got {value!r}"
-    )
-    assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
-        f"the async pipeline must annotate the first failing stage; got {value!r}"
     )
