@@ -8,13 +8,16 @@ its own restoration token, including when a manager is reused or nested.
 
 from __future__ import annotations
 
-from contextvars import ContextVar, Token
-
 from cuprum.catalogue import (
     ProgramCatalogue,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 from cuprum.context.core import CuprumContext, ScopeConfig
-from cuprum.context.state import _reset_context, _set_context, current_context
+from cuprum.context.state import (
+    _push_scoped_entry,
+    _reset_scoped_entry,
+    _set_context,
+    current_context,
+)
 
 
 class _ScopedContext:
@@ -30,7 +33,7 @@ class _ScopedContext:
         """Narrow the active context, install it, and return the result."""
         context = current_context().narrow(self._config)
         token = _set_context(context)
-        _scoped_entries.set((*_scoped_entries.get(), (self, token)))
+        _push_scoped_entry(self, token)
         return context
 
     def __exit__(
@@ -40,24 +43,7 @@ class _ScopedContext:
         exc_tb: object,
     ) -> None:
         """Restore this entry's parent context in last-in, first-out order."""
-        entries = _scoped_entries.get()
-        if not entries or entries[-1][0] is not self:
-            msg = (
-                "scoped context managers must exit in LIFO order in the context "
-                "where they were entered"
-            )
-            raise RuntimeError(msg)
-        try:
-            _reset_context(entries[-1][1])
-        except ValueError as exc:
-            msg = "scoped context manager must exit in the context where it was entered"
-            raise RuntimeError(msg) from exc
-        _scoped_entries.set(entries[:-1])
-
-
-_scoped_entries: ContextVar[tuple[tuple[_ScopedContext, Token[CuprumContext]], ...]] = (
-    ContextVar("cuprum_scoped_entries", default=())
-)
+        _reset_scoped_entry(self)
 
 
 def scoped(

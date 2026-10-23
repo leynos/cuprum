@@ -93,11 +93,13 @@ catalogue, bindings, and timeout policy from it. A manager may be reused
 sequentially, nested, or across async tasks without carrying a prior entry's
 policy into the next one.
 
-The context package keeps a context-local immutable stack of `(manager, token)`
-entries. Entries must exit in LIFO order in the context where they were
-entered. An out-of-order or foreign-manager exit raises `RuntimeError` without
-changing the active state. `allow()` remains the explicit way to widen an
-allowlist.
+`context/state.py` owns the context-local immutable stack of `(manager, token)`
+entries and their token operations. Entries must exit in last-in, first-out
+(LIFO) order in the context where they were entered. An out-of-order or
+foreign-context exit raises `RuntimeError` without changing the active state.
+Nested `with` blocks using the same manager exit in Python's normal LIFO order;
+callers should not invoke `__enter__()` or `__exit__()` manually. `allow()`
+remains the explicit way to widen an allowlist.
 
 Registration handles have a different lifecycle. Factories such as `allow()` and
 `before()` install their derived context when the handle is constructed;

@@ -1,19 +1,15 @@
-"""ContextVar plumbing for the active execution context.
+"""ContextVar plumbing for active execution and scoped-entry state.
 
 Owns the process-wide ``ContextVar`` holding the current
-:class:`~cuprum.context.core.CuprumContext` and the internal set/reset
-helpers used by the registration handles.
+:class:`~cuprum.context.core.CuprumContext`, plus the context-local stack of
+scoped entries and the helpers that activate and restore this state.
 """
 
 from __future__ import annotations
 
-import typing as typ
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 
 from cuprum.context.core import CuprumContext
-
-if typ.TYPE_CHECKING:
-    from contextvars import Token
 
 # Global ContextVar for the current execution context.
 # Default is the singleton _DEFAULT_CONTEXT which is immutable (frozen dataclass).
@@ -46,6 +42,35 @@ def _set_context(ctx: CuprumContext) -> Token[CuprumContext]:
 def _reset_context(token: Token[CuprumContext]) -> None:
     """Restore the context to its previous state using the token."""
     _current_context.reset(token)
+
+
+type _ScopedEntry = tuple[object, Token[CuprumContext]]
+_scoped_entries: ContextVar[tuple[_ScopedEntry, ...]] = ContextVar(
+    "cuprum_scoped_entries",
+    default=(),
+)
+
+
+def _push_scoped_entry(manager: object, token: Token[CuprumContext]) -> None:
+    """Record the restoration token for one scoped-manager entry."""
+    _scoped_entries.set((*_scoped_entries.get(), (manager, token)))
+
+
+def _reset_scoped_entry(manager: object) -> None:
+    """Restore and remove the top entry when it belongs to ``manager``."""
+    entries = _scoped_entries.get()
+    if not entries or entries[-1][0] is not manager:
+        msg = (
+            "scoped context managers must exit in LIFO order in the context "
+            "where they were entered"
+        )
+        raise RuntimeError(msg)
+    try:
+        _reset_context(entries[-1][1])
+    except ValueError as exc:
+        msg = "scoped context manager must exit in the context where it was entered"
+        raise RuntimeError(msg) from exc
+    _scoped_entries.set(entries[:-1])
 
 
 __all__ = [

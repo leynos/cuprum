@@ -33,6 +33,7 @@ where to find the fix. A row that does not match the application can be skipped.
 | [Captured single-command streams are non-optional](#captured-single-command-results)              | coalesces result streams with `or ""` or checks the exact type      |
 | [Scopes take a `ScopeConfig`](#scopes-take-a-scopeconfig)                                         | calls `scoped(allowlist=...)` or `CuprumContext.narrow(...)`        |
 | [Disjoint nested scopes deny](#disjoint-nested-scopes-now-deny-everything)                        | nests scopes whose allowlists share no program                      |
+| [Scope managers derive policy on entry](#scope-managers-derive-policy-on-entry)                   | constructs a manager before entering under a restriction            |
 | [Execution options are not child flags](#execution-options-are-no-longer-child-flags)             | passes `cwd=`, `env=`, `timeout=`, and similar to a builder         |
 | [Builder arguments are typed](#builder-arguments-are-a-typed-contract)                            | passes `bytes`, lists, or other objects to a builder                |
 | [`rsync_sync()` takes local operands only](#rsync_sync-takes-local-operands-only)                 | passes a remote `host:path` or `rsync://` operand to `rsync_sync()` |
@@ -186,6 +187,17 @@ with scoped(ScopeConfig(allowlist=frozenset([GIT]))):
 The default context, outside any scope, still permits every program. Code that
 genuinely needs to widen a scope must say so with `allow()`, which the
 [users' guide](users-guide.md#apply-a-policy) describes.
+
+### Scope managers derive policy on entry
+
+`scoped()` validates and stores its configuration when constructed. Each entry
+derives a fresh policy from the context active at that moment, so a manager
+prepared before a restriction still intersects with that restriction. This also
+applies when one manager is reused sequentially, nested, or across async tasks.
+Each entry must exit in last-in, first-out (LIFO) order in the context where it
+was entered. An out-of-order or foreign-context exit raises `RuntimeError`
+without changing the active context. Use `allow()` when code needs to widen an
+active allowlist explicitly.
 
 ### Execution options are no longer child flags
 

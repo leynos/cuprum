@@ -385,35 +385,37 @@ Internally, a `ContextVar[CuprumContext]` holds the current context. Public APIs
 (`sh.allow`, `sh.before`, `sh.scoped`) update this context in a controlled way.
 
 Each `scoped()` entry derives its context from the context active at entry,
-then restores that exact parent on exit. A second `ContextVar` holds an
-immutable LIFO stack of `(manager, token)` entries. This lets one manager be
-reused sequentially or nested without sharing mutable token state, and keeps
-concurrent async task entries isolated. An out-of-order or foreign-manager exit
-raises `RuntimeError` before changing either context.
+then restores that exact parent on exit. The context-state module holds an
+immutable last in, first out (LIFO) stack of `(manager, token)` entries in a
+`ContextVar`. This lets one manager be reused sequentially or nested without
+sharing mutable token state, and keeps concurrent async task entries isolated.
+An out-of-order, foreign-manager, or foreign-context exit raises `RuntimeError`
+before changing either context.
 
 For screen readers: The diagram shows a scope manager moving from prepared to
-active on entry. It permits nested or repeated entry. A LIFO exit restores the
-prepared state; an out-of-order exit reports an error and leaves the active
-context unchanged.
+active on entry. It permits nested or repeated entry. An inner LIFO exit
+restores the outer active context. An outermost LIFO exit restores the prepared
+state. An out-of-order, foreign-manager, or foreign-context exit by an active
+manager reports an error and leaves the active context unchanged. Calling
+`__exit__()` on a prepared manager while another scope is active is also
+rejected; the manager, entry stack and active context remain unchanged.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Prepared: scoped(config)
     Prepared --> Active: __enter__()
     Active --> Active: nested or reused __enter__()
-    Active --> Prepared: __exit__() in LIFO order
-    Active --> Error: out-of-order or foreign-manager __exit__()
+    Active --> Active: inner __exit__() in LIFO order
+    Active --> Prepared: outermost __exit__() in LIFO order
+    Active --> Error: out-of-order, foreign-manager, or foreign-context __exit__()
+    Prepared --> Error: unmatched __exit__() during another active scope
     Error --> Active: context unchanged
+    Error --> Prepared: manager and context unchanged
     Prepared --> [*]
 ```
 
 *Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
 restoration.*
-
-Line-execution denial coverage stays in `test_safe_cmd_lines.py` and reuses the
-shared `python_builder` fixture from
-`cuprum.unittests._safe_cmd_lines_support`, registered in the root
-`conftest.py`.
 
 ### 5.4 Hooks
 
