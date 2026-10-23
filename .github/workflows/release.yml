@@ -18,10 +18,11 @@ concurrency:
 permissions: {}
 
 # Each filename's canonical bytes are the ones already published: PyPI's
-# first, then an existing asset on the tag's GitHub Release, and this run's
-# attested file only when neither has the name. Each destination receives only
-# the names it lacks, never overwriting, and `publish-release` checks both hold
-# the same digests before the release becomes visible. The decisions live in
+# first, then a GitHub asset with verified build provenance. This run's
+# attested file stays in place when its digest matches GitHub's; an unverified
+# differing asset stops PyPI staging. Each destination receives only names it
+# lacks, never overwriting, and `publish-release` checks both hold the same
+# digests before the release becomes visible. The decisions live in
 # `scripts/release_assets.py`; network calls stay in these steps. Every phase
 # writes a telemetry record through `.github/actions/release-telemetry`. YAML
 # anchors (`&name`, `*name`) share the steps several jobs repeat verbatim.
@@ -163,6 +164,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -202,6 +204,34 @@ jobs:
             gh release download "${GITHUB_REF_NAME}" --pattern "${name}" \
               --dir github-state/files
           done < github-state/carryover.txt
+      - name: Verify carried asset provenance
+        id: attestation
+        run: |
+          set -euo pipefail
+          required_version=2.102.0
+          gh_version="$(gh --version | awk 'NR == 1 {print $3}')"
+          lowest_version="$(printf '%s\n%s\n' "${required_version}" "${gh_version}" \
+            | sort -V | sed -n '1p')"
+          if [ "${lowest_version}" != "${required_version}" ]; then
+            echo "::error title=gh-version::GitHub CLI ${required_version} or newer is required;" \
+              "found ${gh_version:-unknown}." >&2
+            exit 1
+          fi
+          mkdir -p github-state/provenance
+          while IFS= read -r name; do
+            [ -n "${name}" ] || continue
+            record="github-state/provenance/${name}.json"
+            if ! gh attestation verify "github-state/files/${name}" \
+              --repo "${GH_REPO}" \
+              --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
+              --source-ref "${GITHUB_REF}" \
+              --deny-self-hosted-runners \
+              --format json > "${record}"; then
+              rm -f "${record}"
+              echo "::warning title=attestation::Could not verify provenance for GitHub asset ${name};" \
+                "stage-pypi will reject it if PyPI needs its differing bytes."
+            fi
+          done < github-state/carryover.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         id: handoff
         with:
@@ -217,6 +247,7 @@ jobs:
           steps: >-
             github_api=${{ steps.create.outcome }}
             github_api=${{ steps.snapshot.outcome }}
+            attestation=${{ steps.attestation.outcome }}
             upload=${{ steps.handoff.outcome }}
 
   publish-pypi:
@@ -280,7 +311,8 @@ jobs:
           set -euo pipefail
           python3 -m scripts.release_assets_cli stage-pypi --publish dist/publish \
             --index pypi-index.json --assets github-state/assets.json \
-            --github-files github-state/files
+            --github-files github-state/files \
+            --provenance github-state/provenance
       # pypa's action rather than `uv publish`: with Trusted Publishing it also
       # signs and uploads a PEP 740 attestation for every file, which uv does
       # not. `skip-existing` takes the place of uv's `--check-url`, so a file

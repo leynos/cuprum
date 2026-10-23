@@ -3566,7 +3566,7 @@ Table 1: Release jobs and their token scopes
 | `check-version`   | `contents: read`                                               | nothing                                          |
 | `build-wheels`    | `contents: read`                                               | nothing                                          |
 | `attest`          | `contents: read`, `id-token: write`, `attestations: write`     | `check-version`, `build-wheels`                  |
-| `draft-release`   | `contents: write`                                              | `check-version`, `attest`                        |
+| `draft-release`   | `contents: write`, `attestations: read`                        | `check-version`, `attest`                        |
 | `publish-pypi`    | `contents: read`, `id-token: write`, in the `pypi` environment | `attest`, `draft-release`                        |
 | `publish-release` | `contents: write`                                              | `check-version`, `draft-release`, `publish-pypi` |
 
@@ -3593,30 +3593,50 @@ The jobs do the following:
    Sigstore bundle, `cuprum-<tag>-run<run_id>-<attempt>.sigstore.json`, on as
    the `release-dist` artefact, so every later job ships the attested bytes.
    The bundle name is unique per run, so a later run's bundle never overwrites
-   an earlier one's. Verify a downloaded file with
-   `gh attestation verify <file> --repo leynos/cuprum`.
+   an earlier one's. Verify a downloaded file with the same identity policy as
+   the workflow:
+
+   ```bash
+   gh attestation verify <file> --repo leynos/cuprum \
+     --signer-workflow leynos/cuprum/.github/workflows/release.yml \
+     --source-ref refs/tags/v1.2.3 --deny-self-hosted-runners --format json
+   ```
+
+   Replace `v1.2.3` with the release tag. The automated step requires GitHub CLI
+   `2.102.0` or newer, verifies each carried asset after download, and stores
+   successful JSON results beside the files in `release-github-state`. It
+   checks the tag ref through `GITHUB_REF`, not the run's commit SHA, so a
+   previous attempt for the same release tag can be carried over.
 3. `draft-release` reuses the tag's GitHub Release if one exists, draft or
    published, and otherwise creates a draft with generated notes, marked as a
-   pre-release when `check-version` says so. It then snapshots the release's
-   current assets and downloads them, handing them on as the
-   `release-github-state` artefact. A draft is visible only to a token that can
-   write contents, so this is how `publish-pypi`, which holds no such token,
-   can still carry GitHub's bytes forward.
+   pre-release when `check-version` says so. It snapshots the release's current
+   assets and downloads same-named files, then verifies repository, workflow,
+   tag-ref, and non-self-hosted-runner identity. A failed verification removes
+   any partial result, emits an asset-specific warning, and continues; the
+   later PyPI job knows whether those bytes are needed. It hands the files and
+   successful verifier results on as `release-github-state`. A draft is visible
+   only to a token that can write contents, so this is how `publish-pypi`,
+   which holds no such token, can still carry verified GitHub bytes forward.
 4. `publish-pypi` reads the files already published from PyPI's JSON simple
    index. For each artefact this run built: a name PyPI already has is dropped,
-   logging a notice; a name only the GitHub Release already has is replaced with
-   `draft-release`'s carried-over bytes, checked against the release's
-   recorded digest; any other name keeps this run's freshly built file. The
-   index request retries transient failures and is bounded by connection and
-   total timeouts, and a 404 reads as an empty index. It uploads what remains
-   with `pypa/gh-action-pypi-publish` and `skip-existing: true`, which also
-   skips a file an interrupted earlier attempt already uploaded. That action is
-   used rather than `uv publish` because, under Trusted Publishing, it also
-   signs and uploads a PEP 740 attestation for every file; `skip-existing`
-   takes the place of uv's `--check-url`. When every artefact is already on
-   PyPI, the upload step is skipped and the job succeeds. `publish-pypi` holds
-   no GitHub token: its `contents: read` scope is only for a sparse checkout of
-   `scripts/` and the telemetry action.
+   logging a notice. When PyPI lacks a name that GitHub already has,
+   `stage-pypi` keeps this run's attested bytes if their digest already matches
+   the release asset. If they differ, it copies the carried bytes only when
+   GitHub's digest and a verified provenance subject match the exact filename
+   and SHA-256. A self-reported GitHub digest alone is insufficient. Missing or
+   mismatched provenance stops staging before `dist/publish` changes and asks
+   for the GitHub asset to be deleted before rerunning. Any other name keeps
+   this run's freshly built file. The index request retries transient failures
+   and is bounded by connection and total timeouts, and a 404 reads as an empty
+   index. It uploads what remains with `pypa/gh-action-pypi-publish` and
+   `skip-existing: true`, which also skips a file an interrupted earlier
+   attempt already uploaded. That action is used rather than `uv publish`
+   because, under Trusted Publishing, it also signs and uploads a PEP 740
+   attestation for every file; `skip-existing` takes the place of uv's
+   `--check-url`. When every artefact is already on PyPI, the upload step is
+   skipped and the job succeeds. `publish-pypi` holds no GitHub token: its
+   `contents: read` scope is only for a sparse checkout of `scripts/` and the
+   telemetry action.
 5. `publish-release` re-reads the PyPI index and the release's current asset
    list, then uploads to the GitHub Release exactly the names it still lacks —
    fetching PyPI's bytes when PyPI already has the name, checked against PyPI's
@@ -3633,11 +3653,14 @@ The jobs do the following:
 PyPI never accepts a second upload of an existing filename, and rebuilt wheels
 are rarely byte-identical, so the `scripts/release_assets.py` library, called
 through the `scripts/release_assets_cli.py` entry point, reconciles by filename
-rather than by content. Each name's canonical bytes are, in order: PyPI's, if
-PyPI already holds the name; otherwise the GitHub Release's, if it already
-holds the name; otherwise this run's freshly built and attested file. Each
-destination receives only the names it lacks, and nothing already published is
-ever overwritten, which is what makes a re-run of the same tag safe to repeat.
+rather than by content. Each name's canonical bytes are PyPI's when it already
+holds the name. Otherwise, if the GitHub Release holds the name, the workflow
+uses that asset only when its build provenance is verified; when this run's
+attested bytes already have the same digest, it keeps the local copy. If the
+bytes differ and provenance is missing or mismatched, staging fails before
+publication. Names held by neither destination use this run's freshly built and
+attested file. Each destination receives only the names it lacks, and nothing
+already published is ever overwritten.
 
 `publish-release`'s final check compares PyPI's and the GitHub Release's
 SHA-256 digest for every artefact name and confirms the run's Sigstore bundle
@@ -3649,6 +3672,16 @@ offending asset from the GitHub Release (PyPI's published files cannot be
 deleted) so that the next run's reconciliation has a single candidate for that
 name. This is deliberate friction, confined to names that predate this
 reconciliation scheme.
+
+The provenance check adds a recovery case before that final digest check. When
+an existing GitHub asset lacks a matching approved attestation and differs from
+this run's build, `publish-pypi` fails before upload and `publish-release` does
+not run. Delete that GitHub asset and rerun the tag workflow. An asset with a
+valid repository, workflow, tag-ref, runner, filename, and digest match can be
+carried over from an interrupted attempt. If its bytes already match the
+current attested build, the current build is retained without a prior-run
+record. Names already on PyPI continue to be skipped without checking the
+GitHub asset.
 
 `cuprum/unittests/test_release_publish_steps.py` and
 `cuprum/unittests/test_release_github_steps.py` execute the steps' scripts
