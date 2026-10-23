@@ -419,8 +419,8 @@ restoration.*
 
 These checks guard different boundaries. Entry-time narrowing prevents a
 preconstructed scope manager from widening the context it enters. Deferred
-line-stream authorization runs on the first pull, because `SafeCmd.lines()`
-does not spawn until then; it checks the context of the task that consumes the
+line-stream authorization runs on the first pull because `SafeCmd.lines()` does
+not spawn until then; it checks the context of the task that consumes the
 stream. Keep both checks so an earlier, broader manager or prepared stream
 cannot evade the context active when execution begins.
 

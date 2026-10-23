@@ -321,9 +321,10 @@ def test_one_preconstructed_manager_intersects_concurrent_task_parents() -> None
 
     async def run_tasks() -> tuple[tuple[bool, bool], tuple[bool, bool]]:
         """Overlap both entries of the shared manager across tasks."""
-        return await asyncio.gather(task_worker(ECHO), task_worker(LS))
+        results = await asyncio.gather(task_worker(ECHO), task_worker(LS))
+        return results[0], results[1]
 
-    assert asyncio.run(run_tasks()) == [(True, True), (True, True)], (
+    assert asyncio.run(run_tasks()) == ((True, True), (True, True)), (
         "each task must restore its parent and then its original context"
     )
     assert current_context() is original, (
