@@ -138,7 +138,10 @@ if typ.TYPE_CHECKING:
 
 
 # Pytest 9 only accepts plugin declarations in the repository-root conftest.
-pytest_plugins = ("cuprum.unittests._safe_cmd_lines_support",)
+pytest_plugins = (
+    "cuprum.unittests._safe_cmd_lines_support",
+    "cuprum.unittests._safe_cmd_lines_authorization_support",
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:

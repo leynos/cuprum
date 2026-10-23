@@ -2077,6 +2077,28 @@ Resolution order for timeouts:
 Providing `ExecutionContext(timeout=None)` is treated the same as omitting the
 context; resolution continues to the scoped default when present.
 
+`SafeCmd.lines()` resolves its deadline twice. Preparation resolves it eagerly,
+so a stream is not prepared with an obviously stale record, but iteration is
+deferred: the generator body runs in the task that pulls the first event, which
+may be a different task, and possibly a different `scoped()` block, from the
+one that called `lines()`. `_iter_line_events` therefore re-runs the same
+resolution in the consuming context, and the result replaces the prepared value
+on the execution bundle. The important consequence is that the scoped-default
+term is read from the *consuming* scope: a stream built with no timeout, then
+iterated under a deadline, runs under that deadline rather than unbounded. An
+explicit non-`None` argument (including `0`) and `ExecutionContext.timeout`
+still take precedence, and an argument of `None` falls through rather than
+disabling timeouts.
+
+Deferred authorization follows the same pattern. The eager `_enforce_allowlist`
+call in `lines()` remains a fail-fast check, but the binding check happens in
+`_iter_line_events` before the queue, the result future, the plan event, the
+before hooks, or the coordinator task exist. A denial there raises
+`ForbiddenProgramError` to the consumer, leaves `stream.result` as `None`, and
+spawns nothing; if preparation had already started the bounded output-delivery
+worker, the refusal path closes it so a denied stream cannot park a daemon
+thread.
+
 Test scenario: within `with sh.scoped(ScopeConfig(timeout=3.0)):`, passing
 `ExecutionContext(timeout=None)` should still apply the 3.0s scoped timeout.
 
@@ -3449,6 +3471,10 @@ after incomplete iteration, the caller explicitly awaits `stream.aclose()`, or
 the caller is cancelled — by tearing the child process down through the
 existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
 the stream closes. A bare `async for` break does not close the custom iterator.
+Creation only prepares the run; the first `__anext__()` re-checks the allowlist
+and re-resolves the timeout in the task that pulls it, so a scope entered after
+`lines()` returns can still refuse the spawn (transitioning straight to
+`Refused`) or shorten its deadline.
 
 Figure 14: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
@@ -3456,7 +3482,9 @@ streaming to completion, timeout, or cancellation-driven teardown
 ```mermaid
 stateDiagram-v2
     [*] --> Created: SafeCmd.lines()
-    Created --> Running: first __anext__()
+    Created --> Refused: first __anext__() under a denying scope
+    Refused --> [*]: ForbiddenProgramError, nothing spawned
+    Created --> Running: first __anext__() re-authorizes and resolves the deadline
     Running --> Streaming: subprocess and consumers active
     Streaming --> Streaming: yield LineEvent
     Streaming --> Completed: CommandResult published
@@ -3469,12 +3497,44 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.lines()` stream at the seam that implements deferred authorization. A
+prepared stream is not permission to run: the first `__anext__()` under a
+denying scope refuses it and raises `ForbiddenProgramError` without spawning
+anything. An allowed pull instead passes through
+`_refresh_line_stream_execution()`, which re-checks the allowlist in the task
+that pulls the event and re-resolves every decision the preparing scope made on
+the caller's behalf: the deadline, the executable binding, and the environment
+policy. Re-resolving the binding is what stops a stream prepared under one
+binding from executing outside the consuming scope's binding; re-resolving the
+environment policy keeps the events the run emits describing the policy it
+actually ran under. Only then does `_start_line_stream_run()` spawn the
+subprocess and its consumers. Once streaming, the run ends either by publishing
+the `CommandResult` or by closing through `aclose()` or cancellation.
+
+Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+through deferred authorization and spawning to completion or close
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepared: SafeCmd.lines()
+    Prepared --> Refused: first __anext__() under denying scope
+    Refused --> [*]: ForbiddenProgramError
+    Prepared --> Authorized: _refresh_line_stream_execution()
+    Authorized --> Running: _start_line_stream_run()
+    Running --> Streaming: subprocess spawned
+    Streaming --> Completed: CommandResult published
+    Completed --> [*]
+    Streaming --> Closed: aclose() or cancellation
+    Closed --> [*]
+```
+
 For screen readers: The following flowchart shows how each decoded output line
 is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 15: Line observation fan-out from decoded output to lifecycle events,
+Figure 16: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3493,13 +3553,17 @@ flowchart LR
 
 For screen readers: The following sequence diagram shows one full
 `SafeCmd.lines()` iteration. The caller receives a `LineStream` from
-`SafeCmd.lines()`, each `__anext__()` call drives a coordinator that spawns the
-subprocess and starts the stdout and stderr consumers, decoded `LineEvent`
-values are enqueued and yielded as they arrive, and after the process exits the
-consumers are drained, the `CommandResult` is published, and iteration ends with
-`StopAsyncIteration` before the caller reads the `result` attribute.
+`SafeCmd.lines()`, the first `__anext__()` call re-checks the allowlist and
+re-resolves the deadline in the consuming task and only then drives a
+coordinator that spawns the subprocess and starts the stdout and stderr
+consumers, decoded `LineEvent` values are enqueued and yielded as they arrive,
+and after the process exits the consumers are drained, the `CommandResult` is
+published, and iteration ends with `StopAsyncIteration` before the caller reads
+the `result` attribute. The re-authorization step is what lets a scope entered
+after `lines()` returned still govern the run: a forbidden command ends
+iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 16: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 17: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -3512,8 +3576,10 @@ sequenceDiagram
     participant Consumers
 
     Caller->>SafeCmd: lines(output, timeout, context, stdin)
+    SafeCmd->>SafeCmd: provisional allowlist check, resolve timeout
     SafeCmd-->>Caller: LineStream
     Caller->>LineStream: __anext__()
+    LineStream->>LineStream: re-authorize and resolve deadline
     LineStream->>Coordinator: start line stream
     Coordinator->>Process: spawn subprocess
     Coordinator->>Consumers: consume stdout and stderr
@@ -4795,7 +4861,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 17: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 18: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -4825,7 +4891,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 18: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 19: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid

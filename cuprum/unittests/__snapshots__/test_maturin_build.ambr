@@ -40,6 +40,7 @@
       'cuprum/_line_iteration.py',
       'cuprum/_line_splitting.py',
       'cuprum/_line_stream/__init__.py',
+      'cuprum/_line_stream/authorization.py',
       'cuprum/_line_stream/coordinator.py',
       'cuprum/_line_stream/drain.py',
       'cuprum/_line_stream/line_queue.py',

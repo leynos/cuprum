@@ -26,14 +26,11 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
-import functools
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
 from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
-    _build_subprocess_execution,
     _ExecutionState,
-    _prepare_execution_observation,
     _run_prepared_command,
 )
 from cuprum._line_iteration import LineStream, _iter_line_events
@@ -54,10 +51,9 @@ from cuprum.sh.line_options import (
     # re-importing the helpers elsewhere would give a test double a second
     # binding that no production call path resolves. The ``as`` form marks the
     # names this module no longer calls but must keep binding.
-    _line_iteration_tracking,
-    _reject_line_iteration_conflicts,
-    _resolve_line_stdin_source,
+    _line_iteration_tracking as _line_iteration_tracking,
 )
+from cuprum.sh.line_options import _LineIterationRequest, _prepare_line_iteration
 from cuprum.sh.line_options import (
     _reject_redirected_lines_stdout as _reject_redirected_lines_stdout,
 )
@@ -210,18 +206,26 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
     ) -> LineStream:
         """Iterate the command's output lines as they arrive.
 
-        Line events are delivered in arrival order per stream, stamped with
-        monotonic seconds since the command started. Capture and echo stay
-        governed by *output* independently: iterating lines does not disable
-        either unless the caller asks.
+        Line events arrive in order per stream, stamped with monotonic seconds
+        since the command started. Capture and echo stay governed by *output*
+        independently: iterating lines disables neither unless asked.
+
+        The allowlist and the deadline are checked twice: here, when the lazy
+        stream is prepared, and again in the context that pulls the first
+        event. The second check is what makes the deferred spawn obey a scope
+        entered after the stream was built — constructing a stream is not
+        permission to run the program.
 
         Parameters
         ----------
         output:
             Optional ``RunOutputOptions`` controlling stdout/stderr handling.
         timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-            Expiry terminates the subprocess exactly as ``run()`` does.
+            Optional wall-clock timeout. Resolved again when iteration starts:
+            an explicit value here wins, then ``context.timeout``, then the
+            consuming scope's timeout; ``None`` inherits those fallbacks rather
+            than disabling timeouts. Expiry ends the subprocess as ``run()``
+            does.
         context:
             Optional execution settings such as env, cwd, and cancel grace.
         stdin:
@@ -236,40 +240,40 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         Raises
         ------
         ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
+            If the allowlist forbids the program, either at creation or when
+            the first event is requested.
         TimeoutExpired
-            If *timeout* elapses before the command completes.
+            If the effective timeout elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
         StdinSourceError
             If a ``StdinStream`` producer or its encoder fails.
         ValueError
-            If *output* redirects stdout: line iteration reads stdout through
-            a parent-side pipe, so a redirected stdout has nothing to iterate.
-            Use :meth:`run` when stdout goes to a file or descriptor.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
-        out = output or RunOutputOptions()
-        ctx = context or ExecutionContext()
-        _reject_line_iteration_conflicts(self, out, ctx)
-        stdin_source = _resolve_line_stdin_source(stdin, ctx, out)
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        tracking = _line_iteration_tracking()
-        state = _ExecutionState(
-            context=ctx,
-            output=out,
-            stdin_data=stdin_source,
-            timeout=effective_timeout,
-        )
-        observation = _prepare_execution_observation(self, state, tracking)
-
-        execution_factory = functools.partial(
-            _build_subprocess_execution,
+            If *output* redirects stdout or names a bounded capture whose
+            encoding a truncated tail could not survive: line iteration reads
+            stdout through a parent-side pipe. Use :meth:`run` when stdout goes
+            to a file or descriptor.
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, stdin encode, and the option checks
+        tracking, execution_factory = _prepare_line_iteration(
             self,
-            state,
-            observation=observation,
-            sink_bracket=tracking.sink_bracket,
+            _LineIterationRequest(
+                output=output or RunOutputOptions(),
+                context=context or ExecutionContext(),
+                stdin=stdin,
+                timeout=timeout,
+            ),
         )
-        return LineStream(_iter_line_events(execution_factory, tracking))
+        # The raw timeout travels with the generator, not the value
+        # ``_prepare_line_iteration`` resolved: re-resolving that value would
+        # keep a timeout from a scope the caller has since left. ``None`` must
+        # stay ``None`` so the consuming scope's default can apply.
+        return LineStream(
+            _iter_line_events(
+                execution_factory,
+                tracking,
+                requested_timeout=timeout,
+            )
+        )
 
     @typing.overload
     def run_sync(

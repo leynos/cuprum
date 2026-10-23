@@ -45,6 +45,7 @@ _REEXPORTS = [
     (pipeline_module, pipeline_output, "_reject_stdio_targets"),
     (pipeline_module, pipeline_output, "_resolve_pipeline_output"),
     (safe_cmd_module, line_options, "_line_iteration_tracking"),
+    (safe_cmd_module, line_options, "_prepare_line_iteration"),
     (safe_cmd_module, line_options, "_reject_redirected_lines_stdout"),
 ]
 

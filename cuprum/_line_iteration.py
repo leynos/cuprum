@@ -117,15 +117,19 @@ class LineStream:
 async def _iter_line_events(
     execution_factory: cabc.Callable[[], _SubprocessExecution],
     tracking: _ExecutionTracking,
+    *,
+    requested_timeout: float | None,
 ) -> cabc.AsyncGenerator[LineEvent | CommandResult, None]:
     """Yield each ``LineEvent``, then the run's ``CommandResult``.
 
     The driver coroutine owns the subprocess; this generator only drains the
-    queue it feeds. Whatever ends the generator — the terminal result, a
-    ``break``, a generator close, or task cancellation — the driver task is
-    cancelled, which runs the shared reconciliation so the child gets
-    ``SIGTERM``, the cancel grace wait, then ``SIGKILL``, and the consumers
-    drain exactly once.
+    queue it feeds. However it ends — the terminal result, an ``aclose()``,
+    or cancellation — the coordinator is reconciled, so the child gets
+    ``SIGTERM``, the cancel grace wait, then ``SIGKILL``. A bare ``break``
+    ends nothing; ``async with`` or ``aclose()`` guarantees teardown.
+
+    A generator body runs in the context of the task that pulls it, so this
+    function owns the authoritative checks, not ``SafeCmd.lines()``.
 
     Yields
     ------
@@ -133,10 +137,14 @@ async def _iter_line_events(
         One ``LineEvent`` per decoded output line, then the run's
         ``CommandResult`` once the subprocess has exited.
     """
-    execution: _SubprocessExecution = execution_factory()
+    execution = execution_factory()
 
-    from cuprum._line_stream import _line_event_queue
+    from cuprum._line_stream import (
+        _line_event_queue,
+        _refresh_line_stream_execution,
+    )
 
+    execution = _refresh_line_stream_execution(execution, requested_timeout)
     queue = _line_event_queue()
     result_future: asyncio.Future[CommandResult] = (
         asyncio.get_running_loop().create_future()
@@ -150,7 +158,7 @@ async def _iter_line_events(
     # this generator's reconcile drains.
     try:
         execution.observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
+        for hook in execution.observation.hooks.before_hooks:
             hook(execution.cmd)
         coordinator = asyncio.create_task(
             _drive_line_stream(execution, queue, result_future)
@@ -162,7 +170,7 @@ async def _iter_line_events(
             else:
                 break
         result = await result_future
-        _publish_line_completion(tracking, execution, result)
+        _publish_line_completion(execution, result)
         yield result
     except BaseException as error:
         # Broader than ``Exception`` on purpose: the teardown classifies what
@@ -189,12 +197,11 @@ async def _iter_line_events(
 
 
 def _publish_line_completion(
-    tracking: _ExecutionTracking,
     execution: _SubprocessExecution,
     result: CommandResult,
 ) -> None:
-    """Run completion hooks and publish the terminal observation for a line run."""
-    for hook in tracking.execution_hooks.after_hooks:
+    """Run the refreshed completion hooks and publish the terminal event."""
+    for hook in execution.observation.hooks.after_hooks:
         hook(execution.cmd, result)
     outcome = _outcome_for_result(result)
     execution.observation.emit_terminal(
@@ -274,13 +281,12 @@ async def _reconcile_line_stream(
     tracking: _ExecutionTracking,
     finalization: _LineStreamFinalization,
 ) -> None:
-    """Cancel the coordinator when it is still running, then drain its tasks.
+    """Cancel the coordinator if running, then drain its observe-hook tasks.
 
-    Runs on every exit from iteration — completion, ``break``, generator
-    close, and cancellation alike — so the observe-hook tasks are reconciled
-    exactly once however iteration ended. ``coordinator`` is ``None`` when a
-    failure landed before iteration started one, and the task drain still runs:
-    those are the tasks an earlier emit in the same block had already queued.
+    Completion, cancellation, or ``aclose()`` runs this and reconciles the
+    hooks exactly once; a bare ``break`` closes nothing, so nothing here
+    runs. A failure before the task was created leaves ``coordinator``
+    ``None``, and the drain still covers hooks a plan emit had queued.
     """
     if coordinator is not None and not result_future.done():
         coordinator.cancel()
