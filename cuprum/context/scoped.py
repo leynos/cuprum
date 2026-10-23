@@ -8,6 +8,9 @@ its own restoration token, including when a manager is reused or nested.
 
 from __future__ import annotations
 
+import logging
+import typing as typ
+
 from cuprum.catalogue import (
     ProgramCatalogue,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
@@ -18,6 +21,8 @@ from cuprum.context.state import (
     _set_context,
     current_context,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class _ScopedContext:
@@ -34,6 +39,7 @@ class _ScopedContext:
         context = current_context().narrow(self._config)
         token = _set_context(context)
         _push_scoped_entry(self, token)
+        _log_scope_transition("enter", "success", context)
         return context
 
     def __exit__(
@@ -43,7 +49,33 @@ class _ScopedContext:
         exc_tb: object,
     ) -> None:
         """Restore this entry's parent context in last-in, first-out order."""
-        _reset_scoped_entry(self)
+        context = current_context()
+        try:
+            _reset_scoped_entry(self)
+        except RuntimeError:
+            _log_scope_transition("exit", "rejected", context)
+            raise
+        _log_scope_transition("exit", "success", context)
+
+
+def _log_scope_transition(
+    transition: typ.Literal["enter", "exit"],
+    outcome: typ.Literal["success", "rejected"],
+    context: CuprumContext,
+) -> None:
+    """Emit a scope lifecycle record without policy or token contents."""
+    log = _logger.warning if outcome == "rejected" else _logger.debug
+    log(
+        "Scoped context lifecycle transition",
+        extra={
+            "cuprum_action": "scope_lifecycle",
+            "operation": "scoped_context",
+            "transition": transition,
+            "outcome": outcome,
+            "restricted_state": context._allowlist_is_restricted,
+            "policy_cardinality": len(context.allowlist),
+        },
+    )
 
 
 def scoped(

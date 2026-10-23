@@ -98,8 +98,13 @@ entries and their token operations. Entries must exit in last-in, first-out
 (LIFO) order in the context where they were entered. An out-of-order or
 foreign-context exit raises `RuntimeError` without changing the active state.
 Nested `with` blocks using the same manager exit in Python's normal LIFO order;
-callers should not invoke `__enter__()` or `__exit__()` manually. `allow()`
-remains the explicit way to widen an allowlist.
+callers should not invoke `__enter__()` or `__exit__()` manually. Python does
+not pass an entry handle to `__exit__()`, so a direct call cannot identify one
+of several nested entries of the same manager. `scoped()` emits structured
+debug records for entry and successful exit, and a warning record for a
+rejected exit. These records include the transition, outcome, restriction state
+and allowlist cardinality, but never the manager or restoration token.
+`allow()` remains the explicit way to widen an allowlist.
 
 Registration handles have a different lifecycle. Factories such as `allow()` and
 `before()` install their derived context when the handle is constructed;

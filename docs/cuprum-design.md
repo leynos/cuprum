@@ -417,6 +417,11 @@ stateDiagram-v2
 *Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
 restoration.*
 
+Scope lifecycle records use `DEBUG` for entry and successful exit, and
+`WARNING` for a rejected exit. Their structured fields identify the operation,
+transition, outcome, restriction state and allowlist cardinality. They omit
+manager representations, restoration tokens and program names.
+
 These checks guard different boundaries. Entry-time narrowing prevents a
 preconstructed scope manager from widening the context it enters. Deferred
 line-stream authorization runs on the first pull because `SafeCmd.lines()` does

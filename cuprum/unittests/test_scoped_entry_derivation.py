@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 from contextlib import ExitStack
 
@@ -158,6 +159,57 @@ def test_out_of_order_exit_rejects_without_changing_active_context() -> None:
 
     assert current_context() is original, (
         "valid LIFO unwind must restore the original context"
+    )
+
+
+def test_scope_lifecycle_logs_bounded_structured_transitions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Scope logs expose transitions without policy contents or tokens."""
+    first = scoped(ScopeConfig(allowlist=frozenset([ECHO, LS])))
+    second = scoped(ScopeConfig(allowlist=frozenset([ECHO])))
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="cuprum.context.scoped"),
+        first,
+        second,
+        pytest.raises(RuntimeError, match="LIFO order"),
+    ):
+        first.__exit__(None, None, None)
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "cuprum_action", None) == "scope_lifecycle"
+    ]
+    assert [
+        (record.__dict__["transition"], record.__dict__["outcome"])
+        for record in records
+    ] == [
+        ("enter", "success"),
+        ("enter", "success"),
+        ("exit", "rejected"),
+        ("exit", "success"),
+        ("exit", "success"),
+    ], "entry, rejected exit, and successful exit must be observable"
+    assert [record.__dict__["policy_cardinality"] for record in records] == [
+        2,
+        1,
+        1,
+        1,
+        2,
+    ], "lifecycle records must contain only the allowlist cardinality"
+    assert all(record.__dict__["restricted_state"] for record in records), (
+        "lifecycle records must identify restricted contexts"
+    )
+    assert all(
+        record.__dict__["operation"] == "scoped_context" for record in records
+    ), "lifecycle records must use a bounded operation name"
+    assert all("token" not in record.__dict__ for record in records), (
+        "restoration tokens must not be logged"
+    )
+    assert all("manager" not in record.__dict__ for record in records), (
+        "manager representations must not be logged"
     )
 
 
