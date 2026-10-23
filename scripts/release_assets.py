@@ -209,17 +209,38 @@ def _check_digest(path: Path, expected: str | None) -> None:
         raise ReleaseAssetError(msg)
 
 
-def _check_provenance(record: Path, name: str, digest: str) -> None:
-    """Raise unless a verifier record binds ``name`` to ``digest``."""
-    try:
-        document = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        msg = f"{name} has no valid provenance record at {record}"
-        raise ReleaseAssetError(msg) from error
+def _carried_asset_error(name: str, reason: str) -> ReleaseAssetError:
+    """Build an actionable error for an untrusted carried asset."""
+    msg = (
+        f"cannot safely carry GitHub asset {name} to PyPI: {reason}; "
+        "delete the GitHub Release asset and rerun the release"
+    )
+    return ReleaseAssetError(msg)
 
-    if not has_matching_subject(document, name, digest):
-        msg = f"{name} has no matching verified build provenance"
-        raise ReleaseAssetError(msg)
+
+def _require_github_digest(name: str, digest: str | None) -> str:
+    """Require the release API to report a SHA-256 digest for ``name``."""
+    if digest is None:
+        raise _carried_asset_error(name, "GitHub reports no SHA-256 digest")
+    return digest
+
+
+def _verify_carried_asset(
+    asset: Path, provenance: Path, name: str, expected: str
+) -> None:
+    """Validate carried bytes and provenance, with an actionable error."""
+    record = provenance / f"{name}.json"
+    try:
+        _check_digest(asset, expected)
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except ReleaseAssetError as error:
+        raise _carried_asset_error(name, str(error)) from error
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        reason = f"{name} has no valid provenance record at {record}"
+        raise _carried_asset_error(name, reason) from error
+
+    if not has_matching_subject(document, name, expected):
+        raise _carried_asset_error(name, "no matching verified build provenance")
 
 
 def write_output(name: str, *, value: bool) -> None:
@@ -261,27 +282,11 @@ def _prepare_carried_asset(
         raise ReleaseAssetError(msg)
 
     artefact = state.publish / name
-    expected = state.github[name]
-    if expected is not None and sha256_of(artefact) == expected:
+    expected = _require_github_digest(name, state.github[name])
+    if sha256_of(artefact) == expected:
         return None
-    if expected is None:
-        msg = (
-            f"cannot safely carry GitHub asset {name} to PyPI: "
-            "GitHub reports no SHA-256 digest; delete the GitHub Release "
-            "asset and rerun the release"
-        )
-        raise ReleaseAssetError(msg)
-
     asset = github_files / name
-    try:
-        _check_digest(asset, expected)
-        _check_provenance(provenance / f"{name}.json", name, expected)
-    except (ReleaseAssetError, OSError) as error:
-        msg = (
-            f"cannot safely carry GitHub asset {name} to PyPI: {error}; "
-            "delete the GitHub Release asset and rerun the release"
-        )
-        raise ReleaseAssetError(msg) from error
+    _verify_carried_asset(asset, provenance, name, expected)
     return asset
 
 
