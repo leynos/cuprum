@@ -870,6 +870,16 @@ GitHub Actions, which is when `GITHUB_ACTIONS` holds the runner's value `true`.
 For local reproduction of CI framing, or on a non-standard runner that does not
 export the variable, pass `force=True` to activate the sink deliberately.
 
+Single-command groups now default to the bounded `"<project>: <program>"` run
+label; pipeline groups continue to use `pipeline`. A caller-provided `title=`
+wins, while `argv_title=True` opts into a plain space-joined program and
+argument list. The group header is written before the child starts, regardless
+of echo or capture settings, so an argv title sends every argument to the
+workflow log. Caller-provided titles and project and program names also enter
+that log. Workflow-command escaping is not redaction; see the
+[GitHub Actions presentation section](users-guide.md#present-output-in-github-actions)
+for the disclosure details and redaction options.
+
 ### Group and annotate flags
 
 Two flags on `RunOutputOptions` reach the same framing without constructing a

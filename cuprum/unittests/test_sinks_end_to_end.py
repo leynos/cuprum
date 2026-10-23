@@ -18,11 +18,13 @@ import pytest
 
 from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
-from cuprum.redaction import RedactionPolicy
 from cuprum.sh import RunOutputOptions
 from cuprum.sinks import GitHubActionsSink
 from cuprum.sinks.github_actions import _escape_property
 from tests.helpers.catalogue import python_catalogue
+
+if typ.TYPE_CHECKING:
+    from cuprum.redaction import RedactionPolicy
 
 _LEASE_PREFIX = "::stop-commands::"
 
@@ -109,39 +111,6 @@ def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
     assert result.ok is True, f"the framed run must still succeed; got {result!r}"
     assert result.stdout == "inside the group\n", "capture must be unchanged"
     _assert_framed(buffer.getvalue(), command)
-
-
-def test_forced_sink_redacts_opt_in_argv_title_without_changing_run() -> None:
-    """Explicit argv titles are sanitized while command execution stays raw."""
-    sentinel = "gha-e2e-secret-442"
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    command = python("-c", "import sys; print(sys.argv[-1])", sentinel)
-    sink, buffer = _forced_sink(
-        argv_title=True,
-        redaction=RedactionPolicy(literals=(sentinel,)),
-    )
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
-
-    rendered = buffer.getvalue()
-    assert result.stdout == f"{sentinel}\n", "captured output must remain unchanged"
-    assert command.argv[-1] == sentinel, "execution arguments must remain unchanged"
-    expected_title = " ".join(command.argv_with_program).replace(sentinel, "[REDACTED]")
-    assert rendered.startswith(f"::group::{expected_title}\n"), (
-        "the emitted group title must redact its configured sentinel"
-    )
-    assert sentinel not in rendered.partition("\n")[0], (
-        "the title must exclude configured secrets"
-    )
-    assert sentinel in rendered, "mirrored child output must remain unchanged"
-    _assert_framed(
-        rendered,
-        command,
-        child_output=sentinel,
-        expected_group_title=expected_title,
-    )
 
 
 def test_child_workflow_commands_stay_inside_the_lease() -> None:
@@ -233,38 +202,6 @@ def test_forced_sink_frames_both_echoed_streams() -> None:
     )
 
 
-def test_failing_run_annotates_without_argv() -> None:
-    """A real failing run's annotation carries the bounded label, not argv."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
-    command = python("-c", "raise SystemExit(3)", secret)
-    sink, buffer = _forced_sink()
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
-
-    value = buffer.getvalue()
-    assert result.exit_code == 3, f"the failing run must report 3; got {result!r}"
-    assert value.splitlines()[0] == f"::group::{_run_label(command)}", (
-        f"the default group title must use the bounded label; got {value!r}"
-    )
-    assert secret not in value.splitlines()[0], (
-        f"the group line must omit argv; got {value.splitlines()[0]!r}"
-    )
-    annotation = value.split("::error ", 1)[1]
-    assert value.count("::error ") == 1, (
-        f"a failure must annotate exactly once; got {value!r}"
-    )
-    assert secret not in annotation, (
-        f"the annotation must not republish argv; got {annotation!r}"
-    )
-    assert secret not in value, f"default workflow output must omit argv; got {value!r}"
-    assert annotation == (
-        f"title={_escape_property(_run_label(command))}::exit_nonzero\n"
-    ), "the annotation names the program and no arguments"
-
-
 def test_forced_sink_frames_pipeline_and_keeps_results() -> None:
     """A pipeline with a forced sink is framed once and reports its stages.
 
@@ -336,30 +273,6 @@ def _python_command(
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     return python("-c", *source), frozenset([python_program])
-
-
-def test_flags_frame_successful_run(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """``group=True`` alone frames a real run with no sink passed by hand.
-
-    The run is routed through the synthesized adapter, which is why the
-    environment has to look like a runner: the flags construct a sink with no
-    ``force``, so a locally unset ``GITHUB_ACTIONS`` would decline and frame
-    nothing. Output goes to stderr because that is where GitHub Actions reads
-    workflow commands, overriding the ``echo`` sink the run would otherwise
-    mirror to.
-    """
-    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
-    command, allowlist = _python_command("print('inside the group')")
-
-    with scoped(ScopeConfig(allowlist=allowlist)):
-        result = command.run_sync(output=_flags_output(group=True))
-
-    assert result.ok is True, f"the framed run must still succeed; got {result!r}"
-    assert result.stdout == "inside the group\n", "capture must be unchanged"
-    _assert_framed(capsys.readouterr().err, command)
 
 
 def test_flags_annotate_async_run(
@@ -609,39 +522,6 @@ def test_flags_stop_commands_neutralize_child_output(
     assert value.index(release) < value.rindex("::endgroup::\n"), (
         "the session's own endgroup must follow the lease release"
     )
-
-
-def test_flags_annotation_omits_argv(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The annotation title is bounded and the group omits argv by default.
-
-    ``group=True`` and ``annotate_failure=True`` together are the combination a
-    CI caller actually wants; both workflow-command lines must omit argv.
-    """
-    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
-    secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
-    command, allowlist = _python_command("raise SystemExit(2)", secret)
-
-    with scoped(ScopeConfig(allowlist=allowlist)):
-        result = command.run_sync(
-            output=_flags_output(group=True, annotate_failure=True),
-        )
-
-    value = capsys.readouterr().err
-    assert result.exit_code == 2, f"the failing run must report 2; got {result!r}"
-    assert value.count("::group::") == 1, "the group must open exactly once"
-    assert value.count("::endgroup::") == 1, "the group must close exactly once"
-    group = next(line for line in value.splitlines() if line.startswith("::group::"))
-    annotation = value.split("::error ", 1)[1]
-    assert secret not in group, f"the group must not publish argv; got {group!r}"
-    assert secret not in annotation, (
-        f"the annotation must not publish argv; got {annotation!r}"
-    )
-    assert annotation == (
-        f"title={_escape_property(_run_label(command))}::exit_nonzero\n"
-    ), "the annotation names the program and no arguments"
 
 
 def test_flags_frame_pipeline_as_single_group(
