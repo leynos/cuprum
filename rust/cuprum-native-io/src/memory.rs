@@ -8,6 +8,34 @@
 /// The shared writer borrow prevents replacing or moving out an `OwnedStream`
 /// through the callback. Process abort and deliberately leaking resources are
 /// outside this contract.
+///
+/// The callback may use the scoped writer and return any other value:
+///
+/// ```
+/// use cuprum_native_io::with_owned_writer;
+///
+/// fn keep_scoped_writer<W>(writer: W, replacement: W) -> W {
+///     with_owned_writer(&(), writer, |_, scoped_writer| {
+///         let _: &W = scoped_writer;
+///         replacement
+///     })
+/// }
+///
+/// assert_eq!(keep_scoped_writer(1, 2), 2);
+/// ```
+///
+/// It cannot transfer the scoped writer back out, because the borrow it
+/// receives is shared and `std::mem::replace` needs a mutable one:
+///
+/// ```compile_fail,E0308
+/// use cuprum_native_io::with_owned_writer;
+///
+/// fn escape_scoped_writer<W>(writer: W, replacement: W) -> W {
+///     with_owned_writer(&(), writer, |_, scoped_writer| {
+///         std::mem::replace(scoped_writer, replacement)
+///     })
+/// }
+/// ```
 pub fn with_owned_writer<R, W, T>(reader: &R, writer: W, operation: impl FnOnce(&R, &W) -> T) -> T {
     let result = operation(reader, &writer);
     drop(writer);

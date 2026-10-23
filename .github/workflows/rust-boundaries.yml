@@ -84,6 +84,11 @@ jobs:
           mkdir -p target/boundary-verification
           cargo test -p cuprum-streams -p cuprum-native-io --all-targets --all-features 2>&1 |
             tee target/boundary-verification/native.log
+          # `--all-targets` omits doctests, and the compile-time boundary
+          # contracts are doctests (ADR-027); the synchronous-handle one is
+          # compiled only on Windows, so this matrix is its only runner.
+          cargo test -p cuprum-streams -p cuprum-native-io --doc --all-features 2>&1 |
+            tee -a target/boundary-verification/native.log
       - name: Record compiler-cache effectiveness
         if: always() && runner.os == 'Linux' && steps.sccache.outputs.status != 'fallback'
         run: sccache --show-stats --stats-format json

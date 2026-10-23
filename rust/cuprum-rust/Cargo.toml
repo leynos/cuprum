@@ -30,7 +30,6 @@ proptest = "1.11.0"
 rstest = "0.27.0"
 rstest-bdd = "0.5.0"
 rstest-bdd-macros = "0.5.0"
-trybuild = { version = "1.0.116", features = ["diff"] }
 
 [lints]
 workspace = true

@@ -4187,8 +4187,12 @@ private `Transition` (`Wrote`/`Drained`/`Eof`) is constructed only by
 representable state and the internal `step` needs no defensive `writer_open`
 check — a second check would only mask a caller that got it wrong. Because that
 argument rests on `Transition` and `step` remaining module-private, a
-compile-fail case (`tests/ui/fail/pump_transition_unreachable.rs`) holds the
-boundary: it fails if either is widened, even to `pub(crate)`.
+compile-fail doctest for each, on the `mod pump_machine` declaration in
+`cuprum-streams/src/lib.rs`, holds the boundary: each fails if its item is
+widened, even to `pub(crate)`. Compile-time contracts are doctests and ordinary
+test code rather than `trybuild` cases, so that none is compiled by a nested
+build inside a timed test
+([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
 
 `io_utils::classify_write` is the adapter between the two halves. It collapses
 `WriteOutcome` and the non-fatal error partition into the machine's two-variant

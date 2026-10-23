@@ -49,10 +49,10 @@ NEXTEST_CONFIG: typ.Final[Path] = CARGO_WORKSPACE_DIR / ".config" / "nextest.tom
 #: it.
 #:
 #: 300 s is five 60 s periods, sized for the tests bounded by their own work.
-#: The ``compile_tests`` binaries are bounded by a cold build instead and
-#: carry a separate 1800 s override, so the slowest measurements recorded for
-#: this suite describe that tier rather than this one. This value bounds the
-#: profile's own occupants; it is not a measurement of any of them.
+#: No Rust test is bounded by a build any more: the compile-time contracts
+#: run in the ordinary build and doctest phases (ADR-027), so every test sits
+#: on this tier. This value bounds the profile's occupants; it is not a
+#: measurement of any of them.
 EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 
 #: The whole-run budget the default profile must declare, as a duration in
@@ -61,8 +61,10 @@ EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 #: correctly, so ``global-timeout = "2s"`` would pass it while bounding the
 #: run below a single test's allowance.
 #:
-#: 2400 s is forty minutes, and leaves ten minutes beyond the compile-test
-#: tier so a single slow ``trybuild`` binary cannot exhaust the whole suite.
+#: 2400 s is forty minutes. It was sized to leave ten minutes beyond the
+#: retired 1800 s compile-test tier; it is kept rather than narrowed because
+#: the cargo watchdog and the boundary-harness marker are sized against it,
+#: and narrowing it is a separate, measured change (ADR-027).
 EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 40 * 60
 
 #: The oldest nextest that can read every key this configuration sets.

@@ -21,7 +21,6 @@ insta = { version = "1.48.0", default-features = false }
 proptest = "1.11.0"
 rstest = "0.27.0"
 tempfile = "3.27.0"
-trybuild = { version = "1.0.116", features = ["diff"] }
 
 # Safe-stream code retains `#![forbid(unsafe_code)]` in its crate root. The
 # workspace intentionally does not impose that rule on the audited syscall and

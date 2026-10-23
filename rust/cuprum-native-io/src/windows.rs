@@ -136,6 +136,38 @@ pub(crate) fn fd_is_open(raw: PlatformFd) -> io::Result<bool> {
 
 /// Read once into initialized storage, retaining the handle borrow.
 ///
+/// Native I/O requires the synchronous capability, which a
+/// [`SynchronousOwnedStream`] lends:
+///
+/// ```
+/// use cuprum_native_io::{read_once, synchronous_pipe, write_once};
+///
+/// let (reader, writer) = synchronous_pipe()?;
+/// assert_eq!(write_once(writer.as_synchronous_borrowed(), b"x")?, 1);
+/// let mut buffer = [0; 1];
+/// assert_eq!(read_once(reader.as_synchronous_borrowed(), &mut buffer)?, 1);
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// A live generic handle does not grant that capability. Constructing a
+/// genuine overlapped handle is cumbersome and unstable in CI, so this pins
+/// the safer, durable guard: generic borrowed handles cannot reach the
+/// synchronous adapter through its safe API.
+///
+/// ```compile_fail,E0308
+/// use std::os::windows::io::AsHandle;
+///
+/// use cuprum_native_io::{BorrowedStream, pipe, read_once, write_once};
+///
+/// let (reader, writer) = pipe()?;
+/// let generic_reader: BorrowedStream<'_> = reader.as_handle();
+/// let generic_writer: BorrowedStream<'_> = writer.as_handle();
+/// let mut buffer = [0; 1];
+/// let _ = read_once(generic_reader, &mut buffer);
+/// let _ = write_once(generic_writer, b"x");
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
 /// # Errors
 /// Returns the native I/O error, including interruption, without retrying.
 pub fn read_once(stream: SynchronousBorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<isize> {

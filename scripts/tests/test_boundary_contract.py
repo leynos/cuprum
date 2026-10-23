@@ -28,7 +28,7 @@ from scripts.tests.boundary_harness_support import (
 # that failed for some unrelated reason.
 UNSAFE_MARKERS = ("forbid(unsafe_code)", "-F unsafe-code")
 
-TARGETS = ("src/lib.rs", "tests/compile_tests.rs")
+TARGETS = ("src/lib.rs",)
 FUTURE_TARGETS = (
     "src/main.rs",
     "src/bin/future_target.rs",
@@ -122,7 +122,7 @@ def test_member_lint_inheritance_rejects_a_local_override(
 
 
 def test_safe_target_roots_cover_every_current_automatic_target(tmp_path: Path) -> None:
-    """The target scan includes the library and compile-contract integration test."""
+    """The target scan includes every automatic Cargo root: today, the library."""
     root = copy_boundary_repository(tmp_path) / "rust"
     actual = tuple(
         path.relative_to(root / "cuprum-streams").as_posix()
@@ -232,6 +232,10 @@ def test_main_preserves_automatic_directory_symlinks(
     shared = crate / "shared/main.rs"
     shared.parent.mkdir()
     shared.write_text("//! Non-target source.\n", encoding="utf-8")
+    # The crate keeps no integration tests, so the directory Cargo scans for
+    # them is created here; without it the symlink calls below would raise
+    # `FileNotFoundError` and be misreported as a platform skip.
+    (crate / "tests").mkdir(exist_ok=True)
     try:
         (crate / "tests/shared").symlink_to("../shared", target_is_directory=True)
         (crate / "tests/broken").symlink_to("../missing", target_is_directory=True)

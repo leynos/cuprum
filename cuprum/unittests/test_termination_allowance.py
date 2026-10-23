@@ -63,8 +63,8 @@ def _config(profile: str, override: str = "") -> str:
     Returns
     -------
     str
-        A configuration document nextest could parse, declaring the
-        compile-test override when one was asked for.
+        A configuration document nextest could parse, declaring an
+        override when one was asked for.
     """
     lines = [
         "[profile.default]",
@@ -74,7 +74,7 @@ def _config(profile: str, override: str = "") -> str:
     if override:
         lines += [
             "[[profile.default.overrides]]",
-            "filter = 'binary(compile_tests)'",
+            "filter = 'binary(slow_fixture)'",
             f'slow-timeout = {{ period = "60s", terminate-after = 20{override} }}',
         ]
     return "\n".join(lines) + "\n"
