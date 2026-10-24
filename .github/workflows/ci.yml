@@ -69,8 +69,12 @@ jobs:
     # scalar keeps its line break and puts a newline inside the expression.
     # GitHub evaluates the broken value regardless, so a green run is not
     # evidence; `test_placement_expressions_parse_to_one_line` is.
+    # Dependabot pull requests run on the hosted pool too (free on a public
+    # repository). The author is tested, not the actor, which changes when
+    # someone else pushes to the branch.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Compile-bound on two toolchains plus a Windows cross-target check,
     # measured at 198 to 292 s over six runs on four GitHub-hosted vCPU.
@@ -479,7 +483,8 @@ jobs:
     # GitHub evaluates the broken value regardless, so a green run is not
     # evidence; `test_placement_expressions_parse_to_one_line` is.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     env:
@@ -762,7 +767,8 @@ jobs:
     # GitHub evaluates the broken value regardless, so a green run is not
     # evidence; `test_placement_expressions_parse_to_one_line` is.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     steps:
@@ -1060,7 +1066,8 @@ jobs:
     # GitHub evaluates the broken value regardless, so a green run is not
     # evidence; `test_placement_expressions_parse_to_one_line` is.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Above the 3,300 s cargo watchdog set below plus the work either side
     # of the coverage step, which reached 43 s on run 34071469378. Sixty
@@ -1180,10 +1187,12 @@ jobs:
         # line's indentation, so the value is the single reference it
         # reads as, not two joined by a space.
         #
-        # A fork's pull request runs this job on the GitHub-hosted fork arm,
-        # where there is no proxy and the action fails closed, so the step
-        # runs on the owned arm only.
-        if: ${{ !github.event.pull_request.head.repo.fork }}
+        # A fork's or Dependabot's pull request runs this job on the
+        # GitHub-hosted fork arm, where there is no proxy and the action fails
+        # closed, so the step runs on the owned arm only.
+        if: >-
+          ${{ !(github.event.pull_request.head.repo.fork
+          || github.event.pull_request.user.login == 'dependabot[bot]') }}
         uses: "leynos/shared-actions/.github/actions/\
           export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
 
@@ -1197,7 +1206,10 @@ jobs:
           # The fork arm has no proxy and no credentials, so it takes the
           # directory backend and compiles cold, as every fork arm does. The
           # arms are read by position, like the runner's.
-          backend: ${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}
+          backend: >-
+            ${{ (github.event.pull_request.head.repo.fork
+            || github.event.pull_request.user.login == 'dependabot[bot]')
+            && 'local' || 'gha' }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -1356,7 +1368,8 @@ jobs:
     # more-indented continuation in a folded scalar keeps its line break and
     # puts a newline inside the expression.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 10
     permissions:
@@ -1661,7 +1674,8 @@ jobs:
     # GitHub evaluates the broken value regardless, so a green run is not
     # evidence; `test_placement_expressions_parse_to_one_line` is.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 60
     needs:

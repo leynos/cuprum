@@ -22,6 +22,10 @@ from tests.helpers import ci_placement as reader
 OWNED = "ubicloud-standard-2"
 HOSTED = "ubuntu-latest"
 FORK_EXPRESSION = f"${{{{ {reader.FORK_FIELD} && '{HOSTED}' || '{OWNED}' }}}}"
+HOSTED_EXPRESSION = (
+    f"${{{{ ({reader.FORK_FIELD} || {reader.AUTHOR_FIELD} == 'dependabot[bot]') "
+    f"&& '{HOSTED}' || '{OWNED}' }}}}"
+)
 
 
 def _declare(monkeypatch: pytest.MonkeyPatch, declared: dict[str, object]) -> None:
@@ -99,6 +103,44 @@ def test_a_sibling_field_is_reported_as_a_different_condition(
     assert placed.references != frozenset({reader.FORK_FIELD}), (
         "a sibling field must be distinguishable from the fork field"
     )
+
+
+def test_the_hosted_expression_reads_the_fork_and_author_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read the combined fork and Dependabot condition by position."""
+    _declare(monkeypatch, {"runs-on": HOSTED_EXPRESSION, "steps": []})
+    placed = reader.placement("w.yml", "j")
+    assert placed.kind == "fork", f"expected a fork placement, got {placed.kind}"
+    assert placed.fork == HOSTED, f"hosted arm was {placed.fork!r}"
+    assert placed.owned == OWNED, f"owned arm was {placed.owned!r}"
+    assert placed.references == frozenset({reader.FORK_FIELD, reader.AUTHOR_FIELD}), (
+        f"references were {sorted(placed.references)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        HOSTED_EXPRESSION.replace(reader.AUTHOR_FIELD, "github.actor"),
+        HOSTED_EXPRESSION
+        .replace(reader.FORK_FIELD, "TMP")
+        .replace(reader.AUTHOR_FIELD, reader.FORK_FIELD)
+        .replace("TMP", reader.AUTHOR_FIELD),
+    ],
+    ids=["actor-for-author", "fields-swapped"],
+)
+def test_only_the_exact_hosted_condition_is_modelled(
+    monkeypatch: pytest.MonkeyPatch, expression: str
+) -> None:
+    """Refuse `github.actor` and a swapped pair of fields.
+
+    The roles of the two references matter: with the fields swapped every
+    pull request has a truthy author login and would take the hosted arm.
+    """
+    _declare(monkeypatch, {"runs-on": expression, "steps": []})
+    with pytest.raises(AssertionError, match="cannot model"):
+        reader.placement("w.yml", "j")
 
 
 def test_a_hyphenated_condition_is_read(monkeypatch: pytest.MonkeyPatch) -> None:

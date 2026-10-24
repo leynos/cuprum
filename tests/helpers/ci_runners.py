@@ -15,6 +15,7 @@ import typing as typ
 
 from tests.helpers.ci_job_rules import ceiling, never_runs, references
 from tests.helpers.ci_placement import (
+    AUTHOR_FIELD,
     FORK_FIELD,
     FROZEN_HOSTED_LABELS,
     Placement,
@@ -54,6 +55,7 @@ if typ.TYPE_CHECKING:
 # workflows are meant to contain, `ci_workflows` reads what they do contain.
 # fmt: off
 __all__ = (
+    "AUTHOR_FIELD",
     "CACHE_ACTION_PIN",
     "CACHE_PLAIN",
     "CACHE_RESTORE",

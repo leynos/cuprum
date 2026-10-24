@@ -50,9 +50,10 @@ def test_projection_preserves_the_detector_and_admission_contract(
     # its expression can select; an unmapped label makes act skip the job and
     # exit zero.
     declared = str(job(projected, "changes")["runs-on"])
-    selectable = (
-        set(re.findall(r"'([^']+)'", declared)) if "${{" in declared else {declared}
-    )
+    # The author test compares against the literal `dependabot[bot]`, an
+    # operand and not a runner label, so it is not one of the selectable arms.
+    quoted = set(re.findall(r"'([^']+)'", declared)) - {"dependabot[bot]"}
+    selectable = quoted if "${{" in declared else {declared}
     assert selectable, "the changes job must name the labels it can select"
     assert selectable <= set(MAPPED_RUNNER_LABELS), (
         f"act must map every label changes can select; unmapped: "

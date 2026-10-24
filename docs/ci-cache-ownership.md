@@ -175,12 +175,12 @@ from the Ubicloud console on 2026-09-03, and for a GitHub-hosted lane it still
 holds. The Ubicloud lanes other than coverage archive their directories through
 the key families above; moving any of them to the proxy is a separate change.
 
-A fork's pull request runs `coverage` on the GitHub-hosted fork arm, where
-there is no proxy and the credentials action fails closed. That arm skips the
-credentials step and passes `backend: local`, so it compiles cold into a
-directory nothing saves, as every fork arm already does. Both halves are read
-by position from the same fork expression the runner uses, and a contract
-asserts each.
+A fork's or Dependabot's pull request runs `coverage` on the GitHub-hosted fork
+arm, where there is no proxy and the credentials action fails closed. That arm
+skips the credentials step and passes `backend: local`, so it compiles cold
+into a directory nothing saves, as every fork arm already does. Both halves are
+read by position from the same fork-or-Dependabot condition the runner uses,
+and a contract asserts each.
 
 The interpreter matrix has no 3.13 leg. The coverage job runs that
 interpreter's suite and `extension-tests` runs its typechecker, so a leg would

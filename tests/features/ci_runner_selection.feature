@@ -20,6 +20,12 @@ Feature: CI runner selection by event
     Then no lane selects a paid runner
     And every fork-reachable lane selects the hosted fallback
 
+  Scenario: Dependabot's pull request selects only hosted runners
+    Given the continuous integration workflow
+    When a pull request is opened by Dependabot from a branch of this repository
+    Then no lane selects a paid runner
+    And every fork-reachable lane selects the hosted fallback
+
   Scenario: a push to the default branch takes the owned arm
     Given the continuous integration workflow
     When a commit is pushed to the default branch
@@ -47,7 +53,8 @@ Feature: CI runner selection by event
     Then every selected label is a concrete runner name
 
     Examples:
-      | event    |
-      | fork     |
-      | owned    |
-      | push     |
+      | event      |
+      | fork       |
+      | dependabot |
+      | owned      |
+      | push       |
