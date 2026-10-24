@@ -1,0 +1,523 @@
+# Migrate Cuprum to the published rstest-bdd v0.6.0 release
+
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision log`,
+`Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
+be kept up to date as work proceeds.
+
+Status: COMPLETE
+
+## Purpose / big picture
+
+The migration request asks for this repository to be moved onto the published
+`rstest-bdd` v0.6.0 release, with the migration implemented and validated
+rather than merely recommended.
+
+The survey performed before planning establishes that **this repository does
+not depend on `rstest-bdd` at all**, in any Cargo manifest or lockfile, at any
+point in its recorded history. It therefore has no consumers of the framework
+to migrate. What remains of the request is the part that is real and valuable:
+the authoritative documentation import, a recorded applicability analysis, and
+the provenance trail that lets a future reader confirm both.
+
+The user-visible outcome is a documentation set in `docs/` that carries the
+upstream `rstest-bdd` v0.6.0 user guide and migration guides, matching the
+upstream release except for cross-file links, which are absolute so that they
+resolve from this repository and from any consumer the text is copied into. It
+carries a provenance record and an applicability matrix stating precisely which
+v0.6.0 breaking changes this repository is exposed to and which are
+inapplicable. A reader can verify the import against the recorded checksums and
+can see, stated in one place, why no dependency edit was correct.
+
+## Constraints
+
+Hard invariants that must hold throughout implementation.
+
+- The imported upstream documents in `docs/` must match the blobs at upstream
+  commit `72fb22635670e456545ca368805ba4c1c9d7bd69` in every respect **except**
+  cross-file link targets, which are absolute GitHub URLs. **Superseded
+  2026-10-15.** This constraint originally read "must remain byte-for-byte
+  identical … No reformatting, no link rewriting, no local annotation inside
+  those files." A later instruction required all relative links in the imported
+  documentation to be converted to absolute, which overrides the
+  no-link-rewriting clause. The import-time digests are retained in the
+  provenance record alongside the current digests so both sides remain
+  auditable. No other divergence was introduced, and no local annotation was
+  added.
+- No dependency may be added that the repository does not need. Introducing an
+  `rstest-bdd` dependency into a repository that has no BDD consumers would be
+  an invented adoption task, not a migration.
+- No existing behaviour, test coverage, gate, or manifest may be weakened.
+- The v0.6.1 beta and v0.7.0 sections inside the imported text must not be
+  implemented. The guard-based `StepContext` borrowing model is v0.7.0 and the
+  `#[harness_context]` marker is v0.6.1 beta.
+- The v0.6-compatible `#[from(rstest_bdd_harness_context)]` spelling must not be
+  replaced.
+- Unrelated work in the tree must be preserved. The worktree began clean.
+- No merge and no release publication.
+
+## Tolerances (exception triggers)
+
+Thresholds that trigger escalation when breached.
+
+- Scope: if implementation requires net changes to more than 8 tracked files or
+  200 net lines outside `docs/`, stop and escalate.
+- Dependencies: if any `Cargo.toml` or `Cargo.lock` edit is required, stop and
+  escalate. The survey says none is correct; an apparent need means the survey
+  is wrong and the premise must be re-examined.
+- Interface: if any public API signature must change, stop and escalate.
+- Iterations: if a documentation gate still fails after 3 attempts, stop and
+  escalate.
+- Ambiguity: if a reviewer would reasonably expect a dependency edit despite
+  the survey, stop and present the evidence rather than editing.
+
+## Risks
+
+- Risk: the request presupposes a dependency that does not exist, and a naive
+  reading produces an invented migration. Severity: high Likelihood: high
+  (confirmed already) Mitigation: prove the absence exhaustively and with a
+  positive control against repositories that *do* consume the framework, then
+  implement only the applicable part.
+
+- Risk: the imported documents must pass this repository's Markdown gates
+  (`make check-fmt` runs `mdtablefix`, `make markdownlint` runs
+  `markdownlint-cli2` plus the en-GB spelling gate) while staying
+  byte-for-byte. A formatter that rewrites the imported prose would put the two
+  constraints in direct conflict. Severity: high Likelihood: medium Mitigation:
+  measure the formatter's effect on the exact imported bytes before committing;
+  escalate if it changes them.
+
+- Risk: the upstream `docs/` contains a `developers-guide.md` and ADR numbers
+  that collide with this repository's own documents. Severity: medium
+  Likelihood: high (confirmed already) Mitigation: record the upstream link
+  mapping instead of copying link targets.
+
+- Risk: the en-GB-oxendict spelling gate flags upstream prose.
+  Severity: medium Likelihood: medium Mitigation: run the gate and inspect any
+  finding before committing.
+
+## Progress
+
+- [x] (2026-09-26 20:00Z) Read `AGENTS.md`, branch state, and working tree;
+      confirmed the tree is clean and the branch is a session branch, not
+      `main`.
+- [x] (2026-09-26 20:02Z) Located every `rstest-bdd` mention in the repository
+      and established it is a policy statement and a CI comparison note, not a
+      dependency.
+- [x] (2026-09-26 20:05Z) Fetched upstream, resolved tag `v0.6.0`, and compared
+      it against the commit named in the request.
+- [x] (2026-09-26 20:08Z) Proved the absence of an `rstest-bdd` dependency
+      across all manifests, all lockfiles, all history, and `cargo metadata`,
+      with a positive control.
+- [x] (2026-09-26 20:10Z) Read the v0.6.0 and v0.5.0 migration guides in full.
+- [x] (2026-09-26 20:12Z) Imported the three documents byte-for-byte and
+      verified their checksums against the immutable commit.
+- [x] (2026-09-26 20:14Z) Wrote the provenance record.
+- [x] (2026-09-26 20:20Z) Wrote the applicability matrix, deriving every row
+      from a concrete search with its pattern and match count recorded.
+- [x] (2026-09-26 20:26Z) Ran the documentation gates; `make markdownlint` and
+      `make check-fmt` both pass, and the imported files kept their exact
+      digests through every formatting pass.
+- [x] (2026-10-15) Rewrote all 16 cross-file relative links to absolute GitHub
+      URLs, on a later instruction. Verified every target file and every anchor
+      on `main` and at the pinned commit before adopting the base URL. Four
+      definitions and one prose line were re-wrapped to satisfy `make check-fmt`
+      after the longer URLs pushed them past 80 columns, and one footnote
+      definition needed the angle-bracket form to satisfy MD034. Both gates
+      re-run and pass. Recorded both sides' checksums in the provenance record
+      and superseded the no-link-rewriting constraint above.
+- [x] Commit the change.
+- [x] (2026-10-19) Opened the pull request as a draft.
+- [x] (2026-10-19) Rebased onto `origin/main` at
+      `102951f4860a0a0a41e75abbebb8b2b7558f5d6e` from boundary `991dee642`.
+      No conflicts arose. Three adaptations followed from the advanced base:
+      `typos.toml` is no longer touched by this branch, because the spelling
+      gate on `main` independently regenerated the same two entries plus
+      others, so the rebased link-rewriting commit carries documentation
+      changes only; the two line citations in this plan were re-anchored,
+      because `main`'s `AGENTS.md` and `developers-guide.md` edits moved the
+      quoted sentences without changing them; and the four imported documents
+      were added to `docs/contents.md`, because that index covers every other
+      top-level document in `docs/` and these were the only ones missing (see
+      the decision log).
+- [x] (2026-10-19) Rebased again onto `origin/main` at
+      `87d38aff8fbfebb5f965f0df8fc267e9f03a678c`, from boundary `102951f48`.
+      No conflicts arose, and all five commits replayed byte-identically:
+      `main`'s single new commit touches `docs/developers-guide.md` and
+      `scripts/tests/test_markdown_format_makefile.py`, neither of which this
+      branch modifies. The advanced base required one further adaptation. The
+      "Documentation gates" section still carried counts from the first import
+      (82 Markdown files, 677 Python files) and recorded `make test`,
+      `make typecheck` and `make lint` as deliberately not run. `main`'s new
+      commit is itself a correction of stale Markdown-gate figures, so leaving
+      the same defect in this plan would have contradicted the change the
+      rebase had just imported. The counts were re-measured and the not-run
+      claim replaced with the actual gate results (see the decision log).
+- [x] (2026-10-19) Rebased a third time onto `origin/main` at
+      `ed45afde4bde458da0677e635186b385570bcde2`, from boundary `87d38aff8`.
+      No conflicts arose, and all six commits replayed as exact `range-diff`
+      equals. `main` added two commits: one edits `docs/roadmap.md` only, and
+      the other separates tar and rsync operands from options across the
+      builders, their unit and behavioural tests, and both guides. Neither
+      commit touches a path this branch modifies, and the tree delta between
+      the old and new heads is byte-identical to `main`'s own delta. The four
+      line citations in this plan were re-checked against the new base and all
+      still resolve at the same line numbers. The one required adaptation was
+      to the gate table: `main` added two Python source files, which moved the
+      `ruff format` total from 1008 to 1010 and exposed that the figure had
+      always carried the wrong label (see the decision log).
+
+Remaining: review and merge, which this task explicitly excludes. No
+implementation work remains.
+
+## Surprises & discoveries
+
+- Observation: this repository has no `rstest-bdd` dependency, and never had
+  one. Evidence: `git log --all -S "rstest-bdd" -- '*.toml' '**/Cargo.lock'`
+  returns no commit that ever introduced the string into a manifest or lockfile;
+  `cargo metadata` lists no package or dependency whose name contains `bdd`;
+  the two `bdd` substrings in `rust/Cargo.lock` are coincidental hex inside
+  checksums. Impact: the request's premise is false for this repository, so the
+  migration reduces to the documentation import plus applicability analysis.
+
+- Observation: the same string does appear in tracked files, which is what makes
+  the premise look plausible at a glance. Evidence: `AGENTS.md:282` says new
+  features are validated "using `rstest` and `rstest-bdd`", and
+  `docs/developers-guide.md:394` describes an sccache A/B comparison against
+  "Whitaker, rstest-bdd, and Netsuke". Both are statements about *other*
+  repositories' practices. Impact: a keyword-only survey would have produced an
+  invented adoption task.
+
+- Observation: the repository's actual BDD layer is Python `pytest-bdd`, a
+  different framework with a different release cadence. Evidence: 27 `.feature`
+  files under `tests/features`, 105 `scenario(...)` call sites across 33
+  modules under `tests/behaviour`, and `pytest-bdd` in `pyproject.toml`.
+  Impact: confirms the Rust BDD framework has no consumer here.
+
+- Observation: the crate named `rstest` that this repository does depend on is
+  *not* `rstest-bdd`. Evidence: `rstest 0.27.0` from crates.io depends on
+  `rstest_macros`, `futures-timer`, and `futures-util`. The 14
+  `#[from(pipe)]`-style attributes under `rust/` are plain `rstest` fixture
+  selection, and each such file imports `use rstest::{fixture, rstest}`.
+  Impact: these sites are not migration targets and must not be edited.
+
+- Observation: tag `v0.6.0` is a lightweight tag and resolves exactly to the
+  commit named in the request. Evidence: `git rev-parse v0.6.0^{commit}` yields
+  `72fb22635670e456545ca368805ba4c1c9d7bd69`, identical to the request. No
+  annotated tag object exists to dereference differently. Impact: no
+  substitution was needed and none was made.
+
+- Observation: the repository's Markdown formatter does not perturb the imported
+  documents. Evidence:
+  `mdtablefix --wrap --renumber --breaks --ellipsis --fences` over copies of
+  both documents left both byte-identical (SHA-256 unchanged, byte counts
+  136866 and 43011 unchanged). Impact: byte-for-byte fidelity and the
+  `make check-fmt` gate are compatible.
+
+## Decision log
+
+- Decision: treat this as a documentation-import and applicability-analysis
+  task, and do not add an `rstest-bdd` dependency. Rationale: the request
+  states that a repository with no live dependency should have that reported
+  rather than being given an invented adoption task, and explicitly says not to
+  introduce BDD where it is not already used. Adding the dependency would also
+  be the only candidate for a genuine dependency edit, and it is not needed by
+  any existing test. Date/Author: 2026-09-26, migration agent.
+
+- Decision: import `docs/v0-5-0-migration-guide.md` alongside the two required
+  documents. Rationale: the request requires the intervening guides to be
+  inspected when the starting version precedes 0.5.0, and the v0.5.0 guide is
+  the one immediately below the target release. Importing it preserves that
+  inspection for a future reader. Date/Author: 2026-09-26, migration agent.
+
+- Decision: record the upstream relative-link mapping in the provenance document
+  instead of copying link targets into `docs/`. Rationale: one target,
+  `developers-guide.md`, collides with this repository's own
+  `docs/developers-guide.md`, which documents unrelated Cuprum workflows. The
+  upstream ADR numbers also occupy a numbering space independent of this
+  repository's, which already defines `ADR-006` and `ADR-007` for unrelated
+  decisions. Copying upstream files under colliding names would place two
+  different documents at the same identity. Date/Author: 2026-09-26, migration
+  agent. **Amended 2026-10-15:** the request later required every relative link
+  to be made absolute, which removes the collision hazard at its source and
+  supersedes the "do not rewrite links" half of this decision. The targets are
+  still not vendored.
+
+- Decision: keep local migration notes outside the imported copies.
+  Rationale: explicitly required, and it is what allows the imported text to
+  stay pristine. Date/Author: 2026-09-26, migration agent.
+
+- Decision: index the four imported documents in `docs/contents.md` under a
+  dedicated "Vendored upstream documentation" heading, rather than under the
+  project's own guidance. Rationale: after the rebase onto `origin/main`,
+  `docs/contents.md` was the canonical index for every other top-level document
+  in `docs/`, and these four were the only ones absent from it. A separate
+  heading keeps the upstream status and the absence of any dependency visible,
+  so a reader does not mistake imported text for Cuprum's own guidance.
+  Date/Author: 2026-10-19, migration agent.
+
+- Decision: re-measure the "Documentation gates" evidence at each rebase
+  boundary instead of carrying forward the counts captured at import time.
+  Rationale: the counts in that table describe a tree that no longer exists once
+  `main` advances, and a plan that states 82 Markdown files while the gate
+  reports 101 is inaccurate in exactly the way `main`'s commit `87d38aff8`
+  corrects elsewhere. The same reasoning retired the "recorded as not run"
+  paragraph: the rebase instruction requires `make test`, `make typecheck` and
+  `make lint` for every merge, so the plan now records their results and
+  describes them as confirming the rebase rather than as evidence about the
+  imported text. Date/Author: 2026-10-19, migration agent.
+
+- Decision: describe the `ruff format` total as "files already formatted"
+  rather than "Python files already formatted", and state how it is derived.
+  Rationale: the third rebase moved the figure from 1008 to 1010, and asking
+  why it moved exposed the wrong noun. `ruff format --check` over `.md` alone
+  reports 101 files and over `.py` alone reports 909, and 909 + 101 = 1010,
+  because the formatter also formats the Python fenced code blocks inside
+  Markdown. The earlier figures decompose the same way at their own bases: 595
+  and 82 gave 677, and 907 and 101 gave 1008. The arithmetic was therefore
+  sound and only the label was wrong. The digits are corrected for the current
+  tree and the derivation is recorded, so a later reader can re-check the total
+  against a tree that has changed again, which a bare count cannot.
+  Date/Author: 2026-10-19, migration agent.
+
+## Outcomes & retrospective
+
+The repository is left holding the authoritative `rstest-bdd` v0.6.0
+documentation with a provenance record and a search-backed applicability
+matrix. The imported prose is upstream text verbatim; the only divergence is
+the cross-file link rewriting recorded in the provenance document. No
+dependency, manifest, lockfile, source file, test, or gate was changed, because
+none needed to be: the repository has no `rstest-bdd` consumer, and the request
+explicitly excludes inventing one.
+
+Compared against the original purpose, the delivered change is smaller than the
+request's framing implies and larger than a version edit. It is smaller because
+the central migration action — moving consumers off a breaking API — has no
+consumers to move. It is larger because the request's real risk was a false
+premise, and the durable value is the evidence that the premise was tested
+rather than assumed.
+
+What would be done differently: little, at the level of process. The one
+efficiency lesson is that the decision-relevant facts here are cheap to obtain
+(`cargo metadata`, a lockfile grep, and `git log -S`) and should be gathered
+before anything else. A survey that starts from a grep for the framework name
+will find the policy statements in `AGENTS.md` and `docs/developers-guide.md`
+first and may mistake them for a dependency; starting from the dependency graph
+avoids that trap entirely.
+
+Residual gaps, recorded rather than hidden:
+
+1. There is no live migration to validate, so the request's validation clauses
+   (feature-file inventories, scenario-count comparisons, async suspension
+   checks, harness-adoption checks) have no subject in this repository. They
+   are not satisfied; they are inapplicable, and the applicability matrix
+   states why for each.
+2. The imported documents' cross-file links point at upstream files that are
+   deliberately not vendored here, so the targets resolve on GitHub but not
+   inside this checkout. The links are absolute, so they cannot misdirect a
+   reader to a same-named local document; the
+   [provenance record](rstest-bdd-v0-6-0-import-provenance.md#files-not-vendored)
+   states why each omitted file is omitted.
+3. Consumers that *do* need this migration are `leynos/whitaker` and
+   `leynos/netsuke`, both pinned at `rstest-bdd = "0.5.0"`. They are outside
+   this repository's scope and were not modified.
+
+## Retrospective on the request's premise
+
+The request describes a repository with existing `rstest-bdd` consumers. This
+repository is not that repository. Three independent lines of evidence agree:
+the dependency graph contains no `bdd`-named package, no manifest or lockfile
+in any commit ever contained the string, and the only tracked mentions are
+prose about other projects' practices. The same detection procedure returns a
+positive result against `leynos/whitaker` and `leynos/netsuke`, which is what
+rules out a broken method as the explanation.
+
+The request anticipates this outcome: it directs that a repository with no live
+dependency be reported rather than given an invented adoption task. The
+documentation import, the applicability matrix, and this record are the parts
+of the request that have real subject matter here, and they are done.
+
+## Applicability matrix
+
+Every breaking change listed in the v0.6.0 migration guide is assessed below.
+Each row names the search that produced its verdict, so a reader can re-run the
+search rather than trust the count. The searches cover `*.rs` and `*.toml`
+across the tracked tree.
+
+| Breaking change                                                                                          | Search pattern                                                                       | Matches | Verdict                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implicit fixture names normalize one leading underscore                                                  | `#[from(`                                                                            | 14      | Not applicable. All 14 are plain `rstest` fixture selection in `rust/cuprum-native-io/src/ownership_tests.rs`, `rust/cuprum-streams/src/io_utils/tests.rs`, and `rust/cuprum-streams/src/splice/tests.rs`; each file imports `use rstest::{fixture, rstest}`. Not an `rstest-bdd` macro argument. |
+| `runtime = "tokio-current-thread"` is a deprecated alias                                                 | `tokio-current-thread`                                                               | 0       | Not applicable.                                                                                                                                                                                                                                                                                   |
+| Custom `HarnessAdapter` must return `HarnessResult<T>`                                                   | `HarnessAdapter`                                                                     | 0       | Not applicable. No harness is implemented or consumed.                                                                                                                                                                                                                                            |
+| `StepContext::insert_value` returns `InsertOutcome`                                                      | `insert_value`                                                                       | 0       | Not applicable. No direct runtime API caller.                                                                                                                                                                                                                                                     |
+| Step return aliases of `Result<T, E>` now propagate `Err`                                                | `StepResult`                                                                         | 0       | Not applicable. No `rstest-bdd` step functions exist.                                                                                                                                                                                                                                             |
+| Feature paths are manifest-relative                                                                      | `ScenarioMetadata`                                                                   | 0       | Not applicable. No report, JSON, JUnit, or `cargo bdd` consumer.                                                                                                                                                                                                                                  |
+| Rust indexing returns `RustStepIndexResult`; `index_feature_file` and `publish_rust_diagnostics` removed | `RustStepIndex`, `index_feature_file`, `index_rust_file`, `publish_rust_diagnostics` | 0       | Not applicable. No language-server integration.                                                                                                                                                                                                                                                   |
+| `record_bypassed_steps` takes a `BypassedScenario`                                                       | `record_bypassed_steps`, `BypassedScenario`                                          | 0       | Not applicable. No direct bypass-reporting caller.                                                                                                                                                                                                                                                |
+| `find_feature_files` returns `Result<Vec<PathBuf>, ServerError>`                                         | `find_feature_files`                                                                 | 0       | Not applicable. No discovery caller.                                                                                                                                                                                                                                                              |
+| MSRV is now 1.88                                                                                         | `rust-version`                                                                       | 4       | Not applicable. The four hits are this workspace's own `rust-version = "1.85.0"` declarations. Nothing in the graph requires 1.88, because no `rstest-bdd` package is present, so the MSRV stays at 1.85.0. Raising it would advertise a floor no consumer needs.                                 |
+| Feature-file rebuild invalidation; `compile_error!` on a path sharing no filesystem root                 | `*.feature` under `rust/`                                                            | 0       | Not applicable. All 27 `.feature` files are Python `pytest-bdd` assets under `tests/features` and are not bound by any Rust macro.                                                                                                                                                                |
+| Harness dependency matrix (which crates to add)                                                          | `compile-time-validation`, `strict-compile-time-validation`                          | 0       | Not applicable. No feature selection to preserve, because none exists.                                                                                                                                                                                                                            |
+
+The `v0.6.1 beta` (`#[harness_context]`) and `v0.7.0` (guard-based
+`StepContext` borrowing) sections in the imported text are out of scope by the
+version boundary recorded in the provenance document. Neither is implemented.
+
+## Context and orientation
+
+Cuprum is a Python package with an optional Rust extension. All Rust lives in a
+single Cargo workspace rooted at `rust/Cargo.toml` with three members:
+`rust/cuprum-rust`, `rust/cuprum-streams`, and `rust/cuprum-native-io`. There
+is one lockfile, `rust/Cargo.lock`. There are no Cargo manifests outside
+`rust/`, no submodules, no vendored Rust, and no `[patch]` sections.
+
+The workspace declares `rust-version = "1.85.0"`, pinned in
+`rust/rust-toolchain.toml` at channel `1.85.0`. Formatting uses a separate
+nightly pin (`RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28`), and Linux debug work
+uses a third pin (`DEV_FAST_TOOLCHAIN ?= nightly-2026-08-23`). The Rust
+dependency surface is `pyo3`, `thiserror`, `tracing`, `libc`, `cap-std`, and
+`windows-sys` in production, with `proptest`, `rstest`, `insta`, `trybuild`,
+`loom`, and `tempfile` for tests.
+
+`AGENTS.md` is the repository instructions file. It requires the documentation
+style guide, the ExecPlan process, and the gate commands `make check-fmt`,
+`make lint`, `make test`, `make markdownlint`, and `make nixie`. Relevant
+targets are defined in the root `Makefile`.
+
+Terms used in this plan. *Applicability matrix* means a table mapping each
+breaking change in an upstream release to the evidence of whether this
+repository is exposed to it. *Byte-for-byte* means the file's SHA-256 digest
+equals the digest of the freshly written text, so no trailing newline,
+whitespace, or encoding change crept in.
+
+Conformance basis is recorded below.
+
+## Conformance basis
+
+No Terms of Reference, technical design, or ADR in this repository governs a
+`rstest-bdd` migration, because the repository has no `rstest-bdd` dependency.
+There is therefore no upstream artefact to trace to and none is invented.
+
+The governing documents for this work are the repository's own `AGENTS.md` and
+`docs/documentation-style-guide.md`, plus the migration request itself. The
+external authority is upstream commit
+`72fb22635670e456545ca368805ba4c1c9d7bd69` of `leynos/rstest-bdd`.
+
+## Verification plan
+
+This change alters documentation only. It introduces no runtime behaviour, no
+public interface, no persistent format, and no concurrency. It therefore
+introduces no non-trivial invariant or lemma, and no property, model-checking,
+or proof obligation arises. Stating that explicitly is required; the
+verification below is nonetheless substantive and is aimed at the claims that
+this plan actually makes.
+
+The claims requiring evidence are:
+
+1. The imported files are byte-identical to the upstream release.
+2. The repository has no `rstest-bdd` consumer to migrate.
+3. The imported files pass this repository's documentation gates.
+4. The applicability matrix is accurate.
+
+For claim 1, the method is a checksum comparison against the blob read from the
+immutable commit, not against a working tree or a branch. The artefact is the
+SHA-256 table in the provenance record. The discharge condition is exact digest
+equality for all three files. Non-vacuity is addressed by the digests having
+been computed from a freshly fetched clone at the resolved tag and compared
+against an independently written copy; a stale or wrong source would produce a
+different digest.
+
+For claim 2, the method is exhaustive search over every manifest, every
+lockfile, the full commit graph, and the resolved dependency graph. The
+negative result is corroborated by a positive control: the identical search
+procedure applied to `leynos/whitaker` and `leynos/netsuke` returns
+`rstest-bdd = "0.5.0"` in both, proving the method detects the dependency when
+it is present. A negative result without a positive control would be
+uninformative, so this is the non-vacuity check for claim 2.
+
+For claim 3, the method is to run the repository's own gates over the imported
+files and capture the output. The commands are `make markdownlint`,
+`make check-fmt`, and `make spelling`. The discharge condition is a clean run.
+Non-vacuity is addressed by the formatter measurement recorded under Surprises,
+which shows the formatter is capable of being detected as a no-op rather than
+merely assumed to be one.
+
+For claim 4, the method is to derive every row from a concrete search over the
+repository for the API named by the upstream change, with the search pattern
+and the match count recorded. A row claiming "not applicable" is only credible
+if the search that produced it is stated.
+
+Axioms. The import assumes that upstream commit
+`72fb22635670e456545ca368805ba4c1c9d7bd69` is the authoritative v0.6.0 source,
+and that the tag will not be moved. The first was verified by resolving the tag
+directly; the second is outside this repository's control and is why the commit
+SHA, not the tag, is the recorded identity. The gates assume the toolchain pins
+in the `Makefile` behave as they do on `origin/main`, which is unchanged by
+this work.
+
+### Verification plan revision
+
+- (2026-09-26) Initial version.
+
+## Documentation gates
+
+The following commands are run over the finished change, sequentially, with
+output captured under `/tmp`:
+
+    make markdownlint
+    make check-fmt
+    make spelling
+
+`make markdownlint` runs `markdownlint-cli2` and then `make spelling`.
+`make check-fmt` runs `ruff format --check`,
+`cargo +nightly-2026-05-28 fmt --all -- --check`, and `mdtablefix --check`
+again.
+
+Results, all captured after the final formatting pass:
+
+| Gate                | Exit | Evidence                                                                                                        |
+| ------------------- | ---- | --------------------------------------------------------------------------------------------------------------- |
+| `make markdownlint` | 0    | 101 files linted, 0 issues; spelling gate clean.                                                                |
+| `make check-fmt`    | 0    | 1010 files already formatted; `cargo fmt --check` clean; `mdtablefix --check` reports 101 files left unchanged. |
+
+Both totals are the gates' own units, not a count of files of one type. The
+`markdownlint` total equals the tree's 101 tracked Markdown files. The
+`ruff format` total is the number of *Python and Markdown* files, because the
+formatter also formats the Python fenced code blocks inside Markdown. The tree
+holds 909 of the former and 101 of the latter, which is the observed 1010.
+Earlier revisions labelled this total "Python files"; the number was right and
+the noun was wrong. That mislabel is corrected here, and the derivation is
+recorded so a later reader can re-check the total against a tree that has
+changed again.
+
+The same decomposition holds at every base this plan has recorded. At the
+original base `991dee642` the tree held 595 Python files and 77 Markdown files,
+plus the 5 imported documents: 595 plus 82 gives 677, the figure first
+recorded. At `87d38aff8` the tree held 907 Python files and 101 Markdown files:
+907 plus 101 gives 1008. Both earlier numbers were therefore correct, and the
+only defect was the label placed on them.
+
+Two en-GB spelling corrections were applied to this plan's own prose because
+the gate's correction table flags them: an Oxford "-ise" verb stem, and a noun
+spelled the United States way. Quoting the offending tokens here would itself
+trip the gate, so they are described rather than repeated. The imported
+upstream documents required no correction at all: they passed the spelling gate
+on their first run, which is further evidence that the upstream prose already
+conforms to this repository's spelling policy.
+
+**Amended 2026-10-19, after the rebase onto `origin/main` at `87d38aff8`.** The
+original text here recorded `make test`, `make typecheck` and `make lint` as
+not run, on the grounds that a documentation-only change has no behavioural
+surface. That reasoning was overridden by the rebase instruction, which
+requires all four gates to validate the merge, so they were run and are
+recorded rather than claimed.
+
+`make test`, `make typecheck` and `make lint` all exit 0. The counts are
+deliberately not reproduced here: they belong to the run's log, and `main`'s
+Markdown-gate changes show how quickly a copied figure drifts from the tree it
+describes. The gate that matters for this branch's correctness is the Markdown
+set above; the rest confirm that the rebase did not disturb code the branch
+never touched.
+
+The dependency facts are unchanged: no `Cargo.toml`, `Cargo.lock`, Python
+module, or gate definition is modified by this branch.
