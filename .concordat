@@ -2,6 +2,3 @@ language:
   rust:
     surfaces:
       - path: rust/Cargo.toml
-      - path: rust/cuprum-native-io/Cargo.toml
-      - path: rust/cuprum-rust/Cargo.toml
-      - path: rust/cuprum-streams/Cargo.toml

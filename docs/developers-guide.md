@@ -1136,6 +1136,33 @@ Cuprum's ownership boundary: Makefile pins the dev-fast nightly, while
 `tools/mold/VERSION` pins the linker release. The stable support promise
 remains independently verified.
 
+## Rust dev build footprint
+
+`rust/Cargo.toml` sets `[profile.dev] incremental = false` and `debug = 0`.
+Cargo ignores profile tables in member manifests, so `cuprum-rust`,
+`cuprum-streams`, and `cuprum-native-io` inherit both settings from the
+workspace. The release profile is untouched, so release builds are unaffected.
+Non-incremental builds without debug information keep `target` small, which
+matters because compiler caches left behind by a toolchain bump filled the disk
+during `lint-test` on 17 October.
+
+The `.concordat` file declares the Rust surface once, as `rust/Cargo.toml`,
+rather than as the three member manifests. The concordat rule
+`rust-dev-build-footprint` expects the governing workspace to be declared, not
+its members, and `cuprum/unittests/test_rust_dev_build_footprint.py` asserts
+both the profile settings and that declaration. The root toolchain pin is stable
+`1.85.0`, which is exempt from the unstable Cargo metadata key, so no such key
+is set. The Linux accelerated route, selected by `tools/dev-fast/config.toml`
+with `nightly-2026-08-23`, already receives `-Z embed-metadata=no` from Cargo,
+as measured on this branch.
+
+Local debug backtraces and debugger sessions of the Rust extension therefore
+lack source-level debug information. To debug, override the profile for a
+single invocation rather than editing the committed profile. Pass
+`--config 'profile.dev.debug=2'` to Cargo, optionally with
+`--config 'profile.dev.incremental=true'`, or set `CARGO_PROFILE_DEV_DEBUG=2`
+in the environment.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member
