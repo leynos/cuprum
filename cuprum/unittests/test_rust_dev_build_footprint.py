@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo argv, pinned manifest.
 import tomllib
+import typing as typ
 
 import pytest
 import yaml
 
 from tests.helpers.docs import repo_root
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 CONCORDAT = ".concordat"
 WORKSPACE_MANIFEST = "rust/Cargo.toml"
@@ -23,6 +30,10 @@ UNSTABLE_METADATA_KEY = "embed-metadata"
 NUMBERED_RELEASE = re.compile(r"\d+\.\d+\.\d+")
 # Cargo spellings that switch debug information off; any other value keeps it.
 DEBUG_OFF = (0, False, "none")
+MEMBER_CRATE = "cuprum-streams"
+# A cold build of one small member from a fresh target directory, including its
+# dependencies, with a finite budget for compiler admission queues.
+MEMBER_BUILD_TIMEOUT_SECONDS = 1800
 
 
 def _load_toml(relative: str) -> dict[str, object]:
@@ -167,3 +178,58 @@ def test_key_search_ignores_absent_keys_and_finds_nested_ones() -> None:
     assert not _declares_key({"package": {"name": "member"}}, "incremental")
     nested = {"profile": {"dev": {"package": {"*": {"incremental": True}}}}}
     assert _declares_key(nested, "incremental")
+
+
+def _member_rustc_lines(output: str, crate: str) -> list[str]:
+    """Return the verbose Cargo lines that compile ``crate`` itself."""
+    return [
+        line
+        for line in output.splitlines()
+        if "Running" in line and f"--crate-name {crate.replace('-', '_')} " in line
+    ]
+
+
+def test_member_rustc_lines_pick_only_the_named_crate() -> None:
+    """The reader keeps the member's rustc line and drops its dependencies."""
+    output = (
+        "Running `rustc --crate-name cuprum_streams --edition=2021 -C strip=none`\n"
+        "Running `rustc --crate-name syn --edition=2021 -C debuginfo=2`\n"
+    )
+    lines = _member_rustc_lines(output, MEMBER_CRATE)
+    assert len(lines) == 1, "only the named crate's rustc line must be kept"
+    assert "debuginfo=2" not in lines[0], "a dependency's flags must not leak in"
+
+
+def test_a_member_dev_build_passes_no_debuginfo_or_incremental_flag(
+    tmp_path: Path,
+) -> None:
+    """Build one member from a fresh target and read the flags rustc received."""
+    cargo = shutil.which("cargo")
+    assert cargo is not None, "the Cargo-boundary check needs Cargo on PATH"
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"RUSTFLAGS", "CARGO_INCREMENTAL"}
+    }
+    environment["CARGO_TARGET_DIR"] = str(tmp_path)
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv, no shell needed.
+        [
+            cargo,
+            "build",
+            "-v",
+            "-p",
+            MEMBER_CRATE,
+            "--manifest-path",
+            str(repo_root() / WORKSPACE_MANIFEST),
+        ],
+        capture_output=True,
+        check=True,
+        env=environment,
+        text=True,
+        timeout=MEMBER_BUILD_TIMEOUT_SECONDS,
+    )
+    lines = _member_rustc_lines(completed.stdout + completed.stderr, MEMBER_CRATE)
+    assert lines, f"Cargo must have compiled {MEMBER_CRATE} with a verbose rustc line"
+    for line in lines:
+        assert " -C incremental=" not in line, "dev builds must not be incremental"
+        assert " -C debuginfo=" not in line, "dev builds must pass no debuginfo level"
