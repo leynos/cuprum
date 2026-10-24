@@ -7,9 +7,12 @@ checked-in step scripts execute unchanged against state the test controls:
 
 - ``FAKE_GITHUB_ASSETS``: a directory holding one file per release asset.
 - ``FAKE_PYPI_FILES``: a directory holding one file per PyPI file.
+- ``FAKE_ATTESTATIONS``: JSON records for repository build attestations.
 - ``FAKE_CALLS``: a file each call appends its argument vector to, as JSON.
 - ``FAKE_CURL_STATUSES``: comma-separated HTTP statuses the index returns in
   turn; the last repeats. Defaults to ``200``.
+- ``FAKE_ATTEST_FAIL``: optional stderr text that makes verification fail.
+- ``FAKE_GH_VERSION``: the fake GitHub CLI version; defaults to ``2.102.0``.
 
 Like the real services, neither stand-in ever overwrites a file it holds: a
 second upload of an existing asset name fails, as ``gh`` does without
@@ -23,11 +26,14 @@ import json
 import os
 import shutil
 import sys
+import typing as typ
 from pathlib import Path
 
 #: Where the fake PyPI index says each file can be downloaded from.
 FILES_URL = "https://files.example.test/packages/"
 _INDEX_URL = "https://pypi.org/simple/cuprum/"
+_MIN_RELEASE_ARGUMENTS = 2
+_MIN_ATTESTATION_ARGUMENTS = 3
 
 
 def _digest(path: Path) -> str:
@@ -81,9 +87,110 @@ def _gh_download(args: list[str]) -> int:
     return 0
 
 
-def gh(args: list[str]) -> int:
-    """Serve the ``gh release`` calls the release workflow makes."""
-    command = args[1] if len(args) > 1 else ""
+def _option(args: list[str], name: str) -> str | None:
+    """Return the value following one option, if both are present."""
+    try:
+        position = args.index(name)
+    except ValueError:
+        return None
+    return args[position + 1] if position + 1 < len(args) else None
+
+
+def _record_for_digest(record: object, digest: str) -> dict[str, object] | None:
+    """Return a record for ``digest``, if the decoded value is one."""
+    if not isinstance(record, dict):
+        return None
+    record_digest = record.get("sha256")
+    if not isinstance(record_digest, str) or record_digest.lower() != digest:
+        return None
+    # JSON object keys are strings, though isinstance cannot express that.
+    return typ.cast("dict[str, object]", record)
+
+
+def _attestations_for_digest(
+    records_path: Path, digest: str
+) -> list[dict[str, object]]:
+    """Read attestation records and keep entries for the asset digest."""
+    document: object = json.loads(records_path.read_text(encoding="utf-8"))
+    if not isinstance(document, list):
+        return []
+    matching: list[dict[str, object]] = []
+    for value in document:
+        record = _record_for_digest(value, digest)
+        if record is not None:
+            matching.append(record)
+    return matching
+
+
+def _matches_attestation_policy(
+    record: dict[str, object],
+    args: list[str],
+) -> bool:
+    """Return whether a record satisfies each requested identity constraint."""
+    if record.get("repository") != _option(args, "--repo"):
+        return False
+    if record.get("signer_workflow") != _option(args, "--signer-workflow"):
+        return False
+    if record.get("source_ref") != _option(args, "--source-ref"):
+        return False
+    return (
+        "--deny-self-hosted-runners" not in args or record.get("self_hosted") is False
+    )
+
+
+def _attestations_for_policy(
+    records: list[dict[str, object]], args: list[str]
+) -> list[dict[str, object]]:
+    """Keep digest matches that satisfy the verifier's identity options."""
+    return [record for record in records if _matches_attestation_policy(record, args)]
+
+
+def _verification_output(records: list[dict[str, object]]) -> str:
+    """Render matching records in the fake verifier's JSON output shape."""
+    result = [
+        {
+            "verificationResult": {
+                "statement": {
+                    "subject": [
+                        {
+                            "name": record.get("subject_name"),
+                            "digest": {"sha256": record["sha256"]},
+                        }
+                    ]
+                }
+            }
+        }
+        for record in records
+    ]
+    return json.dumps(result)
+
+
+def _gh_attestation_verify(args: list[str]) -> int:
+    """Verify fake digest records against the workflow's identity policy."""
+    if failure := os.environ.get("FAKE_ATTEST_FAIL"):
+        print(failure, file=sys.stderr)
+        return 1
+
+    asset = Path(args[2])
+    digest = _digest(asset)
+    records_path = Path(os.environ["FAKE_ATTESTATIONS"])
+    digest_matches = _attestations_for_digest(records_path, digest)
+    if not digest_matches:
+        print(f"No attestations found for sha256 {digest}", file=sys.stderr)
+        return 1
+
+    verified = _attestations_for_policy(digest_matches, args)
+    if not verified:
+        print("No attestations satisfy the verification policy", file=sys.stderr)
+        return 1
+
+    print(_verification_output(verified))
+    return 0
+
+
+def _gh_release(args: list[str]) -> int:
+    """Serve the supported release subcommands."""
+    command = args[1]
     if command == "view":
         print(_assets_json())
         return 0
@@ -91,7 +198,31 @@ def gh(args: list[str]) -> int:
         return _gh_upload(args[3:])
     if command == "download":
         return _gh_download(args)
-    return 0
+    if command in {"create", "edit"}:
+        return 0
+    return _unsupported_gh_operation(args[:2])
+
+
+def _unsupported_gh_operation(args: list[str]) -> int:
+    """Reject an operation the checked-in release workflow does not use."""
+    operation = " ".join(args)
+    print(f"unsupported fake gh operation: {operation}", file=sys.stderr)
+    return 2
+
+
+def gh(args: list[str]) -> int:
+    """Serve only the GitHub CLI operations the release workflow uses."""
+    if args == ["--version"]:
+        print(f"gh version {os.environ.get('FAKE_GH_VERSION', '2.102.0')} (fake)")
+        return 0
+    if (
+        args[:2] == ["attestation", "verify"]
+        and len(args) >= _MIN_ATTESTATION_ARGUMENTS
+    ):
+        return _gh_attestation_verify(args)
+    if len(args) < _MIN_RELEASE_ARGUMENTS or args[0] != "release":
+        return _unsupported_gh_operation(args)
+    return _gh_release(args)
 
 
 def _next_status() -> str:

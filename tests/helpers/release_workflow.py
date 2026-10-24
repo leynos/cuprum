@@ -13,6 +13,7 @@ composite actions have ``tests/helpers/composite_actions.py``.
 from __future__ import annotations
 
 import dataclasses as dc
+import hashlib
 import json
 import os
 import pathlib as pth
@@ -26,6 +27,9 @@ from tests.helpers.ci_workflows import ROOT, steps
 
 WORKFLOW = "release.yml"
 _FAKE_TOOLS = pth.Path(__file__).with_name("release_fake_tools.py")
+_DEFAULT_TAG = "v1.2.3"
+_DEFAULT_REPOSITORY = "leynos/cuprum"
+_DEFAULT_SIGNER_WORKFLOW = f"{_DEFAULT_REPOSITORY}/.github/workflows/release.yml"
 
 
 def _require(*, condition: bool, message: str) -> None:
@@ -118,6 +122,18 @@ def link_scripts(cwd: pth.Path) -> None:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class AttestationOverrides:
+    """Optional identity fields that a fake build attestation can override."""
+
+    subject_name: str | None = None
+    sha256: str | None = None
+    repository: str = _DEFAULT_REPOSITORY
+    signer_workflow: str = _DEFAULT_SIGNER_WORKFLOW
+    source_ref: str = f"refs/tags/{_DEFAULT_TAG}"
+    self_hosted: bool = False
+
+
+@dc.dataclass(frozen=True, slots=True)
 class FakeRelease:
     """Directories standing in for the GitHub Release and PyPI, and a call log."""
 
@@ -133,14 +149,46 @@ class FakeRelease:
         """The directory holding one file per PyPI file."""
         return self.root / "pypi-files"
 
+    @property
+    def attestations(self) -> pth.Path:
+        """The JSON file holding the fake repository's build attestations."""
+        return self.root / "attestations.json"
+
+    def add_attestation(
+        self,
+        asset: pth.Path,
+        overrides: AttestationOverrides | None = None,
+    ) -> None:
+        """Record a fake attestation, defaulting to the approved release identity."""
+        overrides = overrides or AttestationOverrides()
+        records = json.loads(self.attestations.read_text(encoding="utf-8"))
+        records.append({
+            "subject_name": overrides.subject_name
+            if overrides.subject_name is not None
+            else asset.name,
+            "sha256": overrides.sha256
+            if overrides.sha256 is not None
+            else hashlib.sha256(asset.read_bytes()).hexdigest(),
+            "repository": overrides.repository,
+            "signer_workflow": overrides.signer_workflow,
+            "source_ref": overrides.source_ref,
+            "self_hosted": overrides.self_hosted,
+        })
+        self.attestations.write_text(json.dumps(records), encoding="utf-8")
+
     def env(self, **extra: str) -> dict[str, str]:
         """Return the environment that routes ``gh`` and ``curl`` to the fakes."""
         return {
             "PATH": os.pathsep.join((str(self.root / "tools"), os.defpath)),
             "FAKE_GITHUB_ASSETS": str(self.github),
             "FAKE_PYPI_FILES": str(self.pypi),
+            "FAKE_ATTESTATIONS": str(self.attestations),
+            "FAKE_ATTEST_FAIL": "",
+            "FAKE_GH_VERSION": "2.102.0",
             "FAKE_CALLS": str(self.root / "calls.jsonl"),
             "GITHUB_OUTPUT": str(self.root / "github-output"),
+            "GITHUB_REF": f"refs/tags/{_DEFAULT_TAG}",
+            "GH_REPO": _DEFAULT_REPOSITORY,
             **extra,
         }
 
@@ -163,6 +211,7 @@ def fake_release(root: pth.Path) -> FakeRelease:
     fake = FakeRelease(root)
     fake.github.mkdir(parents=True, exist_ok=True)
     fake.pypi.mkdir(parents=True, exist_ok=True)
+    fake.attestations.write_text("[]", encoding="utf-8")
     return fake
 
 

@@ -36,7 +36,7 @@ _EXPECTED_PERMISSIONS: typ.Final = {
     "build-wheels": {"contents": "read"},
     "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
     "publish-pypi": {"contents": "read", "id-token": "write"},
-    "draft-release": {"contents": "write"},
+    "draft-release": {"contents": "write", "attestations": "read"},
     "publish-release": {"contents": "write"},
 }
 _FETCH_INDEX = "Fetch the PyPI index"
@@ -169,6 +169,60 @@ def test_the_published_artefacts_are_the_attested_ones() -> None:
         )
 
 
+def test_carried_assets_are_verified_before_they_reach_the_pypi_job() -> None:
+    """The draft snapshot hands policy-verified records to the token-free job."""
+    draft_steps = _job("draft-release")["steps"]
+    names = [item.get("name") for item in draft_steps]
+    handoff_index = next(
+        index for index, item in enumerate(draft_steps) if item.get("id") == "handoff"
+    )
+    assert (
+        names.index("Snapshot the release assets")
+        < names.index("Verify carried asset provenance")
+        < handoff_index
+    ), "verification must precede handoff"
+
+    verifier = step_script("draft-release", "Verify carried asset provenance")
+    for fragment in (
+        "required_version=2.102.0",
+        "sort -V",
+        '--repo "${GH_REPO}"',
+        '--signer-workflow "${GH_REPO}/.github/workflows/release.yml"',
+        '--source-ref "${GITHUB_REF}"',
+        "--deny-self-hosted-runners",
+        "--format json",
+        'rm -f "${record}"',
+        "::warning title=attestation::",
+    ):
+        assert fragment in verifier, f"the verifier must enforce {fragment!r}"
+    assert "${{" not in verifier, (
+        "the verifier script must not interpolate workflow expressions"
+    )
+
+    pending = step_script("publish-pypi", "Skip artefacts already on PyPI")
+    assert "--provenance github-state/provenance" in pending, (
+        "PyPI staging must receive the verifier records"
+    )
+    telemetry = next(
+        item
+        for item in draft_steps
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    assert (
+        "attestation=${{ steps.attestation.outcome }}" in telemetry["with"]["steps"]
+    ), "draft-release telemetry must record the attestation outcome"
+    pypi_steps = _job("publish-pypi")["steps"]
+    pypi_telemetry = next(
+        item
+        for item in pypi_steps
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    assert (
+        "digest_mismatch=${{ steps.pending.outcome }}"
+        in pypi_telemetry["with"]["steps"]
+    ), "publish-pypi telemetry must record the staging outcome"
+
+
 def test_the_upload_keeps_pypi_attestations_and_is_idempotent() -> None:
     """PEP 740 attestations stay on, and a partial earlier upload is tolerated."""
     upload = _uses("publish-pypi", "pypa/gh-action-pypi-publish")
@@ -179,6 +233,9 @@ def test_the_upload_keeps_pypi_attestations_and_is_idempotent() -> None:
 def test_the_release_is_published_only_after_pypi() -> None:
     """A failed upload or a digest mismatch leaves the GitHub Release a draft."""
     assert {"draft-release", "publish-pypi"} <= _needs("publish-release")
+    assert "publish-pypi" in _job("publish-release")["needs"], (
+        "publish-release must wait directly on successful PyPI publication"
+    )
     assert "--draft" in step_script(
         "draft-release", "Create or reuse the draft release"
     )
