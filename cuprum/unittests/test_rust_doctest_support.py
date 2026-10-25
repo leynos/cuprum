@@ -13,6 +13,7 @@ import pytest
 from cuprum.unittests._rust_doctest_support import (
     Fence,
     code_blocks,
+    compile_fail_count,
     compile_fail_defects,
     doc_comment_groups,
     imported_names,
@@ -152,4 +153,98 @@ def test_imported_names_expand_braces_and_ignore_whitespace() -> None:
     fence = Fence(1, (), ("use a::b::{c,  d};", "use e::*;"))
     assert imported_names(fence) == {"a::b::c", "a::b::d", "e::*"}, (
         "each braced item must become its own whitespace-free path"
+    )
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [
+        pytest.param("````compile_fail,E0308", "````", id="four-backticks"),
+        pytest.param("`````compile_fail,E0308", "``````", id="closing-longer"),
+        pytest.param("~~~compile_fail,E0308", "~~~", id="tildes"),
+    ],
+)
+def test_longer_and_tilde_fences_are_scanned(opening: str, closing: str) -> None:
+    """A fence rustdoc accepts must not hide a doctest from the contract."""
+    source = (
+        f'{_CONTROL}/// {opening}\n/// let _: u8 = "";\n/// {closing}\nfn item() {{}}\n'
+    )
+    assert compile_fail_count(source) == 1, (
+        "a longer or tilde fence must be counted as a compile-fail doctest"
+    )
+    assert compile_fail_defects(source) == [], (
+        "a controlled negative case in a longer fence has no defect"
+    )
+
+
+def test_a_longer_fence_is_not_closed_by_a_shorter_or_labelled_line() -> None:
+    """Fence-like lines inside a block are content, as CommonMark specifies."""
+    source = (
+        "/// ````compile_fail,E0308\n"
+        "/// ```rust\n"
+        "/// ```\n"
+        '/// let _: u8 = "";\n'
+        "/// ````\n"
+        "fn item() {}\n"
+    )
+    (group,) = doc_comment_groups(source)
+    (block,) = code_blocks(group)
+    assert block.body == (" ```rust", " ```", ' let _: u8 = "";'), (
+        "only a bare fence at least as long as the opening one closes a block"
+    )
+
+
+def test_a_backtick_fence_cannot_carry_a_backtick_in_its_info_string() -> None:
+    """Inline code that starts a line is prose, not a fence."""
+    (group,) = doc_comment_groups("/// ```inline``` code\nfn item() {}\n")
+    assert code_blocks(group) == [], "a backtick in the info string forbids a fence"
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        pytest.param("compile_fail,E0308", id="comma"),
+        pytest.param("compile_fail E0308", id="space"),
+        pytest.param("compile_fail , E0308", id="space-and-comma"),
+        pytest.param("compile_fail\tE0308", id="tab"),
+    ],
+)
+def test_attributes_split_on_commas_and_whitespace(info: str) -> None:
+    """Rustdoc accepts either separator, so the scanner must as well."""
+    source = _CONTROL + f'/// ```{info}\n/// let _: u8 = "";\n/// ```\nfn item() {{}}\n'
+    assert compile_fail_count(source) == 1, f"{info!r} declares a compile-fail doctest"
+    assert compile_fail_defects(source) == [], f"{info!r} names its error code"
+
+
+@pytest.mark.parametrize(
+    ("commented", "negative_line"),
+    [
+        pytest.param("// use krate::b;", 5, id="line-comment"),
+        pytest.param("/* use krate::b; */", 5, id="block-comment"),
+        pytest.param("/*\n use krate::b;\n*/", 7, id="multiline-block-comment"),
+    ],
+)
+def test_a_commented_out_import_does_not_back_a_negative_case(
+    commented: str, negative_line: int
+) -> None:
+    """Only executable imports count towards the control's coverage."""
+    source = _doc(
+        ("", f"use krate::a;\n{commented}"),
+        ("compile_fail,E0308", "use krate::b;"),
+    )
+    assert compile_fail_defects(source) == [_unbacked(negative_line, "krate::b")], (
+        "a commented-out import must not count as one the control makes"
+    )
+
+
+def test_imports_may_be_split_across_controls() -> None:
+    """A rename breaks whichever control imports the name, so a union suffices."""
+    source = _doc(
+        ("", "use krate::a;"),
+        ("", "use krate::b;"),
+        ("compile_fail,E0308", "use krate::{a, b};"),
+    )
+    assert compile_fail_defects(source) == [], (
+        "each name is imported by some control, so renaming either one fails a "
+        "control and the negative case cannot pass for that reason alone"
     )

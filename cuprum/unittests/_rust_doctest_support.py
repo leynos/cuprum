@@ -22,10 +22,22 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_FENCE = re.compile(r"^\s*```(?P<info>[^`]*)$")
+_OPENING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+_CLOSING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})\s*$")
+_ATTRIBUTE_SEPARATOR = re.compile(r"[,\s]+")
 _ERROR_CODE = re.compile(r"^E\d{4}$")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
 _USE_STATEMENT = re.compile(r"\buse\s+(?P<spec>[^;]+);")
 _NON_COMPILING = frozenset({"ignore", "compile_fail", "text", "console", "sh"})
+
+
+class _Opening(typ.NamedTuple):
+    """An opening code fence, with what a matching closing fence must repeat."""
+
+    line: int
+    marker: str
+    attributes: tuple[str, ...]
 
 
 class Fence(typ.NamedTuple):
@@ -63,22 +75,48 @@ def doc_comment_groups(source: str) -> cabc.Iterator[list[tuple[int, str]]]:
         yield group
 
 
+def _opening_fence(number: int, text: str) -> _Opening | None:
+    """Read an opening fence, or return ``None`` when the line is not one."""
+    match = _OPENING_FENCE.match(text)
+    if match is None:
+        return None
+    marker, info = match["fence"], match["info"].strip()
+    if marker[0] == "`" and "`" in info:
+        return None
+    attributes = tuple(part for part in _ATTRIBUTE_SEPARATOR.split(info) if part)
+    return _Opening(number, marker, attributes)
+
+
+def _closes(text: str, opening: _Opening) -> bool:
+    """Report whether a line closes the block ``opening`` started.
+
+    Returns
+    -------
+    bool
+        ``True`` for a bare fence of the same character that is at least as
+        long as the opening one. A line with an info string, such as
+        ```` ```rust ````, is block content, as CommonMark specifies.
+    """
+    match = _CLOSING_FENCE.match(text)
+    if match is None:
+        return False
+    fence = match["fence"]
+    return fence[0] == opening.marker[0] and len(fence) >= len(opening.marker)
+
+
 def code_blocks(group: list[tuple[int, str]]) -> list[Fence]:
     """Return the code blocks in a doc comment, with their attributes and text."""
     blocks: list[Fence] = []
-    opening: tuple[int, tuple[str, ...]] | None = None
+    opening: _Opening | None = None
     body: list[str] = []
     for number, text in group:
-        match = _FENCE.match(text)
-        if match is None:
-            body.append(text)
-        elif opening is None:
-            info = match["info"].strip()
-            attributes = tuple(part.strip() for part in info.split(",") if part)
-            opening, body = (number, attributes), []
+        if opening is None:
+            opening, body = _opening_fence(number, text), []
+        elif _closes(text, opening):
+            blocks.append(Fence(opening.line, opening.attributes, tuple(body)))
+            opening = None
         else:
-            blocks.append(Fence(opening[0], opening[1], tuple(body)))
-            opening, body = None, []
+            body.append(text)
     return blocks
 
 
@@ -101,7 +139,8 @@ def imported_names(fence: Fence) -> frozenset[str]:
 
     Hidden doctest lines (a leading ``# ``) count, and a braced import list
     expands to one path per item, so a statement that rustfmt wrapped over
-    several lines reads the same as a one-line one.
+    several lines reads the same as a one-line one. Rust comments are removed
+    first, so a commented-out import does not count as one.
 
     Returns
     -------
@@ -109,6 +148,7 @@ def imported_names(fence: Fence) -> frozenset[str]:
         One full path per imported name, such as ``a::b::c``.
     """
     text = "\n".join(line.removeprefix("# ") for line in fence.body)
+    text = _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", text))
     names: set[str] = set()
     for statement in _USE_STATEMENT.finditer(text):
         spec = re.sub(r"\s+", "", statement["spec"])
