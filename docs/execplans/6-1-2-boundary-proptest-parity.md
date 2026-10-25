@@ -2,6 +2,11 @@
 
 Status: DRAFT — awaiting explicit approval before implementation.
 
+Rebased on `origin/main` at `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` on
+2026-10-24. Issues #90, #124, and #127 are closed; their merged work is
+recorded under [Conformance basis](#conformance-basis). Roadmap 6.1.2 remains
+open.
+
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
 Conformance basis, and Verification plan current at every milestone.
@@ -26,7 +31,10 @@ generated domain; it is not an exhaustive proof over all possible inputs.
 ## Constraints
 
 Implementation requires explicit approval of this plan. The planning pull
-request changes documentation only and leaves roadmap 6.1.2 unchecked.
+request leaves roadmap 6.1.2 unchecked. Its post-rebase validation repairs
+isolate existing checker tests from ancestor project configuration and
+synchronize native lifecycle fixtures before their short timeout begins. They
+do not implement stream-boundary parity or change production code.
 
 Keep production dispatch, public signatures, Python fallback, observation
 channels, and error policy unchanged. Preserve the completed 6.1.1 conversion
@@ -73,10 +81,14 @@ is no elapsed-time limit on planning or implementation work itself.
 - Medium impact, medium likelihood: seed replay changes after strategy edits.
   Version seeds with their source, preserve minimized named regressions, and
   verify replay before changing the generator.
-- High impact, known limitation: the complete Python suite with an installed
-  extension can abort through the separate descriptor race in issue #124.
-  Follow the existing split between ordinary and extension-required suites;
-  never describe an aborted or skipped run as passing.
+- Medium impact, uncertain status: existing Makefile and CI comments still
+  describe a descriptor close race associated with issue #124 and keep the
+  extension suite selective. Issue #124 is closed by PR #160, which unified the
+  splice loop and fixed `drain_reader` EINTR handling. M1 must verify whether
+  the documented race still reproduces before treating it as a current blocker;
+  a closed issue alone does not establish that every related failure mode is
+  gone. Keep using the repository-defined ordinary and extension test targets
+  and report their results accurately.
 
 ## Progress
 
@@ -85,6 +97,17 @@ is no elapsed-time limit on planning or implementation work itself.
 - [x] (2026-10-13) Complete Wyvern reconnaissance and upstream-tool research.
 - [x] (2026-10-13) Reconcile the six expert perspectives into the design.
 - [x] (2026-10-13) Pass documentation gates and publish draft PR #619.
+- [x] (2026-10-24) Rebase the two-commit plan branch onto fetched `origin/main`;
+  the replay was conflict-free and `range-diff` matched both commits.
+- [x] (2026-10-24) Verify that issues #90, #124, and #127 are closed and their
+  linked implementation PRs are merged into the target branch.
+- [x] (2026-10-24) Diagnose typing-contract timeouts as ancestor project
+  discovery, and add a failing isolation regression before repairing the helper.
+- [x] (2026-10-25) Repair isolated checker configuration and native lifecycle
+  fixture scheduling, without changing production behaviour.
+- [x] (2026-10-25) Pass `make check-fmt`, `make test`, `make typecheck`,
+  `make lint`, `make markdownlint`, and `make nixie`.
+- [ ] Update and push PR #619 after gate validation.
 - [ ] Obtain explicit user approval before implementation.
 - [ ] M1: establish the real-boundary test bridge and prove its failure paths.
 - [ ] M2: add generated parity, error witnesses, and replayable seeds.
@@ -92,6 +115,25 @@ is no elapsed-time limit on planning or implementation work itself.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
+
+Post-rebase `make test` passed 4,245 tests and skipped 96, but ten typing
+contract cases timed out. A bounded experiment showed that an unrelated
+`/tmp/pyproject.toml` made the checker scan thousands of temporary files.
+Explicit fixture scope reduced the same check to one file and 1.118 seconds; an
+explicit empty configuration also prevents inherited rule suppression. See
+[the diagnosis](../debugging/debugging-plan-2026-10-24-typing-project-discovery.md).
+This test-harness repair is separate from the unapproved parity
+implementation. The subsequent full run passed the typing suite, then exposed a
+stale Ruff diagnostic assertion. The import-order fixture now uses the
+repository's configuration explicitly and checks its named `unsorted-imports`
+diagnostic.
+
+A later full run exposed a separate lifecycle-fixture startup race: its 50 ms
+pipeline deadline could expire before the held native worker started. A 100 ms
+dispatch delay reproduced the failure. The fixture now waits for worker
+readiness before arming the same short deadline, retaining the real timeout and
+deferred-cleanup paths. See the
+[startup diagnosis](../debugging/debugging-plan-2026-10-25-native-pump-startup.md).
 
 Roadmap 6.1.1 is already complete. `RustStreamError` lives in
 `rust/cuprum-rust/src/lib.rs`; `run_stream_operation` in
@@ -111,7 +153,9 @@ alone satisfies the requested Rust-generated cross-language boundary property.
 CodeGraph reindexing returned `Transport closed` during planning. Wyvern agents
 used direct source reads and exchanged evidence through context packs
 `pk_hy3ijyw2` and `pk_6juklsmc`. This plan contains the durable facts needed
-without those temporary packs.
+without those temporary packs. On 2026-10-24, the plan branch rebased cleanly
+onto `origin/main`; the replayed two commits matched the originals in
+`range-diff`. No conflict resolution was needed.
 
 ## Decision log
 
@@ -128,15 +172,22 @@ without those temporary packs.
 - (2026-10-13) Preserve ordinary-suite and extension-suite separation. The
   new gate belongs to the existing extension workflow, not production routing
   or a new scheduled CI service.
+- (2026-10-24) Record #90, #124, and #127 as closed with merged implementation
+  PRs. Closure supplies context, not completion evidence for roadmap 6.1.2.
+  Keep the extension lane selective as currently configured, and verify the
+  remaining #124 race claim before changing test-environment requirements.
 
 ## Outcomes & retrospective
 
 The plan, six-perspective expert review, and documentation validation are
 complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619) publishes
-the plan on `6-1-2-boundary-proptest-parity`, tracking its `origin` branch. No
-implementation tests, native builds, performance measurements, or runtime
-changes have been performed for this task. Approval, implementation, and
-roadmap completion remain outstanding.
+the plan on `6-1-2-boundary-proptest-parity`, tracking its `origin` branch. The
+branch has since been rebased onto `origin/main`; the two-commit `range-diff`
+is unchanged and the replay had no conflicts. Issues #90, #124, and #127 are
+closed through merged PRs. All requested post-rebase gates passed. Publication
+of the validated commits is the remaining delivery step. The rebase adds no
+runtime changes or new parity tests and makes no performance claim. Approval,
+implementation, and roadmap completion remain outstanding.
 
 ## Context and orientation
 
@@ -177,15 +228,32 @@ external documentation gaps, `logisphere-experts` for design review, and
 
 ## Conformance basis
 
-The repository baseline is commit `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`.
-There is no separate task-specific terms-of-reference document. The governing
-documents at that revision are `docs/roadmap.md` §6.1.2,
-`docs/cuprum-design.md` (Rust extension strategy),
+The current planning baseline is fetched `origin/main` at commit
+`40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24). The original plan was
+drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`; both are retained in
+local recovery refs for the rebase audit. There is no separate task-specific
+terms-of-reference document. The governing documents at the current baseline are
+`docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust extension strategy),
 `docs/adr-002-additional-rust-components.md` (decoding and descriptor risks),
 `docs/adr-008-rust-pump-observation-channel.md` (separate pump observations),
 and `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §§3–4. Consult
 `docs/developers-guide.md` for extension-required testing and CI ownership.
-Issues #90 and #127 provide context; this plan PR does not close either issue.
+Issue #90 was implemented by merged PR
+[#229](https://github.com/leynos/cuprum/pull/229) (commit
+`a1840eb2662a14f6c171b01bc3cbc68fd2752b65`), which added a buffer-size cap and
+Python/Rust boundary property tests. Issue #124 was implemented by merged PR
+[#160](https://github.com/leynos/cuprum/pull/160) (commit
+`d763ea36d1becad902285108e00cb0f946d25128`), which unified the splice loop and
+fixed `drain_reader` EINTR handling. Issue #127 was implemented by merged PR
+[#164](https://github.com/leynos/cuprum/pull/164) (commit
+`1716f08f89312babd0df14c3396c53105c65531a`), which documents and tests
+`rust_consume_stream` as implemented but not integrated. All three issues are
+closed, their implementation PRs are merged, and the listed commits are
+reachable from this baseline. The work in 6.1.2 remains: Rust proptest through
+the compiled PyO3 boundary, broader generated inputs around 1 MiB, committed
+replay evidence, and confirmation of the current extension-suite error
+boundary. This plan PR does not close those issues a second time or mark the
+roadmap task complete.
 
 Trace the important requirements as follows:
 
@@ -454,27 +522,29 @@ missing native module, mismatch, child crash, or timeout must exit non-zero.
 Use the same target for focused red/green evidence; capture the intentional
 negative run separately, restore the mutation, and rerun it successfully.
 
-For each implementation commit, the scrutineer runs the following sequentially
-in the ordinary development environment without an installed optional native
-extension, consistent with the current CI split:
+For each implementation commit, use the requested ordinary repository gates
+sequentially in the checkout as documented by `AGENTS.md`. Do not assume that
+issue #124's closure either removes or confirms the descriptor race still
+mentioned by current Makefile/CI comments; M1 must check the current behaviour
+through the repository-defined test lanes. The requested post-rebase commands
+are `make check-fmt`, `make test`, `make typecheck`, and `make lint`. After
+`make develop`, use `make test-extension` for extension-required cases. Keep
+these runs sequential and preserve their exit statuses and logs. Stop at a
+failed command, inspect its log, and fix the cause before retrying it:
 
 ```bash
 set -o pipefail
-make dev-fast-check 2>&1 | tee /tmp/dev-fast-cuprum-6-1-2.out
 make check-fmt 2>&1 | tee /tmp/check-fmt-cuprum-6-1-2.out
-make lint 2>&1 | tee /tmp/lint-cuprum-6-1-2.out
 make test 2>&1 | tee /tmp/test-cuprum-6-1-2.out
 make typecheck 2>&1 | tee /tmp/typecheck-cuprum-6-1-2.out
+make lint 2>&1 | tee /tmp/lint-cuprum-6-1-2.out
 make markdownlint 2>&1 | tee /tmp/markdownlint-cuprum-6-1-2.out
 make nixie 2>&1 | tee /tmp/nixie-cuprum-6-1-2.out
 ```
 
-Check each command's exit status before proceeding. For native acceptance, use
-this checkout's `.venv` and the shared Cargo cache. The Makefile hardcodes
-`.venv` in several places, so an unverified alternative environment selector is
-not sufficient. Do not delete or modify another worktree's environment. Rebuild
-the extension from the candidate source and then run the required extension
-suite:
+For implementation acceptance, rebuild the native extension from the candidate
+source, then run its required suite. The proposed parity target runs exactly
+once through `make test-extension` after M1 wires it in:
 
 ```bash
 set -o pipefail
@@ -482,57 +552,12 @@ make develop 2>&1 | tee /tmp/develop-cuprum-6-1-2.out
 make test-extension 2>&1 | tee /tmp/extension-cuprum-6-1-2.out
 ```
 
-The final command includes the proposed parity target exactly once. Before
-every ordinary full-gate run, temporarily move aside only the untracked native
-module belonging to this checkout. First run `make build`, then run the
-following through `.venv/bin/python` (Windows: `.venv/Scripts/python.exe`):
-
-```python
-import importlib.util
-import subprocess
-from pathlib import Path
-
-root = Path.cwd().resolve()
-spec = importlib.util.find_spec("cuprum._rust_backend_native")
-if spec is not None:
-    assert spec.origin is not None, "native module has no file origin"
-    native = Path(spec.origin).resolve()
-    assert native.is_relative_to(root), "native module belongs to another checkout"
-    relative = native.relative_to(root)
-    tracked = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", str(relative)],
-        capture_output=True,
-        check=False,
-    )
-    assert tracked.returncode == 1, "refuse to move tracked or unverifiable file"
-    saved = native.with_name(native.name + ".boundary-disabled")
-    assert not saved.exists(), "inspect an existing saved artefact before continuing"
-    native.rename(saved)
-    print(f"Saved native artefact: {saved}")
-```
-
-This is an operator recovery snippet, not a new repository helper script. Run a
-fresh interpreter preflight before `make test`:
-
-```bash
-uv run python -c 'import importlib.util; assert importlib.util.find_spec("cuprum._rust_backend_native") is None'
-```
-
-If it fails, stop and inspect the reported import origin; do not run the full
-suite. After ordinary gates, rebuild with `make develop` and verify the new
-module origin. Retain the saved untracked artefact until the replacement build
-passes; rollback is `Path(saved_path).rename(original_path)` only when the
-original path is absent. After replacement native acceptance passes, remove
-only that recorded saved file with `Path(saved_path).unlink()` and record the
-cleanup, so the next gate cycle can repeat safely. Never use broad cleanup or
-`make clean` for this transition. Record the exact saved path in the milestone
-evidence. Report hosted Windows results separately from local Linux evidence.
-No new benchmark run is required for this task.
-
-For this documentation-only planning PR, run `make fmt`, inspect and retain
-only intentional formatting changes, then run `make check-fmt`,
-`make markdownlint` (including spelling), and `make nixie`. Stage the plan
-before spelling so tracked-file checks include it. Publish the branch tracking
+For the initial documentation-only planning PR, run `make fmt`, inspect and
+retain only intentional formatting changes, then run `make check-fmt`,
+`make markdownlint` (including spelling), and `make nixie`. Post-rebase
+validation also requires `make test`, `make typecheck`, and `make lint`,
+including the typing-harness isolation repair. Stage the plan before spelling
+so tracked-file checks include it. Publish the branch tracking
 `origin/6-1-2-boundary-proptest-parity` and create a draft PR with a
 branch-wise plan link and the Lody session link in a terminal References
 section. Publishing the plan is not approval to implement it.
@@ -592,3 +617,28 @@ Revision note (2026-10-13): `make fmt`, `make check-fmt`, `make markdownlint`
 including spelling, and `make nixie` passed. Draft PR #619 was published after
 commit `617651b2`; implementation still requires explicit approval. The roadmap
 remains unchecked.
+
+Revision note (2026-10-24): rebased the two plan commits onto fetched
+`origin/main` at `40d56d69f39f09b5759d0524a5aa1e621a15e8d0`; replay was clean
+and `range-diff` matched. Verified #90/#229, #124/#160, and #127/#164 as
+closed/merged. Updated the current baseline and remaining 6.1.2 scope. The
+requested post-rebase gates and push were pending at this revision;
+implementation remains approval-gated.
+
+Revision note (2026-10-25): completed test-harness repairs for isolated ty and
+Ruff configuration, the current Ruff diagnostic identifier, and native worker
+readiness before the lifecycle fixture starts its timeout. Production timeout
+and dispatch behaviour are unchanged. `make check-fmt`, `make typecheck`,
+`make lint`, `make markdownlint`, and `make nixie` passed; logs are under
+`/tmp/pr619-verified-<gate>.out`, with zero exit-status sidecars.
+
+The first full test run on the repaired candidate exhausted the existing
+1,800-second compile-time UI timeout while waiting for shared Cargo and
+compiler resources (`/tmp/pr619-verified-test.out`). A single retry reused the
+completed build artefacts without changing timeouts, filters, caches, or
+admission policy. That full `make test` run passed (`/tmp/pr619-warm-test.out`,
+exit status zero): all Python partitions passed, all 167 Rust Nextest tests
+passed, and separate Rust doctests completed with no failures and three ignored
+examples. The two slow Rust compile-time tests completed in approximately 645
+and 791 seconds. These are local validation records, not portable performance
+measurements.
