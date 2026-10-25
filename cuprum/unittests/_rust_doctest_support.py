@@ -164,24 +164,30 @@ def _raw_string_end(text: str, raw_start: re.Match[str]) -> int:
     return len(text) if found == -1 else found + len(closing)
 
 
-def _next_token(text: str, index: int) -> tuple[int, bool]:
-    """Return where the token at ``index`` ends, and whether the code keeps it."""
+def _next_token(text: str, index: int) -> tuple[int, str]:
+    """Return where the token at ``index`` ends, and its kind.
+
+    Returns
+    -------
+    tuple[int, str]
+        The end index, and ``"comment"``, ``"string"`` or ``"code"``.
+    """
     if text.startswith("//", index):
         end = text.find("\n", index)
-        return (len(text) if end == -1 else end), False
+        return (len(text) if end == -1 else end), "comment"
     if text.startswith("/*", index):
-        return _block_comment_end(text, index), False
+        return _block_comment_end(text, index), "comment"
     if text[index] == '"':
-        return _string_end(text, index), True
+        return _string_end(text, index), "string"
     if raw_start := _RAW_STRING_START.match(text, index):
-        return _raw_string_end(text, raw_start), True
+        return _raw_string_end(text, raw_start), "string"
     if text.startswith("'\"'", index):
-        return index + 3, True
-    return index + 1, True
+        return index + 3, "string"
+    return index + 1, "code"
 
 
-def strip_comments(text: str) -> str:
-    """Remove Rust comments from ``text``, leaving string literals intact.
+def _tokens(text: str) -> cabc.Iterator[tuple[str, str]]:
+    """Split ``text`` into ``(kind, chunk)`` pairs that together cover all of it.
 
     Block comments nest, as they do in Rust, and a comment marker inside a
     string, raw string or the ``'"'`` character literal is not a comment. An
@@ -189,20 +195,48 @@ def strip_comments(text: str) -> str:
     character literals are not interpreted, which is enough for the import
     lines this scanner reads.
 
+    Yields
+    ------
+    tuple[str, str]
+        The token kind (``"comment"``, ``"string"`` or ``"code"``), then its
+        text. The newline that ends a line comment is not part of the comment.
+    """
+    index = 0
+    while index < len(text):
+        end, kind = _next_token(text, index)
+        yield kind, text[index:end]
+        index = end
+
+
+def strip_comments(text: str) -> str:
+    """Remove Rust comments from ``text``, leaving string literals intact.
+
     Returns
     -------
     str
         ``text`` without its comments; the newline that ends a line comment is
         kept, so line structure is preserved.
     """
-    parts: list[str] = []
-    index = 0
-    while index < len(text):
-        end, is_kept = _next_token(text, index)
-        if is_kept:
-            parts.append(text[index:end])
-        index = end
-    return "".join(parts)
+    return "".join(chunk for kind, chunk in _tokens(text) if kind != "comment")
+
+
+def executable_code(text: str) -> str:
+    """Return ``text`` without comments and with string literals emptied.
+
+    The contents of a string are data, not code, so a ``use`` statement inside
+    one must not be read as an import.
+
+    Returns
+    -------
+    str
+        ``text`` with each comment removed and each string, raw string or
+        quote-character literal replaced by an empty string literal.
+    """
+    return "".join(
+        '""' if kind == "string" else chunk
+        for kind, chunk in _tokens(text)
+        if kind != "comment"
+    )
 
 
 def imported_names(fence: Fence) -> frozenset[str]:
@@ -210,8 +244,8 @@ def imported_names(fence: Fence) -> frozenset[str]:
 
     Hidden doctest lines (a leading ``# ``) count, and a braced import list
     expands to one path per item, so a statement that rustfmt wrapped over
-    several lines reads the same as a one-line one. Rust comments are removed
-    first, so a commented-out import does not count as one.
+    several lines reads the same as a one-line one. Only executable code
+    counts, so an import in a comment or a string literal is not read.
 
     Returns
     -------
@@ -219,7 +253,7 @@ def imported_names(fence: Fence) -> frozenset[str]:
         One full path per imported name, such as ``a::b::c``.
     """
     text = "\n".join(line.removeprefix("# ") for line in fence.body)
-    text = strip_comments(text)
+    text = executable_code(text)
     names: set[str] = set()
     for statement in _USE_STATEMENT.finditer(text):
         spec = re.sub(r"\s+", "", statement["spec"])

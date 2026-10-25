@@ -16,6 +16,7 @@ from cuprum.unittests._rust_doctest_support import (
     compile_fail_count,
     compile_fail_defects,
     doc_comment_groups,
+    executable_code,
     imported_names,
     strip_comments,
 )
@@ -290,4 +291,54 @@ def test_an_import_after_a_string_holding_a_comment_marker_is_still_read() -> No
     fence = Fence(1, (), ('let _s = "/*";', "use krate::a;", "// closes */ here"))
     assert imported_names(fence) == {"krate::a"}, (
         "the string literal must be kept whole so the import after it is read"
+    )
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        pytest.param('"use krate::b;"', id="string"),
+        pytest.param('r#"use krate::b;"#', id="raw-string"),
+        pytest.param('"say \\" use krate::b;"', id="string-with-escaped-quote"),
+    ],
+)
+def test_an_import_inside_a_string_does_not_back_a_negative_case(literal: str) -> None:
+    """Text in a string literal is data, so it cannot import anything."""
+    source = _doc(
+        ("", f"use krate::a;\nlet _s = {literal};"),
+        ("compile_fail,E0308", "use krate::b;"),
+    )
+    assert compile_fail_defects(source) == [_unbacked(5, "krate::b")], (
+        "an import-shaped string in a control must not count as an import"
+    )
+
+
+def test_imported_names_ignore_strings_but_keep_the_imports_around_them() -> None:
+    """Only executable code is read, whatever literals surround an import."""
+    fence = Fence(
+        1,
+        (),
+        ('let _s = "use krate::b;";', "use krate::a;", "let _t = '\"'; use krate::c;"),
+    )
+    assert imported_names(fence) == {"krate::a", "krate::c"}, (
+        "imports outside strings must be read and those inside must not"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param('a "x" // c\nb', 'a "" \nb', id="string-and-line-comment"),
+        pytest.param("a /* c */ b", "a  b", id="block-comment"),
+        pytest.param('a r#"x"# b', 'a "" b', id="raw-string"),
+        pytest.param("a '\"' b", 'a "" b', id="quote-character-literal"),
+        pytest.param("plain code;", "plain code;", id="code-is-unchanged"),
+    ],
+)
+def test_executable_code_removes_comments_and_empties_strings(
+    text: str, expected: str
+) -> None:
+    """Comments vanish and string contents are replaced by an empty string."""
+    assert executable_code(text) == expected, (
+        "only code may remain: comments removed, string literals emptied"
     )
