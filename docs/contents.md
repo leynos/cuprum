@@ -42,11 +42,13 @@ open each document.
 These documents are imported from the `rstest-bdd` project and are not Cuprum's
 own guidance. The [users' guide](rstest-bdd-users-guide.md) applies only where
 a Cuprum change touches the Rust behaviour-testing integration that `AGENTS.md`
-names as the project's validation framework; consequently no dependency on
-`rstest-bdd` exists today. The
-[provenance record](rstest-bdd-v0-6-0-import-provenance.md) states the upstream
-commit, the checksums of both sides of the link rewriting, and the content
-boundary.
+names as the project's validation framework. `cuprum-rust` depends on
+`rstest-bdd` 0.5.0 today, so the imported guide describes the 0.6.0 release
+rather than the version in use; consult the
+[0.6.0 migration guide][rstest-bdd-migration-060] before raising that
+dependency. The [provenance record](rstest-bdd-v0-6-0-import-provenance.md)
+states the upstream commit, the checksums of both sides of the link rewriting,
+and the content boundary.
 
 - [`rstest-bdd` users' guide][rstest-bdd-guide] - upstream user-facing guide to
   the behaviour-driven development framework.
