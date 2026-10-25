@@ -1428,6 +1428,13 @@ to a temporary directory and requires the pinned `ty` to report
 the repository-wide check scope deliberately: a file the checker is meant to
 reject cannot be checked in without failing the gate.
 
+The checker subprocess receives an explicit fixture path, project directory,
+and the empty `cuprum/unittests/typing_fixtures/ty.toml` configuration. This
+keeps temporary fixtures independent of ancestor projects and user settings: an
+unrelated configuration must neither broaden the checked file set nor suppress
+the expected diagnostics. The hostile-ancestor regression exercises both valid
+and invalid calls under an unrelated project.
+
 The protocol lives in `cuprum/sh/builder.py` and is deliberately not
 `typing.runtime_checkable`. `safe_cmd` must not import it back, because the
 protocol imports `SafeCmd` from `safe_cmd` and the reverse import would close a
@@ -2218,6 +2225,17 @@ coupled to that cleanup, so restoring blocking mode or resuming the transport
 earlier cannot hand descriptors back to asyncio while native code is still
 mid-transfer; the grace-expiry release closes only the asyncio-owned reader,
 since the worker reads its own duplicate.
+
+The synchronous lifecycle tests coordinate native-worker readiness before
+arming their 50 ms timeout. They exercise both immediate dispatch and a 100 ms
+delayed dispatch, so startup scheduling cannot prevent the held-worker cleanup
+state from being reached. Their test-only wait wrapper retains the production
+timeout and cleanup path, including descriptor ownership and transport-release
+assertions. Both child stages stay alive until that timeout, so delayed
+dispatch cannot lose the native handoff to an already-closed reader. Shared
+fixture support lives in
+`cuprum/unittests/_native_pump_lifecycle_test_helpers.py`; this is not a
+production deadline policy or a general-purpose timing abstraction.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry
@@ -5774,6 +5792,11 @@ large allocation-heavy standard-library internals unless the proof genuinely
 requires that surface.
 
 ## Python linting
+
+The import-order contract test invokes Ruff with the repository's
+`pyproject.toml` explicitly, so temporary-directory ancestors cannot alter the
+check. Its diagnostic assertion follows the `unsorted-imports` rule name
+emitted by the pinned checker with the repository's preview setting.
 
 Cuprum uses a seven-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,

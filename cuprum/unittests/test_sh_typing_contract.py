@@ -84,6 +84,11 @@ def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
         [
             _ty_executable(),
             "check",
+            str(workdir),
+            "--project",
+            str(workdir),
+            "--config-file",
+            str(_VALID_FIXTURE / "ty.toml"),
             "--python",
             sys.prefix,
             "--output-format",
@@ -156,3 +161,33 @@ def test_invalid_calls_are_rejected(name: str, tmp_path: Path) -> None:
     assert "unresolved-import" not in output, (
         f"cuprum must resolve from sys.prefix, got:\n{output}"
     )
+
+
+@pytest.mark.parametrize(
+    ("call", "expected_code"),
+    [("b('valid')", 0), ("b(object())", 1)],
+    ids=["valid-call", "invalid-call"],
+)
+def test_checker_ignores_ancestor_project(
+    tmp_path: Path, call: str, expected_code: int
+) -> None:
+    """Ancestor projects cannot add files or suppress fixture diagnostics."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "unrelated"\nversion = "0.0.0"\n'
+        '[tool.ty.rules]\ninvalid-argument-type = "ignore"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "unrelated.py").write_text("missing_ancestor_name\n", encoding="utf-8")
+    fixture_dir = tmp_path / "fixture"
+    fixture_dir.mkdir()
+    (fixture_dir / "call.py").write_text(f"{_SNIPPET_HEADER}{call}\n", encoding="utf-8")
+
+    result = _run_ty(fixture_dir)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == expected_code, output
+    assert "unrelated.py" not in output, output
+    assert "unresolved-import" not in output, output
+    if expected_code:
+        assert "invalid-argument-type" in output, output
+        assert "call.py" in output, output

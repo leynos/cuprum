@@ -92,7 +92,7 @@ def _run_ruff(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         if not key.startswith(("GIT_CONFIG_", "RUFF_"))
     }
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell.
-        [*_ruff_argv(), *args],
+        [*_ruff_argv(), "--config", str(ROOT / "pyproject.toml"), *args],
         capture_output=True,
         check=False,
         cwd=cwd,
@@ -144,7 +144,7 @@ def test_the_import_order_check_rejects_a_formatted_but_unsorted_file(
         "`ruff check --select I` accepted an import block that is out of "
         "order, so the formatting gate cannot detect this defect class"
     )
-    assert "I001" in checked.stdout, (
-        "the import sorter must report I001 for the fixture; it said:\n"
+    assert "unsorted-imports" in checked.stdout, (
+        "the import sorter must report unsorted-imports for the fixture; it said:\n"
         f"{checked.stdout}"
     )
