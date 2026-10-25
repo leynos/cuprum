@@ -91,21 +91,23 @@ def _relative(path: Path) -> str:
     return path.relative_to(repo_root()).as_posix()
 
 
+def _dependency_scopes(manifest: dict[str, object]) -> list[dict[str, object]]:
+    """Return the manifest tables that may hold dependency tables."""
+    targets = manifest.get("target", {})
+    target_scopes = list(targets.values()) if isinstance(targets, dict) else []
+    candidates = [manifest, manifest.get("workspace", {}), *target_scopes]
+    return [scope for scope in candidates if isinstance(scope, dict)]
+
+
 def _dependency_names(manifest: dict[str, object]) -> set[str]:
     """Return every dependency name a parsed manifest declares."""
-    scopes: list[object] = [manifest, manifest.get("workspace", {})]
-    targets = manifest.get("target", {})
-    if isinstance(targets, dict):
-        scopes.extend(targets.values())
-    names: set[str] = set()
-    for scope in scopes:
-        if not isinstance(scope, dict):
-            continue
-        for table in DEPENDENCY_TABLES:
-            declared = scope.get(table, {})
-            if isinstance(declared, dict):
-                names.update(str(name) for name in declared)
-    return names
+    return {
+        str(name)
+        for scope in _dependency_scopes(manifest)
+        for table in DEPENDENCY_TABLES
+        if isinstance(declared := scope.get(table), dict)
+        for name in declared
+    }
 
 
 def _doc_comment_groups(source: str) -> cabc.Iterator[list[tuple[int, str]]]:
