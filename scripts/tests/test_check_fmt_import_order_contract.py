@@ -86,17 +86,16 @@ def _ruff_argv() -> list[str]:
 
 def _run_ruff(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run Ruff with a clean environment and a bounded timeout."""
-    # The probe lives under the system temporary directory, so Ruff would adopt
-    # any `pyproject.toml` found above it. A stray one in a shared `/tmp` once
-    # switched on preview mode, which prints rule names instead of codes, so
-    # the subcommand always runs with `--isolated` to ignore every config file.
+    # The probe lives under the system temporary directory. Pinning the
+    # repository configuration prevents ancestor settings from changing the
+    # check while retaining the preview settings used by the actual gate.
     env = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("GIT_CONFIG_", "RUFF_"))
     }
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell.
-        [*_ruff_argv(), args[0], "--isolated", *args[1:]],
+        [*_ruff_argv(), "--config", str(ROOT / "pyproject.toml"), *args],
         capture_output=True,
         check=False,
         cwd=cwd,
@@ -148,7 +147,7 @@ def test_the_import_order_check_rejects_a_formatted_but_unsorted_file(
         "`ruff check --select I` accepted an import block that is out of "
         "order, so the formatting gate cannot detect this defect class"
     )
-    assert "I001" in checked.stdout, (
-        "the import sorter must report I001 for the fixture; it said:\n"
+    assert "unsorted-imports" in checked.stdout, (
+        "the import sorter must report unsorted-imports for the fixture; it said:\n"
         f"{checked.stdout}"
     )
