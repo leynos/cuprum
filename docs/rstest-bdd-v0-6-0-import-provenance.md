@@ -99,17 +99,17 @@ spans, and two of those name paths in the upstream repository.
 
 `docs/rstest-bdd-users-guide.md` mentions
 `docs/known-issues.md#rustc-internal-compiler-error-ice-with-mutable-world-macro`.
-No file of that name exists here, so the span reads as an upstream document this
-import does not vendor, consistently with the rest of the guide.
+No file of that name exists here, so the span reads as an upstream document
+this import does not vendor, consistently with the rest of the guide.
 
 `docs/rstest-bdd-v0-6-0-migration-guide.md` says the JSON contract is
 "documented at `docs/roadmap.md:316`". That path *does* exist here, which makes
 the span mislead rather than merely dangle: this repository's `docs/roadmap.md`
 Line 316 records per-line event emission for the Python pipeline, an unrelated
-Cuprum item. The upstream reference points at a `rstest-bdd` roadmap that is not
-vendored. The span is preserved verbatim because the import contract permits no
-divergence beyond the recorded link rewrites; this paragraph is the record of
-the mismatch.
+Cuprum item. The upstream reference points at a `rstest-bdd` roadmap that is
+not vendored. The span is preserved verbatim because the import contract
+permits no divergence beyond the recorded link rewrites; this paragraph is the
+record of the mismatch.
 
 ### Checksums on both sides of the rewriting
 
