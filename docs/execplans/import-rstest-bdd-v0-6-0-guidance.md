@@ -39,7 +39,12 @@ resolve from this repository and from any consumer the text is copied into. It
 carries a provenance record and an applicability matrix stating precisely which
 v0.6.0 breaking changes this repository is exposed to and which are
 inapplicable. A reader can verify the import against the recorded checksums and
-can see, stated in one place, why no dependency edit was correct.
+can see, stated in one place, how much of the v0.6.0 surface this repository is
+exposed to and which part of it is blocked. **Corrected 2026-10-25:** this
+sentence originally promised an explanation of "why no dependency edit was
+correct". No dependency edit was correct only until 2026-10-12, when one became
+necessary; the reason it is still absent is the MSRV floor, not a finding of
+nothing to do. See [Blocked migration](#blocked-migration).
 
 ## Constraints
 
@@ -89,11 +94,18 @@ Thresholds that trigger escalation when breached.
 
 ## Risks
 
-- Risk: the request presupposes a dependency that does not exist, and a naive
-  reading produces an invented migration. Severity: high Likelihood: high
-  (confirmed already) Mitigation: prove the absence exhaustively and with a
-  positive control against repositories that *do* consume the framework, then
-  implement only the applicable part.
+- Risk: the request presupposed a dependency that did not then exist, and a
+  naive reading would have produced an invented migration. Severity: high
+  Likelihood: high (historical; the premise expired on 2026-10-12) Mitigation:
+  prove the absence exhaustively and with a positive control against
+  repositories that *do* consume the framework, then implement only the
+  applicable part. **Corrected 2026-10-25:** this risk was real when it was
+  written and its mitigation was applied correctly, but the premise no longer
+  holds. Commit `d79dded2a` added a `rstest-bdd` dependency on 2026-10-12,
+  which is an ancestor of this branch's base, so the risk is now the opposite
+  one: assuming the dependency is absent and treating an unfinished migration
+  as a non-finding. The mitigation for the current state is recorded in
+  [Blocked migration](#blocked-migration).
 
 - Risk: the imported documents must pass this repository's Markdown gates
   (`make check-fmt` runs `mdtablefix`, `make markdownlint` runs
@@ -225,11 +237,16 @@ MSRV floor, not finished. See [Blocked migration](#blocked-migration).
 
 - Observation: the same string does appear in tracked files, which is what makes
   the premise look plausible at a glance. Evidence: `AGENTS.md:282` says new
-  features are validated "using `rstest` and `rstest-bdd`", and
-  `docs/developers-guide.md:394` describes an sccache A/B comparison against
-  "Whitaker, rstest-bdd, and Netsuke". Both are statements about *other*
-  repositories' practices. Impact: a keyword-only survey would have produced an
-  invented adoption task.
+  features are validated "using `rstest` and `rstest-bdd`", which is this
+  repository's own contribution rule, and `docs/developers-guide.md:448`
+  describes a local-directory backend A/B against "Whitaker, rstest-bdd, and
+  Netsuke". Impact: a keyword-only survey would have produced an invented
+  adoption task. **Corrected 2026-10-25:** the original entry called both
+  citations statements about *other* repositories' practices. That is wrong for
+  the `AGENTS.md` sentence, which is a rule binding this repository's own
+  changes, and it is the earliest textual hint that a consumer was expected. The
+  `developers-guide.md` citation had also drifted from line 394 to 448 as
+  `main` advanced; the quotation is unchanged.
 
 - Observation: the repository's larger BDD layer is Python `pytest-bdd`, a
   different framework with a different release cadence. Evidence: `.feature`
@@ -309,9 +326,13 @@ MSRV floor, not finished. See [Blocked migration](#blocked-migration).
   project's own guidance. Rationale: after the rebase onto `origin/main`,
   `docs/contents.md` was the canonical index for every other top-level document
   in `docs/`, and these four were the only ones absent from it. A separate
-  heading keeps the upstream status and the absence of any dependency visible,
-  so a reader does not mistake imported text for Cuprum's own guidance.
-  Date/Author: 2026-10-19, migration agent.
+  heading keeps the upstream status visible, so a reader does not mistake
+  imported text for Cuprum's own guidance. Date/Author: 2026-10-19, migration
+  agent. **Corrected 2026-10-25:** the rationale originally added "and the
+  absence of any dependency", which is no longer true. The heading keeps the
+  upstream status and the version mismatch visible — the imported guide
+  describes 0.6.0 while `cuprum-rust` uses 0.5.0 — and that mismatch, not an
+  absence, is what the entry states.
 
 - Decision: re-measure the "Documentation gates" evidence at each rebase
   boundary instead of carrying forward the counts captured at import time.
@@ -376,7 +397,7 @@ Residual gaps, recorded rather than hidden:
    deliberately not vendored here, so the targets resolve on GitHub but not
    inside this checkout. The links are absolute, so they cannot misdirect a
    reader to a same-named local document; the
-   [provenance record](rstest-bdd-v0-6-0-import-provenance.md#files-not-vendored)
+   [provenance record](../rstest-bdd-v0-6-0-import-provenance.md#files-not-vendored)
    states why each omitted file is omitted.
 3. Consumers that *do* need this migration are `leynos/whitaker` and
    `leynos/netsuke`, both pinned at `rstest-bdd = "0.5.0"`. They are outside
@@ -467,7 +488,7 @@ across the tracked tree.
 
 | Breaking change                                                                                          | Search pattern                                                                       | Matches | Verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Implicit fixture names normalize one leading underscore                                                  | `#[from(`                                                                            | 15      | Not applicable. All 15 are plain `rstest` fixture selection in `rust/cuprum-native-io/src/ownership_tests.rs`, `rust/cuprum-streams/src/io_utils/tests.rs`, and `rust/cuprum-streams/src/splice/tests.rs`; each file imports `rstest`, not `rstest_bdd`. Not an `rstest-bdd` macro argument.                                                                                                                                                                                                                                                                                                    |
+| Implicit fixture names normalize one leading underscore                                                  | `#[from(`                                                                            | 15      | Not applicable. The 15 hits are 14 `rstest` fixture-selection attributes plus one doc-comment mention of the syntax, in `rust/cuprum-native-io/src/ownership_tests.rs`, `rust/cuprum-streams/src/io_utils/tests.rs`, and `rust/cuprum-streams/src/splice/tests.rs`; each file imports `rstest`, not `rstest_bdd`. Not an `rstest-bdd` macro argument.                                                                                                                                                                                                                                           |
 | `runtime = "tokio-current-thread"` is a deprecated alias                                                 | `tokio-current-thread`                                                               | 0       | Not applicable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Custom `HarnessAdapter` must return `HarnessResult<T>`                                                   | `HarnessAdapter`                                                                     | 0       | Not applicable. No harness is implemented or consumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `StepContext::insert_value` returns `InsertOutcome`                                                      | `insert_value`                                                                       | 0       | Not applicable. No direct runtime API caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -476,7 +497,7 @@ across the tracked tree.
 | Rust indexing returns `RustStepIndexResult`; `index_feature_file` and `publish_rust_diagnostics` removed | `RustStepIndex`, `index_feature_file`, `index_rust_file`, `publish_rust_diagnostics` | 0       | Not applicable. No language-server integration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `record_bypassed_steps` takes a `BypassedScenario`                                                       | `record_bypassed_steps`, `BypassedScenario`                                          | 0       | Not applicable. No direct bypass-reporting caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `find_feature_files` returns `Result<Vec<PathBuf>, ServerError>`                                         | `find_feature_files`                                                                 | 0       | Not applicable. No discovery caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| MSRV is now 1.88                                                                                         | `rust-version`                                                                       | 4       | **Blocking.** The four hits are this workspace's own `rust-version = "1.85.0"` declarations, but `rstest-bdd` 0.6.0 itself requires 1.88, so adopting it raises this repository's published floor. See [Blocked migration](#blocked-migration).                                                                                                                                                                                                                                                                                                                                                 |
+| MSRV is now 1.88                                                                                         | `rust-version`                                                                       | 4       | **Blocking.** The four hits are one literal `rust-version = "1.85.0"` declaration in `rust/Cargo.toml` and three crates inheriting it with `rust-version.workspace = true`, but `rstest-bdd` 0.6.0 itself requires 1.88, so adopting it raises this repository's published floor. See [Blocked migration](#blocked-migration).                                                                                                                                                                                                                                                                  |
 | Feature-file rebuild invalidation; `compile_error!` on a path sharing no filesystem root                 | `*.feature` under `rust/`                                                            | 1       | **Applicable on adoption.** The Python `pytest-bdd` assets under `tests/features` are unbound, but `rust/cuprum-rust/tests/features/stream_errors.feature` is bound by six `#[scenario]` attributes, so the manifest-relative path rule and rebuild-invalidation change apply to it.                                                                                                                                                                                                                                                                                                            |
 | Harness dependency matrix (which crates to add)                                                          | `compile-time-validation`, `strict-compile-time-validation`                          | 0       | Not applicable. No `rstest-bdd` feature selection exists to preserve. The workspace enables no `rstest-bdd` features; `cuprum-rust` declares only its own `loom-defect-fixture`.                                                                                                                                                                                                                                                                                                                                                                                                                |
 
@@ -539,7 +560,12 @@ this plan actually makes.
 
 The claims requiring evidence are:
 
-1. The imported files are byte-identical to the upstream release.
+1. The imported files are identical to the upstream release except for the
+   authorized cross-file link rewriting. **Corrected 2026-10-25:** the original
+   claim read "byte-identical", which the link-rewriting instruction
+   superseded. "Byte-for-byte" below therefore means the file equals the
+   upstream blob up to that bounded, enumerated exception, not that no byte
+   differs.
 2. The repository's `rstest-bdd` exposure is known and the migration status is
    recorded. **Corrected 2026-10-25:** the original claim read "the repository
    has no `rstest-bdd` consumer to migrate", which is false. There is one
@@ -549,21 +575,38 @@ The claims requiring evidence are:
 3. The imported files pass this repository's documentation gates.
 4. The applicability matrix is accurate.
 
-For claim 1, the method is a checksum comparison against the blob read from the
-immutable commit, not against a working tree or a branch. The artefact is the
-SHA-256 table in the provenance record. The discharge condition is exact digest
-equality for all three files. Non-vacuity is addressed by the digests having
-been computed from a freshly fetched clone at the resolved tag and compared
-against an independently written copy; a stale or wrong source would produce a
-different digest.
+For claim 1, the method is a two-sided checksum comparison plus a bounded diff,
+not a single digest equality. The upstream side is the blob read from the
+immutable commit, never a working tree or a branch; the local side is the
+committed file. The artefact is the SHA-256 table in the provenance record,
+which carries both sides. The discharge condition is that each pair of digests
+matches its recorded value **and** that `diff` against the upstream blob yields
+only the enumerated link rewrites: five hunks, sixteen rewritten link sites
+(one, thirteen and two across the three documents), and byte growth of +52,
++676 and +101. Digest equality alone cannot discharge this claim, because the
+rewriting intentionally breaks it; the diff bounds the exception, and the
+provenance record keeps both digest sets so neither side is inferred from the
+other. Non-vacuity is addressed by the upstream digests having been computed
+from a freshly fetched clone at the resolved tag, compared against an
+independently written copy, and by the diff being non-empty in exactly the
+places the rewriting touched.
 
-For claim 2, the method is exhaustive search over every manifest, every
-lockfile, the full commit graph, and the resolved dependency graph. The
-negative result is corroborated by a positive control: the identical search
-procedure applied to `leynos/whitaker` and `leynos/netsuke` returns
-`rstest-bdd = "0.5.0"` in both, proving the method detects the dependency when
-it is present. A negative result without a positive control would be
-uninformative, so this is the non-vacuity check for claim 2.
+For claim 2, the method is a positive dependency and consumer check, not a
+negative search. The dependency is read from `rust/cuprum-rust/Cargo.toml`,
+which declares `rstest-bdd = "0.5.0"` and `rstest-bdd-macros = "0.5.0"`. The
+consumer is `rust/cuprum-rust/src/stream_error_behaviour.rs`, which defines
+fourteen steps (four `#[given]`, three `#[when]`, seven `#[then]`) across six
+named `#[scenario]` bindings matching the six scenarios in
+`rust/cuprum-rust/tests/features/stream_errors.feature`. The migration status
+is then established from published crate metadata: `rstest-bdd` 0.6.0,
+`rstest-bdd-macros` 0.6.0 and `gherkin` 0.16.0 each declare
+`rust-version = "1.88"`, while `rust/Cargo.toml` and `rust/rust-toolchain.toml`
+pin 1.85.0, so the migration is blocked rather than unnecessary. **Corrected
+2026-10-25:** the original method described corroborating a negative result
+with a positive control applied to other repositories. That control was the
+right instrument for a true negative and is retained in the Progress record for
+its historical scope, but it is the wrong instrument for a repository that does
+have a consumer.
 
 For claim 3, the method is to run the repository's own gates over the imported
 files and capture the output. The commands are `make markdownlint`,
