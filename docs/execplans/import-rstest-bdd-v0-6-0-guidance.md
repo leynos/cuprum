@@ -83,14 +83,18 @@ Thresholds that trigger escalation when breached.
 
 - Scope: if implementation requires net changes to more than 8 tracked files or
   200 net lines outside `docs/`, stop and escalate.
-- Dependencies: if any `Cargo.toml` or `Cargo.lock` edit is required, stop and
-  escalate. The survey says none is correct; an apparent need means the survey
-  is wrong and the premise must be re-examined.
+- Dependencies: the repository does have a live `rstest-bdd` 0.5.0 consumer,
+  and the version move is blocked by the 1.88 MSRV floor recorded in
+  [Blocked migration](#blocked-migration). If a `Cargo.toml` or `Cargo.lock`
+  edit raising that floor or changing a dependency version is required, stop
+  and escalate for the owner's approval rather than treating the apparent need
+  as a survey defect.
 - Interface: if any public API signature must change, stop and escalate.
 - Iterations: if a documentation gate still fails after 3 attempts, stop and
   escalate.
-- Ambiguity: if a reviewer would reasonably expect a dependency edit despite
-  the survey, stop and present the evidence rather than editing.
+- Ambiguity: if a reviewer would reasonably expect the dependency migration to
+  land here, stop and present the MSRV evidence in
+  [Blocked migration](#blocked-migration) rather than editing the manifests.
 
 ## Risks
 

@@ -92,6 +92,25 @@ The bare-URL lint (MD034) requires the CommonMark angle-bracket form
 `<https://…>` for a definition that is nothing but a URL, so the single
 footnote definition rewritten in the v0.5.0 guide uses that form.
 
+### Repository-relative paths that were left alone
+
+The rewriting covers Markdown link destinations. It does not touch inline code
+spans, and two of those name paths in the upstream repository.
+
+`docs/rstest-bdd-users-guide.md` mentions
+`docs/known-issues.md#rustc-internal-compiler-error-ice-with-mutable-world-macro`.
+No file of that name exists here, so the span reads as an upstream document this
+import does not vendor, consistently with the rest of the guide.
+
+`docs/rstest-bdd-v0-6-0-migration-guide.md` says the JSON contract is
+"documented at `docs/roadmap.md:316`". That path *does* exist here, which makes
+the span mislead rather than merely dangle: this repository's `docs/roadmap.md`
+Line 316 records per-line event emission for the Python pipeline, an unrelated
+Cuprum item. The upstream reference points at a `rstest-bdd` roadmap that is not
+vendored. The span is preserved verbatim because the import contract permits no
+divergence beyond the recorded link rewrites; this paragraph is the record of
+the mismatch.
+
 ### Checksums on both sides of the rewriting
 
 The left column is the digest as imported from the pinned commit. The right
@@ -139,4 +158,4 @@ recorded in the ExecPlan.
 
 Specifically, the guard-based `StepContext` borrowing model is a v0.7.0 change
 and the `#[harness_context]` marker is a v0.6.1 beta change. Neither is
-implemented or relied upon by this repository's migration.
+implemented nor relied upon by this repository's migration.
