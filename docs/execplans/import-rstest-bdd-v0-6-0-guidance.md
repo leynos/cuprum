@@ -422,8 +422,11 @@ decision, and the reason is a hard MSRV floor rather than effort or priority.
   declares `rust-version = 1.88`.
 - This workspace pins `rust-version = "1.85.0"` in `rust/Cargo.toml` and
   `channel = "1.85.0"` in `rust/rust-toolchain.toml`, and `make msrv-check`
-  compiles every target on that toolchain. That check runs inside `make lint`,
-  which is a required status context on `main`.
+  compiles every target on that toolchain. `msrv-check` is a standalone target
+  rather than a prerequisite of `make lint`; it runs as its own step in the
+  `.github/workflows/ci.yml` `lint-test` job, and `lint-test` is a required
+  status context on `main`. The gate is therefore still a merge blocker, but it
+  arrives through the job step, not through the lint aggregate.
 - Raising the floor is therefore not a local edit. It changes the published
   minimum for every consumer of all three crates and is recorded in
   `rust/Cargo.toml`, `rust/rust-toolchain.toml`, the `MSRV_TOOLCHAIN` variable
@@ -650,7 +653,7 @@ The dependency facts are unchanged: no `Cargo.toml`, `Cargo.lock`, Python
 module, or gate definition is modified by this branch.
 
 **Amended 2026-10-25, after the fourth rebase onto `origin/main` at `40d56d69f`
-and the premise correction.** All four gates were re-run against the corrected
+and the premise correction.** All six gates were re-run against the corrected
 tree, in order: `make fmt`, `make markdownlint` (104 files, 0 issues, spelling
 clean), `make check-fmt` (1094 files formatted, `cargo fmt --check` clean,
 `mdtablefix --check` reports 104 unchanged), `make test` (4255 passed, 96
