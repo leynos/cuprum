@@ -26,6 +26,7 @@ _OPENING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 _CLOSING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})\s*$")
 _ATTRIBUTE_SEPARATOR = re.compile(r"[,\s]+")
 _ERROR_CODE = re.compile(r"^E\d{4}$")
+_COMMENT_MARKER = re.compile(r"/\*|\*/")
 _RAW_STRING_START = re.compile(r'r(?P<hashes>#*)"')
 _USE_STATEMENT = re.compile(r"\buse\s+(?P<spec>[^;]+);")
 _NON_COMPILING = frozenset({"ignore", "compile_fail", "text", "console", "sh"})
@@ -136,16 +137,10 @@ def is_positive_control(fence: Fence) -> bool:
 def _block_comment_end(text: str, start: int) -> int:
     """Return the index after the (possibly nested) block comment at ``start``."""
     depth = 0
-    index = start
-    while index < len(text):
-        if text.startswith("/*", index):
-            depth, index = depth + 1, index + 2
-        elif text.startswith("*/", index):
-            depth, index = depth - 1, index + 2
-            if depth == 0:
-                return index
-        else:
-            index += 1
+    for marker in _COMMENT_MARKER.finditer(text, start):
+        depth += 1 if marker[0] == "/*" else -1
+        if depth == 0:
+            return marker.end()
     return len(text)
 
 
