@@ -107,7 +107,8 @@ is no elapsed-time limit on planning or implementation work itself.
   fixture scheduling, without changing production behaviour.
 - [x] (2026-10-25) Pass `make check-fmt`, `make test`, `make typecheck`,
   `make lint`, `make markdownlint`, and `make nixie`.
-- [ ] Update and push PR #619 after gate validation.
+- [x] (2026-10-25) Publish the validated rebase with an explicit force-push
+  lease, verify the remote head, and update draft PR #619.
 - [ ] Obtain explicit user approval before implementation.
 - [ ] M1: establish the real-boundary test bridge and prove its failure paths.
 - [ ] M2: add generated parity, error witnesses, and replayable seeds.
@@ -184,10 +185,11 @@ complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619) publishes
 the plan on `6-1-2-boundary-proptest-parity`, tracking its `origin` branch. The
 branch has since been rebased onto `origin/main`; the two-commit `range-diff`
 is unchanged and the replay had no conflicts. Issues #90, #124, and #127 are
-closed through merged PRs. All requested post-rebase gates passed. Publication
-of the validated commits is the remaining delivery step. The rebase adds no
-runtime changes or new parity tests and makes no performance claim. Approval,
-implementation, and roadmap completion remain outstanding.
+closed through merged PRs. All requested post-rebase gates passed. The
+validated rebase was pushed with an explicit lease and its remote head
+verified; draft PR #619 records the updated scope and validation. The rebase
+adds no runtime changes or new parity tests and makes no performance claim.
+Approval, implementation, and roadmap completion remain outstanding.
 
 ## Context and orientation
 
@@ -642,3 +644,10 @@ passed, and separate Rust doctests completed with no failures and three ignored
 examples. The two slow Rust compile-time tests completed in approximately 645
 and 791 seconds. These are local validation records, not portable performance
 measurements.
+
+Revision note (2026-10-25): published validated commit `8d5e6ca29` using a
+force-push lease against the original remote head `b14ca0d6e`. Refreshed the
+named tracking ref and verified that local HEAD, upstream, and the remote
+branch matched. Updated draft PR #619 with the closed-issue references, test
+repairs, passing gates, and Lody session reference. This delivery record does
+not authorize implementation or mark roadmap 6.1.2 complete.
