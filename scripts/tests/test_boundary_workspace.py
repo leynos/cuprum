@@ -106,9 +106,11 @@ def _external_source_links(
         ),
         (crate / "tests/absolute.rs", tmp_path / "absolute-source.rs", None),
     )
-    for _link, source, _target in paths:
+    for link, source, _target in paths:
         source.write_text(SAFE_SOURCE, encoding="utf-8")
         source.chmod(stat.S_IRUSR)
+        # The crate has no `tests/`; a missing parent must not read as a skip.
+        link.parent.mkdir(exist_ok=True)
     try:
         for link, source, target in paths:
             link.symlink_to(source if target is None else target)
@@ -116,10 +118,7 @@ def _external_source_links(
         pytest.skip(f"the platform cannot create the symlink fixture: {error}")
     return tuple(
         _ExternalSourceLink(
-            link,
-            source,
-            source.read_bytes(),
-            stat.S_IMODE(source.stat().st_mode),
+            link, source, source.read_bytes(), stat.S_IMODE(source.stat().st_mode)
         )
         for link, source, target in paths
     )

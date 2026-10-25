@@ -60,6 +60,15 @@ fn validate_buffer_size(size: i64) -> Result<BufferSize, RustStreamError> {
 /// always reports `true`. The Python wrapper treats a failed import as
 /// "unavailable", so no runtime probing is needed here.
 ///
+/// The marker stays const-evaluable while its `PyO3` registration continues
+/// to provide the runtime Python export:
+///
+/// ```
+/// const RUST_AVAILABLE: bool = _rust_backend_native::is_available();
+///
+/// assert!(RUST_AVAILABLE);
+/// ```
+///
 /// # Returns
 /// `true` whenever the extension is loaded and callable.
 #[must_use]
@@ -112,6 +121,48 @@ fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
 }
 
 /// Python module definition for the optional Rust backend.
+///
+/// `PyO3` accepts the macro shapes this initializer relies on: a module
+/// returning `PyResult<()>` that registers functions, including one whose
+/// explicit signature defaults a parameter without changing its Rust arity:
+///
+/// ```
+/// use pyo3::prelude::*;
+///
+/// #[pyfunction]
+/// const fn is_available() -> bool { true }
+///
+/// #[pyfunction]
+/// #[pyo3(signature = (reader_fd, writer_fd, buffer_size = 65536))]
+/// const fn example_pump(reader_fd: i64, writer_fd: i64, buffer_size: i64) -> i64 {
+///     reader_fd + writer_fd + buffer_size
+/// }
+///
+/// #[pymodule]
+/// fn well_formed(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+///     module.add_function(wrap_pyfunction!(is_available, module)?)?;
+///     module.add_function(wrap_pyfunction!(example_pump, module)?)?;
+///     module.add("__doc__", "Cuprum optional Rust backend.")?;
+///     module.add("__package__", "cuprum")?;
+///     module.add("__loader__", py.None())?;
+///     Ok(())
+/// }
+///
+/// fn main() {
+///     assert_eq!(example_pump(1, 2, 65_536), 65_539);
+/// }
+/// ```
+///
+/// and rejects any other return type with a type mismatch, which keeps an
+/// initializer that cannot report failure out of the extension:
+///
+/// ```compile_fail,E0308
+/// use pyo3::prelude::*;
+///
+/// #[pymodule]
+/// fn bad_module(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> i32 { 0 }
+/// # fn main() {}
+/// ```
 ///
 /// # Errors
 /// Returns a Python error if the module cannot be initialized.

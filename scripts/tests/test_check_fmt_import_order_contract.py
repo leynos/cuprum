@@ -86,13 +86,17 @@ def _ruff_argv() -> list[str]:
 
 def _run_ruff(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run Ruff with a clean environment and a bounded timeout."""
+    # The probe lives under the system temporary directory, so Ruff would adopt
+    # any `pyproject.toml` found above it. A stray one in a shared `/tmp` once
+    # switched on preview mode, which prints rule names instead of codes, so
+    # the subcommand always runs with `--isolated` to ignore every config file.
     env = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("GIT_CONFIG_", "RUFF_"))
     }
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell.
-        [*_ruff_argv(), *args],
+        [*_ruff_argv(), args[0], "--isolated", *args[1:]],
         capture_output=True,
         check=False,
         cwd=cwd,

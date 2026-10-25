@@ -11,20 +11,17 @@ The tiers are ordered per-test allowance < global-timeout < cargo watchdog <
 job ceiling. The first two live in `rust/.config/nextest.toml`; the third is
 the shared coverage action's cargo watchdog; and the fourth is GitHub Actions'
 job timer. The contract in `cuprum/unittests/test_timeout_ordering_contract.py`
-pins the first three relationships, the compile-test tier has a contract of its
-own in `cuprum/unittests/test_compile_test_timeout_tier.py`, and the
-termination allowance is pinned by
+pins the first three relationships, and the termination allowance is pinned by
 `cuprum/unittests/test_termination_allowance.py`.
 
 _Table 1: Coverage timeout tiers._
 
-| Tier               | Configuration key or environment variable             | Value  | Scope                                        |
-| ------------------ | ----------------------------------------------------- | ------ | -------------------------------------------- |
-| Per-test allowance | `profile.default.slow-timeout`                        | 300 s  | One Rust test                                |
-| Compile-test tier  | `profile.default.overrides` (`binary(compile_tests)`) | 1800 s | The two `trybuild` UI tests                  |
-| Whole-run budget   | `profile.default.global-timeout`                      | 2400 s | One nextest run                              |
-| Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`                         | 3300 s | One coverage action cargo call               |
-| Job ceiling        | `timeout-minutes`                                     | 75 m   | The `coverage` job and its trunk counterpart |
+| Tier               | Configuration key or environment variable | Value  | Scope                                        |
+| ------------------ | ----------------------------------------- | ------ | -------------------------------------------- |
+| Per-test allowance | `profile.default.slow-timeout`            | 300 s  | One Rust test                                |
+| Whole-run budget   | `profile.default.global-timeout`          | 2400 s | One nextest run                              |
+| Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`             | 3300 s | One coverage action cargo call               |
+| Job ceiling        | `timeout-minutes`                         | 75 m   | The `coverage` job and its trunk counterpart |
 
 The file sits in `rust/` rather than the repository root because nextest
 resolves `.config/nextest.toml` from the Cargo workspace root and searches no
@@ -49,77 +46,37 @@ running nextest and refuses anything below the floor. Both sites are pinned by
 
 The 300 s per-test allowance is `period = "60s"` multiplied by
 `terminate-after = 5`, so nextest kills a hung test after it has reported the
-test as slow. That period also sets when a test is reported slow, and the worst
-healthy test here is long enough to trip it: the `trybuild` UI test
-`compile_time_ui` ran 62 s on run 35400748402, so the coverage log carries a
-`SLOW` line for it. That is the warning working, not a fault.
+test as slow. Every Rust test sits on this tier, and each is bounded by its own
+work rather than by a build.
 
-300 s is not, however, a bound no healthy test reaches. `trybuild` compiles a
-scratch crate for each UI case into a target directory of its own,
-`rust/target/tests/trybuild/`, so the artefacts nextest builds in
-`rust/target/` cannot serve that compilation. These tests also inherit
-`RUSTFLAGS` from the `cargo` that invoked them, and `make test` passes
-`-C codegen-units=1`, which trybuild's nested `cargo` obeys in turn; the
-coverage lane passes only `-D warnings`.
-
-`make test` once also pinned Cargo to a single job (`--jobs 1` and
-`CARGO_BUILD_JOBS=1`), and the figures below were measured under that pin. The
-pin is gone: Cargo now uses its default job count, or the caller's
-`CARGO_BUILD_JOBS`. The figures remain measurements under the former pin. They
-have not been re-measured without it, and concurrent compilations can contend
-for resources, so they are not a guaranteed bound on the new behaviour. The
-allowance sized from them is unchanged, and no tier depends on serial builds.
-
-The scratch directory does persist, and a repeat run with it warm took 1.271 s
-here. A cold one is the cost that matters, because it recurs on every fresh
-checkout, every clean, and every change to `RUSTFLAGS`. Two measurements of
-that cost were taken on 2026-09-19 with the gate's exact flags and an emptied
-`rust/target/tests/trybuild/`, and they differ by more than a factor of two: a
-single-test run took 277.049 s, and a full `make test` took 124.884 s. The gap
-is `sccache` and machine load, not the test, so the budget is sized for the
-larger figure. The coverage lane on run 35400748402 measured the same test at
-62.484 s, with its scratch directory and compiler cache already warm. A gate
-run on the same date killed it at the 300 s allowance —
-`TERMINATING [>300.000s]` — while it was still compiling a dependency, that is,
-while it was healthy. These 2026-09-19 figures are historical measurements from
-before the shared compiler queue became the limiting factor; they explain why
-the default 300 s tier was first raised, but do not bound a later run that
-waits for shared Cargo resources.
-
-In a later `make test` run, `cuprum-rust::compile_tests::compile_time_ui`
-reached the 600 s compile-test limit after waiting on shared Cargo
-package-cache locks. Its trybuild fixture build completed in 9m35s, and nextest
-stopped the test before the later 92 tests could run. A 2026-10-16 run then
-reached the 900 s allowance while nested Cargo was still waiting on the same
-lock, before the later 99 tests could run. A 2026-10-17 run reached the 1200 s
-allowance while the outer Rust test build had taken 19m31s and nested Cargo was
-still compiling its trybuild scratch crate. These runs show that the earlier
-measurements do not cover queue wait as well as compilation.
-
-`terminate-after` is therefore raised to 30 for the `binary(compile_tests)`
-tests, giving them 1800 s, and left at 5 for the other 123. Thirty 60 s periods
-allow ten minutes beyond the observed 1200 s cutoff while retaining a finite
-bound. The 40-minute global nextest budget leaves ten minutes beyond the
-compile-test tier for the sibling UI test and the rest of the suite. The 300 s
-general allowance remains unchanged. The override is scoped by binary rather
-than by test name so both `trybuild` tests carry it:
-`cuprum-streams::compile_tests::transition_privacy` is the same species and
-measured 39.6 s from a warm scratch directory, and a bound that covered only
-the test that happened to time out first would leave its sibling as the next
-tripwire.
+That was not always so. Until
+[ADR-027](adr-027-compile-contracts-in-the-build-graph.md), the `trybuild` UI
+tests ran in the `compile_tests` binaries under a `binary(compile_tests)`
+override. `trybuild` compiled a scratch crate with flags no workspace artefact
+matched, so each checkout rebuilt the whole dependency graph inside one test's
+allowance while every compiler invocation queued for the host-wide compiler
+admission pool. That override was raised from 300 s to 600 s, 900 s, 1200 s and
+1800 s, and still expired mid-build on 2026-10-20, with between 66 and 382
+admission requests queued ahead. The queue belongs to the host rather than the
+test, so no allowance could bound it. Those contracts are now ordinary and
+`compile_fail` doctests compiled against the workspace's existing artefacts,
+and the override is gone.
 
 `largest_per_test_allowance_seconds()` reads the maximum across the default
 profile and every override, not the profile alone. An override exists precisely
 to exceed the profile it overrides, so reading only the profile would
 understate the allowance and the containment assertions would pass while a test
 could still outlast the tier meant to contain it. The 2400 s global budget
-contains the 1800 s allowance. The watchdog contains 2400 s for nextest, its 60
-s termination allowance, and 600 s for a cold build for 3060 s, with four
-minutes of remaining headroom in the 3300 s watchdog. The job ceiling is 4500 s
-(75 minutes). The watchdog remains sized above roughly fifty successful
-coverage runs: the worst coverage step was 418 s in run 34071469378, the worst
-trunk coverage step was 322 s in run 34062626757, and run 34067223641 measured
-the worst work outside the watchdog. None was a genuinely cold build.
+contains the 300 s allowance. It was sized to leave ten minutes beyond the
+retired 1800 s tier and is kept rather than narrowed, because the watchdog and
+the boundary-harness marker below are sized against it; narrowing it is a
+separate, measured change. The watchdog contains 2400 s for nextest, its 60 s
+termination allowance, and 600 s for a cold build for 3060 s, with four minutes
+of remaining headroom in the 3300 s watchdog. The job ceiling is 4500 s (75
+minutes). The watchdog remains sized above roughly fifty successful coverage
+runs: the worst coverage step was 418 s in run 34071469378, the worst trunk
+coverage step was 322 s in run 34062626757, and run 34067223641 measured the
+worst work outside the watchdog. None was a genuinely cold build.
 
 The watchdog must satisfy
 `watchdog >= global-timeout + termination + cold build`. Termination is the

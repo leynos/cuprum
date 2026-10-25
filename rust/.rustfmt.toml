@@ -12,5 +12,3 @@ format_macro_matchers = true
 fn_single_line = true
 condense_wildcard_suffixes = true
 use_field_init_shorthand = true
-
-ignore = ["cuprum-rust/tests/ui"]

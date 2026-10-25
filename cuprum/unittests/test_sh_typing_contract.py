@@ -80,6 +80,12 @@ def _ty_executable() -> str:
 
 def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
     """Type-check ``workdir`` with the pinned ty and return the process result."""
+    # ty adopts the nearest project configuration above its working directory.
+    # These directories live under the system temporary directory, so without
+    # a configuration of their own a stray `pyproject.toml` in a shared `/tmp`
+    # becomes the project root and every call checks everything beneath it.
+    # An empty `ty.toml` pins the root here and changes no setting.
+    (workdir / "ty.toml").touch()
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
         [
             _ty_executable(),
@@ -155,4 +161,26 @@ def test_invalid_calls_are_rejected(name: str, tmp_path: Path) -> None:
     )
     assert "unresolved-import" not in output, (
         f"cuprum must resolve from sys.prefix, got:\n{output}"
+    )
+
+
+def test_an_ancestor_project_cannot_widen_the_check(tmp_path: Path) -> None:
+    """A project configuration above the working directory is not adopted."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "ancestor"\nversion = "0"\n', encoding="utf-8"
+    )
+    (tmp_path / "ancestor_defect.py").write_text(
+        "defect: int = 'not an int'\n", encoding="utf-8"
+    )
+    workdir = tmp_path / "nested"
+    workdir.mkdir()
+    (workdir / "clean.py").write_text("value: int = 1\n", encoding="utf-8")
+
+    result = _run_ty(workdir)
+
+    assert result.returncode == 0, (
+        f"only the working directory may be checked, got:\n{result.stdout}"
+    )
+    assert "ancestor_defect" not in result.stdout, (
+        f"a sibling of the working directory was checked:\n{result.stdout}"
     )
