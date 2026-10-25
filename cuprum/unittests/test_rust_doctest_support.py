@@ -17,6 +17,7 @@ from cuprum.unittests._rust_doctest_support import (
     compile_fail_defects,
     doc_comment_groups,
     imported_names,
+    strip_comments,
 )
 
 _CONTROL = "/// ```\n/// let _ = 1;\n/// ```\n"
@@ -247,4 +248,46 @@ def test_imports_may_be_split_across_controls() -> None:
     assert compile_fail_defects(source) == [], (
         "each name is imported by some control, so renaming either one fails a "
         "control and the negative case cannot pass for that reason alone"
+    )
+
+
+def test_a_nested_block_comment_hides_an_import_after_its_inner_close() -> None:
+    """Rust block comments nest, so the first ``*/`` does not end the outer one."""
+    commented = "/* outer\n   /* inner */\n   use krate::b;\n*/"
+    source = _doc(
+        ("", f"use krate::a;\n{commented}"),
+        ("compile_fail,E0308", "use krate::b;"),
+    )
+    assert compile_fail_defects(source) == [_unbacked(8, "krate::b")], (
+        "an import inside a nested block comment must not back a negative case"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("a // b\nc", "a \nc", id="line-comment-keeps-the-newline"),
+        pytest.param("a /* b */ c", "a  c", id="block-comment"),
+        pytest.param("a /* x /* y */ z */ c", "a  c", id="nested-block-comment"),
+        pytest.param("a /* never closed", "a ", id="unterminated-block-comment"),
+        pytest.param('a "// b" c', 'a "// b" c', id="line-marker-in-string"),
+        pytest.param('a "/* b" c', 'a "/* b" c', id="block-marker-in-string"),
+        pytest.param('a "q\\" // b" c', 'a "q\\" // b" c', id="escaped-quote"),
+        pytest.param('r#"/* b "# c', 'r#"/* b "# c', id="raw-string"),
+        pytest.param("a '\"' // b", "a '\"' ", id="quote-character-literal"),
+    ],
+)
+def test_comments_are_stripped_and_literals_are_kept(text: str, expected: str) -> None:
+    """A comment marker inside another token must not change what is read."""
+    assert strip_comments(text) == expected, (
+        "comments must be removed with nesting, and string, raw string and "
+        "quote-character literals must be left whole"
+    )
+
+
+def test_an_import_after_a_string_holding_a_comment_marker_is_still_read() -> None:
+    """A ``/*`` inside a string must not swallow the import that follows it."""
+    fence = Fence(1, (), ('let _s = "/*";', "use krate::a;", "// closes */ here"))
+    assert imported_names(fence) == {"krate::a"}, (
+        "the string literal must be kept whole so the import after it is read"
     )

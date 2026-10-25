@@ -26,8 +26,7 @@ _OPENING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 _CLOSING_FENCE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})\s*$")
 _ATTRIBUTE_SEPARATOR = re.compile(r"[,\s]+")
 _ERROR_CODE = re.compile(r"^E\d{4}$")
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-_LINE_COMMENT = re.compile(r"//[^\n]*")
+_RAW_STRING_START = re.compile(r'r(?P<hashes>#*)"')
 _USE_STATEMENT = re.compile(r"\buse\s+(?P<spec>[^;]+);")
 _NON_COMPILING = frozenset({"ignore", "compile_fail", "text", "console", "sh"})
 
@@ -134,6 +133,83 @@ def is_positive_control(fence: Fence) -> bool:
     )
 
 
+def _block_comment_end(text: str, start: int) -> int:
+    """Return the index after the (possibly nested) block comment at ``start``."""
+    depth = 0
+    index = start
+    while index < len(text):
+        if text.startswith("/*", index):
+            depth, index = depth + 1, index + 2
+        elif text.startswith("*/", index):
+            depth, index = depth - 1, index + 2
+            if depth == 0:
+                return index
+        else:
+            index += 1
+    return len(text)
+
+
+def _string_end(text: str, start: int) -> int:
+    """Return the index after the string literal whose opening quote is ``start``."""
+    index = start + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == '"':
+            return index + 1
+        else:
+            index += 1
+    return len(text)
+
+
+def _raw_string_end(text: str, raw_start: re.Match[str]) -> int:
+    """Return the index after the raw string literal that ``raw_start`` opens."""
+    closing = '"' + raw_start["hashes"]
+    found = text.find(closing, raw_start.end())
+    return len(text) if found == -1 else found + len(closing)
+
+
+def _next_token(text: str, index: int) -> tuple[int, bool]:
+    """Return where the token at ``index`` ends, and whether the code keeps it."""
+    if text.startswith("//", index):
+        end = text.find("\n", index)
+        return (len(text) if end == -1 else end), False
+    if text.startswith("/*", index):
+        return _block_comment_end(text, index), False
+    if text[index] == '"':
+        return _string_end(text, index), True
+    if raw_start := _RAW_STRING_START.match(text, index):
+        return _raw_string_end(text, raw_start), True
+    if text.startswith("'\"'", index):
+        return index + 3, True
+    return index + 1, True
+
+
+def strip_comments(text: str) -> str:
+    """Remove Rust comments from ``text``, leaving string literals intact.
+
+    Block comments nest, as they do in Rust, and a comment marker inside a
+    string, raw string or the ``'"'`` character literal is not a comment. An
+    unterminated block comment runs to the end of the text. Lifetimes and other
+    character literals are not interpreted, which is enough for the import
+    lines this scanner reads.
+
+    Returns
+    -------
+    str
+        ``text`` without its comments; the newline that ends a line comment is
+        kept, so line structure is preserved.
+    """
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        end, is_kept = _next_token(text, index)
+        if is_kept:
+            parts.append(text[index:end])
+        index = end
+    return "".join(parts)
+
+
 def imported_names(fence: Fence) -> frozenset[str]:
     """Return every name a block imports, as whitespace-free full paths.
 
@@ -148,7 +224,7 @@ def imported_names(fence: Fence) -> frozenset[str]:
         One full path per imported name, such as ``a::b::c``.
     """
     text = "\n".join(line.removeprefix("# ") for line in fence.body)
-    text = _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", text))
+    text = strip_comments(text)
     names: set[str] = set()
     for statement in _USE_STATEMENT.finditer(text):
         spec = re.sub(r"\s+", "", statement["spec"])
