@@ -116,6 +116,10 @@ open each document.
 - [RFC 0001: Execution interception][rfc-0001] - proposed backend seam so
   callers can be tested without a process, with a recording double and a
   passthrough path for executable-level mocking frameworks.
+- [RFC 0002: Reusable command composition helpers][rfc-0002] - proposed
+  vocabulary for presence flags, option values, repeated options, and separated
+  positional operands, plus a guard against keyword flags landing after a `--`
+  separator.
 
 ## Planning and validation references
 
@@ -178,3 +182,4 @@ open each document.
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
 [rfc-0001]: rfcs/0001-execution-interception.md
+[rfc-0002]: rfcs/0002-command-composition-helpers.md
