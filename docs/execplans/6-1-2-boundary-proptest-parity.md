@@ -1,6 +1,6 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
-Status: DRAFT — awaiting explicit approval before implementation.
+Status: APPROVED — proceed as written within the stated tolerances.
 
 Rebased on `origin/main` at `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` on
 2026-10-24. Issues #90, #124, and #127 are closed; their merged work is
@@ -109,7 +109,8 @@ is no elapsed-time limit on planning or implementation work itself.
   `make lint`, `make markdownlint`, and `make nixie`.
 - [x] (2026-10-25) Publish the validated rebase with an explicit force-push
   lease, verify the remote head, and update draft PR #619.
-- [ ] Obtain explicit user approval before implementation.
+- [x] (2026-10-25) Obtain explicit user approval before implementation;
+  proceed as written within the stated tolerances.
 - [ ] M1: establish the real-boundary test bridge and prove its failure paths.
 - [ ] M2: add generated parity, error witnesses, and replayable seeds.
 - [ ] M3: complete behavioural coverage, documentation, and full validation.
@@ -160,6 +161,9 @@ onto `origin/main`; the replayed two commits matched the originals in
 
 ## Decision log
 
+- (2026-10-25) The user explicitly approved implementation and selected the
+  plan as written, within its existing tolerances. No scope deviation is
+  authorized.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle
@@ -602,8 +606,8 @@ routing. Those requirements are included above.
 
 The trade-off is extra process-launch cost for real proptest-driven boundary
 evidence without changing PyO3 linkage. M1 measures that cost and validates
-platform feasibility before wider coverage. Approval remains the user's
-decision.
+platform feasibility before wider coverage. The user approved this plan on
+2026-10-25; implementation may proceed within its stated tolerances.
 
 [proptest-persistence]: https://proptest-rs.github.io/proptest/proptest/failure-persistence.html
 [pyo3-building]: https://pyo3.rs/v0.29.0/building-and-distribution.html
