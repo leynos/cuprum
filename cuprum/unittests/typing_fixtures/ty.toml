@@ -1,0 +1,2 @@
+# Use default checker rules without inheriting ancestor or user configuration.
+# The test helper supplies the fixture path and interpreter explicitly.
