@@ -49,10 +49,12 @@ This follows the policy upstream already applies to `docs/users-guide.md`.
 ADR-021 records the reasoning: the user's guide "is vendored into consumer
 projects, so it cannot rely on relative paths for cross-references into this
 repository", and issue #499 moved those cross-references to absolute GitHub
-URLs. The 14 absolute definitions already present in the imported user's guide
-are the result, 11 of them pointing at `blob/main`. This change extends the
-same treatment to the links that upstream had left relative, so the vendored
-copies no longer contain a mixture of the two forms.
+URLs. The 15 absolute definitions already present in the imported user's guide
+are the result, 11 of them pointing at `blob/main`. One of the 15 wraps its
+destination onto the following line, so a single-line scan of the file
+undercounts by one. This change extends the same treatment to the links that
+upstream had left relative, so the vendored copies no longer contain a mixture
+of the two forms.
 
 The base URL is `https://github.com/leynos/rstest-bdd/blob/main/`, matching the
 definitions upstream already emits. Before adopting it, every target and every
