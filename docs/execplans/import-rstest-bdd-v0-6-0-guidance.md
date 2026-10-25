@@ -5,7 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: COMPLETE FOR THE DOCUMENTATION IMPORT; THE DEPENDENCY MIGRATION IS
+BLOCKED ON A CROSS-REPOSITORY MSRV DECISION
 
 ## Purpose / big picture
 
@@ -13,12 +14,23 @@ The migration request asks for this repository to be moved onto the published
 `rstest-bdd` v0.6.0 release, with the migration implemented and validated
 rather than merely recommended.
 
-The survey performed before planning establishes that **this repository does
-not depend on `rstest-bdd` at all**, in any Cargo manifest or lockfile, at any
-point in its recorded history. It therefore has no consumers of the framework
-to migrate. What remains of the request is the part that is real and valuable:
-the authoritative documentation import, a recorded applicability analysis, and
-the provenance trail that lets a future reader confirm both.
+The survey performed before planning, on 2026-09-26, established that this
+repository did not depend on `rstest-bdd` in any Cargo manifest or lockfile at
+that time. That finding has since been overtaken: commit `d79dded2a` (PR #432,
+"Introduce RustStreamError at the PyO3 boundary (6.1.1)") added
+`rstest-bdd = "0.5.0"` and `rstest-bdd-macros = "0.5.0"` to
+`rust/cuprum-rust/Cargo.toml` on 2026-10-12, and that commit is an ancestor of
+this plan's last rebase base `ed45afde4` (2026-10-19). The repository therefore
+**does** have one live `rstest-bdd` consumer as published. See
+[Premise correction](#premise-correction-2026-10-25) for the corrected finding
+and [Blocked migration](#blocked-migration) for why the version move cannot be
+completed inside this repository.
+
+What this plan delivers is the part that is real and valuable and remains
+correct: the authoritative documentation import, a recorded applicability
+analysis, and the provenance trail that lets a future reader confirm both. The
+dependency migration itself is recorded as blocked, with the specific external
+decision named, rather than as done.
 
 The user-visible outcome is a documentation set in `docs/` that carries the
 upstream `rstest-bdd` v0.6.0 user guide and migration guides, matching the
@@ -44,9 +56,13 @@ Hard invariants that must hold throughout implementation.
   provenance record alongside the current digests so both sides remain
   auditable. No other divergence was introduced, and no local annotation was
   added.
-- No dependency may be added that the repository does not need. Introducing an
-  `rstest-bdd` dependency into a repository that has no BDD consumers would be
-  an invented adoption task, not a migration.
+- No dependency may be added that the repository does not need. **Corrected
+  2026-10-25.** This constraint originally justified introducing nothing on the
+  grounds that the repository had no BDD consumers. It has one: `cuprum-rust`
+  declares `rstest-bdd` 0.5.0 and uses it in
+  `rust/cuprum-rust/src/stream_error_behaviour.rs`. The constraint still holds
+  in its general form — no *unneeded* dependency is added — but it no longer
+  establishes that no dependency edit was required.
 - No existing behaviour, test coverage, gate, or manifest may be weakened.
 - The v0.6.1 beta and v0.7.0 sections inside the imported text must not be
   implemented. The guard-based `StepContext` borrowing model is v0.7.0 and the
@@ -103,12 +119,16 @@ Thresholds that trigger escalation when breached.
       `main`.
 - [x] (2026-09-26 20:02Z) Located every `rstest-bdd` mention in the repository
       and established it is a policy statement and a CI comparison note, not a
-      dependency.
+      dependency. **Corrected 2026-10-25:** this held on the date taken and
+      was overtaken on 2026-10-12 by `d79dded2a`; see
+      [Premise correction](#premise-correction-2026-10-25).
 - [x] (2026-09-26 20:05Z) Fetched upstream, resolved tag `v0.6.0`, and compared
       it against the commit named in the request.
 - [x] (2026-09-26 20:08Z) Proved the absence of an `rstest-bdd` dependency
       across all manifests, all lockfiles, all history, and `cargo metadata`,
-      with a positive control.
+      with a positive control. **Corrected 2026-10-25:** the proof was valid
+      only before 2026-10-12 and its citation is now retired; see
+      [Premise correction](#premise-correction-2026-10-25).
 - [x] (2026-09-26 20:10Z) Read the v0.6.0 and v0.5.0 migration guides in full.
 - [x] (2026-09-26 20:12Z) Imported the three documents byte-for-byte and
       verified their checksums against the immutable commit.
@@ -167,18 +187,41 @@ Thresholds that trigger escalation when breached.
       `ruff format` total from 1008 to 1010 and exposed that the figure had
       always carried the wrong label (see the decision log).
 
-Remaining: review and merge, which this task explicitly excludes. No
-implementation work remains.
+**Corrected 2026-10-25.** The original entry ended "Remaining: review and
+merge, which this task explicitly excludes. No implementation work remains."
+The first clause still holds for the documentation import. The second does not:
+one `rstest-bdd` consumer exists and its version migration is blocked on the
+MSRV floor, not finished. See [Blocked migration](#blocked-migration).
+
+- [x] (2026-10-25) Rebased a fourth time onto `origin/main` at `40d56d69f`,
+      from boundary `ed45afde4`. All eight commits replayed with no conflicts;
+      `range-diff` showed seven identical and one differing only in a context
+      line that `main` had reworded. The net diff against the new base is
+      exactly the six documents this branch owns, and `main`'s new ADR-026
+      survived the replay.
+- [x] (2026-10-25) Re-measured the request's premise instead of re-reading it.
+      The dependency claim was false as published, having expired on
+      2026-10-12. Corrected the Status, Purpose, Constraints, Progress,
+      Surprises, Decision log, Outcomes, Conformance basis, Verification plan,
+      Retrospective, and three applicability-matrix rows; added
+      [Premise correction](#premise-correction-2026-10-25) and
+      [Blocked migration](#blocked-migration).
 
 ## Surprises & discoveries
 
-- Observation: this repository has no `rstest-bdd` dependency, and never had
-  one. Evidence: `git log --all -S "rstest-bdd" -- '*.toml' '**/Cargo.lock'`
-  returns no commit that ever introduced the string into a manifest or lockfile;
-  `cargo metadata` lists no package or dependency whose name contains `bdd`;
-  the two `bdd` substrings in `rust/Cargo.lock` are coincidental hex inside
-  checksums. Impact: the request's premise is false for this repository, so the
-  migration reduces to the documentation import plus applicability analysis.
+- Observation: this repository had no `rstest-bdd` dependency on 2026-09-26,
+  when the survey ran, but it acquired one three weeks later. **Corrected
+  2026-10-25.** The original entry read "has no `rstest-bdd` dependency, and
+  never had one", citing
+  `git log --all -S "rstest-bdd" -- '*.toml' '**/Cargo.lock'` as returning no
+  commit. Re-running that exact command today returns five commits, the first
+  and relevant one being `d79dded2a` (2026-10-12). `cargo metadata` now resolves
+  `rstest-bdd 0.5.0`, `rstest-bdd-macros 0.5.0`, `rstest-bdd-patterns 0.5.0`,
+  and `rstest-bdd-policy 0.5.0`. Impact: the survey's negative result was
+  accurate when taken and was overtaken by later work on `main`; the plan's
+  later rebases re-measured its gate figures but did not re-check this claim,
+  so the false version survived into publication. The lesson is that a rebase
+  invalidates evidence about the repository as well as counts about the tree.
 
 - Observation: the same string does appear in tracked files, which is what makes
   the premise look plausible at a glance. Evidence: `AGENTS.md:282` says new
@@ -188,11 +231,20 @@ implementation work remains.
   repositories' practices. Impact: a keyword-only survey would have produced an
   invented adoption task.
 
-- Observation: the repository's actual BDD layer is Python `pytest-bdd`, a
-  different framework with a different release cadence. Evidence: 27 `.feature`
-  files under `tests/features`, 105 `scenario(...)` call sites across 33
-  modules under `tests/behaviour`, and `pytest-bdd` in `pyproject.toml`.
-  Impact: confirms the Rust BDD framework has no consumer here.
+- Observation: the repository's larger BDD layer is Python `pytest-bdd`, a
+  different framework with a different release cadence. Evidence: `.feature`
+  files under `tests/features` and `pytest-bdd` in `pyproject.toml`.
+  **Corrected 2026-10-25.** The original entry counted "27 `.feature` files
+  under `tests/features`, 105 `scenario(...)` call sites across 33 modules under
+  `tests/behaviour`", and concluded that this "confirms the Rust BDD framework
+  has no consumer here". Two problems. The counts were already stale and do not
+  reproduce under any single definition today, so they are dropped rather than
+  replaced with differently-scoped figures. More importantly, the inference
+  does not follow: Python's `pytest-bdd` assets are unrelated to Rust's
+  `rstest-bdd`, and one Rust consumer exists independently of them, in
+  `rust/cuprum-rust/src/stream_error_behaviour.rs` with its own
+  `tests/features/stream_errors.feature`. A large Python BDD surface is not
+  evidence about the Rust framework's adoption either way.
 
 - Observation: the crate named `rstest` that this repository does depend on is
   *not* `rstest-bdd`. Evidence: `rstest 0.27.0` from crates.io depends on
@@ -222,7 +274,12 @@ implementation work remains.
   rather than being given an invented adoption task, and explicitly says not to
   introduce BDD where it is not already used. Adding the dependency would also
   be the only candidate for a genuine dependency edit, and it is not needed by
-  any existing test. Date/Author: 2026-09-26, migration agent.
+  any existing test. Date/Author: 2026-09-26, migration agent. **Corrected
+  2026-10-25:** the last clause is no longer true. `cuprum-rust` already
+  depends on `rstest-bdd` 0.5.0 and uses it in one behavioural module, so the
+  dependency *is* needed by an existing test. The decision to ship the
+  documentation import remains right; the decision to treat the version move as
+  unnecessary does not, and is replaced by the blocked-migration record below.
 
 - Decision: import `docs/v0-5-0-migration-guide.md` alongside the two required
   documents. Rationale: the request requires the intervening guides to be
@@ -286,32 +343,35 @@ The repository is left holding the authoritative `rstest-bdd` v0.6.0
 documentation with a provenance record and a search-backed applicability
 matrix. The imported prose is upstream text verbatim; the only divergence is
 the cross-file link rewriting recorded in the provenance document. No
-dependency, manifest, lockfile, source file, test, or gate was changed, because
-none needed to be: the repository has no `rstest-bdd` consumer, and the request
-explicitly excludes inventing one.
+dependency, manifest, lockfile, source file, test, or gate was changed.
+**Corrected 2026-10-25:** the original text justified that by asserting the
+repository has no `rstest-bdd` consumer. It has one, so the absence of a
+manifest change is not a finding of "nothing to do" but an unfinished migration
+whose blocker lies outside this repository. See
+[Blocked migration](#blocked-migration).
 
 Compared against the original purpose, the delivered change is smaller than the
-request's framing implies and larger than a version edit. It is smaller because
-the central migration action — moving consumers off a breaking API — has no
-consumers to move. It is larger because the request's real risk was a false
-premise, and the durable value is the evidence that the premise was tested
-rather than assumed.
+request's framing implies and smaller than a version edit: the central
+migration action — raising the dependency to 0.6.0 and proving the consumer
+still passes — is not performed here. The consumer uses no API that 0.6.0
+breaks, so the work it would need is small; the version literal and the
+resulting proof run are what is missing. What the change does deliver is a
+documentation set, an applicability analysis, and the evidence for why the
+version move cannot land in this repository at present.
 
-What would be done differently: little, at the level of process. The one
-efficiency lesson is that the decision-relevant facts here are cheap to obtain
-(`cargo metadata`, a lockfile grep, and `git log -S`) and should be gathered
-before anything else. A survey that starts from a grep for the framework name
-will find the policy statements in `AGENTS.md` and `docs/developers-guide.md`
-first and may mistake them for a dependency; starting from the dependency graph
-avoids that trap entirely.
+What would be done differently: the decision-relevant facts here are cheap to
+obtain (`cargo metadata`, a lockfile grep, and `git log -S`) and should be
+re-gathered, not just re-read, at every rebase. The original survey took them
+correctly on 2026-09-26 and they were overtaken on 2026-10-12; three subsequent
+rebases refreshed the plan's gate counts but carried the dependency claim
+forward unexamined, which is how a true finding became a false published one.
+Re-measuring a claim is not the same as re-reading it.
 
 Residual gaps, recorded rather than hidden:
 
-1. There is no live migration to validate, so the request's validation clauses
-   (feature-file inventories, scenario-count comparisons, async suspension
-   checks, harness-adoption checks) have no subject in this repository. They
-   are not satisfied; they are inapplicable, and the applicability matrix
-   states why for each.
+1. The version migration is not performed. One consumer exists and is listed in
+   [Blocked migration](#blocked-migration); the blocker is the MSRV floor that
+   `rstest-bdd` 0.6.0 requires.
 2. The imported documents' cross-file links point at upstream files that are
    deliberately not vendored here, so the targets resolve on GitHub but not
    inside this checkout. The links are absolute, so they cannot misdirect a
@@ -322,20 +382,78 @@ Residual gaps, recorded rather than hidden:
    `leynos/netsuke`, both pinned at `rstest-bdd = "0.5.0"`. They are outside
    this repository's scope and were not modified.
 
+## Premise correction (2026-10-25)
+
+The request's premise was that this repository has existing `rstest-bdd`
+consumers. The survey of 2026-09-26 found none, and that finding was correct at
+the time. It was overtaken on 2026-10-12 by `d79dded2a`, and the plan was
+republished on a base that already contained that commit without the claim
+being re-checked.
+
+The corrected position, re-measured at `40d56d69f`:
+
+| Claim as originally published                                   | Status now                                                                                                                                                                   |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `rstest-bdd` package in the dependency graph                 | False. `cargo metadata` resolves `rstest-bdd`, `rstest-bdd-macros`, `rstest-bdd-patterns`, and `rstest-bdd-policy`, all 0.5.0.                                               |
+| No manifest or lockfile in any commit ever contained the string | False. `git log --all -S "rstest-bdd" -- '*.toml' '**/Cargo.lock'` returns five commits, the earliest relevant one being `d79dded2a`.                                        |
+| The only tracked mentions are prose about other repositories    | Partly false. `rust/cuprum-rust/Cargo.toml:31-32` declare the two crates, `stream_error_behaviour.rs` imports them, and a `.feature` file is bound by them.                  |
+| No consumers of the framework to migrate                        | False. `rust/cuprum-rust/src/stream_error_behaviour.rs` is one consumer, with `rust/cuprum-rust/tests/features/stream_errors.feature` bound by six `#[scenario]` attributes. |
+| The detection method is sound (positive control on other repos) | Still true, and now also demonstrated positively here. The method was never broken; the observation simply expired.                                                          |
+
+The documentation import, the provenance record, and the link rewriting are
+unaffected by this correction and remain as delivered. In the applicability
+matrix, the MSRV and feature-file rows are now blocking or applicable, and the
+`StepResult` row now demands an audit, because a consumer exists. The remaining
+rows still hold, because the 0.6.0 breaking changes they search for are absent
+from this tree. The consumer uses `Slot`, `StepResult`, and the
+`#[given]`/`#[when]`/`#[then]`/`#[scenario]` attributes. `Slot` is not touched
+by 0.6.0 at all, and the `StepResult` exposure is a bare alias rather than the
+local `Result<T, E>` alias the change targets.
+
+## Blocked migration
+
+The version move cannot be completed in this repository without an external
+decision, and the reason is a hard MSRV floor rather than effort or priority.
+
+- `rstest-bdd` 0.6.0 declares `rust-version = "1.88"`. Verified with
+  `cargo info rstest-bdd@0.6.0`, which reports `rust-version: 1.88`; the
+  upstream migration guide's "MSRV is now 1.88" entry says the same, and
+  attributes it to the `gherkin 0.16` parser dependency, which independently
+  declares `rust-version = 1.88`.
+- This workspace pins `rust-version = "1.85.0"` in `rust/Cargo.toml` and
+  `channel = "1.85.0"` in `rust/rust-toolchain.toml`, and `make msrv-check`
+  compiles every target on that toolchain. That check runs inside `make lint`,
+  which is a required status context on `main`.
+- Raising the floor is therefore not a local edit. It changes the published
+  minimum for every consumer of all three crates and is recorded in
+  `rust/Cargo.toml`, `rust/rust-toolchain.toml`, the `MSRV_TOOLCHAIN` variable
+  in the `Makefile`, and the prose in `AGENTS.md`,
+  `docs/adr-011-audited-rust-boundaries.md`, and `docs/developers-guide.md`
+  that states 1.85.0 is the published floor.
+
+The code-level migration is small: the single consumer uses no API touched by
+the 0.6.0 breaking changes, so the likely edit is the two version literals plus
+whatever the resolver reports. The gating question is policy, not code, and it
+belongs to the repository owner. Until it is answered, the correct state of
+this plan is "documentation delivered, dependency migration blocked", which is
+what the status line above records.
+
 ## Retrospective on the request's premise
 
-The request describes a repository with existing `rstest-bdd` consumers. This
-repository is not that repository. Three independent lines of evidence agree:
-the dependency graph contains no `bdd`-named package, no manifest or lockfile
-in any commit ever contained the string, and the only tracked mentions are
-prose about other projects' practices. The same detection procedure returns a
-positive result against `leynos/whitaker` and `leynos/netsuke`, which is what
-rules out a broken method as the explanation.
+The request describes a repository with existing `rstest-bdd` consumers.
+**Corrected 2026-10-25:** it is that repository after all, from `d79dded2a`
+onwards. The three lines of evidence in the original text — no `bdd`-named
+package, no manifest ever containing the string, only prose mentions — each
+held on 2026-09-26 and each is now false; see
+[Premise correction](#premise-correction-2026-10-25) for the re-measurement
+against `40d56d69f`.
 
-The request anticipates this outcome: it directs that a repository with no live
-dependency be reported rather than given an invented adoption task. The
-documentation import, the applicability matrix, and this record are the parts
-of the request that have real subject matter here, and they are done.
+The durable lesson is not about the survey method, which was sound and had a
+positive control. It is that a negative result about the *repository* decays as
+the repository changes, exactly like a count about the tree, and this plan
+treated it as a fixed finding across three rebases that re-measured everything
+else. A rebase onto a new base re-opens every factual claim, not only the
+numeric ones.
 
 ## Applicability matrix
 
@@ -344,20 +462,20 @@ Each row names the search that produced its verdict, so a reader can re-run the
 search rather than trust the count. The searches cover `*.rs` and `*.toml`
 across the tracked tree.
 
-| Breaking change                                                                                          | Search pattern                                                                       | Matches | Verdict                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Implicit fixture names normalize one leading underscore                                                  | `#[from(`                                                                            | 14      | Not applicable. All 14 are plain `rstest` fixture selection in `rust/cuprum-native-io/src/ownership_tests.rs`, `rust/cuprum-streams/src/io_utils/tests.rs`, and `rust/cuprum-streams/src/splice/tests.rs`; each file imports `use rstest::{fixture, rstest}`. Not an `rstest-bdd` macro argument. |
-| `runtime = "tokio-current-thread"` is a deprecated alias                                                 | `tokio-current-thread`                                                               | 0       | Not applicable.                                                                                                                                                                                                                                                                                   |
-| Custom `HarnessAdapter` must return `HarnessResult<T>`                                                   | `HarnessAdapter`                                                                     | 0       | Not applicable. No harness is implemented or consumed.                                                                                                                                                                                                                                            |
-| `StepContext::insert_value` returns `InsertOutcome`                                                      | `insert_value`                                                                       | 0       | Not applicable. No direct runtime API caller.                                                                                                                                                                                                                                                     |
-| Step return aliases of `Result<T, E>` now propagate `Err`                                                | `StepResult`                                                                         | 0       | Not applicable. No `rstest-bdd` step functions exist.                                                                                                                                                                                                                                             |
-| Feature paths are manifest-relative                                                                      | `ScenarioMetadata`                                                                   | 0       | Not applicable. No report, JSON, JUnit, or `cargo bdd` consumer.                                                                                                                                                                                                                                  |
-| Rust indexing returns `RustStepIndexResult`; `index_feature_file` and `publish_rust_diagnostics` removed | `RustStepIndex`, `index_feature_file`, `index_rust_file`, `publish_rust_diagnostics` | 0       | Not applicable. No language-server integration.                                                                                                                                                                                                                                                   |
-| `record_bypassed_steps` takes a `BypassedScenario`                                                       | `record_bypassed_steps`, `BypassedScenario`                                          | 0       | Not applicable. No direct bypass-reporting caller.                                                                                                                                                                                                                                                |
-| `find_feature_files` returns `Result<Vec<PathBuf>, ServerError>`                                         | `find_feature_files`                                                                 | 0       | Not applicable. No discovery caller.                                                                                                                                                                                                                                                              |
-| MSRV is now 1.88                                                                                         | `rust-version`                                                                       | 4       | Not applicable. The four hits are this workspace's own `rust-version = "1.85.0"` declarations. Nothing in the graph requires 1.88, because no `rstest-bdd` package is present, so the MSRV stays at 1.85.0. Raising it would advertise a floor no consumer needs.                                 |
-| Feature-file rebuild invalidation; `compile_error!` on a path sharing no filesystem root                 | `*.feature` under `rust/`                                                            | 0       | Not applicable. All 27 `.feature` files are Python `pytest-bdd` assets under `tests/features` and are not bound by any Rust macro.                                                                                                                                                                |
-| Harness dependency matrix (which crates to add)                                                          | `compile-time-validation`, `strict-compile-time-validation`                          | 0       | Not applicable. No feature selection to preserve, because none exists.                                                                                                                                                                                                                            |
+| Breaking change                                                                                          | Search pattern                                                                       | Matches | Verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implicit fixture names normalize one leading underscore                                                  | `#[from(`                                                                            | 15      | Not applicable. All 15 are plain `rstest` fixture selection in `rust/cuprum-native-io/src/ownership_tests.rs`, `rust/cuprum-streams/src/io_utils/tests.rs`, and `rust/cuprum-streams/src/splice/tests.rs`; each file imports `rstest`, not `rstest_bdd`. Not an `rstest-bdd` macro argument.                                                                                                                                                                                                                                                                                                    |
+| `runtime = "tokio-current-thread"` is a deprecated alias                                                 | `tokio-current-thread`                                                               | 0       | Not applicable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Custom `HarnessAdapter` must return `HarnessResult<T>`                                                   | `HarnessAdapter`                                                                     | 0       | Not applicable. No harness is implemented or consumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `StepContext::insert_value` returns `InsertOutcome`                                                      | `insert_value`                                                                       | 0       | Not applicable. No direct runtime API caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Step return aliases of `Result<T, E>` now propagate `Err`                                                | `StepResult`                                                                         | 13      | **Audit required on adoption.** `stream_error_behaviour.rs` defines 14 step functions, of which the 3 `#[when]` and 7 `#[then]` steps return `StepResult<(), String>`; the 4 `#[given]` steps return `()`. The 13 matches are those 10 signatures, the `recorded` helper's signature, the `use` line, and one doc-comment mention. 0.5.0 already recognizes a bare `StepResult` path, so these classify as `ResultUnit` and propagate today. The change targets *local aliases* of `Result<T, E>`, which this module does not define; the audit is to confirm that still holds after upgrading. |
+| Feature paths are manifest-relative                                                                      | `ScenarioMetadata`                                                                   | 0       | Not applicable. No report, JSON, JUnit, or `cargo bdd` consumer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Rust indexing returns `RustStepIndexResult`; `index_feature_file` and `publish_rust_diagnostics` removed | `RustStepIndex`, `index_feature_file`, `index_rust_file`, `publish_rust_diagnostics` | 0       | Not applicable. No language-server integration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `record_bypassed_steps` takes a `BypassedScenario`                                                       | `record_bypassed_steps`, `BypassedScenario`                                          | 0       | Not applicable. No direct bypass-reporting caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `find_feature_files` returns `Result<Vec<PathBuf>, ServerError>`                                         | `find_feature_files`                                                                 | 0       | Not applicable. No discovery caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| MSRV is now 1.88                                                                                         | `rust-version`                                                                       | 4       | **Blocking.** The four hits are this workspace's own `rust-version = "1.85.0"` declarations, but `rstest-bdd` 0.6.0 itself requires 1.88, so adopting it raises this repository's published floor. See [Blocked migration](#blocked-migration).                                                                                                                                                                                                                                                                                                                                                 |
+| Feature-file rebuild invalidation; `compile_error!` on a path sharing no filesystem root                 | `*.feature` under `rust/`                                                            | 1       | **Applicable on adoption.** The Python `pytest-bdd` assets under `tests/features` are unbound, but `rust/cuprum-rust/tests/features/stream_errors.feature` is bound by six `#[scenario]` attributes, so the manifest-relative path rule and rebuild-invalidation change apply to it.                                                                                                                                                                                                                                                                                                            |
+| Harness dependency matrix (which crates to add)                                                          | `compile-time-validation`, `strict-compile-time-validation`                          | 0       | Not applicable. No `rstest-bdd` feature selection exists to preserve. The workspace enables no `rstest-bdd` features; `cuprum-rust` declares only its own `loom-defect-fixture`.                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 The `v0.6.1 beta` (`#[harness_context]`) and `v0.7.0` (guard-based
 `StepContext` borrowing) sections in the imported text are out of scope by the
@@ -395,8 +513,12 @@ Conformance basis is recorded below.
 ## Conformance basis
 
 No Terms of Reference, technical design, or ADR in this repository governs a
-`rstest-bdd` migration, because the repository has no `rstest-bdd` dependency.
-There is therefore no upstream artefact to trace to and none is invented.
+`rstest-bdd` migration; on 2026-09-26 the repository had no `rstest-bdd`
+dependency. There is therefore no upstream artefact to trace to and none is
+invented. **Corrected 2026-10-25:** the dependency now exists, so this
+conformance basis describes the import alone and does not discharge the
+migration, which is blocked on the MSRV decision recorded in
+[Blocked migration](#blocked-migration).
 
 The governing documents for this work are the repository's own `AGENTS.md` and
 `docs/documentation-style-guide.md`, plus the migration request itself. The
@@ -415,7 +537,12 @@ this plan actually makes.
 The claims requiring evidence are:
 
 1. The imported files are byte-identical to the upstream release.
-2. The repository has no `rstest-bdd` consumer to migrate.
+2. The repository's `rstest-bdd` exposure is known and the migration status is
+   recorded. **Corrected 2026-10-25:** the original claim read "the repository
+   has no `rstest-bdd` consumer to migrate", which is false. There is one
+   consumer, at `rust/cuprum-rust/src/stream_error_behaviour.rs`, and the
+   migration is blocked on the MSRV floor recorded in
+   [Blocked migration](#blocked-migration).
 3. The imported files pass this repository's documentation gates.
 4. The applicability matrix is accurate.
 
@@ -521,3 +648,23 @@ never touched.
 
 The dependency facts are unchanged: no `Cargo.toml`, `Cargo.lock`, Python
 module, or gate definition is modified by this branch.
+
+**Amended 2026-10-25, after the fourth rebase onto `origin/main` at `40d56d69f`
+and the premise correction.** All four gates were re-run against the corrected
+tree, in order: `make fmt`, `make markdownlint` (104 files, 0 issues, spelling
+clean), `make check-fmt` (1094 files formatted, `cargo fmt --check` clean,
+`mdtablefix --check` reports 104 unchanged), `make test` (4255 passed, 96
+skipped, 0 failed; nextest 167/167; doctests clean), `make typecheck`, and
+`make lint`. Each gate exits 0.
+
+One host condition required care and is recorded rather than passed over. An
+unrelated `/tmp/pyproject.toml` on this machine belongs to another project and
+is not part of this repository. `ty` walks upward from its working directory,
+and `cuprum/unittests/test_sh_typing_contract.py` runs it with `cwd` set to a
+pytest `tmp_path` under `/tmp`, so the stray file became the inferred project
+root and `ty` scanned the whole of `/tmp`. Ten tests in that one module timed
+out at the pytest 30-second limit on the first run. Re-running the same module
+with `TMPDIR` set outside `/tmp` passed all 11 in 0.69 seconds, and the full
+suite then passed with `TMPDIR` likewise redirected. The failure is a property
+of the host's `/tmp`, not of this branch, whose diff is six Markdown files; the
+redirect isolates the artefact without changing the repository or the gate.
