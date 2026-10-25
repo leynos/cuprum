@@ -78,7 +78,9 @@ violation, which must compile. The error code ensures the negative case fails
 for the reason it names, and the control ensures the snippet's include and
 imports resolve, so the negative case cannot pass vacuously. Where one
 diagnostic would hide another, each guarded item gets its own negative case;
-the pump machine therefore has one for `Transition` and one for `step`. The
+the pump machine therefore has one for `Transition` and one for `step`, and the
+Windows adapter has one for `read_once` and one for `write_once`. A single
+snippet that called both would stay green when only one of them regressed. The
 doctests sit on:
 
 - the `#[pymodule]` in `rust/cuprum-rust/src/lib.rs`, for the initializer's
@@ -88,9 +90,10 @@ doctests sit on:
   as a module;
 - `with_owned_writer` in `rust/cuprum-native-io/src/memory.rs`, for the shared
   writer borrow; and
-- `read_once` in `rust/cuprum-native-io/src/windows.rs`, for the synchronous
-  capability. This module is compiled only on Windows, so its doctests are
-  collected only there.
+- `read_once` and `write_once` in `rust/cuprum-native-io/src/windows.rs`, for
+  the synchronous capability, each with its own positive control and negative
+  case. This module is compiled only on Windows, so its doctests are collected
+  only there.
 
 `make test` and the coverage lane already run doctests. The
 `rust-boundaries.yml` native matrix gains a `--doc` run, because

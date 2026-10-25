@@ -56,7 +56,7 @@ NESTED_BUILD_PATTERNS: typ.Final[tuple[re.Pattern[str], ...]] = (
 #: doctests at all.
 EXPECTED_COMPILE_FAIL_DOCTESTS: typ.Final[dict[str, int]] = {
     "rust/cuprum-native-io/src/memory.rs": 1,
-    "rust/cuprum-native-io/src/windows.rs": 1,
+    "rust/cuprum-native-io/src/windows.rs": 2,
     "rust/cuprum-rust/src/lib.rs": 1,
     "rust/cuprum-streams/src/lib.rs": 2,
 }

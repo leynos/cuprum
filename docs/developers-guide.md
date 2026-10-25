@@ -4683,7 +4683,7 @@ branches with warnings denied. A doctest cannot substitute for it: rustdoc
 compiles doctests for the host target, so on a Linux runner it selects the Unix
 stream module and does not compile the Windows module. The Windows exports are
 in `stream_pyfunctions_windows.rs`, selected by `#[cfg(windows)]` at
-`rust/cuprum-rust/src/lib.rs:52-62`, so Linux coverage excludes those lines.
+`rust/cuprum-rust/src/lib.rs:87-94`, so Linux coverage excludes those lines.
 
 ## Rust FD-borrow ownership contract
 
@@ -4711,7 +4711,7 @@ path and its caller must establish the mode at creation, duplication, or
 handoff. `synchronous_pipe` is the safe construction path for Cuprum-created
 anonymous pipes, whose `CreatePipe` endpoints have synchronous semantics. These
 APIs and the adapter are in
-`rust/cuprum-native-io/src/windows.rs:16-59,91-105,173-197`; the foreign-handle
+`rust/cuprum-native-io/src/windows.rs:16-59,91-105,173-222`; the foreign-handle
 obligations are recorded by `borrow_reader` and `adopt_writer` in
 `rust/cuprum-native-io/src/lib.rs:76-129`.
 
@@ -7027,15 +7027,18 @@ Every compile-fail doctest must:
   make the negative case pass vacuously.
 
 Where one diagnostic could mask another, give each guarded item its own
-negative case. The pump machine's privacy contract on the `mod pump_machine`
-declaration in `rust/cuprum-streams/src/lib.rs` is the worked example: one case
-probes `Transition` and another probes `step`, so widening either item, even to
-`pub(crate)`, fails its own doctest while the other still reports `E0603`. A
-case that pins an encapsulation boundary must include the real module with
-`#[path]` rather than restating its shape, because a handwritten copy would
-only prove the copy private. Such a doctest cannot live in the file it
-includes, because rustc rejects a module that includes itself, so place it on
-the parent's module declaration.
+negative case. A compile-fail doctest passes when the expected error occurs
+anywhere in the snippet, so one snippet that exercises two items stays green
+when only one of them regresses. The pump machine's privacy contract on the
+`mod pump_machine` declaration in `rust/cuprum-streams/src/lib.rs` is the
+worked example: one case probes `Transition` and another probes `step`, so
+widening either item, even to `pub(crate)`, fails its own doctest while the
+other still reports `E0603`. The Windows adapter splits `read_once` and
+`write_once` the same way. A case that pins an encapsulation boundary must
+include the real module with `#[path]` rather than restating its shape, because
+a handwritten copy would only prove the copy private. Such a doctest cannot
+live in the file it includes, because rustc rejects a module that includes
+itself, so place it on the parent's module declaration.
 
 `cuprum/unittests/test_compile_contracts_build_graph.py` enforces these rules.
 It refuses a `trybuild` dependency or lockfile entry and any Rust source that
@@ -7043,11 +7046,11 @@ starts a nested `cargo` or `rustc`, and it pins the inventory of compile-fail
 doctests, so add a contract and its inventory entry in the same change.
 
 Doctests in a module compiled only under `cfg(windows)`, such as the
-synchronous-handle pair on `read_once` in
+synchronous-handle cases on `read_once` and `write_once` in
 `rust/cuprum-native-io/src/windows.rs`, are collected only on Windows. The
 `rust-boundaries.yml` native matrix runs `cargo test --doc` for the native
 crates on Windows, Linux, and macOS for that reason. Before committing such a
-pair, check both snippets against the Windows target, for example as a
+case, check every snippet against the Windows target, for example as a
 temporary example built with
 `cargo check --target x86_64-pc-windows-msvc --example <name>`.
 
