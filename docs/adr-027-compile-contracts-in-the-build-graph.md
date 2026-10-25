@@ -74,14 +74,21 @@ here, with `PyO3`'s Python C-API symbols unresolved under the
 
 Each compile-fail case is a `compile_fail,EXXXX` doctest that shares its doc
 comment with a positive control: a doctest of the same shape without the
-violation, which must compile. The error code ensures the negative case fails
-for the reason it names, and the control ensures the snippet's include and
-imports resolve, so the negative case cannot pass vacuously. Where one
-diagnostic would hide another, each guarded item gets its own negative case;
-the pump machine therefore has one for `Transition` and one for `step`, and the
-Windows adapter has one for `read_once` and one for `write_once`. A single
-snippet that called both would stay green when only one of them regressed. The
-doctests sit on:
+violation, which must compile. The two do different work on different
+toolchains. Nightly rustdoc, which the dev-fast route of `make test` uses,
+checks that the named error occurs. Stable rustdoc, including the pinned 1.85.0
+that CI uses for the native-contract matrix and the coverage lane, accepts the
+code without checking it: on 2026-10-25 a snippet that failed with `E0308` but
+pinned `E0603` passed on both stable and 1.85.0 and failed on
+`nightly-2026-08-23`. Where the code is not checked, a negative case passes for
+any compile error, including an import that no longer resolves, so the control
+carries the guarantee. It shares the negative case's includes and setup, and
+the contract requires that every name a negative case imports is also imported
+by a control in the same doc comment. Where one diagnostic would hide another,
+each guarded item gets its own negative case; the pump machine therefore has
+one for `Transition` and one for `step`, and the Windows adapter has one for
+`read_once` and one for `write_once`. A single snippet that called both would
+stay green when only one of them regressed. The doctests sit on:
 
 - the `#[pymodule]` in `rust/cuprum-rust/src/lib.rs`, for the initializer's
   return type;
@@ -121,9 +128,15 @@ compile-fail doctests so that one cannot be deleted silently.
 
 - A `compile_fail` doctest pins the error code, not the full diagnostic text
   the `.stderr` snapshots compared. A change to the compiler's wording, span,
-  or secondary notes no longer fails a test. For the visibility and borrow
-  contracts the error code is the contract. For the `PyO3` return-type case it
-  is a weaker check of a property that belongs to `PyO3` itself.
+  or secondary notes no longer fails a test.
+- The pin itself is enforced only by nightly rustdoc. The Windows doctests are
+  compiled only on Windows, where CI uses stable, so their codes document the
+  intended diagnostic and are never checked; their controls are the only guard
+  against a negative case passing for the wrong reason. A negative case can
+  still pass for an unrelated error that involves no import, such as a renamed
+  variant, on a stable toolchain. For the visibility and borrow contracts the
+  error code is the contract. For the `PyO3` return-type case it is a weaker
+  check of a property that belongs to `PyO3` itself.
 - Rustdoc reports a doctest by file and line rather than by a named UI case.
 
 ## Assumptions

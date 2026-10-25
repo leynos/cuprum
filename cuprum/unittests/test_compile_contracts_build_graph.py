@@ -12,10 +12,12 @@ artefacts the test build already produced.
 
 This module keeps it that way. No workspace manifest, nor the lockfile, may
 bring `trybuild` back; no Rust source may spawn Cargo or the compiler; every
-`compile_fail` doctest must name the error it expects, so it cannot pass for
-an unrelated failure; and each must sit in a doc comment that also holds a
-compiling positive control, so a broken include or import cannot make the
-negative case pass vacuously.
+`compile_fail` doctest must name the error it expects and sit in a doc comment
+that also holds a compiling positive control; and that control must import
+everything the negative case does. Stable rustdoc ignores the error code, so
+on those toolchains the control is what stops a broken include or import from
+making the negative case pass for the wrong reason. The doc-comment scanner is
+in ``_rust_doctest_support``.
 
 See ``docs/adr-027-compile-contracts-in-the-build-graph.md``.
 """
@@ -28,10 +30,13 @@ import typing as typ
 
 import pytest
 
+from cuprum.unittests._rust_doctest_support import (
+    compile_fail_count,
+    compile_fail_defects,
+)
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
 #: The dependency tables a manifest can declare, at the top level, under
@@ -60,17 +65,6 @@ EXPECTED_COMPILE_FAIL_DOCTESTS: typ.Final[dict[str, int]] = {
     "rust/cuprum-rust/src/lib.rs": 1,
     "rust/cuprum-streams/src/lib.rs": 2,
 }
-
-_FENCE = re.compile(r"^\s*```(?P<info>[^`]*)$")
-_ERROR_CODE = re.compile(r"^E\d{4}$")
-_NON_COMPILING = frozenset({"ignore", "compile_fail", "text", "console", "sh"})
-
-
-class _Fence(typ.NamedTuple):
-    """One opening code fence inside a doc comment."""
-
-    line: int
-    attributes: tuple[str, ...]
 
 
 def _rust_root() -> Path:
@@ -108,86 +102,6 @@ def _dependency_names(manifest: dict[str, object]) -> set[str]:
         if isinstance(declared := scope.get(table), dict)
         for name in declared
     }
-
-
-def _doc_comment_groups(source: str) -> cabc.Iterator[list[tuple[int, str]]]:
-    """Yield each run of consecutive same-style doc comment lines.
-
-    A run ends at any other line or a change of marker, which is where rustdoc
-    ends one item's documentation.
-
-    Yields
-    ------
-    list[tuple[int, str]]
-        One run's lines, each as its one-based line number and the text after
-        the ``///`` or ``//!`` marker.
-    """
-    group: list[tuple[int, str]] = []
-    marker = ""
-    for number, line in enumerate(source.splitlines(), start=1):
-        stripped = line.lstrip()
-        current = stripped[:3] if stripped.startswith(("///", "//!")) else ""
-        if current != marker and group:
-            yield group
-            group = []
-        marker = current
-        if current:
-            group.append((number, stripped[3:]))
-    if group:
-        yield group
-
-
-def _opening_fences(group: list[tuple[int, str]]) -> list[_Fence]:
-    """Return the opening fences in a doc comment, skipping closing ones."""
-    fences: list[_Fence] = []
-    is_inside = False
-    for number, text in group:
-        match = _FENCE.match(text)
-        if match is None:
-            continue
-        if not is_inside:
-            info = match["info"].strip()
-            attributes = tuple(part.strip() for part in info.split(",") if part)
-            fences.append(_Fence(number, attributes))
-        is_inside = not is_inside
-    return fences
-
-
-def _is_compile_fail(fence: _Fence) -> bool:
-    """Report whether a fence declares a compile-fail doctest."""
-    return "compile_fail" in fence.attributes
-
-
-def _is_positive_control(fence: _Fence) -> bool:
-    """Report whether a fence declares a Rust doctest that must compile."""
-    return not _NON_COMPILING.intersection(fence.attributes) and all(
-        attribute in {"rust", "no_run", "should_panic"}
-        or attribute.startswith("edition")
-        for attribute in fence.attributes
-    )
-
-
-def _compile_fail_defects(source: str) -> list[str]:
-    """Return each `compile_fail` doctest that breaks the contract."""
-    defects: list[str] = []
-    for group in _doc_comment_groups(source):
-        fences = _opening_fences(group)
-        has_control = any(_is_positive_control(fence) for fence in fences)
-        for fence in filter(_is_compile_fail, fences):
-            if not any(_ERROR_CODE.match(part) for part in fence.attributes):
-                defects.append(f"line {fence.line}: names no expected error code")
-            if not has_control:
-                defects.append(f"line {fence.line}: has no positive control")
-    return defects
-
-
-def _compile_fail_count(source: str) -> int:
-    """Return how many `compile_fail` doctests a source file holds."""
-    return sum(
-        _is_compile_fail(fence)
-        for group in _doc_comment_groups(source)
-        for fence in _opening_fences(group)
-    )
 
 
 def test_no_workspace_manifest_depends_on_trybuild() -> None:
@@ -235,12 +149,13 @@ def test_every_compile_fail_doctest_is_pinned_and_controlled() -> None:
     defects = {
         _relative(path): found
         for path in _workspace_files("*.rs")
-        if (found := _compile_fail_defects(path.read_text(encoding="utf-8")))
+        if (found := compile_fail_defects(path.read_text(encoding="utf-8")))
     }
     assert not defects, (
         f"`compile_fail` doctests must name the error they expect and share "
-        f"their doc comment with a compiling positive control, or they can "
-        f"pass for an unrelated failure: {defects}"
+        f"their doc comment with a compiling positive control that imports "
+        f"everything they do, or they can pass for an unrelated failure on a "
+        f"toolchain whose rustdoc ignores the error code: {defects}"
     )
 
 
@@ -249,54 +164,12 @@ def test_the_compile_fail_inventory_is_pinned() -> None:
     counts = {
         _relative(path): count
         for path in _workspace_files("*.rs")
-        if (count := _compile_fail_count(path.read_text(encoding="utf-8")))
+        if (count := compile_fail_count(path.read_text(encoding="utf-8")))
     }
     assert counts == EXPECTED_COMPILE_FAIL_DOCTESTS, (
         f"the workspace holds {counts} `compile_fail` doctests, not the "
         f"reviewed {EXPECTED_COMPILE_FAIL_DOCTESTS}; update the inventory "
         f"only alongside the contract being added or retired"
-    )
-
-
-_CONTROL = "/// ```\n/// let _ = 1;\n/// ```\n"
-_PINNED = '/// ```compile_fail,E0308\n/// let _: u8 = "";\n/// ```\n'
-
-
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
-        pytest.param(_CONTROL + _PINNED + "fn item() {}\n", [], id="pinned"),
-        pytest.param(
-            _CONTROL + _PINNED.replace(",E0308", "") + "fn item() {}\n",
-            ["line 4: names no expected error code"],
-            id="no-error-code",
-        ),
-        pytest.param(
-            _PINNED + "fn item() {}\n",
-            ["line 1: has no positive control"],
-            id="no-control",
-        ),
-        pytest.param(
-            _CONTROL + "fn first() {}\n" + _PINNED + "fn second() {}\n",
-            ["line 5: has no positive control"],
-            id="control-on-another-item",
-        ),
-        pytest.param(
-            _CONTROL.replace("```\n/// let", "```ignore\n/// let", 1)
-            + _PINNED
-            + "fn item() {}\n",
-            ["line 4: has no positive control"],
-            id="ignored-control",
-        ),
-    ],
-)
-def test_the_doctest_scanner_reports_each_defect(
-    source: str, expected: list[str]
-) -> None:
-    """The scanner names the defects the contract exists to refuse."""
-    assert _compile_fail_defects(source) == expected, (
-        "the scanner must flag a missing error code and a missing control, "
-        "and must not accept a control documented on a different item"
     )
 
 

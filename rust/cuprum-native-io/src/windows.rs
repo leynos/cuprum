@@ -140,7 +140,16 @@ pub(crate) fn fd_is_open(raw: PlatformFd) -> io::Result<bool> {
 /// [`SynchronousOwnedStream`] lends:
 ///
 /// ```
-/// use cuprum_native_io::{read_once, synchronous_pipe, write_once};
+/// use std::os::windows::io::AsHandle;
+///
+/// use cuprum_native_io::{BorrowedStream, pipe, read_once, synchronous_pipe, write_once};
+///
+/// // A generic handle exists here too; it simply is not passed to `read_once`.
+/// // The control imports everything the rejection case below does, so a
+/// // renamed import fails this control instead of letting that case pass for
+/// // the wrong reason on a rustdoc that ignores the error code.
+/// let (generic_reader, _generic_writer) = pipe()?;
+/// let _generic: BorrowedStream<'_> = generic_reader.as_handle();
 ///
 /// let (reader, writer) = synchronous_pipe()?;
 /// assert_eq!(write_once(writer.as_synchronous_borrowed(), b"x")?, 1);
@@ -180,7 +189,13 @@ pub fn read_once(stream: SynchronousBorrowedStream<'_>, buffer: &mut [u8]) -> io
 /// [`SynchronousOwnedStream`] lends:
 ///
 /// ```
-/// use cuprum_native_io::{synchronous_pipe, write_once};
+/// use std::os::windows::io::AsHandle;
+///
+/// use cuprum_native_io::{BorrowedStream, pipe, synchronous_pipe, write_once};
+///
+/// // As on `read_once`, the control shares the rejection case's imports.
+/// let (_generic_reader, generic_writer) = pipe()?;
+/// let _generic: BorrowedStream<'_> = generic_writer.as_handle();
 ///
 /// let (_reader, writer) = synchronous_pipe()?;
 /// assert_eq!(write_once(writer.as_synchronous_borrowed(), b"x")?, 1);

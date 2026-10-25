@@ -4711,7 +4711,7 @@ path and its caller must establish the mode at creation, duplication, or
 handoff. `synchronous_pipe` is the safe construction path for Cuprum-created
 anonymous pipes, whose `CreatePipe` endpoints have synchronous semantics. These
 APIs and the adapter are in
-`rust/cuprum-native-io/src/windows.rs:16-59,91-105,173-222`; the foreign-handle
+`rust/cuprum-native-io/src/windows.rs:16-59,91-105,182-237`; the foreign-handle
 obligations are recorded by `borrow_reader` and `adopt_writer` in
 `rust/cuprum-native-io/src/lib.rs:76-129`.
 
@@ -7020,11 +7020,15 @@ decision and the `trybuild` timeouts that prompted it.
 
 Every compile-fail doctest must:
 
-- name the error code it expects, so it cannot pass because of an unrelated
+- name the error code it expects. Only nightly rustdoc, which the dev-fast
+  route of `make test` uses, checks it. Stable rustdoc, including the pinned
+  1.85.0 that CI uses, accepts any code and passes the case for any compile
   error; and
 - share its doc comment with a positive control, a doctest of the same shape
-  without the violation that must compile, so a broken include or import cannot
-  make the negative case pass vacuously.
+  without the violation that must compile, and have that control import
+  everything the negative case does. On a toolchain that ignores the code, the
+  control is what stops a broken include or a renamed import from making the
+  negative case pass for the wrong reason.
 
 Where one diagnostic could mask another, give each guarded item its own
 negative case. A compile-fail doctest passes when the expected error occurs
@@ -7040,10 +7044,13 @@ a handwritten copy would only prove the copy private. Such a doctest cannot
 live in the file it includes, because rustc rejects a module that includes
 itself, so place it on the parent's module declaration.
 
-`cuprum/unittests/test_compile_contracts_build_graph.py` enforces these rules.
-It refuses a `trybuild` dependency or lockfile entry and any Rust source that
-starts a nested `cargo` or `rustc`, and it pins the inventory of compile-fail
-doctests, so add a contract and its inventory entry in the same change.
+`cuprum/unittests/test_compile_contracts_build_graph.py` enforces these rules,
+reading doc comments through `cuprum/unittests/_rust_doctest_support.py`. It
+refuses a `trybuild` dependency or lockfile entry and any Rust source that
+starts a nested `cargo` or `rustc`. It requires an error code, a control in the
+same doc comment, and a control that imports every name its negative case does.
+It also pins the inventory of compile-fail doctests, so add a contract and its
+inventory entry in the same change.
 
 Doctests in a module compiled only under `cfg(windows)`, such as the
 synchronous-handle cases on `read_once` and `write_once` in
