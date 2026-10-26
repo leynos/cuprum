@@ -6,10 +6,13 @@ import pytest
 
 from scripts.modern_stable_warning_controls import (
     GATES,
+    WARNING_DENIAL,
     WARNING_FUNCTION,
+    WARNING_REPLAY_STATE,
     GateRun,
     _has_warning_failure,
     _verify_prewarm,
+    _verify_warm,
     append_warning,
     observe_output,
     with_warning_policy,
@@ -68,9 +71,9 @@ def test_pre_warmup_changes_only_the_single_modern_warning_setting() -> None:
 def test_observation_counts_compile_and_fresh_lines() -> None:
     """Summarize Cargo freshness without discarding the original output."""
     output = (
-        "Fresh proc-macro2 v1.0.0\n"
-        "Compiling cuprum-streams v0.1.0\n"
-        "Checking cuprum-rust v0.1.0\n"
+        "    \x1b[1mFresh\x1b[0m proc-macro2 v1.0.0\n"
+        "    \x1b[1mCompiling\x1b[0m cuprum-streams v0.1.0\n"
+        "    \x1b[1mChecking\x1b[0m cuprum-rust v0.1.0\n"
     )
 
     result = observe_output(GATES[0], "warning-warm", 101, output)
@@ -105,6 +108,26 @@ def test_warning_prewarm_accepts_a_fresh_cached_package() -> None:
     _verify_prewarm(run, failures)
 
     assert not failures, "a fresh cached warning prewarm must be accepted"
+
+
+def test_warm_warning_replay_needs_no_local_fresh_line() -> None:
+    """Cargo may replay a local warning without printing that crate as Fresh."""
+    output = (
+        "       Fresh proc-macro2 v1.0.0\n"
+        f"warning: {WARNING_FUNCTION}\n"
+        f"{WARNING_DENIAL}\n"
+    )
+    run = observe_output(GATES[0], "warning-warm", 101, output)
+    failures: list[str] = []
+
+    _verify_warm(run, failures)
+
+    assert run.package_state == WARNING_REPLAY_STATE, (
+        "a cached warning denial must be distinguishable from a missing state"
+    )
+    assert run.compile_lines == 0, "the warm replay must not rebuild packages"
+    assert run.fresh_lines == 1, "the run must retain positive cache freshness"
+    assert not failures, "the cached warning replay must satisfy the warm control"
 
 
 def test_warning_failure_requires_the_cargo_policy_diagnostic() -> None:
