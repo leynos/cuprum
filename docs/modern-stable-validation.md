@@ -148,22 +148,67 @@ compiled, checked, or fresh.
 
 ### Observed gate results
 
-These result tables are filled from the implementation run before the change is
-committed. They record statuses and Cargo freshness; they do not claim a
-measured speedup.
+The results below come from Linux runs on the implementation candidate. They
+record statuses and Cargo freshness; they do not claim a measured speedup.
 
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
-| Modern toolchain guard                              | Pending                                 | Exact `rustc -vV` and `cargo -V` output above                         |
-| Rust 1.85.0 MSRV check                              | Pending                                 | `make msrv-check`                                                     |
-| Modern stable check, lint, tests, docs and doctests | Pending                                 | `make modern-stable`                                                  |
-| Native extension suite                              | Pending                                 | Counts from `make test-extension`                                     |
-| Cargo warning fixture and warm-cache controls       | Passed, 21 tests                        | `make test-modern-stable-contract`                                    |
+| Modern toolchain guard                              | Passed                                  | Exact `rustc -vV` and `cargo -V` output above                         |
+| Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
+| Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
+| Native extension suite                              | 103 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
+| Cargo warning fixture and warm-cache controls       | Passed, 24 tests                        | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
-| Full-gate warning controls                          | Pending                                 | `make modern-stable-warning-controls`                                 |
-| `rust/Cargo.lock` unchanged                         | Pending                                 | CI lockfile check and local status                                    |
+| Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
+| `rust/Cargo.lock` unchanged                         | Passed; SHA-256 recorded below          | CI lockfile check and local checksum                                  |
 
 _Table 3: Implementation validation evidence._
+
+The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
+and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the
+versions printed above. Its Rust test run reported 165 passed and no skipped
+tests; the separate doctest run reported 8 passed and 3 ignored. The extension
+skips are Windows-only tests and are not Linux runtime evidence. The lockfile
+SHA-256 was `f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591`.
+
+The full-gate harness reported these exit statuses and Cargo freshness counts.
+Exit 2 is the expected denied-warning result; exit 0 is the expected
+permissive-prewarm or clean-source success. A cached warning replay has no
+`Fresh` line for the local package, so the report labels that state separately
+and records the positive number of fresh dependency lines.
+
+| Gate    | Package          | Phase               | Exit | Package state         | Compile/check lines | Fresh lines |
+| ------- | ---------------- | ------------------- | ---: | --------------------- | ------------------: | ----------: |
+| check   | `cuprum-streams` | warning-cold        | 2    | Checking              | 159                 | 0           |
+| check   | `cuprum-streams` | warning-prewarm     | 0    | Checking              | 16                  | 153         |
+| check   | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 152         |
+| check   | `cuprum-streams` | warning-warm-repeat | 2    | Cached warning replay | 0                   | 152         |
+| check   | `cuprum-streams` | clean               | 0    | Checking              | 2                   | 167         |
+| clippy  | `cuprum-streams` | warning-cold        | 2    | Checking              | 2                   | 166         |
+| clippy  | `cuprum-streams` | warning-prewarm     | 0    | Fresh                 | 1                   | 168         |
+| clippy  | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 152         |
+| clippy  | `cuprum-streams` | warning-warm-repeat | 2    | Cached warning replay | 0                   | 152         |
+| clippy  | `cuprum-streams` | clean               | 0    | Checking              | 2                   | 167         |
+| test    | `cuprum-streams` | warning-cold        | 2    | Compiling             | 67                  | 92          |
+| test    | `cuprum-streams` | warning-prewarm     | 0    | Compiling             | 9                   | 160         |
+| test    | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 155         |
+| test    | `cuprum-streams` | warning-warm-repeat | 2    | Cached warning replay | 0                   | 155         |
+| test    | `cuprum-streams` | clean               | 0    | Compiling             | 2                   | 167         |
+| Maturin | `cuprum-rust`    | warning-cold        | 2    | Compiling             | 12                  | 10          |
+| Maturin | `cuprum-rust`    | warning-prewarm     | 0    | Fresh                 | 0                   | 22          |
+| Maturin | `cuprum-rust`    | warning-warm        | 2    | Fresh                 | 0                   | 22          |
+| Maturin | `cuprum-rust`    | warning-warm-repeat | 2    | Fresh                 | 0                   | 22          |
+| Maturin | `cuprum-rust`    | clean               | 0    | Compiling             | 1                   | 21          |
+
+_Table 4: Cold, permissive prewarm, repeated warm denial, and clean-source
+results from `make modern-stable-warning-controls`._
+
+Each gate failed on the injected local warning when cold, succeeded after a
+permissive prewarm, failed twice when the cached warning was replayed under
+denial, and succeeded after removing the warning. The clean-source row shows
+the affected package compiling or being checked again. Maturin emitted the
+separate `build-backend` packaging diagnostic; the local Rust warning still
+failed under Cargo's policy and the restored source rebuilt successfully.
 
 ## Limits and interpretation
 
