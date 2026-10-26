@@ -204,7 +204,7 @@ def _assert_compiles_warning(cargo: str, target: str, crate: Path) -> None:
     assert "deliberately_unused" in output, output
 
 
-def _assert_denial_reuses_artifact(cargo: str, target: str, crate: Path) -> None:
+def _assert_denial_reuses_artefact(cargo: str, target: str, crate: Path) -> None:
     """Require a fresh Cargo replay to deny the cached fixture warning."""
     result = _run_cargo(cargo, target, crate, "build", warnings="deny")
     output = _assert_fails_on_warning(
@@ -216,7 +216,7 @@ def _assert_denial_reuses_artifact(cargo: str, target: str, crate: Path) -> None
     )
 
 
-def _assert_warning_recovery_reuses_artifact(
+def _assert_warning_recovery_reuses_artefact(
     cargo: str, target: str, crate: Path
 ) -> None:
     """Require warning policy recovery to replay the cached build cleanly."""
@@ -239,16 +239,16 @@ def _assert_fixed_warning_rebuilds(cargo: str, target: str, crate: Path) -> None
 
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
-def test_warning_policy_toggles_reuse_the_same_build_artifact(tmp_path: Path) -> None:
+def test_warning_policy_toggles_reuse_the_same_build_artefact(tmp_path: Path) -> None:
     """Show warn/deny changes replay warnings without recompiling the crate."""
     cargo = _require_toolchain()
     target = _host_target()
     crate = _crate(tmp_path, "warning-policy-fixture", WARNING_SOURCE)
 
     _assert_compiles_warning(cargo, target, crate)
-    _assert_denial_reuses_artifact(cargo, target, crate)
-    _assert_denial_reuses_artifact(cargo, target, crate)
-    _assert_warning_recovery_reuses_artifact(cargo, target, crate)
+    _assert_denial_reuses_artefact(cargo, target, crate)
+    _assert_denial_reuses_artefact(cargo, target, crate)
+    _assert_warning_recovery_reuses_artefact(cargo, target, crate)
     _assert_fixed_warning_rebuilds(cargo, target, crate)
 
 
@@ -284,7 +284,7 @@ def test_removing_rustflags_invalidates_an_otherwise_warm_build(
     changed_output = _diagnostics(removed_flag)
     assert removed_flag.returncode == 0, changed_output
     assert "Compiling flag-invalidation-fixture" in changed_output, (
-        "removing the old -D warnings flag must invalidate its prior artifact once"
+        "removing the old -D warnings flag must invalidate its prior artefact once"
     )
     assert "deliberately_unused" not in changed_output, changed_output
 

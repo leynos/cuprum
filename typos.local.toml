@@ -33,6 +33,8 @@ ignore = [
   '[0-9a-f]{6}[0-9]',
   # markdownlint-cli2 follows this fixed external environment variable.
   '\bFORCE_COLOR\b',
+  # Cargo fixes this environment variable's US spelling as an external name.
+  '\bCARGO_TERM_COLOR\b',
   # GitHub's Actions API and the established CLI expose these literal names.
   '"artifacts"',
   '"artifact"',

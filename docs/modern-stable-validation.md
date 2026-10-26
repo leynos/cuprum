@@ -25,7 +25,7 @@ Cargo 1.97 introduced `build.warnings` and the matching `CARGO_BUILD_WARNINGS`
 environment variable. See the [Cargo configuration reference][cargo-warnings]
 and [Rust 1.97 release notes][rust-1-97]. Cargo's setting changes local package
 lint-warning fatality without changing the compiler flags that identify the
-build artifact. The probe below found that Cargo also makes a warn-level
+build artefact. The probe below found that Cargo also makes a warn-level
 Rustdoc lint on the local package fatal when this setting is present. The
 setting does not define every diagnostic emitted by dependency crates, build
 tools, or packaging tools.
@@ -120,12 +120,12 @@ code-generation flags fixed. Its expected sequence is:
 1. `warn`: compile successfully and record the local warning.
 2. `deny`: fail while Cargo reports the package as `Fresh`.
 3. `deny` again: fail again without recompiling the package.
-4. `warn`: succeed from the same fresh artifact.
+4. `warn`: succeed from the same fresh artefact.
 5. Remove the warning and run `deny`: rebuild the edited package and succeed.
 
 A separate clean-source control builds with the old `-D warnings` compiler
 flag, removes that flag, and confirms one recompilation under the new flags.
-After that artifact is built, changing only `CARGO_BUILD_WARNINGS` keeps it
+After that artefact is built, changing only `CARGO_BUILD_WARNINGS` keeps it
 fresh. The warning fixture independently confirms that policy-only changes
 replay a cached warning without recompiling its local package. Clippy has its
 own warn-level lint fixture and warm failure control. Where the environment has

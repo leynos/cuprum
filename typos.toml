@@ -62,6 +62,7 @@ extend-ignore-re = [
     "\\bASTROID_VERSION\\b",
     "\\bAppFactory<Ser\\b",
     "\\bAstroid\\b",
+    "\\bCARGO_TERM_COLOR\\b",
     "\\bDEV_FAST_MOLD_VERSION(?:_(?:FILE|PATTERN))?\\b",
     "\\bFORCE_COLOR\\b",
     "\\bMOLD_VERSION\\b",
