@@ -49,6 +49,7 @@ def _modern_commands(output: str) -> list[str]:
 
 
 def _makefile() -> str:
+    """Return the Makefile text for static route assertions."""
     return (repo_root() / "Makefile").read_text(encoding="utf-8")
 
 
@@ -85,8 +86,8 @@ def test_modern_route_owns_its_toolchain_flags_and_target_directory() -> None:
     assert "nightly-2026-08-23" not in output, (
         "modern commands must not select dev-fast"
     )
-    assert "mold" not in output
-    assert "Cranelift" not in output
+    assert "mold" not in output, "modern commands must not select the Linux fast linker"
+    assert "Cranelift" not in output, "modern commands must not select Cranelift"
 
 
 def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
@@ -107,12 +108,22 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
             )
         )
     )
-    assert "CARGO_BUILD_WARNINGS=deny" in output
-    assert "CARGO_BUILD_WARNINGS=warn" not in output
-    assert 'RUSTFLAGS="-C codegen-units=1"' in output
-    assert "RUSTFLAGS=-D warnings" not in output
-    assert "ambient-rustc" not in output
-    assert "CARGO_ENCODED_RUSTFLAGS=ambient" not in output
+    assert "CARGO_BUILD_WARNINGS=deny" in output, (
+        "the modern route must force Cargo warning denial"
+    )
+    assert "CARGO_BUILD_WARNINGS=warn" not in output, (
+        "caller warning policy must not weaken the modern route"
+    )
+    assert 'RUSTFLAGS="-C codegen-units=1"' in output, (
+        "ambient Rust flags must be replaced by the modern code-generation flag"
+    )
+    assert "RUSTFLAGS=-D warnings" not in output, (
+        "caller Rust flags must not re-enter the modern command"
+    )
+    assert "ambient-rustc" not in output, "the route must clear a caller RUSTC"
+    assert "CARGO_ENCODED_RUSTFLAGS=ambient" not in output, (
+        "the route must clear encoded caller Rust flags"
+    )
 
 
 def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
@@ -137,7 +148,9 @@ def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
     )
     output = completed.stdout + completed.stderr
     assert completed.returncode != 0, "the guard must reject an unselected Cargo"
-    assert "does not honour rustup toolchain selection" in output
+    assert "does not honour rustup toolchain selection" in output, (
+        "the toolchain guard must explain the rejected Cargo override"
+    )
 
 
 def test_modern_check_runs_all_required_gates_in_order() -> None:
@@ -174,25 +187,45 @@ def test_modern_clippy_moves_only_warning_fatality_to_cargo() -> None:
     """Use Cargo warning denial without dropping Clippy's lint pass."""
     output = _dry_run("modern-stable-clippy")
     clippy = next(line for line in output.splitlines() if "probe-cargo clippy" in line)
-    assert "CARGO_BUILD_WARNINGS=deny" in clippy
-    assert "--workspace --all-targets --all-features" in clippy
-    assert "-- -D warnings" not in clippy
-    assert "--verbose" in clippy
-    assert "-C codegen-units=1" in clippy
+    assert "CARGO_BUILD_WARNINGS=deny" in clippy, (
+        "modern Clippy must use Cargo warning denial"
+    )
+    assert "--workspace --all-targets --all-features" in clippy, (
+        "modern Clippy must cover every workspace target and feature"
+    )
+    assert "-- -D warnings" not in clippy, (
+        "modern Clippy must not key warnings in Rust compiler flags"
+    )
+    assert "--verbose" in clippy, "modern Clippy must expose freshness status"
+    assert "-C codegen-units=1" in clippy, (
+        "modern Clippy must retain the code-generation setting"
+    )
 
 
 def test_modern_documentation_keeps_stable_rustdoc_warning_flags() -> None:
     """Keep rustdoc and doctest warning enforcement outside the migration."""
     documentation = _dry_run("modern-stable-doc")
     doctests = _dry_run("modern-stable-doctest")
-    assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in documentation
-    assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in doctests
+    assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in documentation, (
+        "modern rustdoc must retain its warning-fatality flags"
+    )
+    assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in doctests, (
+        "modern doctests must retain their stable-compatible warning flags"
+    )
     for output in (documentation, doctests):
-        assert "CARGO_BUILD_WARNINGS=deny" not in output
-        assert "--verbose" in output
-        assert "-Zunstable-options" not in output
-        assert "--display-doctest-warnings" not in output
-        assert "--doctest-build-arg" not in output
+        assert "CARGO_BUILD_WARNINGS=deny" not in output, (
+            "modern rustdoc and doctests must retain separate warning controls"
+        )
+        assert "--verbose" in output, "documentation gates must expose freshness"
+        assert "-Zunstable-options" not in output, (
+            "stable documentation must omit nightly-only flags"
+        )
+        assert "--display-doctest-warnings" not in output, (
+            "stable doctests must omit the nightly warning display flag"
+        )
+        assert "--doctest-build-arg" not in output, (
+            "stable doctests must omit nightly compiler arguments"
+        )
 
 
 def test_modern_test_threads_do_not_become_cargo_build_jobs() -> None:
@@ -207,7 +240,7 @@ def test_modern_test_threads_do_not_become_cargo_build_jobs() -> None:
     assert any(
         "--test-threads 4" in line or "--test-threads=4" in line
         for line in test_commands
-    )
+    ), "TEST_JOBS must configure test threads"
     assert all(
         not re.search(r"(?:^|\s)--(?:build-)?jobs(?:=|\s)", line)
         for line in test_commands
@@ -229,8 +262,17 @@ def test_modern_develop_passes_locked_and_uses_the_modern_environment() -> None:
         "--locked",
     ):
         assert required in command, f"Maturin command must include {required!r}"
-    assert "--config" not in command
-    assert "tools/dev-fast/cargo" not in command
+    output_order = (
+        output.index("python -m ensurepip --upgrade"),
+        output.index("maturin develop"),
+    )
+    assert output_order == tuple(sorted(output_order)), (
+        "modern develop must prepare pip before Maturin installs the extension"
+    )
+    assert "--config" not in command, "modern Maturin must not select a fragment"
+    assert "tools/dev-fast/cargo" not in command, (
+        "modern Maturin must not use the dev-fast Cargo adapter"
+    )
 
 
 def test_modern_extension_and_aggregate_targets_preserve_order() -> None:
@@ -242,7 +284,9 @@ def test_modern_extension_and_aggregate_targets_preserve_order() -> None:
         "make test-extension",
     )
     positions = [extension.index(target) for target in ordered]
-    assert positions == sorted(positions)
+    assert positions == sorted(positions), (
+        "the extension target must check, develop, then run extension tests"
+    )
 
     aggregate = _dry_run("modern-stable")
     check = aggregate.index("make modern-stable-check")
@@ -277,14 +321,26 @@ def test_existing_routes_keep_their_warning_policy() -> None:
         "msrv-check",
         variables={"DEV_FAST_HOST_IS_LINUX": "no"},
     )
-    assert "clippy --all-targets --all-features -- -D warnings" in routes
-    assert 'RUSTFLAGS="-D warnings -C codegen-units=1"' in routes
-    assert "RUSTUP_TOOLCHAIN=1.85.0" in routes
-    assert "DOCTEST_RUSTDOC_FLAGS" in makefile
+    assert "clippy --all-targets --all-features -- -D warnings" in routes, (
+        "the retained Clippy route must keep warning fatality in compiler flags"
+    )
+    assert 'RUSTFLAGS="-D warnings -C codegen-units=1"' in routes, (
+        "the retained test route must keep its established warning flags"
+    )
+    assert "RUSTUP_TOOLCHAIN=1.85.0" in routes, (
+        "the MSRV route must remain pinned to Rust 1.85.0"
+    )
+    assert "DOCTEST_RUSTDOC_FLAGS" in makefile, (
+        "nightly doctests must retain their separate rustdoc flags"
+    )
 
 
 def test_msrv_check_prints_both_actual_toolchain_versions() -> None:
     """Make the unchanged MSRV check identify its compiler and Cargo versions."""
     output = _dry_run("msrv-check")
-    assert 'rustup run "1.85.0" rustc -vV' in output
-    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in output
+    assert 'rustup run "1.85.0" rustc -vV' in output, (
+        "the MSRV check must print the selected rustc version"
+    )
+    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in output, (
+        "the MSRV check must print the selected Cargo version"
+    )
