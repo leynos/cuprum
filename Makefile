@@ -721,7 +721,7 @@ test-boundary-parity: $(RUST_DEBUG_PREREQUISITE) ## Check consume parity through
 	cargo_status=$$?; \
 	cat "$$log_file"; \
 	if [ "$$cargo_status" -ne 0 ]; then exit "$$cargo_status"; fi; \
-	if ! grep -Eq '^running [1-9][0-9]* tests?$$' "$$log_file"; then printf '%s\n' 'boundary parity target selected zero ignored tests' >&2; exit 1; fi
+	if ! grep -Eq '^running 30 tests?$$' "$$log_file"; then printf '%s\n' 'boundary parity target did not select all 30 ignored tests' >&2; exit 1; fi
 
 test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
 	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_ci_dev_fast_action.py

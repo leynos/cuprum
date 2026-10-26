@@ -1,0 +1,6 @@
+# Curated coverage seeds, not historical failures or proptest persistence syntax.
+# Format: label domain buffer_size Proptest-1.11.0-RngSeed::Fixed(u64)
+small-arbitrary small 1 6120001
+small-large-buffer small 65537 6120002
+large-pattern-4096 large 4096 6120003
+large-pattern-default large 65536 6120004

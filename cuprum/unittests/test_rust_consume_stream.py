@@ -232,9 +232,16 @@ class TestRustConsumeStream:
             read_fd, write_fd = os.pipe()
             stack.callback(_safe_close, read_fd)
             stack.callback(_safe_close, write_fd)
+            payload = b"left unread after buffer rejection"
+            os.write(write_fd, payload)
             _safe_close(write_fd)
             with pytest.raises(ValueError, match="buffer_size"):
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
+
+            os.fstat(read_fd)
+            assert os.read(read_fd, len(payload)) == payload, (
+                "buffer validation must leave the borrowed reader usable and unread"
+            )
 
     @staticmethod
     def test_propagates_io_errors(
