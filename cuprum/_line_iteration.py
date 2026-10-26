@@ -89,8 +89,7 @@ class LineStream:
             return item
         self.result = item
         # The driver generator is finished; closing it here releases the
-        # coordinator's waiters deterministically instead of at garbage
-        # collection.
+        # coordinator's waiters deterministically, not at garbage collection.
         await self._iterator.aclose()
         raise StopAsyncIteration
 
@@ -267,11 +266,9 @@ async def _drive_line_stream(
 
     try:
         run = await _start_line_stream_run(execution, queue)
-        # The coordinator reads the run's own bundle rather than the one this
-        # call was handed: the spawn helper rebuilt *its* copy with the run's
-        # monotonic start reference stamped on, and the post-exit deadline is a
-        # remainder from that reference. Continuing with the original would
-        # measure the child against the ``0.0`` default it still carries.
+        # The coordinator reads the run's own bundle: the spawn helper stamped
+        # the run's monotonic start onto its copy, and the post-exit deadline is
+        # a remainder from that reference, not from the ``0.0`` copy here.
         await _coordinate_line_stream(run, queue, result_future)
     except asyncio.CancelledError:
         raise
@@ -299,9 +296,8 @@ async def _reconcile_line_stream(
         if coordinator is not None:
             await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
     except BaseException as error:
-        # A published coordinator failure must not skip observe-hook cleanup.
-        # Passing it as the active error means a failing hook is grouped with,
-        # rather than replaces, the outcome that ended the run.
+        # A published coordinator failure must not skip observe-hook cleanup:
+        # the active error groups a failing hook with the outcome, not over it.
         _emit_line_stream_error(
             finalization.execution,
             finalization.result,
@@ -351,9 +347,8 @@ async def _next_queue_item(
                 raise error
         return await getter
     finally:
-        # ``asyncio.wait`` leaves the loser pending, so a published failure and
-        # a cancellation landing on the wait both leave the getter parked on a
-        # queue nobody will read again.
+        # ``asyncio.wait`` leaves the loser pending, so a published failure or a
+        # cancellation would park the getter on a queue nobody will read again.
         if not getter.done():
             getter.cancel()
             await asyncio.gather(getter, return_exceptions=True)
