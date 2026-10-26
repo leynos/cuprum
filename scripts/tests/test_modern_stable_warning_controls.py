@@ -10,12 +10,12 @@ from scripts.modern_stable_warning_controls import (
     WARNING_FUNCTION,
     WARNING_REPLAY_STATE,
     GateRun,
+    _append_warning,
     _has_warning_failure,
+    _observe_output,
     _verify_prewarm,
     _verify_warm,
-    append_warning,
-    observe_output,
-    with_warning_policy,
+    _with_warning_policy,
 )
 
 
@@ -23,13 +23,13 @@ def test_warning_injection_appends_one_private_unused_function() -> None:
     """Make the warning source explicit and reject accidental double edits."""
     source = "//! Fixture module.\n"
 
-    changed = append_warning(source)
+    changed = _append_warning(source)
 
     assert changed == f"{source}\n{WARNING_FUNCTION}\n", (
         "warning injection must append the single expected private function"
     )
     with pytest.raises(ValueError, match="already exists"):
-        append_warning(changed)
+        _append_warning(changed)
 
 
 def test_controls_cover_each_migrated_gate_and_the_maturin_boundary() -> None:
@@ -61,11 +61,11 @@ def test_pre_warmup_changes_only_the_single_modern_warning_setting() -> None:
         "CARGO_TARGET_DIR=rust/target/modern-stable\n"
     )
 
-    assert with_warning_policy(makefile, "warn") == makefile.replace(
+    assert _with_warning_policy(makefile, "warn") == makefile.replace(
         "CARGO_BUILD_WARNINGS=deny", "CARGO_BUILD_WARNINGS=warn"
     ), "pre-warmup must change only the modern Cargo warning policy"
     with pytest.raises(ValueError, match="exactly once"):
-        with_warning_policy(makefile + makefile, "warn")
+        _with_warning_policy(makefile + makefile, "warn")
 
 
 def test_observation_counts_compile_and_fresh_lines() -> None:
@@ -76,7 +76,7 @@ def test_observation_counts_compile_and_fresh_lines() -> None:
         "    \x1b[1mChecking\x1b[0m cuprum-rust v0.1.0\n"
     )
 
-    result = observe_output(GATES[0], "warning-warm", 101, output)
+    result = _observe_output(GATES[0], "warning-warm", 101, output)
 
     assert result.exit_code == 101, (
         "the fixture must retain Cargo's warning-denial exit"
@@ -117,7 +117,7 @@ def test_warm_warning_replay_needs_no_local_fresh_line() -> None:
         f"warning: {WARNING_FUNCTION}\n"
         f"{WARNING_DENIAL}\n"
     )
-    run = observe_output(GATES[0], "warning-warm", 101, output)
+    run = _observe_output(GATES[0], "warning-warm", 101, output)
     failures: list[str] = []
 
     _verify_warm(run, failures)
