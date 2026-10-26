@@ -1192,7 +1192,6 @@ jobs:
       - name: Save the modern stable compiler cache
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.sccache-dir.outputs.cache-hit != 'true' &&
           steps.sccache.outputs.status != 'fallback'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
