@@ -1243,12 +1243,22 @@ and warning policy. The Linux dev-fast warning policy is unchanged.
 
 The observed negative controls and the route inventory live in
 [`modern-stable-validation.md`](modern-stable-validation.md). A toolchain bump
-must update the Makefile pin, the `modern-stable` CI job, this guide, the
-toolchain-pin contract, and the version scope in the shared compiler-cache
-renderer together. The Cargo registry key remains unchanged. The evidence
-document must record the new compiler and Cargo versions and rerun the warning,
-cache-freshness, extension, and lockfile controls. This Linux route is
-POSIX-oriented; it does not add Windows or macOS runtime evidence.
+must update the Makefile pin, the `modern-stable` CI job, this guide, and the
+toolchain-pin contract. Also update each hard-coded pin in:
+
+- `tests/helpers/ci_runners.py`, which lists the expected cache family.
+- `tests/test_ci_modern_stable_contract.py`.
+- `cuprum/unittests/test_cargo_build_warnings_contract.py`.
+- `cuprum/unittests/test_modern_stable_make_contract.py`.
+- `docs/ci-cache-ownership.md`, which records the writer table.
+
+The shared cache-key renderer reads `compiler-version` from the CI job; it does
+not hold the toolchain pin, so a pin-only change does not require editing the
+renderer. Change it only if the cache-key shape changes. The Cargo registry key
+remains unchanged. The evidence document must record the new compiler and Cargo
+versions and rerun the warning, cache-freshness, extension, and lockfile
+controls. This Linux route is POSIX-oriented; it does not add Windows or macOS
+runtime evidence.
 
 ## Tar and rsync builder helpers
 

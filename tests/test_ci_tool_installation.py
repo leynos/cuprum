@@ -52,7 +52,7 @@ def test_ci_does_not_build_tools_from_source() -> None:
             )
 
 
-def test_no_workflow_installs_cargo_nextest() -> None:
+def test_only_modern_stable_installs_cargo_nextest() -> None:
     """Use one pinned prebuilt installer for the modern validation job.
 
     The ordinary Rust matrix no longer runs the Rust suite, so nextest belongs

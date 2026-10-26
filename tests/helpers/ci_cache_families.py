@@ -84,7 +84,8 @@ class CacheFamily(typ.NamedTuple):
         renders to. The two lanes read different cache services.
     scope:
         The ``cache-keys`` inputs this family is scoped by, in the order
-        :data:`KEY_SCOPES` declares them.
+        :data:`KEY_SCOPES` declares them. ``SCCACHE_CACHE_KEY`` families with
+        ``modern-stable`` also include the resolved compiler version.
     """
 
     key_name: str
