@@ -1251,6 +1251,9 @@ toolchain-pin contract. Also update each hard-coded pin in:
 - `cuprum/unittests/test_cargo_build_warnings_contract.py`.
 - `cuprum/unittests/test_modern_stable_make_contract.py`.
 - `docs/ci-cache-ownership.md`, which records the writer table.
+- `docs/modern-stable-validation.md`, which records the pin and its evidence.
+- `docs/adr-012-linux-dev-fast-routing.md`, which names the pin.
+- `AGENTS.md`, which names the pin in the `make modern-stable` guidance.
 
 The shared cache-key renderer reads `compiler-version` from the CI job; it does
 not hold the toolchain pin, so a pin-only change does not require editing the

@@ -142,8 +142,10 @@ The full-gate harness injects an unused-function warning into `cuprum-streams`
 for check, Clippy, and tests, then into `cuprum-rust` for Maturin. Each gate
 runs cold with denial, warm under `warn`, twice warm under denial, and once
 after source restoration. It uses `make -C` on a temporary Git worktree and one
-shared modern-stable target directory. Maturin runs with verbose Cargo output
-so the harness can record exit status and whether the affected package was
+shared modern-stable target directory. The worktree starts from committed
+`HEAD`, so uncommitted source or build-policy edits in the caller's checkout
+are not included in this evidence. Maturin runs with verbose Cargo output so
+the harness can record exit status and whether the affected package was
 compiled, checked, or fresh.
 
 ### Observed gate results

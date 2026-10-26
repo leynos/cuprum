@@ -8,6 +8,8 @@
 The harness edits only a temporary Git worktree. It denies a cold warning,
 builds that warning under Cargo's permissive policy, replays it from a warm
 cache under denial, and then checks that removing it restores the route.
+The temporary worktree is created from committed ``HEAD``; uncommitted source
+or build-policy edits in the caller's checkout are not part of the evidence.
 """
 
 from __future__ import annotations
