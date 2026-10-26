@@ -41,6 +41,9 @@ import typing as typ
 
 import pytest
 
+from cuprum._process_group import _POST_KILL_SETTLEMENT_S
+from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
+from cuprum._subprocess_stdin_reclaim import _STDIN_RECLAIM_BUDGET_S
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
 from cuprum.line_stream_observation import observe_line_stream
 from cuprum.sh import (
@@ -63,6 +66,7 @@ from tests.helpers.execution import _RunKwargs
 from tests.helpers.timeouts import (
     descendant_then_exit_argv,
     pending_tasks,
+    process_is_running,
 )
 
 if typ.TYPE_CHECKING:
@@ -199,7 +203,16 @@ async def _run_to_deadline(
     delivered: list[str] = []
     reader = asyncio.ensure_future(_drain_lines(lines, delivered))
     try:
-        expired = await run_to_its_own_deadline(reader)
+        expired = await run_to_its_own_deadline(
+            reader,
+            cleanup_allowance_s=_STDIN_RECLAIM_BUDGET_S
+            + _CAPTURE_EOF_GRACE_S
+            + (
+                ExecutionContext().cancel_grace + _POST_KILL_SETTLEMENT_S
+                if policy is ProcessGroupPolicy.OWN_GROUP
+                else 0
+            ),
+        )
     finally:
         reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
@@ -244,6 +257,10 @@ def test_a_descendant_holding_the_pipes_does_not_outlive_the_lines_deadline(
         try:
             drained = await _run_to_deadline(command, policy)
             descendant_pid = recorded_descendant_or_fail(pid_file)
+            if policy is ProcessGroupPolicy.INHERIT:
+                assert process_is_running(descendant_pid), (
+                    "an inherited line stream must leave its descendant alive"
+                )
             return drained
         finally:
             reap_descendant(pid_file, descendant_pid)
@@ -297,6 +314,10 @@ def test_the_lines_deadline_settles_the_group_and_leaves_nothing_pending(
                     "left holding its pipes still alive, so the expiry bounded "
                     "the drain without settling the group the descendant was in",
                 )
+            else:
+                assert process_is_running(descendant_pid), (
+                    "an inherited line stream must leave its descendant alive"
+                )
             return descendant_pid, pending_tasks()
         finally:
             reap_descendant(pid_file, descendant_pid)
@@ -346,6 +367,10 @@ def test_the_lines_deadline_expiry_is_reported_as_a_timeout_phase(
             with observe_line_stream(events.append):
                 drained = await _run_to_deadline(command, policy)
             descendant_pid = recorded_descendant_or_fail(pid_file)
+            if policy is ProcessGroupPolicy.INHERIT:
+                assert process_is_running(descendant_pid), (
+                    "an inherited line stream must leave its descendant alive"
+                )
             return drained.expired
         finally:
             reap_descendant(pid_file, descendant_pid)

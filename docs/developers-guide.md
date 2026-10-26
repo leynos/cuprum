@@ -7506,8 +7506,9 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_stdio_binding_guards.py`, `cuprum/_stdio_diagnostics.py`,
 `cuprum/stdio_events.py`, `cuprum/_subprocess_timeout.py`,
 `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
-`cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`, and
-`cuprum/_command_finalization.py`. Pipeline startup has its own boundary in
+`cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`,
+`cuprum/_subprocess_direct_run.py`, `cuprum/_command_finalization.py`, and
+`cuprum/_pipeline_settlement.py`. Pipeline startup has its own boundary in
 `cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
 spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
 `_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
@@ -7653,6 +7654,12 @@ The two live together because the spawn is what the bundle describes: a caller
 that has to refuse a spawn patches the seam, and a caller that patches the seam
 would otherwise be reaching for a name on the result-assembly path.
 
+`cuprum/_subprocess_direct_run.py` owns the non-streaming single-command path:
+it waits for the child and reconciles its stdin writer under the run's
+remaining deadline, then settles the writer and any owned process group on
+failure. The direct path has no stream consumers; the streamed command path and
+its post-exit drain remain in `_subprocess_stream_run.py`.
+
 `_start_owned_process` is not the only announcement site, and the split does
 not pretend it is. `_spawn_subprocess` has three callers; the direct run
 reaches it through `_start_owned_process`, while
@@ -7716,7 +7723,7 @@ termination, since the wait's own cancellation handler escalates through
 `_terminate_all_shielded`. The cancellation grace and the termination policy
 are not restated here. Its three call sites are the non-streaming
 single-command path (`_run_subprocess_without_streams` in
-`cuprum/_subprocess_stream_run.py`), the streaming path
+`cuprum/_subprocess_direct_run.py`), the streaming path
 (`_wait_for_streamed_process_exit` in `cuprum/_subprocess_stream_run.py`), and
 line iteration (`_wait_for_line_stream_exit` in
 `cuprum/_line_stream/coordinator.py`). The exit wait is passed in already
@@ -7729,22 +7736,23 @@ reason its deadline names are re-exported.
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
 settles the per-stream relay-diagnostics collectors before returning captured
-output. `_subprocess_execution.py` retains the non-streaming path and final
-`CommandResult` assembly, re-exporting `_start_owned_process` and the execution
-bundle from `cuprum/_subprocess_spawn.py`, and stream-consumer construction and
-stream configuration from `_subprocess_streams`. `_StreamConsumerSpawnContext`
-is the private bundle of stream configuration, PID, and the stdout/stderr
-diagnostics collectors that the streamed run creates before handing those
-values to the consumer tasks. `_reconcile_shielded` is the reconciliation both
-pre-gather exit routes owe: it drains the consumers under one
-`_shielded_cleanup`, and takes a `preserve` flag rather than deciding for
-itself, because the routes disagree about what the drained text is for — the
-exit-wait deadline hands it to the caller's `TimeoutExpired`, while the route
-re-raising some other failure settles promptly and keeps `preserve=False` so
-the capture grace is not spent on text nobody will read. Preserving applies the
-run's per-stream capture policies; discarding reports the policy pair
-`(None, None)`, and every stream the drain then settles comes back as an empty
-`_CapturedDrain` rather than as captured text.
+output. `_subprocess_execution.py` retains orchestration and final
+`CommandResult` assembly, re-exporting `_run_subprocess_without_streams` from
+`_subprocess_direct_run.py`, `_start_owned_process` and the execution bundle
+from `cuprum/_subprocess_spawn.py`, and stream-consumer construction and stream
+configuration from `_subprocess_streams`. `_StreamConsumerSpawnContext` is the
+private bundle of stream configuration, PID, and the stdout/stderr diagnostics
+collectors that the streamed run creates before handing those values to the
+consumer tasks. `_reconcile_shielded` is the reconciliation both pre-gather
+exit routes owe: it drains the consumers under one `_shielded_cleanup`, and
+takes a `preserve` flag rather than deciding for itself, because the routes
+disagree about what the drained text is for — the exit-wait deadline hands it
+to the caller's `TimeoutExpired`, while the route re-raising some other failure
+settles promptly and keeps `preserve=False` so the capture grace is not spent
+on text nobody will read. Preserving applies the run's per-stream capture
+policies; discarding reports the policy pair `(None, None)`, and every stream
+the drain then settles comes back as an empty `_CapturedDrain` rather than as
+captured text.
 
 `cuprum/_command_finalization.py` owns the post-spawn finalization cluster that
 was split out of `cuprum/_command_internals.py` when the stdio-resolution work
@@ -7829,6 +7837,12 @@ per-stage *reporting*: the terminal `exit` event a stage owes its observers
 pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
+
+`cuprum/_pipeline_settlement.py` owns the shared sequence for an expired
+pipeline: terminate the stages first, then reconcile the pumps and settle the
+readers so they can preserve output already written. Both the stage-wait expiry
+and an unfinished final gather use this sequence; the module does not decide
+how the caller reports the timeout.
 
 `cuprum/_pipeline_observations.py` owns the state a run is observed *through*:
 `_build_pipeline_observations` assembles one `_StageObservation` per command —
@@ -8097,8 +8111,14 @@ and that refusal reports `-1` because no code was ever established.
 
 A pipeline enforces one deadline for the whole run, rather than a separate
 deadline per stage. `_collect_pipeline_inputs`, in
-`cuprum/_pipeline_internals.py`, awaits the pipeline against that single
-deadline and maps its expiry to `TimeoutExpired`.
+`cuprum/_pipeline_collect.py`, awaits the pipeline against that single deadline
+and maps its expiry to `TimeoutExpired`.
+
+The collector's private `_PipelineDeadline` pairs the absolute deadline with
+the resolved monotonic clock that stamped it. The stage wait and output gather
+debit that same clock. This record is local to collection; it is not a reusable
+deadline layer. A spawn without observations retains the collector's fallback
+clock.
 
 On expiry, `_collect_pipeline_inputs` calls `_terminate_timed_out_stages` (in
 `cuprum/_process_lifecycle.py`) before it gathers stage output. Doing so first

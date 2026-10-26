@@ -124,14 +124,16 @@ async def _cancel_stdin_writer(
 
     The retrieval is a done callback rather than a statement after the wait,
     and the difference is the case this helper exists for. When the budget
-    expires the wait returns with the task *still pending*, and ``exception()``
-    on a pending task raises ``InvalidStateError`` instead of marking anything
-    — so a retrieval placed after the wait records nothing at exactly the
-    moment the task is being reclaimed rather than waited out. A writer that
-    then fails as it unwinds is reported by the loop as never retrieved, which
-    was measured on 3.12 and 3.14 before the callback replaced the trailing
-    call. The callback fires whenever the task actually finishes: inside the
-    window, during the reclaim, or after this helper has returned.
+    expires the wait returns with the task *still pending* — which is the
+    ordinary outcome here, not a corner case — and ``exception()`` on a
+    pending task raises ``InvalidStateError`` instead of marking anything, so
+    a retrieval placed after the wait records nothing at exactly the moment
+    the task is being reclaimed rather than waited out. Measured on 3.12.15
+    and 3.14.7: with the wait alone, a writer that absorbs the cancellation,
+    parks past the budget and then fails is reported as ``Task exception was
+    never retrieved``; with the callback registered first, nothing is reported.
+    The callback fires whenever the task actually finishes: inside the window,
+    during the reclaim, or after this helper has returned.
 
     Parameters
     ----------

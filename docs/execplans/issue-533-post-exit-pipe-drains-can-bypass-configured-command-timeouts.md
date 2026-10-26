@@ -7,27 +7,24 @@ be kept up to date as work proceeds.
 
 Status: IN PROGRESS — EP-M1 (the direct run's post-exit stdin await), EP-M2 (the
 `lines()` post-exit drain and the four-layer `TimeoutError` misclassification
-it exposed), EP-M3 (the pipeline's post-exit collection) and EP-M4
-(documentation and full validation) are all implemented, tested Red-then-Green,
-and committed. The branch has been rebased three times. The first replay, onto
-`origin/main` = `5da6d68fb`, is described below; the second, onto `origin/main`
-= `9c9008351` ("Add bounded and file-backed capture policies per stream"),
-replayed the same 34 commits against `main`'s per-stream capture policy API,
-and its seven conflicts were resolved by hand (see `Progress` and
-`Decision log`). The third, onto `origin/main` = `e2c7592b5` ("Reject remote
-rsync operands in the core builder"), replayed 38 commits with no conflict:
-that commit touches the builder library and only three documentation files this
-branch also edits, and `range-diff` reports all 38 as patch-identical. The
-final target-versus-head audit is clean: 52 commits ahead of `origin/main` =
-`e2c7592b5` and none behind, no merge commits in the range, no deleted files,
-and `git diff --check` reports nothing. That base is still the remote `main`,
-so the comparison is against the current target rather than a stale local copy.
-The candidate carries the split that brought `cuprum/_subprocess_execution.py`
-back under the 400-line module cap. The PR is open as
-[#652](https://github.com/leynos/cuprum/pull/652). The one review thread
-CodeScene raised, a Bumpy Road Ahead on `_pipeline_payloads`, a function this
-branch introduces, was actioned by flattening the function rather than
-suppressing the marker (see `Decision log`).
+it exposed), EP-M3 (the pipeline's post-exit collection), and EP-M4
+(documentation and validation) are implemented. The prior implementation and
+its CodeScene Bumpy Road Ahead finding on `_pipeline_payloads` were addressed
+on the branch; this plan now also tracks the review follow-up against the
+current published candidate.
+
+At the start of this review follow-up, PR
+[#652](https://github.com/leynos/cuprum/pull/652) was open and ready at
+`351b4d762212720807d6d913972964caf0e72cc9`, based on `main` at
+`7126a1ffb495efe7608d093f5439ca727ba3e0a6`. The local branch was two commits
+ahead of that published head, with further review edits in the worktree. The
+branch's fourth replay onto `7126a1ffb` is described in `Progress`: all 73
+replayed commits have counterparts, and the later checkpoint commits are
+accounted for there. The published-head review left two current inline threads
+and six pre-merge findings outstanding: deadline and clock coverage, inherited
+descendant behaviour, property coverage, timeout telemetry, and the migration
+and developer documentation. This review follow-up is in progress; its final
+candidate and gates are recorded in `Progress` after they complete.
 
 Every gate round is recorded in `Progress` beside the head it ran at, and the
 `Progress` record — not this paragraph — is the source of truth for which round
@@ -605,8 +602,11 @@ the issue was filed:
       `_spawn_stdin_writer` claim for the third time — see `Decision log`.
       Focused re-run: `test_pipeline_post_exit_deadline.py` 16 passed, 8
       skipped in 14.26 s (`/tmp/test-cuprum-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-epm3-review2.out`).
-- [ ] Gate each commit through `scrutineer`; request `coderabbit review --agent`
-  after each milestone.
+- [x] (2026-10-26) Gate the review follow-up through `scrutineer`; the six
+  sequential gates passed on candidate tree
+  `e64491c381747ee90367ec904d8d73c2d2ee4d52`.
+- [ ] Publish the validated candidate, complete the fresh review and
+  pre-merge reconciliation, then merge PR #652 at its exact head.
 - [x] (2026-10-21) Push and open the draft PR:
       [#652](https://github.com/leynos/cuprum/pull/652),
   draft, head `8936c9bfa`, with the Lody session link and `Fixes #533`.
@@ -1615,14 +1615,22 @@ the issue was filed:
     task and shielding it, which is one of the two fixes the review suggested,
     would therefore **not** have closed the finding on the interpreter this
     repository's gates run under.
-  - `cancel_writer_late_failure.py` covers the layer the review did not name.
-    `_cancel_stdin_writer` retrieved its outcome in a `finally` after
-    `asyncio.wait(..., timeout=budget)`, and when that budget expires the task
-    is still pending, where `Task.exception()` raises `InvalidStateError` and
-    marks nothing — so the trailing call retrieved nothing at exactly the
-    moment the helper is reclaiming rather than waiting. Measured before the
-    fix on **both** interpreters:
-    `reported=["Task exception was never retrieved: ..."]`.
+  - `reclaim_no_retrieval.py` covers the layer the review did not name.
+    `_cancel_stdin_writer`'s body was `cancel()`, then
+    `asyncio.wait(..., timeout=budget)`, with **no retrieval at all** — neither
+    a trailing call nor a callback. A correction worth recording: an earlier
+    draft of this entry described a retrieval in a `finally` after the wait,
+    and no such code ever existed on this branch; the branch's history shows
+    the wait alone at `d93df9563`. The probe therefore arms the real wait
+    against the callback, and nothing else differs between the arms. A writer
+    that absorbs its cancellation, parks past the budget and then fails is
+    reported as `Task exception was never retrieved` on **both** 3.12.15 and
+    3.14.7 without the callback, and reports nothing with it; the
+    `pending_after_budget=True` both arms print is what makes the case the
+    helper's ordinary outcome rather than a corner. That also disposes of the
+    trailing-call hypothesis on measurement rather than on reading:
+    `Task.exception()` on a pending task raises `InvalidStateError`, so a
+    retrieval placed after this wait could not have marked anything anyway.
 
   Both sites now await through `asyncio.wait` plus a re-await, with
   `_retrieve_task_outcome` registered as a done callback *before* the wait so
@@ -1637,10 +1645,9 @@ the issue was filed:
   cancellation still reaches the caller as the very object it raised. A fourth
   case covers the reclaim past its budget. Each case was checked against the
   spelling it replaces — `asyncio.shield` at each of the three sites, and the
-  trailing retrieval in the reclaim — and each failed under its own mutation
-  while the other six cases still passed. Measured 7 passed in 1.77 s before
-  the mutation probes and 12 passed in 1.96 s for both affected modules
-  together.
+  wait alone in the reclaim — and each failed under its own mutation while the
+  other six cases still passed. Measured 7 passed in 1.77 s before the mutation
+  probes and 12 passed in 1.96 s for both affected modules together.
 
   One further mutation says why the callback is not belt-and-braces: removing
   the `add_done_callback` from `_await_task_to_completion` while keeping
@@ -1654,6 +1661,67 @@ the issue was filed:
   cross-version claim rests on the two probes above, which exercise the same
   shapes directly and were run on both interpreters. The module's own cases
   have not been executed on 3.12.
+
+- [x] (2026-10-26) Addressed the review of published PR head
+  `351b4d762212720807d6d913972964caf0e72cc9`. The two current inline findings
+  were fixed in the local candidate: the shield-created writer settle is now
+  reconciled to completion, and the regression test asserts the writer's exact
+  exception object. The six pre-merge findings were valid and are covered by
+  the follow-up below; formal proof is not applicable because this change adds
+  no proof artefact.
+
+  The timing cases now compare elapsed time with the configured timeout plus
+  only the documented cleanup allowances. `INHERIT` cases assert that the
+  descendant remains alive when the run returns; the direct no-timeout case
+  instruments the writer settlement. Pipeline coverage now includes
+  `run_bytes()` and `run_bytes_sync()`, and a controlled-clock test proves the
+  stage wait and output gather debit the same observation clock. The
+  collection-local `_PipelineDeadline` carries that clock beside its absolute
+  deadline and preserves the no-observation fallback.
+
+  Two Hypothesis properties compare `_bounded_payloads` and
+  `_pipeline_payloads` against generated reference models for absent slots,
+  completion states, deadlines, failures, cancellation, positional alignment,
+  observed-output precedence, and independent capture policies. Direct and
+  `lines()` post-exit deadline expiry now use `_report_timeout_expiry`; public
+  route regressions assert the timeout log fields, structured event, and one
+  metrics increment. The migration and developer guides describe the changed
+  behaviour and module boundaries, and the opening of this plan now reflects
+  the fourth replay onto `7126a1ffb` and the current review cycle.
+
+  The enlarged direct and pipeline test files were split into cohesive modules;
+  all touched Python files remain under the 400-line cap. Focused validation
+  exited zero: 80 feature tests passed and 13 Rust-backend cases skipped, plus
+  78 selection-contract cases passed across 13 pytest sessions. Focused Ruff and
+  `git diff --check` passed. Red checks restored the old empty-observation
+  clock read and made only the fallback deadline case fail (one failed, three
+  passed); a separate inherited-policy red probe made the new survival
+  assertions fail when a descendant was signalled. Evidence is in
+  `/tmp/gh533-clock-red.out`, `/tmp/gh533-inherit-red-2.out`,
+  `/tmp/test-cuprum-gh533-review-focused-final.out`, and
+  `/tmp/ruff-cuprum-gh533-review-focused-final.out`.
+
+  Full sequential gate round on candidate tree
+  `e64491c381747ee90367ec904d8d73c2d2ee4d52`, with HEAD
+  `9f377608390e0cbaeb1e12f0e847a33b7f89d7a7` before and after each gate. All
+  six exited zero, and the staged candidate tree and worktree status remained
+  unchanged:
+
+  | Gate                | Exit | Elapsed | Evidence                                                                                                                              |
+  | ------------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+  | `make check-fmt`    | 0    | 1 s     | `/tmp/check-fmt-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out`    |
+  | `make lint`         | 0    | 747 s   | `/tmp/lint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out`         |
+  | `make typecheck`    | 0    | 2 s     | `/tmp/typecheck-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out`    |
+  | `make test`         | 0    | 1721 s  | `/tmp/test-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out`         |
+  | `make markdownlint` | 0    | 21 s    | `/tmp/markdownlint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out` |
+  | `make nixie`        | 0    | 3 s     | `/tmp/nixie-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.out`        |
+
+  The Rust suite ran 165 nextest tests with no skips and all three doctest
+  suites passed. Markdown lint reported zero issues and the generated
+  `typos.toml` was current; Nixie validated every diagram. The manifest beside
+  the logs is
+  `/tmp/gh533-gates-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.meta`.
+  Local CodeScene checks and publication of this candidate remain pending.
 
 ## Surprises & discoveries
 
@@ -2905,15 +2973,17 @@ the issue was filed:
 
 - Decision (third CodeRabbit review, 2026-10-26): register
   `_retrieve_task_outcome` as a done callback before the bounded wait in
-  `_cancel_stdin_writer` and in `_await_task_to_completion`, instead of calling
-  it after the wait. This is the fourth leak in the family and the review did
-  not name it. After a timed-out wait the task is pending, where
-  `Task.exception()` raises `InvalidStateError` and records nothing, so a
-  trailing retrieval is a no-op in precisely the case the helper exists for.
-  Measured on 3.12.15 and 3.14.7 before the change and silent on both after.
-  The callback fires whenever the task finishes — inside the window, during the
-  reclaim, or after the helper has returned — which is the only registration
-  point that covers all three.
+  `_cancel_stdin_writer` and in `_await_task_to_completion`. This is the fourth
+  leak in the family and the review did not name it. `_cancel_stdin_writer` had
+  no retrieval at all — `cancel()`, the bounded wait, and nothing else — so a
+  writer that absorbed its cancellation, parked past the budget and then failed
+  was reported as never retrieved; measured on 3.12.15 and 3.14.7 before the
+  callback was added, and silent on both after. The callback is the only
+  registration point that covers all three ways the task can end: inside the
+  window, during the reclaim, and after the helper has returned. A retrieval
+  placed after the wait would not do, because the budget expiring leaves the
+  task pending, where `Task.exception()` raises `InvalidStateError` and marks
+  nothing — and that is the helper's ordinary outcome, not a corner case.
 
 - Decision (third CodeRabbit review, 2026-10-26): consolidate the finalizer's
   private `_retrieve_finalizer_outcome` into the shared
@@ -3373,6 +3443,40 @@ Gate runs are delegated to the `scrutineer` subagent, which runs them
 sequentially and writes one log per gate under `/tmp`. A gate log certifies the
 revision it recorded at its own head; after any further commit, the affected
 gates must be re-run rather than the stale log cited.
+
+### Review follow-up — 2026-10-26
+
+The first full gate round passed at tree `e64491c`, and the later documentation
+round passed at `13fcc76`. CodeScene then identified two Large Method findings
+in this branch: `_await_writer_within_deadline` and the controlled-clock test.
+Both were split along their existing responsibilities rather than suppressed.
+The direct wait now delegates timeout translation to
+`_raise_direct_writer_timeout`; the clock test delegates its wait recorders,
+configuration, and completed-output collection to focused helpers. The focused
+rerun passed 28 affected tests and 78 selection-contract tests; Ruff and
+`git diff --check` also passed. CodeScene's staged delta is clean at tree
+`526fe72`. The full sequential gates were then repeated against tree
+`77231c4936c710de1280e2a309750cf53317eaa7`, with HEAD fixed at
+`9f377608390e0cbaeb1e12f0e847a33b7f89d7a7`; all six passed and the tracked tree
+was unchanged before and after each gate.
+
+| Gate                | Result | Elapsed | Log                                                                                                                                       |
+| ------------------- | ------ | ------: | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check-fmt`    | passed | 1 s     | `/tmp/check-fmt-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out`    |
+| `make lint`         | passed | 387 s   | `/tmp/lint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out`         |
+| `make typecheck`    | passed | 1 s     | `/tmp/typecheck-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out`    |
+| `make test`         | passed | 1,123 s | `/tmp/test-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out`         |
+| `make markdownlint` | passed | 30 s    | `/tmp/markdownlint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out` |
+| `make nixie`        | passed | 2 s     | `/tmp/nixie-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-final.out`        |
+
+The runner's manifest is
+`/tmp/gh533-final-gates-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts.meta`.
+`make test` reported 4,386 unit tests passed with 110 skipped, 119 script
+tests passed, 184 behavioural tests passed, 22 integration tests passed,
+165/165 Rust tests passed, and all doctest suites passed. This ExecPlan record
+is the only post-round change, so its commit-specific checks are the
+documentation gates: `make check-fmt`, `make markdownlint`, and `make nixie`,
+run sequentially. No code changed after the full gate round.
 
 ## Outcomes & retrospective
 

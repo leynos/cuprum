@@ -57,6 +57,7 @@ import asyncio
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
     _await_task_to_completion,
@@ -71,6 +72,7 @@ from cuprum._subprocess_wait import (
     _deadline_for_collection,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._timeout_reporting import _report_timeout_expiry
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -123,6 +125,7 @@ async def _await_writer_within_deadline(
     ``main``, and dropping it for this path would trade one hang for another:
     the deadline fix is about which bound a deadlined run gets, not about
     whether an undeadlined one is bounded at all.
+
     """
     # A remainder the exit wait already spent is passed through rather than
     # clamped: a non-positive delay schedules the scope's expiry for the next
@@ -136,17 +139,36 @@ async def _await_writer_within_deadline(
         async with asyncio.timeout(remaining):
             await _await_task_to_completion(stdin_task)
     except TimeoutError as exc:
-        # The direct path captures nothing, so both payloads are ``None``. The
-        # public ``TimeoutExpired`` is built from the configured timeout at the
-        # execution boundary above, which is the same translation the streamed
-        # route's expiry reaches; a caller cannot tell the two apart, and should
-        # not be able to.
-        _handle_stream_timeout(
-            exc,
-            stdout_text=None,
-            stderr_text=None,
-            timeout=execution.timeout,
+        _raise_direct_writer_timeout(execution, stdin_task, exc)
+
+
+def _raise_direct_writer_timeout(
+    execution: _SubprocessExecution,
+    stdin_task: asyncio.Task[None],
+    exc: TimeoutError,
+) -> typ.NoReturn:
+    """Preserve a producer failure or report the direct run's own expiry.
+
+    Identity distinguishes the producer's exception from the scope's expiry.
+    The direct path captures nothing, so the translated expiry carries no
+    output; the public boundary reports the configured timeout in either mode.
+
+    """
+    if _stdin_writer_failure(stdin_task) is exc:
+        raise exc
+    if execution.timeout is not None:
+        _report_timeout_expiry(
+            execution.observation,
+            pid=execution.observation.started_pid,
+            configured_timeout=execution.timeout,
+            mode="elapsed_deadline",
         )
+    _handle_stream_timeout(
+        exc,
+        stdout_text=None,
+        stderr_text=None,
+        timeout=execution.timeout,
+    )
 
 
 async def _cleanup_direct_run(

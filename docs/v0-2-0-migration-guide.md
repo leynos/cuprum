@@ -467,6 +467,26 @@ start:
 
 The sections that follow cover the remaining additions.
 
+### Configured timeouts include post-exit work
+
+A configured `timeout=` now bounds the work after the direct child exits as
+well as the wait for that child. This includes reconciling a direct run's stdin
+writer, draining `SafeCmd.lines()` output (including time spent under consumer
+backpressure), and collecting pipeline output. A descendant that inherited a
+pipe can no longer keep one of these runs open past its deadline. Expiry raises
+`TimeoutExpired`; output already captured, and lines already delivered, are
+preserved.
+
+Cleanup can extend the run beyond its deadline by the documented allowances:
+`cancel_grace` (0.5 s by default), the 0.25 s capture EOF window once per
+capturing run, and the 0.5 s stdin-close window when the run has stdin data. An
+`OWN_GROUP` pipeline can also use up to one second after forcibly killing the
+group for settlement. `OWN_GROUP` permits Cuprum to reclaim descendants in the
+owned group; under `INHERIT`, only the direct child may be signalled. A
+pipeline starts its timeout budget when output collection begins, after stage
+spawn. With `timeout=None`, there is no run deadline or timeout expiry, as
+before; the direct run's stdin writer still uses its shared settle window.
+
 ### Single-project catalogue construction
 
 `ProjectSettings.documentation_locations` and `noise_rules` now default to

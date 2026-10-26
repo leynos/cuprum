@@ -73,11 +73,23 @@ def _sh_module() -> types.ModuleType:
     return module
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineDeadline:
+    """Pair the collection deadline with the clock that stamped it.
+
+    Private to pipeline collection: carrying both values prevents either wait
+    from querying a different clock, including a spawn with no observations.
+    """
+
+    at: float | None
+    monotonic_clock: cabc.Callable[[], float]
+
+
 async def _await_pipeline_wait_result(
     spawn: _PipelineSpawnResult,
     config: _PipelineRunConfig,
     *,
-    timeout_deadline: float | None,
+    deadline: _PipelineDeadline,
     pipe_tasks: list[asyncio.Task[None]],
 ) -> _PipelineWaitResult:
     """Wait for the pipeline to finish, honouring any timeout deadline.
@@ -98,8 +110,8 @@ async def _await_pipeline_wait_result(
         produced by ``_wait_for_pipeline``.
     """
     wait_timeout: float | None = None
-    if timeout_deadline is not None:
-        wait_timeout = max(0.0, timeout_deadline - time.monotonic())
+    if deadline.at is not None:
+        wait_timeout = max(0.0, deadline.at - deadline.monotonic_clock())
     pipeline_wait = _wait_for_pipeline(
         spawn.processes,
         pipe_tasks=pipe_tasks,
@@ -279,9 +291,14 @@ async def _collect_pipeline_inputs(
 ) -> _PipelineStageResultInputs:
     """Await pipeline completion and collect outputs, mapping timeouts."""
     timeout = config.timeout
+    observations = spawn.stages.observations
+    monotonic_clock = (
+        observations[0].monotonic_clock if observations else time.monotonic
+    )
     timeout_deadline: float | None = None
     if timeout is not None:
-        timeout_deadline = time.monotonic() + timeout
+        timeout_deadline = monotonic_clock() + timeout
+    deadline = _PipelineDeadline(timeout_deadline, monotonic_clock)
 
     pipe_tasks = _create_pipe_tasks(
         spawn.processes,
@@ -292,7 +309,7 @@ async def _collect_pipeline_inputs(
         wait_result = await _await_pipeline_wait_result(
             spawn,
             config,
-            timeout_deadline=timeout_deadline,
+            deadline=deadline,
             pipe_tasks=pipe_tasks,
         )
     except TimeoutError as exc:
@@ -325,7 +342,11 @@ async def _collect_pipeline_inputs(
     # still bounds this gather; expiry is reported through the explicit flag
     # rather than through the exception type, so nothing here relabels an
     # unrelated error.
-    gathered = await _gather_pipeline_outputs(spawn, deadline=timeout_deadline)
+    gathered = await _gather_pipeline_outputs(
+        spawn,
+        deadline=timeout_deadline,
+        monotonic_clock=monotonic_clock,
+    )
     if not gathered.finished:
         await _report_pipeline_expiry(
             _PipelineExpiry(

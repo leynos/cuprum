@@ -438,6 +438,8 @@ async def assert_reclaimed(descendant_pid: int, message: str) -> None:
 
 async def run_to_its_own_deadline(
     run: cabc.Awaitable[object],
+    *,
+    cleanup_allowance_s: float | None = None,
 ) -> TimeoutExpired:
     """Await *run*, requiring it to end on its own deadline and in time.
 
@@ -466,9 +468,14 @@ async def run_to_its_own_deadline(
     with pytest.raises(TimeoutExpired) as raised:
         await asyncio.wait_for(run, RUN_BUDGET_S)
     elapsed = time.monotonic() - started
-    assert elapsed < RUN_BUDGET_S, (
+    bound = (
+        RUN_BUDGET_S
+        if cleanup_allowance_s is None
+        else raised.value.timeout + cleanup_allowance_s
+    )
+    assert elapsed < bound, (
         "the run reached this assertion too late to have been bounded by its "
-        "own deadline rather than by the test's outer bound"
+        f"own deadline and cleanup allowances: {elapsed:.3f}s >= {bound:.3f}s"
     )
     return raised.value
 

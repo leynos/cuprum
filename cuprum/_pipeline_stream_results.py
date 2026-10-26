@@ -65,6 +65,7 @@ async def _bounded_payloads(
     tasks: list[_StreamConsumerTask | None],
     *,
     deadline: float | None,
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic,
 ) -> tuple[tuple[_CapturedDrain | None, ...], bool]:
     """Await optional capture tasks, bounded by an absolute deadline.
 
@@ -94,8 +95,10 @@ async def _bounded_payloads(
         Consumer tasks to await, in stage order. ``None`` marks a stage that
         has no consumer for this stream and contributes a ``None`` slot.
     deadline:
-        Absolute ``time.monotonic()`` reading the wait must not pass, or
+        Absolute reading of ``monotonic_clock`` the wait must not pass, or
         ``None`` for no bound at all.
+    monotonic_clock:
+        The same clock used to stamp ``deadline`` at collection start.
 
     Returns
     -------
@@ -111,7 +114,7 @@ async def _bounded_payloads(
         # an expiry that never happened.
         return tuple([None] * len(tasks)), True
 
-    remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+    remaining = None if deadline is None else max(0.0, deadline - monotonic_clock())
     done, pending = await asyncio.wait(
         [task for _, task in indexed],
         timeout=remaining,

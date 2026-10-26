@@ -39,6 +39,7 @@ from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._stream_drain_finish import _CapturedDrain
@@ -57,6 +58,7 @@ async def _gather_pipeline_outputs(
     spawn: _PipelineSpawnResult,
     *,
     deadline: float | None,
+    monotonic_clock: cabc.Callable[[], float],
 ) -> _PipelineOutputGather:
     """Observe the pipeline's readers without waiting past an absolute deadline.
 
@@ -79,7 +81,11 @@ async def _gather_pipeline_outputs(
         finished.
     """
     tasks = _pipeline_output_tasks(spawn)
-    drains, finished = await _bounded_payloads(tasks, deadline=deadline)
+    drains, finished = await _bounded_payloads(
+        tasks,
+        deadline=deadline,
+        monotonic_clock=monotonic_clock,
+    )
     return _PipelineOutputGather(tasks=tasks, drains=drains, finished=finished)
 
 

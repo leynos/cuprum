@@ -30,6 +30,7 @@ from cuprum._subprocess_wait import (
     _drain_context,
     _reconcile_run_tasks,
 )
+from cuprum._timeout_reporting import _report_timeout_expiry
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
@@ -184,6 +185,13 @@ async def _expire_line_stream(
     return type is ``NoReturn`` for that reason: the refusal to return is what
     keeps the caller's ``except`` arm from falling through to the success path.
     """
+    if execution.timeout is not None:
+        _report_timeout_expiry(
+            execution.observation,
+            pid=pid,
+            configured_timeout=execution.timeout,
+            mode="elapsed_deadline",
+        )
     run.telemetry.emit(
         LineStreamPhase.TIMEOUT,
         _LineStreamEventDetails(error=exc),
