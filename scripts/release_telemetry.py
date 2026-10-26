@@ -22,6 +22,8 @@ The inputs arrive as environment variables:
 - ``RELEASE_JOB_STATUS``: ``job.status`` when the record is written.
 - ``RELEASE_ATTEMPTS`` and ``RELEASE_HTTP_STATUS``: the PyPI index request's
   attempt count and final HTTP status, empty for phases without one.
+- ``RELEASE_VERIFICATION_FAILURES``: the draft phase's carried assets whose
+  provenance could not be verified, empty when the step has no output.
 - ``PHASE_STARTED_AT``: the job's start, in whole Unix seconds.
 
 It uses the runner's preinstalled ``python3`` and the standard library only,
@@ -47,7 +49,7 @@ from pathlib import Path
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 METRIC = "release_phase_outcomes_total"
 OPERATIONS = frozenset({
     "check_version",
@@ -72,6 +74,15 @@ OUTCOMES = frozenset({"success", "failure", "skipped"})
 RETRY_BUCKETS = ("0", "1-2", "3+")
 ELAPSED_BUCKETS = ("under_1m", "1m_5m", "5m_15m", "over_15m", "unknown")
 HTTP_STATUS_CLASSES = frozenset({"none", "network", "2xx", "3xx", "4xx", "5xx"})
+VERIFICATION_FAILURE_BUCKETS = ("0", "1", "2-5", "6+")
+_VERIFICATION_FAILURE_BUCKET_BY_COUNT = {
+    "0": VERIFICATION_FAILURE_BUCKETS[0],
+    "1": VERIFICATION_FAILURE_BUCKETS[1],
+    "2": VERIFICATION_FAILURE_BUCKETS[2],
+    "3": VERIFICATION_FAILURE_BUCKETS[2],
+    "4": VERIFICATION_FAILURE_BUCKETS[2],
+    "5": VERIFICATION_FAILURE_BUCKETS[2],
+}
 
 #: Upper bounds, in seconds, of every elapsed band but the open-ended last.
 _ELAPSED_BOUNDS = ((60, "under_1m"), (300, "1m_5m"), (900, "5m_15m"))
@@ -103,6 +114,18 @@ def retry_bucket(attempts: str) -> str:
     if retries <= 0:
         return RETRY_BUCKETS[0]
     return RETRY_BUCKETS[1] if retries < _MANY_RETRIES else RETRY_BUCKETS[2]
+
+
+def _verification_failure_bucket(failures: str) -> str:
+    """Band non-negative carried-asset verification failures."""
+    normalized = failures or "0"
+    if not _is_decimal(normalized):
+        msg = "verification failure count must be a decimal string"
+        raise ValueError(msg)
+    count = normalized.lstrip("0") or "0"
+    return _VERIFICATION_FAILURE_BUCKET_BY_COUNT.get(
+        count, VERIFICATION_FAILURE_BUCKETS[3]
+    )
 
 
 def http_status_class(status: str) -> str:
@@ -175,7 +198,7 @@ def build_record(environ: cabc.Mapping[str, str], now: float) -> dict[str, objec
     Returns
     -------
     dict[str, object]
-        The schema-version-1 record, ready to encode as one JSON line.
+        The schema-version-2 record, ready to encode as one JSON line.
 
     Raises
     ------
@@ -202,6 +225,9 @@ def build_record(environ: cabc.Mapping[str, str], now: float) -> dict[str, objec
         "outcome": outcome,
         "failure_category": category,
         "retry_bucket": retry_bucket(environ.get("RELEASE_ATTEMPTS", "")),
+        "verification_failure_bucket": _verification_failure_bucket(
+            environ.get("RELEASE_VERIFICATION_FAILURES", "0")
+        ),
         "elapsed_bucket": elapsed_bucket(environ.get("PHASE_STARTED_AT", ""), now),
         "http_status_class": http_status_class(environ.get("RELEASE_HTTP_STATUS", "")),
     }

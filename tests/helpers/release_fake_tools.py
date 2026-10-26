@@ -22,7 +22,6 @@ second upload of an existing asset name fails, as ``gh`` does without
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -30,16 +29,13 @@ import sys
 import typing as typ
 from pathlib import Path
 
+from tests.helpers.release_asset_provenance import sha256_hex
+
 #: Where the fake PyPI index says each file can be downloaded from.
 FILES_URL = "https://files.example.test/packages/"
 _INDEX_URL = "https://pypi.org/simple/cuprum/"
 _MIN_RELEASE_ARGUMENTS = 2
 _MIN_ATTESTATION_ARGUMENTS = 3
-
-
-def _digest(path: Path) -> str:
-    """Return the SHA-256 hex digest of one file."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _directory(variable: str) -> Path:
@@ -58,7 +54,7 @@ def _record(tool: str, args: list[str]) -> None:
 def _assets_json() -> str:
     """Render the release's assets as ``gh release view --json assets`` does."""
     assets = [
-        {"name": path.name, "digest": f"sha256:{_digest(path)}"}
+        {"name": path.name, "digest": f"sha256:{sha256_hex(path.read_bytes())}"}
         for path in sorted(_directory("FAKE_GITHUB_ASSETS").iterdir())
     ]
     return json.dumps({"assets": assets})
@@ -99,13 +95,12 @@ def _option(args: list[str], name: str) -> str | None:
 
 def _record_for_digest(record: object, digest: str) -> dict[str, object] | None:
     """Return a record for ``digest``, if the decoded value is one."""
-    if not isinstance(record, dict):
-        return None
-    record_digest = record.get("sha256")
-    if not isinstance(record_digest, str) or record_digest.lower() != digest:
-        return None
-    # JSON object keys are strings, though isinstance cannot express that.
-    return typ.cast("dict[str, object]", record)
+    match record:
+        case {"sha256": str() as record_digest} if record_digest.lower() == digest:
+            # JSON object keys are strings, though a pattern cannot express that.
+            return typ.cast("dict[str, object]", record)
+        case _:
+            return None
 
 
 def _attestations_for_digest(
@@ -181,7 +176,7 @@ def _gh_attestation_verify(args: list[str]) -> int:
         return 1
 
     asset = Path(args[2])
-    digest = _digest(asset)
+    digest = sha256_hex(asset.read_bytes())
     records_path = Path(os.environ["FAKE_ATTESTATIONS"])
     digest_matches = _attestations_for_digest(records_path, digest)
     if not digest_matches:
@@ -249,7 +244,7 @@ def _index_json() -> str:
         {
             "filename": path.name,
             "url": f"{FILES_URL}{path.name}",
-            "hashes": {"sha256": _digest(path)},
+            "hashes": {"sha256": sha256_hex(path.read_bytes())},
         }
         for path in sorted(_directory("FAKE_PYPI_FILES").iterdir())
     ]

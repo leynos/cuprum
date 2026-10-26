@@ -251,11 +251,13 @@ before changing `dist/publish`; PyPI-held names still skip provenance checks.
 
 The reconciliation API takes the downloaded GitHub asset directory and the
 directory of verifier records; `stage-pypi` receives the latter through its
-required `--provenance PATH` option. Its standard-library-only parser checks
-the GitHub CLI JSON subject shape; identity policy is established by the
-workflow's verifier flags. Missing, malformed, or mismatched provenance fails
-closed and names the asset. The error directs maintainers to rerun once to
-retry verification, then delete the GitHub Release asset and rerun if it
+required `--provenance PATH` option. The standard-library-only
+`scripts/release_provenance.py` module's `has_matching_subject` function checks
+the GitHub CLI JSON subject shape. It must not import third-party packages while
+`publish-pypi` holds its OIDC credential; identity policy is established by
+the workflow's verifier flags. Missing, malformed, or mismatched provenance
+fails closed and names the asset. The error directs maintainers to rerun once
+to retry verification, then delete the GitHub Release asset and rerun if it
 remains unverified.
 
 ### Least privilege
@@ -266,7 +268,13 @@ newer with the repository, release workflow, `GITHUB_REF` tag, and
 `--deny-self-hosted-runners` policy. The successful JSON records are
 transferred with `release-github-state`. `publish-pypi` remains token-free and
 receives no attestation permission; it decides whether a missing record matters
-after it knows PyPI's holdings.
+after it knows PyPI's holdings. The `2.102.0` minimum includes fixes for
+[GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+which prevents affected CLI versions from accepting a different signer
+workflow whose path merely shares the configured prefix, and
+[GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8),
+which makes `--source-ref` comparison case-sensitive so verification binds to
+the exact release tag.
 
 ### Attestation identity for carried assets
 
@@ -291,5 +299,8 @@ The `draft-release` telemetry record maps the verification step to the existing
 job failure because `draft-release` cannot know whether PyPI already holds that
 name. If PyPI needs differing bytes and provenance is absent, `stage-pypi`
 fails before publication and its existing `digest_mismatch` telemetry mapping
-records the blocking outcome. The release phases still have no tracing spans:
-GitHub Actions has no tracing collector or backend to receive them.
+records the blocking outcome. Schema version 2 adds the bounded
+`verification_failure_bucket` label (`0`, `1`, `2-5`, or `6+`) so a successful
+draft phase still records when one or more asset verifications needed manual
+recovery. The release phases still have no tracing spans: GitHub Actions has no
+tracing collector or backend to receive them.

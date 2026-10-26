@@ -3684,7 +3684,16 @@ with a valid repository, workflow, tag-ref, runner, filename, and digest match
 can be carried over from an interrupted attempt. If its bytes already match the
 current attested build, the current build is retained without a prior-run
 record. Names already on PyPI continue to be skipped without checking the
-GitHub asset.
+GitHub asset. The standard-library-only `scripts/release_provenance.py` module
+implements `has_matching_subject` to check the verifier JSON subject shape; it
+must not import third-party packages while `publish-pypi` holds its OIDC
+credential. The GitHub CLI minimum of 2.102.0 fixes
+[GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+which prevents affected versions from accepting a different signer workflow
+whose path merely shares the configured prefix, and
+[GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8),
+which makes `--source-ref` comparison case-sensitive so verification binds to
+the exact release tag.
 
 `cuprum/unittests/test_release_publish_steps.py` and
 `cuprum/unittests/test_release_github_steps.py` execute the steps' scripts
@@ -3704,13 +3713,18 @@ Each job/phase writes one bounded JSONL record through
 `.github/actions/release-telemetry`, following the same fail-open pattern as
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md)
 ([ADR-014](adr-014-benchmark-gate-telemetry-sink.md)). The metric is
-`release_phase_outcomes_total`, schema version 1, labelled with `operation`
+`release_phase_outcomes_total`, schema version 2, labelled with `operation`
 (`check_version`, `attest`, `draft_release`, `publish_pypi`, `github_upload`,
 `publish_release`), `outcome` (`success`, `failure`, `skipped`),
-`failure_category`, `retry_bucket`, `elapsed_bucket`, and `http_status_class`;
-`run_id`, `run_attempt`, `tag`, and `recorded_at` are metadata outside
-`labels`. See [ADR-017](adr-017-release-pipeline.md#telemetry) for the full
-label vocabulary.
+`failure_category`, `retry_bucket`, `verification_failure_bucket` (`0`, `1`,
+`2-5`, `6+`), `elapsed_bucket`, and `http_status_class`; `run_id`,
+`run_attempt`, `tag`, and `recorded_at` are metadata outside `labels`. See
+[ADR-017](adr-017-release-pipeline.md#telemetry) for the original label
+vocabulary and
+[its addendum](adr-017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
+for schema version 2 and `verification_failure_bucket`. The draft phase
+records unresolved per-asset verifier warnings in that bucket, even when PyPI
+already holds those names and the release can continue.
 
 Records are written even when a step fails, guarded by `!cancelled()`, and are
 uploaded as the artefact `release-telemetry-<job>-<attempt>`, retained for 90

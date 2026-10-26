@@ -192,6 +192,8 @@ def test_carried_assets_are_verified_before_they_reach_the_pypi_job() -> None:
         "--deny-self-hosted-runners",
         "--format json",
         'rm -f "${record}"',
+        "verification_failures=$((verification_failures + 1))",
+        '>> "${GITHUB_OUTPUT}"',
         "::warning title=attestation::",
     ):
         assert fragment in verifier, f"the verifier must enforce {fragment!r}"
@@ -211,6 +213,9 @@ def test_carried_assets_are_verified_before_they_reach_the_pypi_job() -> None:
     assert (
         "attestation=${{ steps.attestation.outcome }}" in telemetry["with"]["steps"]
     ), "draft-release telemetry must record the attestation outcome"
+    assert telemetry["with"]["verification-failures"] == (
+        "${{ steps.attestation.outputs.verification_failures }}"
+    ), "draft-release telemetry must retain the bounded verifier failure count"
     pypi_steps = _job("publish-pypi")["steps"]
     pypi_telemetry = next(
         item

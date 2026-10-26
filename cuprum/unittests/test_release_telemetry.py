@@ -32,6 +32,7 @@ _VOCABULARIES: typ.Final = {
     "outcome": telemetry.OUTCOMES,
     "failure_category": telemetry.FAILURE_CATEGORIES,
     "retry_bucket": frozenset(telemetry.RETRY_BUCKETS),
+    "verification_failure_bucket": frozenset(telemetry.VERIFICATION_FAILURE_BUCKETS),
     "elapsed_bucket": frozenset(telemetry.ELAPSED_BUCKETS),
     "http_status_class": telemetry.HTTP_STATUS_CLASSES,
 }
@@ -48,6 +49,7 @@ def _environ(tmp_path: pth.Path, **overrides: str) -> dict[str, str]:
         "RELEASE_JOB_STATUS": "success",
         "RELEASE_ATTEMPTS": "1",
         "RELEASE_HTTP_STATUS": "200",
+        "RELEASE_VERIFICATION_FAILURES": "0",
         "PHASE_STARTED_AT": str(int(_NOW) - 30),
         "GITHUB_RUN_ID": "123456789",
         "GITHUB_RUN_ATTEMPT": "2",
@@ -72,7 +74,7 @@ def test_the_record_has_exactly_the_versioned_schema(tmp_path: pth.Path) -> None
 
     [record] = _records(tmp_path)
     assert record == {
-        "schema_version": 1,
+        "schema_version": 2,
         "metric": "release_phase_outcomes_total",
         "value": 1,
         "labels": {
@@ -80,6 +82,7 @@ def test_the_record_has_exactly_the_versioned_schema(tmp_path: pth.Path) -> None
             "outcome": "success",
             "failure_category": "none",
             "retry_bucket": "0",
+            "verification_failure_bucket": "0",
             "elapsed_bucket": "under_1m",
             "http_status_class": "2xx",
         },
@@ -132,6 +135,32 @@ def test_retries_are_reported_in_closed_bands(attempts: str, bucket: str) -> Non
 
 
 @pytest.mark.parametrize(
+    ("failures", "bucket"),
+    [
+        ("", "0"),
+        ("000", "0"),
+        ("1", "1"),
+        ("0001", "1"),
+        ("2", "2-5"),
+        ("5", "2-5"),
+        ("6", "6+"),
+        ("900000000000000000000", "6+"),
+    ],
+)
+def test_carried_asset_verification_failures_use_closed_bands(
+    tmp_path: pth.Path, failures: str, bucket: str
+) -> None:
+    """Per-asset warning counts stay within a bounded telemetry vocabulary."""
+    record = telemetry.build_record(
+        _environ(tmp_path, RELEASE_VERIFICATION_FAILURES=failures), _NOW
+    )
+    labels = typ.cast("dict[str, str]", record["labels"])
+    assert labels["verification_failure_bucket"] == bucket, (
+        "the public record must report the closed verification-failure band"
+    )
+
+
+@pytest.mark.parametrize(
     ("status", "status_class"),
     [("200", "2xx"), ("404", "4xx"), ("503", "5xx"), ("000", "network"), ("", "none")],
 )
@@ -164,8 +193,17 @@ def test_elapsed_time_falls_in_closed_bands(elapsed: int, bucket: str) -> None:
         {"GITHUB_RUN_ID": "12a"},
         {"GITHUB_REF_NAME": "main"},
         {"GITHUB_REF_NAME": "v1.2.3;rm -rf"},
+        {"RELEASE_VERIFICATION_FAILURES": "1x"},
     ],
-    ids=["operation", "category", "no-steps", "run-id", "branch", "tag-payload"],
+    ids=[
+        "operation",
+        "category",
+        "no-steps",
+        "run-id",
+        "branch",
+        "tag-payload",
+        "verification-failures",
+    ],
 )
 def test_an_invalid_field_omits_the_record_without_failing(
     tmp_path: pth.Path, overrides: dict[str, str], capsys: pytest.CaptureFixture[str]
@@ -199,6 +237,7 @@ _ENVIRONMENTS = st.fixed_dictionaries({
     "RELEASE_JOB_STATUS": _ANY_TEXT,
     "RELEASE_ATTEMPTS": _ANY_TEXT,
     "RELEASE_HTTP_STATUS": _ANY_TEXT,
+    "RELEASE_VERIFICATION_FAILURES": _ANY_TEXT,
     "PHASE_STARTED_AT": _ANY_TEXT,
     "GITHUB_RUN_ID": st.just("1"),
     "GITHUB_RUN_ATTEMPT": st.just("1"),
@@ -279,8 +318,15 @@ def _action() -> dict[str, typ.Any]:
 
 def test_the_action_writes_fail_open_and_uploads_for_ninety_days() -> None:
     """The record is kept per job and attempt, and nothing it does gates."""
+    inputs = _action()["inputs"]
+    assert inputs["verification-failures"]["default"] == "0", (
+        "verification failures default to an empty warning count"
+    )
     write, upload, warn = _action()["runs"]["steps"]
     assert write["continue-on-error"] is True
+    assert write["env"]["RELEASE_VERIFICATION_FAILURES"] == (
+        "${{ inputs.verification-failures }}"
+    )
     assert upload["continue-on-error"] is True
     assert upload["if"] == "${{ !cancelled() && inputs.upload == 'true' }}"
     assert upload["with"] == {

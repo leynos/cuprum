@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 
 
-def _digest(content: bytes) -> str:
+def sha256_hex(content: bytes) -> str:
     """Return the SHA-256 hex digest of test bytes."""
     return hashlib.sha256(content).hexdigest()
 
 
-def _provenance(name: str, digest: str) -> list[dict[str, object]]:
+def provenance_record(name: str, digest: str) -> list[dict[str, object]]:
     """Build a verifier result with one named digest subject."""
     return [
         {

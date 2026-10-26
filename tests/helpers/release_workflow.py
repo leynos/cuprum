@@ -178,8 +178,12 @@ class FakeRelease:
 
     def env(self, **extra: str) -> dict[str, str]:
         """Return the environment that routes ``gh`` and ``curl`` to the fakes."""
+        python_path = os.pathsep.join(
+            filter(None, (str(ROOT), os.environ.get("PYTHONPATH", "")))
+        )
         return {
             "PATH": os.pathsep.join((str(self.root / "tools"), os.defpath)),
+            "PYTHONPATH": python_path,
             "FAKE_GITHUB_ASSETS": str(self.github),
             "FAKE_PYPI_FILES": str(self.pypi),
             "FAKE_ATTESTATIONS": str(self.attestations),

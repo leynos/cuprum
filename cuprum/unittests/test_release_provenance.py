@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import typing as typ
 
 import pytest
 
 from scripts.release_assets import PypiFile, ReleaseAssetError, State, stage_pypi
-from tests.helpers.release_asset_provenance import _digest, _provenance
+from tests.helpers.release_asset_provenance import provenance_record, sha256_hex
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -43,7 +42,7 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
     state = State(
         publish=publish,
         pypi={},
-        github={_ASSET: hashlib.sha256(carried_bytes).hexdigest()},
+        github={_ASSET: sha256_hex(carried_bytes)},
     )
 
     with pytest.raises(ReleaseAssetError, match=_ASSET) as error:
@@ -74,8 +73,10 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
                 }
             }
         ],
-        _provenance(_ASSET, "0" * 64),
-        _provenance("other.whl", _digest(b"unattested bytes already on GitHub")),
+        provenance_record(_ASSET, "0" * 64),
+        provenance_record(
+            "other.whl", sha256_hex(b"unattested bytes already on GitHub")
+        ),
         {"verificationResult": {"statement": {"subject": []}}},
     ],
     ids=[
@@ -110,8 +111,8 @@ def test_untrusted_records_fail_before_any_publish_mutation(
         )
     state = State(
         publish=publish,
-        pypi={_PYPI_ASSET: PypiFile(_digest(pypi_bytes), "https://pypi.test/file")},
-        github={_ASSET: _digest(carried_bytes)},
+        pypi={_PYPI_ASSET: PypiFile(sha256_hex(pypi_bytes), "https://pypi.test/file")},
+        github={_ASSET: sha256_hex(carried_bytes)},
     )
     before = {path.name: path.read_bytes() for path in publish.iterdir()}
 
@@ -135,13 +136,13 @@ def test_all_carried_assets_are_checked_before_any_copy(
         (publish / name).write_bytes(local_bytes[name])
         (github_files / name).write_bytes(carried_bytes[name])
     (provenance / f"{names[0]}.json").write_text(
-        json.dumps(_provenance(names[0], _digest(carried_bytes[names[0]]))),
+        json.dumps(provenance_record(names[0], sha256_hex(carried_bytes[names[0]]))),
         encoding="utf-8",
     )
     state = State(
         publish,
         {},
-        {name: _digest(content) for name, content in carried_bytes.items()},
+        {name: sha256_hex(content) for name, content in carried_bytes.items()},
     )
 
     with pytest.raises(ReleaseAssetError, match=names[1]):
@@ -161,9 +162,9 @@ def test_matching_provenance_allows_a_verified_prior_run_asset(
     publish, github_files, provenance = release_paths
     (publish / _ASSET).write_bytes(local_bytes)
     (github_files / _ASSET).write_bytes(carried_bytes)
-    expected_digest = _digest(carried_bytes)
+    expected_digest = sha256_hex(carried_bytes)
     (provenance / f"{_ASSET}.json").write_text(
-        json.dumps(_provenance(_ASSET, expected_digest.upper())), encoding="utf-8"
+        json.dumps(provenance_record(_ASSET, expected_digest.upper())), encoding="utf-8"
     )
     state = State(publish, {}, {_ASSET: expected_digest})
 
@@ -182,7 +183,7 @@ def test_identical_local_bytes_need_no_prior_run_record(
     local_bytes = b"same attested bytes"
     publish, github_files, provenance = release_paths
     (publish / _ASSET).write_bytes(local_bytes)
-    state = State(publish, {}, {_ASSET: _digest(local_bytes)})
+    state = State(publish, {}, {_ASSET: sha256_hex(local_bytes)})
 
     assert stage_pypi(state, github_files, provenance), (
         "identical local bytes should stay in the PyPI staging directory"
@@ -201,8 +202,8 @@ def test_pypi_held_asset_needs_no_carried_provenance(
     (publish / _ASSET).write_bytes(local_bytes)
     state = State(
         publish,
-        {_ASSET: PypiFile(_digest(b"pypi bytes"), "https://pypi.test/file")},
-        {_ASSET: _digest(b"untrusted github bytes")},
+        {_ASSET: PypiFile(sha256_hex(b"pypi bytes"), "https://pypi.test/file")},
+        {_ASSET: sha256_hex(b"untrusted github bytes")},
     )
 
     assert stage_pypi(state, github_files, provenance) is False, (

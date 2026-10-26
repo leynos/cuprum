@@ -24,6 +24,7 @@ from tests.helpers.release_workflow import (
     fake_release,
     install_tool,
     link_scripts,
+    outputs,
     run_bash,
     step_script,
 )
@@ -270,6 +271,9 @@ def test_failed_verification_warns_and_saves_no_record(
     assert len(verify_calls) == 3, (
         "verification failures must stop after three attempts"
     )
+    assert outputs(tmp_path / "github-output")["verification_failures"] == "1", (
+        "a verifier warning must be reported to phase telemetry"
+    )
 
 
 def test_transient_verification_failure_retries_before_saving_provenance(
@@ -294,6 +298,9 @@ def test_transient_verification_failure_retries_before_saving_provenance(
     assert len(verify_calls) == 2, "a first transient failure must be retried once"
     assert verify_calls[0] == verify_calls[1], "each retry must preserve the policy"
     assert record.is_file(), "successful retry must save its approved verifier result"
+    assert outputs(tmp_path / "github-output")["verification_failures"] == "0", (
+        "a successful retry must not be reported as a remaining failure"
+    )
     assert "Could not verify provenance" not in completed.stdout, (
         "a later successful attempt must not leave a failure warning"
     )

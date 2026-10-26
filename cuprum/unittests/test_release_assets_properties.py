@@ -10,7 +10,6 @@ overwrite anything.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import tempfile
 import typing as typ
@@ -29,6 +28,7 @@ from scripts.release_assets import (
     stage_github,
     stage_pypi,
 )
+from tests.helpers.release_asset_provenance import provenance_record, sha256_hex
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -40,11 +40,6 @@ _POOL = (
     "c-1-py3-none-any.whl",
     "c-1.tar.gz",
 )
-
-
-def _digest(content: bytes) -> str:
-    """Return the SHA-256 hex digest of ``content``."""
-    return hashlib.sha256(content).hexdigest()
 
 
 @st.composite
@@ -110,29 +105,16 @@ def _stage(
     for name, content in github.items():
         (carried / name).write_bytes(content)
         (provenance / f"{name}.json").write_text(
-            json.dumps([
-                {
-                    "verificationResult": {
-                        "statement": {
-                            "subject": [
-                                {
-                                    "name": name,
-                                    "digest": {"sha256": _digest(content)},
-                                }
-                            ]
-                        }
-                    }
-                }
-            ]),
+            json.dumps(provenance_record(name, sha256_hex(content))),
             encoding="utf-8",
         )
     return State(
         publish,
         {
-            name: PypiFile(_digest(b), f"https://f.test/{name}")
+            name: PypiFile(sha256_hex(b), f"https://f.test/{name}")
             for name, b in pypi.items()
         },
-        {name: _digest(content) for name, content in github.items()},
+        {name: sha256_hex(content) for name, content in github.items()},
     )
 
 
@@ -235,8 +217,8 @@ class ReleaseRuns(RuleBasedStateMachine):
         """Require the digest check a complete run ends with to pass."""
         problems = mismatches(
             local,
-            {name: _digest(content) for name, content in self.pypi.items()},
-            {name: _digest(content) for name, content in self.github.items()},
+            {name: sha256_hex(content) for name, content in self.pypi.items()},
+            {name: sha256_hex(content) for name, content in self.github.items()},
         )
         assert problems == [], problems
 
