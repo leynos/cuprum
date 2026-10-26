@@ -1533,6 +1533,58 @@ the issue was filed:
   coverage, and asking for approval while stating the gap gets an approval plus
   an honest statement of the gap back, which is the correct pair of facts.
 
+- [x] (2026-10-26) A certified six-gate round on `351b4d762`, and why the
+  earlier one could not be cited.
+
+  The round recorded at `dbce96b24` could not be cited for the shipped head,
+  and part of it never existed as claimed. Three separate problems, found by
+  reading the logs rather than the manifest:
+
+  1. The `check-fmt` gate's log file has been **overwritten**. It now contains a
+     `check-fmt` failure (`1 file would be reformatted`, mdtablefix naming the
+     plan itself, `make: *** [Makefile:492: check-fmt] Error 1`) stamped
+     11:48:15 — after the manifest was written at 11:43:34. The manifest
+     records `exit=0` for that gate. Both facts are in the same directory, and
+     the log that exists is not the log the manifest describes. Any gate log
+     written to a name that a later run reuses is not durable evidence.
+  2. `692ed63da` was never gated by a *head-recording* runner. The Markdown
+     gates were re-run against it ad hoc, which is why the `-692ed63da` triple
+     exists, but the caller recorded `tracked_before=` blank in one attempt —
+     an empty string there is a missing measurement, not a zero.
+  3. `351b4d762` is a docs-only commit on top of `692ed63da`, so the code gates
+     at `dbce96b24` still describe the shipped *code*, but nothing recorded
+     them against the head that actually ships.
+
+  Fixed by writing the runner to name each log **after the head it measured**
+  (`/tmp/<gate>-cuprum-<branch>-<head>.out`) so a later run of the same gate
+  cannot silently replace another revision's evidence, and by re-running all
+  six gates on `351b4d762`. Each gate recorded full 40-character
+  `head_before`/`head_after` and a tracked-tree count of zero before and after:
+
+  | Gate           | Exit | Elapsed |
+  | -------------- | ---- | ------- |
+  | `check-fmt`    | 0    | 1 s     |
+  | `markdownlint` | 0    | 21 s    |
+  | `nixie`        | 0    | 0 s     |
+  | `typecheck`    | 0    | 1 s     |
+  | `lint`         | 0    | 455 s   |
+  | `test`         | 0    | 934 s   |
+
+  The test totals reproduce the earlier round exactly rather than drifting: 22
+  pytest sessions, 5786 passed, 125 skipped, zero `FAILED`/`ERROR` lines;
+  nextest `165 tests run: 165 passed, 0 skipped`; four `test result: ok`
+  doctest suites across three `Doc-tests` binaries. `typecheck` is two
+  `All checks passed!` scopes. `lint` shows three `rated at 10.00/10` reports,
+  `duplication gate passed; 68 allowed by reasoned exceptions`, and — the two
+  that an earlier round left unobserved rather than passing —
+  `yamllint --strict` and `actionlint -shellcheck=` both ran with no output and
+  exit 0. Evidence lives at `/tmp/gh533-round-351b4d762.meta` plus the six
+  head-named logs beside it.
+
+  The lesson: an elapsed time and an exit code are claims until the log they
+  point at is read. Two of the six files in that directory disagreed with their
+  own manifest, and reading only the manifest would have certified both.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
