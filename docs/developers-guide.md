@@ -3602,11 +3602,13 @@ The jobs do the following:
      --source-ref refs/tags/v1.2.3 --deny-self-hosted-runners --format json
    ```
 
-   Replace `v1.2.3` with the release tag. The automated step requires GitHub CLI
-   `2.102.0` or newer, verifies each carried asset after download, and stores
-   successful JSON results beside the files in `release-github-state`. It
-   checks the tag ref through `GITHUB_REF`, not the run's commit SHA, so a
-   previous attempt for the same release tag can be carried over.
+   Replace `v1.2.3` with the release tag. When the carryover list is non-empty,
+   the automated step requires GitHub CLI `2.102.0` or newer, verifies each
+   carried asset after download, and stores successful JSON results beside the
+   files in `release-github-state`. An empty carryover list skips the verifier
+   version check. The verifier checks the tag ref through `GITHUB_REF`, not the
+   run's commit SHA, so a previous attempt for the same release tag can be
+   carried over.
 3. `draft-release` reuses the tag's GitHub Release if one exists, draft or
    published, and otherwise creates a draft with generated notes, marked as a
    pre-release when `check-version` says so. It snapshots the release's current
@@ -3687,7 +3689,8 @@ record. Names already on PyPI continue to be skipped without checking the
 GitHub asset. The standard-library-only `scripts/release_provenance.py` module
 implements `has_matching_subject` to check the verifier JSON subject shape; it
 must not import third-party packages while `publish-pypi` holds its OIDC
-credential. The GitHub CLI minimum of 2.102.0 fixes
+credential. When carried assets need verification, the GitHub CLI minimum of
+2.102.0 fixes
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected versions from accepting a different signer workflow
 whose path merely shares the configured prefix, and

@@ -21,7 +21,7 @@ import typing as typ
 import urllib.parse
 from pathlib import Path
 
-from scripts.release_provenance import has_matching_subject
+from scripts.release_provenance import has_matching_record
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -229,17 +229,15 @@ def _verify_carried_asset(
     asset: Path, provenance: Path, name: str, expected: str
 ) -> None:
     """Validate carried bytes and provenance, with an actionable error."""
-    record = provenance / f"{name}.json"
     try:
         _check_digest(asset, expected)
-        document = json.loads(record.read_text(encoding="utf-8"))
     except ReleaseAssetError as error:
         raise _carried_asset_error(name, str(error)) from error
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        reason = f"{name} has no valid provenance record at {record}"
+    except OSError as error:
+        reason = "cannot read the downloaded GitHub bytes"
         raise _carried_asset_error(name, reason) from error
 
-    if not has_matching_subject(document, name, expected):
+    if not has_matching_record(provenance, name, expected):
         raise _carried_asset_error(name, "no matching verified build provenance")
 
 

@@ -184,6 +184,10 @@ def test_carried_assets_are_verified_before_they_reach_the_pypi_job() -> None:
 
     verifier = step_script("draft-release", "Verify carried asset provenance")
     for fragment in (
+        "carryover_file=github-state/carryover.txt",
+        'if [ ! -f "${carryover_file}" ]; then',
+        'if [ ! -s "${carryover_file}" ]; then',
+        'echo "verification_failures=0" >> "${GITHUB_OUTPUT}"',
         "required_version=2.102.0",
         "sort -V",
         '--repo "${GH_REPO}"',
@@ -197,6 +201,9 @@ def test_carried_assets_are_verified_before_they_reach_the_pypi_job() -> None:
         "::warning title=attestation::",
     ):
         assert fragment in verifier, f"the verifier must enforce {fragment!r}"
+    assert verifier.index('if [ ! -s "${carryover_file}" ]; then') < verifier.index(
+        "required_version=2.102.0"
+    ), "the CLI minimum applies only when carried assets need verification"
     assert "${{" not in verifier, (
         "the verifier script must not interpolate workflow expressions"
     )

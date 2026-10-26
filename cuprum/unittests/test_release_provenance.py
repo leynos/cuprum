@@ -56,6 +56,33 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
     )
 
 
+def test_missing_carried_file_is_reported_as_an_asset_read_error(
+    release_paths: tuple[pth.Path, pth.Path, pth.Path],
+) -> None:
+    """A missing download is not misreported as a missing provenance record."""
+    local_bytes = b"attested bytes from this run"
+    carried_bytes = b"bytes expected from GitHub"
+    publish, github_files, provenance = release_paths
+    (publish / _ASSET).write_bytes(local_bytes)
+    state = State(
+        publish=publish,
+        pypi={},
+        github={_ASSET: sha256_hex(carried_bytes)},
+    )
+
+    with pytest.raises(
+        ReleaseAssetError, match="cannot read the downloaded GitHub bytes"
+    ) as error:
+        stage_pypi(state, github_files, provenance)
+
+    assert str(error.value).count(_ASSET) == 1, (
+        "the carried asset name must not be repeated in the cause"
+    )
+    assert (publish / _ASSET).read_bytes() == local_bytes, (
+        "a missing carried file must preserve the local attested wheel"
+    )
+
+
 @pytest.mark.parametrize(
     "record",
     [

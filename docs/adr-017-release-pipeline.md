@@ -263,12 +263,15 @@ remains unverified.
 ### Least privilege
 
 `draft-release` adds `attestations: read` because it verifies preexisting
-assets against GitHub's attestation store. It uses GitHub CLI `2.102.0` or
-newer with the repository, release workflow, `GITHUB_REF` tag, and
-`--deny-self-hosted-runners` policy. The successful JSON records are
-transferred with `release-github-state`. `publish-pypi` remains token-free and
-receives no attestation permission; it decides whether a missing record matters
-after it knows PyPI's holdings. The `2.102.0` minimum includes fixes for
+assets against GitHub's attestation store. When carried assets need
+verification, it requires GitHub CLI `2.102.0` or newer and applies the
+repository, release workflow, `GITHUB_REF` tag, and
+`--deny-self-hosted-runners` policy. An empty carryover list records zero
+verification failures without invoking the attestation CLI. Successful JSON
+records are transferred with `release-github-state`. `publish-pypi` remains
+token-free and receives no attestation permission; it decides whether a missing
+record matters after it knows PyPI's holdings. The `2.102.0` minimum includes
+fixes for
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected CLI versions from accepting a different signer
 workflow whose path merely shares the configured prefix, and

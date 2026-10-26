@@ -330,6 +330,48 @@ def test_the_verifier_requires_github_cli_2_102_0(
     ), "an older CLI must fail before invoking the verifier"
 
 
+def test_an_empty_carryover_does_not_require_the_attestation_cli_version(
+    tmp_path: pth.Path,
+) -> None:
+    """No verifier invocation means an older CLI version is irrelevant."""
+    fake = fake_release(tmp_path)
+    state = tmp_path / "github-state"
+    state.mkdir()
+    (state / "carryover.txt").write_text("", encoding="utf-8")
+
+    completed = run_bash(
+        step_script("draft-release", "Verify carried asset provenance"),
+        tmp_path,
+        fake.env(FAKE_GH_VERSION="2.101.9"),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert outputs(tmp_path / "github-output")["verification_failures"] == "0", (
+        "the telemetry output must be present when no asset needs verification"
+    )
+    assert not fake.calls("gh"), "an empty carryover must not invoke the verifier"
+    assert (state / "provenance").is_dir(), (
+        "the handoff must still contain an empty provenance directory"
+    )
+
+
+def test_a_missing_carryover_list_fails_closed(tmp_path: pth.Path) -> None:
+    """Missing snapshot state cannot be mistaken for an empty asset list."""
+    fake = fake_release(tmp_path)
+
+    completed = run_bash(
+        step_script("draft-release", "Verify carried asset provenance"),
+        tmp_path,
+        fake.env(),
+    )
+
+    assert completed.returncode != 0, "a missing carryover list must fail the step"
+    assert "Carryover list is missing" in completed.stderr, (
+        "the failure must identify the missing snapshot state"
+    )
+    assert not fake.calls("gh"), "the step must fail before querying GitHub"
+
+
 def test_the_fake_gh_rejects_operations_the_workflow_does_not_use(
     tmp_path: pth.Path,
 ) -> None:

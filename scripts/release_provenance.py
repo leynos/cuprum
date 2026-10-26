@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+
+def has_matching_record(provenance: pth.Path, name: str, digest: str) -> bool:
+    """Read one verifier record and find its exact release asset subject."""
+    record = provenance / f"{name}.json"
+    try:
+        document = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return has_matching_subject(document, name, digest)
+
 
 def has_matching_subject(document: object, name: str, digest: str) -> bool:
     """Return whether verifier JSON binds ``name`` to the expected SHA-256.

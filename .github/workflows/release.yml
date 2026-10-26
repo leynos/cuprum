@@ -208,6 +208,17 @@ jobs:
         id: attestation
         run: |
           set -euo pipefail
+          carryover_file=github-state/carryover.txt
+          if [ ! -f "${carryover_file}" ]; then
+            echo "::error title=attestation::Carryover list is missing." >&2
+            exit 1
+          fi
+          mkdir -p github-state/provenance
+          verification_failures=0
+          if [ ! -s "${carryover_file}" ]; then
+            echo "verification_failures=0" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           # 2.102.0 fixes GHSA-wjmr-j3rp-mh2g and GHSA-4mq3-hpgx-9cx8.
           required_version=2.102.0
           gh_version="$(gh --version | awk 'NR == 1 {print $3}')"
@@ -218,8 +229,6 @@ jobs:
               "found ${gh_version:-unknown}." >&2
             exit 1
           fi
-          mkdir -p github-state/provenance
-          verification_failures=0
           while IFS= read -r name; do
             [ -n "${name}" ] || continue
             record="github-state/provenance/${name}.json"
@@ -244,7 +253,7 @@ jobs:
               echo "::warning title=attestation::Could not verify provenance for GitHub asset ${name};" \
                 "stage-pypi will reject it if PyPI needs its differing bytes."
             fi
-          done < github-state/carryover.txt
+          done < "${carryover_file}"
           echo "verification_failures=${verification_failures}" >> "${GITHUB_OUTPUT}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         id: handoff
