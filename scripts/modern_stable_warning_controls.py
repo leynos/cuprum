@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import os
+import re
 import tempfile
 import typing as typ
 from pathlib import Path
@@ -21,10 +22,12 @@ from pathlib import Path
 from cuprum import ExecutionContext, Program, ProgramCatalogue, scoped, sh
 
 ROOT = Path(__file__).resolve().parent.parent
-WARNING_FUNCTION = "fn issue_506_warning_control() {}"
+WARNING_FUNCTION = "fn issue_506_warning_control() { std::thread::yield_now(); }"
 WARNING_NAME = "issue_506_warning_control"
 DENIED_WARNING_SETTING = "CARGO_BUILD_WARNINGS=deny"
 WARNING_DENIAL = "error: warnings are denied by `build.warnings` configuration"
+WARNING_REPLAY_STATE = "Cached warning replay"
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 GIT_PROGRAM = Program("git")
 MAKE_PROGRAM = Program("make")
 CATALOGUE = ProgramCatalogue.from_programs(GIT_PROGRAM, MAKE_PROGRAM)
@@ -132,7 +135,9 @@ def observe_output(
     output: str,
 ) -> GateRun:
     """Summarize Cargo compile/fresh lines and the selected package state."""
-    lines = output.splitlines()
+    # Cargo may colour its `Checking` and `Fresh` prefixes even when captured.
+    # Strip terminal escapes for classification while preserving the raw log.
+    lines = [ANSI_ESCAPE.sub("", line).lstrip() for line in output.splitlines()]
     package_state = next(
         (
             line.split(maxsplit=1)[0]
@@ -142,6 +147,10 @@ def observe_output(
         ),
         "not-reported",
     )
+    if _is_cached_warning_replay(package_state, output):
+        # Cargo replays the cached warning without printing a Fresh line for
+        # the local package that owns that warning.
+        package_state = WARNING_REPLAY_STATE
     return GateRun(
         gate=gate.name,
         package=gate.package,
@@ -156,6 +165,15 @@ def observe_output(
     )
 
 
+def _is_cached_warning_replay(package_state: str, output: str) -> bool:
+    """Recognize Cargo's warning-only cached replay diagnostic."""
+    if package_state != "not-reported":
+        return False
+    if WARNING_NAME not in output:
+        return False
+    return WARNING_DENIAL in output
+
+
 def _run(
     program: SafeCmdBuilder, arguments: tuple[str, ...], cwd: Path
 ) -> tuple[int, str]:
@@ -163,6 +181,7 @@ def _run(
     environment = os.environ.copy()
     environment.pop("MAKEFLAGS", None)
     environment["CARGO_BUILD_JOBS"] = "2"
+    environment["CARGO_TERM_COLOR"] = "never"
     environment["TEST_JOBS"] = "2"
     context = ExecutionContext(cwd=cwd.as_posix(), env=environment)
     with scoped(catalogue=CATALOGUE):
@@ -191,8 +210,14 @@ def _has_warning_failure(run: GateRun) -> bool:
 
 
 def _has_cached_warning_failure(run: GateRun) -> bool:
-    """Require denial to replay the warning from the selected local crate."""
-    return _has_warning_failure(run) and run.package_state == "Fresh"
+    """Require denial to replay a warning without rebuilding its package."""
+    has_cached_state = run.package_state in {"Fresh", WARNING_REPLAY_STATE}
+    return (
+        _has_warning_failure(run)
+        and has_cached_state
+        and not _package_was_rebuilt(run)
+        and run.fresh_lines > 0
+    )
 
 
 def _package_was_rebuilt(run: GateRun) -> bool:
