@@ -1002,8 +1002,12 @@ jobs:
 
   modern-stable:
     name: Modern stable Rust validation
+    # Fork and Dependabot pull requests use GitHub-hosted runners, which they
+    # can obtain on a public repository. The author field is stable when a
+    # different user pushes to the pull request branch.
     runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
+      ${{ (github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 90
     env:
