@@ -9,28 +9,13 @@ import typing as typ
 import pytest
 
 from scripts.release_assets import PypiFile, ReleaseAssetError, State, stage_pypi
-
-_ASSET = "cuprum-1.2.3-py3-none-any.whl"
-_PYPI_ASSET = "a-cuprum-1.2.3.tar.gz"
+from tests.helpers.release_asset_provenance import _digest, _provenance
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
-
-def _digest(content: bytes) -> str:
-    """Return the SHA-256 hex digest of ``content``."""
-    return hashlib.sha256(content).hexdigest()
-
-
-def _provenance(name: str, digest: str) -> list[dict[str, object]]:
-    """Build the subject fragment emitted by ``gh attestation verify``."""
-    return [
-        {
-            "verificationResult": {
-                "statement": {"subject": [{"name": name, "digest": {"sha256": digest}}]}
-            }
-        }
-    ]
+_ASSET = "cuprum-1.2.3-py3-none-any.whl"
+_PYPI_ASSET = "a-cuprum-1.2.3.tar.gz"
 
 
 @pytest.fixture
@@ -67,7 +52,7 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
     assert (publish / _ASSET).read_bytes() == local_bytes, (
         "rejected provenance must preserve the local attested wheel"
     )
-    assert "delete the GitHub Release asset and rerun" in str(error.value), (
+    assert "delete the named asset and rerun" in str(error.value), (
         "the error must explain how to recover from an untrusted asset"
     )
 

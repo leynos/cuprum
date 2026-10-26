@@ -12,6 +12,7 @@ checked-in step scripts execute unchanged against state the test controls:
 - ``FAKE_CURL_STATUSES``: comma-separated HTTP statuses the index returns in
   turn; the last repeats. Defaults to ``200``.
 - ``FAKE_ATTEST_FAIL``: optional stderr text that makes verification fail.
+- ``FAKE_ATTEST_FAIL_COUNT``: number of initial verification attempts to fail.
 - ``FAKE_GH_VERSION``: the fake GitHub CLI version; defaults to ``2.102.0``.
 
 Like the real services, neither stand-in ever overwrites a file it holds: a
@@ -169,6 +170,14 @@ def _gh_attestation_verify(args: list[str]) -> int:
     """Verify fake digest records against the workflow's identity policy."""
     if failure := os.environ.get("FAKE_ATTEST_FAIL"):
         print(failure, file=sys.stderr)
+        return 1
+
+    counter = Path(os.environ["FAKE_CALLS"]).with_suffix(".attestation-count")
+    attempt = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+    counter.write_text(str(attempt + 1), encoding="utf-8")
+    fail_count = int(os.environ.get("FAKE_ATTEST_FAIL_COUNT", "0"))
+    if attempt < fail_count:
+        print(f"controlled verifier failure on attempt {attempt + 1}", file=sys.stderr)
         return 1
 
     asset = Path(args[2])

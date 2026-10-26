@@ -259,11 +259,44 @@ def test_failed_verification_warns_and_saves_no_record(
     )
 
     record = tmp_path / "github-state" / "provenance" / f"{_CARRIED_ASSET}.json"
+    verify_calls = [
+        call for call in fake.calls("gh") if call[:2] == ["attestation", "verify"]
+    ]
     assert completed.returncode == 0, completed.stderr
     assert f"GitHub asset {_CARRIED_ASSET}" in completed.stdout, (
         "verification failure must warn about the specific carried asset"
     )
     assert not record.exists(), "failed verification must remove partial JSON output"
+    assert len(verify_calls) == 3, (
+        "verification failures must stop after three attempts"
+    )
+
+
+def test_transient_verification_failure_retries_before_saving_provenance(
+    tmp_path: pth.Path,
+) -> None:
+    """A temporary verifier failure gets another bounded verification attempt."""
+    fake = fake_release(tmp_path)
+    asset, environment = _carried_asset(fake)
+    fake.add_attestation(asset)
+
+    completed = run_bash(
+        step_script("draft-release", "Verify carried asset provenance"),
+        tmp_path,
+        {**environment, "FAKE_ATTEST_FAIL_COUNT": "1"},
+    )
+
+    verify_calls = [
+        call for call in fake.calls("gh") if call[:2] == ["attestation", "verify"]
+    ]
+    record = tmp_path / "github-state" / "provenance" / f"{_CARRIED_ASSET}.json"
+    assert completed.returncode == 0, completed.stderr
+    assert len(verify_calls) == 2, "a first transient failure must be retried once"
+    assert verify_calls[0] == verify_calls[1], "each retry must preserve the policy"
+    assert record.is_file(), "successful retry must save its approved verifier result"
+    assert "Could not verify provenance" not in completed.stdout, (
+        "a later successful attempt must not leave a failure warning"
+    )
 
 
 def test_the_verifier_requires_github_cli_2_102_0(

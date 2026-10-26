@@ -213,7 +213,7 @@ def _carried_asset_error(name: str, reason: str) -> ReleaseAssetError:
     """Build an actionable error for an untrusted carried asset."""
     msg = (
         f"cannot safely carry GitHub asset {name} to PyPI: {reason}; "
-        "delete the GitHub Release asset and rerun the release"
+        "rerun once; if still untrusted, delete the named asset and rerun"
     )
     return ReleaseAssetError(msg)
 

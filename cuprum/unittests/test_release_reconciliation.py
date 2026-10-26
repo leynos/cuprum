@@ -172,7 +172,7 @@ def test_unverified_differing_asset_stops_before_pypi_upload(
     assert _GITHUB_ONLY in completed.stderr, (
         "the staging failure must name the unverified release asset"
     )
-    assert "delete the GitHub Release asset and rerun" in completed.stderr, (
+    assert "delete the named asset and rerun" in completed.stderr, (
         "the staging failure must explain the recovery action"
     )
     assert (pypi / "dist" / "publish" / _GITHUB_ONLY).read_bytes() == local_bytes, (

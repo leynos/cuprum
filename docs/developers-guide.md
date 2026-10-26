@@ -3625,9 +3625,10 @@ The jobs do the following:
    GitHub's digest and a verified provenance subject match the exact filename
    and SHA-256. A self-reported GitHub digest alone is insufficient. Missing or
    mismatched provenance stops staging before `dist/publish` changes and asks
-   for the GitHub asset to be deleted before rerunning. Any other name keeps
-   this run's freshly built file. The index request retries transient failures
-   and is bounded by connection and total timeouts, and a 404 reads as an empty
+   for the release to be rerun once to retry provenance verification; if it
+   still fails, delete the GitHub asset and rerun. Any other name keeps this
+   run's freshly built file. The index request retries transient failures and
+   is bounded by connection and total timeouts, and a 404 reads as an empty
    index. It uploads what remains with `pypa/gh-action-pypi-publish` and
    `skip-existing: true`, which also skips a file an interrupted earlier
    attempt already uploaded. That action is used rather than `uv publish`
@@ -3676,9 +3677,11 @@ reconciliation scheme.
 The provenance check adds a recovery case before that final digest check. When
 an existing GitHub asset lacks a matching approved attestation and differs from
 this run's build, `publish-pypi` fails before upload and `publish-release` does
-not run. Delete that GitHub asset and rerun the tag workflow. An asset with a
-valid repository, workflow, tag-ref, runner, filename, and digest match can be
-carried over from an interrupted attempt. If its bytes already match the
+not run. The workflow retries verification three times with short backoffs. If
+all attempts fail, rerun the tag workflow once to retry provenance
+verification; if it still fails, delete the GitHub asset and rerun. An asset
+with a valid repository, workflow, tag-ref, runner, filename, and digest match
+can be carried over from an interrupted attempt. If its bytes already match the
 current attested build, the current build is retained without a prior-run
 record. Names already on PyPI continue to be skipped without checking the
 GitHub asset.

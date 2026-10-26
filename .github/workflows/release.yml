@@ -221,13 +221,23 @@ jobs:
           while IFS= read -r name; do
             [ -n "${name}" ] || continue
             record="github-state/provenance/${name}.json"
-            if ! gh attestation verify "github-state/files/${name}" \
-              --repo "${GH_REPO}" \
-              --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
-              --source-ref "${GITHUB_REF}" \
-              --deny-self-hosted-runners \
-              --format json > "${record}"; then
+            verified=false
+            for attempt in 1 2 3; do
+              if gh attestation verify "github-state/files/${name}" \
+                --repo "${GH_REPO}" \
+                --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
+                --source-ref "${GITHUB_REF}" \
+                --deny-self-hosted-runners \
+                --format json > "${record}"; then
+                verified=true
+                break
+              fi
               rm -f "${record}"
+              if [ "${attempt}" -lt 3 ]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+            if [ "${verified}" != true ]; then
               echo "::warning title=attestation::Could not verify provenance for GitHub asset ${name};" \
                 "stage-pypi will reject it if PyPI needs its differing bytes."
             fi
