@@ -18,7 +18,10 @@ from cuprum._line_stream.reader_wait import _await_consumers
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._stream_drain import _decode_consumer_drains
 from cuprum._subprocess_rendezvous import _stdin_writer_failure
-from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _await_task_to_completion,
+    _settle_stdin_writer,
+)
 from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -223,10 +226,32 @@ async def _await_writer_within_scope(run: _LineStreamRun) -> None:
     task bundle, which it is: the reconciliation this route falls back to
     cancels it through ``_cancel_stdin_writer``. Nothing here cancels it, so
     there is no window in which the shield's inner task is left unowned.
+
+    The *settle* needs the same care for a different reason. Handing
+    ``asyncio.shield`` a bare coroutine makes it build a task this frame never
+    holds, and ``shield`` removes its done callback from that task when the
+    outer future is cancelled. A settle that then fails — the writer failing
+    inside the grace window is the ordinary way it does — has nothing left to
+    retrieve it, and the loop reports an unretrieved task exception against a
+    run that has already ended. Creating the task here keeps it reachable, and
+    the await goes through
+    :func:`~cuprum._subprocess_stdin_reclaim._await_task_to_completion`, which
+    retrieves the outcome whichever side of the cancellation it lands on.
+
+    That last part is not an alternative spelling of "retain the task and
+    shield it". From Python 3.14 ``asyncio.shield`` re-registers its own
+    reporter, ``asyncio.tasks._log_on_exception``, on a still-pending inner
+    task whenever the awaiting future is cancelled. That report is emitted
+    through the loop's exception handler without consulting whether the outcome
+    was retrieved, so retaining the task alone leaves it firing on 3.14 while
+    3.12 and 3.13 stay silent. ``asyncio.wait`` registers no such reporter. A
+    failure arriving before the cancellation still reaches this caller
+    unchanged.
     """
     if run.tasks.stdin_task is None:
         return
-    await asyncio.shield(_settle_stdin_writer(run.tasks.stdin_task))
+    settle = asyncio.ensure_future(_settle_stdin_writer(run.tasks.stdin_task))
+    await _await_task_to_completion(settle)
 
 
 async def _consumer_drains(

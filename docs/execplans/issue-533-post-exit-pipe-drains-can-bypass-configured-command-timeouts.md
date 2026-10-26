@@ -1585,6 +1585,76 @@ the issue was filed:
   point at is read. Two of the six files in that directory disagreed with their
   own manifest, and reading only the manifest would have certified both.
 
+- [x] (2026-10-26) The third review's two findings, and the fourth leak they
+  did not name. Code and tests are in the working tree; the commit-gate round
+  and the reply to the two review threads are the remaining steps.
+
+  CodeRabbit raised two findings against `drain.py:230`: (1) the shield-created
+  settle task is never reconciled, so a writer failing during the cancellation
+  race is reported as unretrieved; (2) a test asserts its writer failure by
+  `isinstance` while its docstring claims identity. Finding 2 is applied
+  literally: `_assert_writer_failure_survives` now takes the raised object and
+  asserts `caught.value is sentinel`, and both writer-failure cases raise that
+  exact sentinel.
+
+  Finding 1 was right, and its stated mechanism was incomplete in a way that
+  mattered. Two probes were written first, both scratch under `/tmp/probe533/`,
+  and run on 3.12.15 (`/usr/bin/python3.12`) and 3.14.7 (the project venv,
+  `.venv/bin/python`):
+
+  - `shield_report_314.py` cancels an awaiting frame while a settle is pending,
+    lets the settle then fail, and records what the loop is told. With
+    `asyncio.shield` the loop reports
+    `RuntimeError exception in shielded future` on 3.14.7; with
+    `asyncio.wait` + re-await it reports nothing. **3.12.15 reports nothing
+    under either spelling**, so this is a 3.14 behaviour: `shield`'s
+    `_outer_done_callback` removes its own callback from a still-pending inner
+    task and re-registers `asyncio.tasks._log_on_exception`
+    (`asyncio/tasks.py:914`, re-registration at `:994`), which reports the
+    inner failure whether or not the outcome is retrieved. Retaining the settle
+    task and shielding it, which is one of the two fixes the review suggested,
+    would therefore **not** have closed the finding on the interpreter this
+    repository's gates run under.
+  - `cancel_writer_late_failure.py` covers the layer the review did not name.
+    `_cancel_stdin_writer` retrieved its outcome in a `finally` after
+    `asyncio.wait(..., timeout=budget)`, and when that budget expires the task
+    is still pending, where `Task.exception()` raises `InvalidStateError` and
+    marks nothing — so the trailing call retrieved nothing at exactly the
+    moment the helper is reclaiming rather than waiting. Measured before the
+    fix on **both** interpreters:
+    `reported=["Task exception was never retrieved: ..."]`.
+
+  Both sites now await through `asyncio.wait` plus a re-await, with
+  `_retrieve_task_outcome` registered as a done callback *before* the wait so
+  it fires whenever the task actually finishes. `_shielded_cleanup` was probed
+  as a suspected fourth site (`settle_self_cancel.py`) and is clean on both
+  interpreters, so it is unchanged. Cancellation still propagates unchanged:
+  the caller's `CancelledError` is not consumed anywhere in the new path.
+
+  Tests: `cuprum/unittests/test_stdin_settle_outcome.py` (new) parametrizes the
+  three awaiting sites and asserts two things per site — a writer failing after
+  the caller has left produces no loop report, and a writer failing before any
+  cancellation still reaches the caller as the very object it raised. A fourth
+  case covers the reclaim past its budget. Each case was checked against the
+  spelling it replaces — `asyncio.shield` at each of the three sites, and the
+  trailing retrieval in the reclaim — and each failed under its own mutation
+  while the other six cases still passed. Measured 7 passed in 1.77 s before
+  the mutation probes and 12 passed in 1.96 s for both affected modules
+  together.
+
+  One further mutation says why the callback is not belt-and-braces: removing
+  the `add_done_callback` from `_await_task_to_completion` while keeping
+  `asyncio.wait` fails all three site cases. Waiting alone does not retrieve,
+  and on these paths the task that needs retrieving is exactly the one the
+  caller stopped waiting for.
+
+  The new test module itself runs only under the project venv (3.14.7), which
+  is the interpreter the gates use. `/usr/bin/python3.12` cannot load the
+  suite's `conftest.py` — it has no `hypothesis_crosshair_provider` — so the
+  cross-version claim rests on the two probes above, which exercise the same
+  shapes directly and were run on both interpreters. The module's own cases
+  have not been executed on 3.12.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
@@ -2816,6 +2886,43 @@ the issue was filed:
   removal of `_tracing_native_pump_cleanup.py` is the syrupy window artefact.
   Keeping the tool's output when it is provably one line is safer than
   hand-editing the same one line, and the diff remains as reviewable as before.
+
+- Decision (third CodeRabbit review, 2026-10-26): replace the `asyncio.shield`
+  spelling with `asyncio.wait` + re-await at every post-exit writer await,
+  rather than adopting either of the two remedies the review offered. The
+  review proposed retaining the settle task through reconciliation, or
+  attaching a completion callback that calls `task.exception()`. Both were
+  measured, and neither is sufficient on 3.14: `shield` re-registers
+  `_log_on_exception` on a still-pending inner task when the awaiting future is
+  cancelled, and that callback reports through the loop regardless of whether
+  the outcome was retrieved. Retaining the task fixes 3.12 and 3.13, which were
+  never broken, and leaves 3.14 — the interpreter the gates run under —
+  reporting. `asyncio.wait` registers no such reporter and supplies the same
+  cancellation separation, so it is the mechanism, not a preference.
+  Alternative rejected: keep `shield` and suppress the loop handler around the
+  awaits (rejected: the leak is cuprum's task, and silencing the loop would
+  hide real unretrieved failures from every other site as well).
+
+- Decision (third CodeRabbit review, 2026-10-26): register
+  `_retrieve_task_outcome` as a done callback before the bounded wait in
+  `_cancel_stdin_writer` and in `_await_task_to_completion`, instead of calling
+  it after the wait. This is the fourth leak in the family and the review did
+  not name it. After a timed-out wait the task is pending, where
+  `Task.exception()` raises `InvalidStateError` and records nothing, so a
+  trailing retrieval is a no-op in precisely the case the helper exists for.
+  Measured on 3.12.15 and 3.14.7 before the change and silent on both after.
+  The callback fires whenever the task finishes — inside the window, during the
+  reclaim, or after the helper has returned — which is the only registration
+  point that covers all three.
+
+- Decision (third CodeRabbit review, 2026-10-26): consolidate the finalizer's
+  private `_retrieve_finalizer_outcome` into the shared
+  `_retrieve_task_outcome` rather than keep two copies. The two bodies were
+  identical apart from their docstrings and the finalizer's was already
+  registered as a done callback, so the duplication was an accident of when
+  each was written, not a considered distinction. Rationale: the family now has
+  four sites that must agree about what "retrieved" means, and the duplication
+  gate would have flagged the copy on the next run anyway.
 
 ## Milestones
 

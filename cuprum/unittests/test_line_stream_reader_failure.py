@@ -191,15 +191,23 @@ def test_lines_reader_timeout_is_not_reported_as_the_run_deadline(
 def _assert_writer_failure_survives(
     seen: cabc.Sequence[LineStreamEvent],
     caught: pytest.ExceptionInfo[_WriterTimeoutError],
+    sentinel: _WriterTimeoutError,
 ) -> None:
     """Assert the run reported the writer's error rather than a deadline.
 
     The exception identity is what makes this an attribution assertion rather
     than a type one: the sentinel is raised from the writer and must arrive at
-    the caller as that same object, not as anything a timeout path built.
+    the caller as that same object, not as anything a timeout path built. A
+    type check alone would pass for any ``_WriterTimeoutError`` a timeout path
+    had constructed itself, so the sentinel is compared by identity and the
+    type check is kept only to make a wrong-object failure readable.
     """
     assert isinstance(caught.value, _WriterTimeoutError), (
         f"the caller must receive the writer's own exception, got {caught.value!r}"
+    )
+    assert caught.value is sentinel, (
+        "the caller must receive the very object the writer raised, got "
+        f"{caught.value!r} rather than the raised sentinel"
     )
     phases = [event.phase for event in seen]
     assert LineStreamPhase.TIMEOUT not in phases, (
@@ -223,6 +231,7 @@ def test_lines_writer_timeout_before_exit_is_not_the_run_deadline(
     ``timeout=`` is configured, so the translation had no deadline to report
     and replaced the caller's real error with an invariant failure.
     """
+    sentinel = _WriterTimeoutError()
 
     # RUF029: the seam this replaces is awaited by the spawn path, so the
     # double must be a coroutine function even though it awaits nothing.
@@ -231,7 +240,7 @@ def test_lines_writer_timeout_before_exit_is_not_the_run_deadline(
         **__: object,
     ) -> None:
         """Fail the writer with a ``TimeoutError`` before it writes anything."""
-        raise _WriterTimeoutError
+        raise sentinel
 
     monkeypatch.setattr(
         "cuprum._subprocess_stdin_stream._write_stdin_stream",
@@ -251,7 +260,7 @@ def test_lines_writer_timeout_before_exit_is_not_the_run_deadline(
     ):
         asyncio.run(collect())
 
-    _assert_writer_failure_survives(seen, caught)
+    _assert_writer_failure_survives(seen, caught, sentinel)
 
 
 def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
@@ -273,11 +282,12 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
     which is the earliest moment the drain owns the writer.
     """
     rendezvous_returned = asyncio.Event()
+    sentinel = _WriterTimeoutError(after_exit=True)
 
     async def _fail_after_rendezvous(*_: object, **__: object) -> None:
         """Fail the writer once the exit rendezvous has handed the run on."""
         await rendezvous_returned.wait()
-        raise _WriterTimeoutError(after_exit=True)
+        raise sentinel
 
     async def _record_rendezvous(
         exit_wait: cabc.Coroutine[typ.Any, typ.Any, tuple[int, float]],
@@ -316,7 +326,7 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
         "the writer must fail after the exit rendezvous, or this case does not "
         "reach the drain's arm"
     )
-    _assert_writer_failure_survives(seen, caught)
+    _assert_writer_failure_survives(seen, caught, sentinel)
 
 
 def test_run_reader_timeout_is_not_reported_as_the_run_deadline(

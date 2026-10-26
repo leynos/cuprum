@@ -59,6 +59,7 @@ import typing as typ
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
+    _await_task_to_completion,
     _cancel_stdin_writer,
     _settle_stdin_writer,
 )
@@ -88,13 +89,22 @@ async def _await_writer_within_deadline(
     already reached — and the cleanup that would settle the writer, and signal
     the descendant, is precisely what the hang prevents.
 
-    The wait is *shielded* for the same reason the streamed path's is: awaiting
+    The wait is shielded for the same reason the streamed path's is: awaiting
     the writer task makes it this await's ``_fut_waiter``, and ``Task.cancel()``
-    forwards, so the timeout scope would be woken only after the writer had
-    finished dying — including the close grace it bounds. The shield returns the
-    cancellation at once, leaving settlement to the expiry path, which is where
-    the group teardown also runs. It is a latency improvement rather than what
-    makes the run terminate: the bounded close below does that.
+    forwards, so the expiry would be felt only after the writer had finished
+    unwinding, which is unbounded when the writer is what is stuck. The shield
+    lets the cancellation through at once, leaving the writer to the reclaim
+    that follows. It is a timing fix rather than what makes the run terminate:
+    the writer's own settle and the reclaim are what bound and finish it.
+
+    The shield is `_await_task_to_completion` rather than `asyncio.shield`
+    because the latter reports. A writer that absorbs its cancellation and then
+    fails — which a producer wrapping caller code may do — is left with
+    `shield`'s own `_log_on_exception` callback attached once the scope's
+    cancellation lands, and from Python 3.14 that reports
+    `... exception in shielded future` through the loop however carefully the
+    writer's outcome is retrieved afterwards. `asyncio.wait` supplies the same
+    separation and registers no reporter.
 
     Expiry and cancellation are read apart by the scope rather than by this
     frame. ``asyncio.timeout`` converts its own expiry into a ``TimeoutError``
@@ -124,7 +134,7 @@ async def _await_writer_within_deadline(
         return
     try:
         async with asyncio.timeout(remaining):
-            await asyncio.shield(stdin_task)
+            await _await_task_to_completion(stdin_task)
     except TimeoutError as exc:
         # The direct path captures nothing, so both payloads are ``None``. The
         # public ``TimeoutExpired`` is built from the configured timeout at the
