@@ -1501,6 +1501,38 @@ the issue was filed:
   the tracking ref read as one commit, and `rev-list --count @{upstream}..HEAD`
   was 0.
 
+- [x] (2026-10-26) The post-rebase review state, and the gap the approval left.
+
+  The three Markdown gates were re-run on the published head rather than
+  inherited, because the `-r2` log set finished at 11:48:57 and the commit is
+  stamped 11:48:59 — close enough that the filename cannot settle which content
+  they measured. At `692ed63da` all three exit 0 (`106 files left unchanged`,
+  `0 issues`, Mermaid validated), with head and worktree unchanged across each.
+
+  Hosted CI on the head is 23 passing and 4 skipped, nothing pending. The only
+  branch rule on `main` is `required_status_checks` plus `deletion`; there is
+  **no** required-review rule, so `mergeStateStatus` became `CLEAN` once the
+  last check landed even though `reviewDecision` still read
+  `CHANGES_REQUESTED`. That stale decision was not the blocker it appeared to
+  be, and the earlier reading of `BLOCKED` as review-blocked was wrong — it was
+  a still-running `coverage` job.
+
+  Approval was requested with the gap stated rather than glossed. CodeRabbit
+  approved at exactly `692ed63da` (status
+  `Approve command performed: Review threads unchanged. Approval completed`),
+  and in the same reply said the approval does not confirm the head was
+  inspected, naming `4b918bdd4`, the timeout and exit-event consolidation, and
+  the rebase preservation as unreviewed. A green `CodeRabbit` status on this
+  head means `Review paused` — auto-pause, not inspection — so the
+  approval-event and the review-event are different facts and only the first
+  exists.
+
+  A full review of the head is therefore queued as comenq `4b2e2178` (ETA about
+  1h 41m) and the merge is held until its findings are dispositioned. The
+  lesson is the one this plan already records twice: an approval command is not
+  coverage, and asking for approval while stating the gap gets an approval plus
+  an honest statement of the gap back, which is the correct pair of facts.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
