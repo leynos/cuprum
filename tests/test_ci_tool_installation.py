@@ -107,7 +107,8 @@ def test_modern_stable_installs_the_pinned_nextest_release_from_checksums() -> N
     assert checksums.get("BINARY") == (
         "8d717594668f0ec817405b9526cb657ca40fc888068277004860d0f253837d14"
     ), "the nextest binary must retain its reviewed checksum"
-    assert script.index("sha256sum --check") < script.index("tar --extract"), (
+    archive_check = script.index('"${CARGO_NEXTEST_ARCHIVE_SHA256}"')
+    assert archive_check < script.index("tar --extract"), (
         "the downloaded nextest archive must be verified before extraction"
     )
     assert "cargo install" not in script, (

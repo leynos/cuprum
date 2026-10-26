@@ -108,7 +108,7 @@ GATES = (
 )
 
 
-def append_warning(source: str) -> str:
+def _append_warning(source: str) -> str:
     """Append one deliberately unused private function to a Rust module."""
     if WARNING_FUNCTION in source:
         msg = "the modern-stable warning marker already exists in the source"
@@ -117,7 +117,7 @@ def append_warning(source: str) -> str:
     return f"{source}{separator}\n{WARNING_FUNCTION}\n"
 
 
-def with_warning_policy(makefile: str, policy: str) -> str:
+def _with_warning_policy(makefile: str, policy: str) -> str:
     """Return the Makefile with only the modern route's policy changed."""
     if policy not in {"warn", "deny"}:
         msg = f"unsupported Cargo warning policy: {policy}"
@@ -128,13 +128,13 @@ def with_warning_policy(makefile: str, policy: str) -> str:
     return makefile.replace(DENIED_WARNING_SETTING, f"CARGO_BUILD_WARNINGS={policy}")
 
 
-def observe_output(
+def _observe_output(
     gate: Gate,
     phase: str,
     exit_code: int,
     output: str,
 ) -> GateRun:
-    """Summarize Cargo compile/fresh lines and the selected package state."""
+    """Summarize Cargo freshness output for one warning-control invocation."""
     # Cargo may colour its `Checking` and `Fresh` prefixes even when captured.
     # Strip terminal escapes for classification while preserving the raw log.
     lines = [ANSI_ESCAPE.sub("", line).lstrip() for line in output.splitlines()]
@@ -193,7 +193,7 @@ def _run(
 def _run_gate(worktree: Path, gate: Gate, phase: str) -> GateRun:
     """Run one modern-stable Make target and retain its full log."""
     exit_code, output = _run(make, ("-C", worktree.as_posix(), gate.target), ROOT)
-    observed = observe_output(gate, phase, exit_code, output)
+    observed = _observe_output(gate, phase, exit_code, output)
     log_directory = ROOT / "rust/target/modern-stable-warning-controls"
     log_directory.mkdir(parents=True, exist_ok=True)
     (log_directory / f"{gate.name}-{phase}.log").write_text(output, encoding="utf-8")
@@ -267,7 +267,7 @@ def _exercise_gate(
     original = source_path.read_text(encoding="utf-8")
     failures: list[str] = []
     results: list[GateRun] = []
-    source_path.write_text(append_warning(original), encoding="utf-8")
+    source_path.write_text(_append_warning(original), encoding="utf-8")
     try:
         cold = _run_gate(worktree, gate, "warning-cold")
         results.append(cold)
@@ -301,7 +301,7 @@ def _exercise_gates(worktree: Path) -> tuple[tuple[GateRun, ...], tuple[str, ...
     policies = WarningPolicies(
         path=makefile_path,
         denied=denied,
-        permissive=with_warning_policy(denied, "warn"),
+        permissive=_with_warning_policy(denied, "warn"),
     )
     results: list[GateRun] = []
     failures: list[str] = []
@@ -373,7 +373,17 @@ def _report(results: tuple[GateRun, ...], failures: tuple[str, ...]) -> str:
 
 
 def main() -> int:
-    """Run the warning controls and return failure if a control is unexpected."""
+    """Run warning controls and write the report to the Rust target directory.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    int
+        Zero when every control has the expected result, otherwise one.
+    """
     results, failures = _run_controls()
     report = _report(results, failures)
     report_path = ROOT / "rust/target/modern-stable-warning-controls/report.md"
