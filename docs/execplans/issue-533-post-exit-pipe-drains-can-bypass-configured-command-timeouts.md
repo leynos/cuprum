@@ -1406,6 +1406,31 @@ the issue was filed:
   lines. Pylint `too-many-lines` then reports 10.00/10 on the module at 399
   lines. No cap was relaxed and no lint suppressed.
 
+- [x] (2026-10-26) Audited the replay before overwriting the published head.
+  `range-diff --no-color e2c7592b5..4832ef74a 7126a1ffb..ed208fdf5` pairs 73
+  old commits to 73 new ones with **two** new-side-only commits and none
+  old-side-only: 66 are byte-identical and 7 diverge, being the five conflict
+  resolutions plus two that only moved context. That accounts for the whole new
+  range of 75, so no branch work is unrepresented.
+
+  Parity between the ranges was checked as a set equality rather than by
+  trusting a line count, because the first two attempts to read the marker
+  column undercounted. `range-diff` right-aligns the new-side ordinal, so a
+  single-digit commit begins with a leading space that a `^[0-9]+:` anchor
+  silently skips; the correct pattern is `^ *[0-9]+: `.
+
+  Three references were compared before deciding to push, not two. HEAD is
+  `ed208fdf5`; the tracking ref and `git ls-remote` both read `4832ef74a`, so
+  the 82-commit gap is real rather than the stale-tracking-ref artefact. The
+  remote head is **not** an ancestor of local HEAD, with 73 remote-only
+  commits, which is what a rebased branch looks like and why the push needs a
+  lease rather than being a fast-forward. SSH authenticates as `leynos`.
+
+  The push is deliberately held until the six gates have run at `ed208fdf5`.
+  That head carries the rebase plus two commits no round has observed, and
+  publishing it first would put a claim in front of reviewers that no gate log
+  supports.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
