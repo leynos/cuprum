@@ -2414,17 +2414,19 @@ preserving the `SafeCmd.run()` execution contract:
   with `timeout=None` collects unbounded, exactly as before. On the routes that
   end in an expiry, the overshoot past the deadline is bounded by the cleanup
   allowances alone: `cancel_grace`, the 0.25 s `_CAPTURE_EOF_GRACE_S` window
-  once per capturing run, and the 0.5 s stdin close grace for a run given
-  `stdin` data. A pipeline takes no stdin, so it owes only the first two. Every
-  run that owns its process group owes one more allowance on an expiry route:
-  the `_POST_KILL_SETTLEMENT_S` wait of up to one second that `_process_group`
-  applies after forcibly killing the group. Every owning teardown reaches that
-  wait, but not through one helper: a direct run, a streamed run, and a
-  `lines()` run call `_settle_owned_group_before_draining`, the owned handle
-  has its own equivalent in `cuprum._process_handle.coordinator`, and a
-  pipeline reaches the same wait through `_terminate_all_shielded`, because it
-  owns several stage groups rather than one. A run that inherits its caller's
-  group settles nothing and owes no such wait.
+  once per capturing run, and up to 1.25 s to settle a stdin writer for a run
+  given `stdin` data: its 0.5 s pipe close, two 0.25 s producer-finalization
+  windows, and one 0.25 s scheduling grace. A pipeline takes no stdin, so it
+  owes only the first two. Every run that owns its process group owes one more
+  allowance on an expiry route: the `_POST_KILL_SETTLEMENT_S` wait of up to one
+  second that `_process_group` applies after forcibly killing the group. Every
+  owning teardown reaches that wait, but not through one helper: a direct run,
+  a streamed run, and a `lines()` run call
+  `_settle_owned_group_before_draining`, the owned handle has its own
+  equivalent in `cuprum._process_handle.coordinator`, and a pipeline reaches
+  the same wait through `_terminate_all_shielded`, because it owns several
+  stage groups rather than one. A run that inherits its caller's group settles
+  nothing and owes no such wait.
 
 For screen readers: The following sequence diagram shows how
 `_drain_stream_consumers` gives capturing stream readers a bounded EOF-grace
@@ -3442,6 +3444,13 @@ and its tests cannot drift apart. `_streams.py` dispatches to
 `_consume_stream_with_lines` when a line observer is registered. The await
 stays with the consumer because awaiting a sink is the drain's contract, not a
 splitting rule.
+
+Each line stream also carries a settlement event. Teardown sets it before
+cancelling readers, so a publisher parked on a full queue can stop trying to
+publish. The drain absorbs each raw chunk into capture before decoding its
+lines, so stopping publication does not discard the captured prefix. The same
+event covers the final unterminated line, which is otherwise published after
+the read loop returns.
 
 The accumulator exists because the earlier concatenate-and-rescan approach was
 quadratic: every chunk copied the whole pending line and searched it again, so

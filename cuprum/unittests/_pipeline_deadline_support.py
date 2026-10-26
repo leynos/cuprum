@@ -199,7 +199,11 @@ def _pipeline(
         else python("-c", "import sys; sys.stdout.write('head' + chr(10))")
     )
     last = python(
-        *descendant_then_exit_argv(pid_file, exit_code=0, stdout_marker=MARKER)
+        *descendant_then_exit_argv(
+            pid_file,
+            exit_code=0,
+            stdout_chunks=(f"{MARKER}\n",),
+        )
     )
     return first | last
 

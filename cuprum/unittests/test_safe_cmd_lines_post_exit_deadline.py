@@ -248,7 +248,11 @@ def test_a_descendant_holding_the_pipes_does_not_outlive_the_lines_deadline(
     """
     pid_file = tmp_path / f"lines-{policy.name}.pid"
     command = owned_builder(
-        *descendant_then_exit_argv(pid_file, exit_code=0, stdout_marker=_MARKER)
+        *descendant_then_exit_argv(
+            pid_file,
+            exit_code=0,
+            stdout_chunks=(f"{_MARKER}\n",),
+        )
     )
 
     async def run_case() -> _DrainedLines:

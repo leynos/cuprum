@@ -28,6 +28,7 @@ import typing as typ
 
 import pytest
 
+from cuprum import _subprocess_stdin as stdin_module
 from cuprum import _subprocess_stdin_finalize as finalize
 from cuprum import _subprocess_stdin_reclaim as reclaim_module
 from cuprum._subprocess_stdin_finalize import _finalize_stdin_source
@@ -243,16 +244,22 @@ def test_the_reclaim_budget_covers_the_cleanup_it_waits_for() -> None:
     reclaim = reclaim_module._STDIN_RECLAIM_BUDGET_S
     finalize_steps = reclaim_module._STDIN_FINALIZE_STEPS
     window = reclaim_module._STDIN_SETTLE_GRACE_S
-    expected = window * (1 + finalize_steps)
+    close_grace = stdin_module._CLOSE_GRACE_S
+    scheduling_grace = reclaim_module._STDIN_RECLAIM_SCHEDULING_GRACE_S
+    expected = close_grace + finalize_steps * window + scheduling_grace
 
     assert reclaim == expected, (
         f"the writer reclaim budget is {reclaim}s but the teardown it spans "
-        f"needs {expected}s (one pipe release plus {finalize_steps} "
-        "finalization steps)"
+        f"needs {expected}s ({close_grace}s to close the pipe, {finalize_steps} "
+        f"finalization steps, and {scheduling_grace}s scheduling grace)"
     )
-    assert reclaim > window, (
-        "the reclaim budget has collapsed to a single window, which cannot "
-        "cover the cleanup a cancelled writer runs"
+    assert close_grace != window, (
+        "this regression requires the pipe-close bound to come from its "
+        "actual constant rather than a copied settle step"
+    )
+    assert scheduling_grace >= window, (
+        "the outer writer wait needs a full settle grace beyond the nested "
+        "deadlines, or it can win the same boundary race it is meant to avoid"
     )
     assert window == reclaim_module._STDIN_FINALIZER_RECLAIM_S, (
         "a finalizer task nests nothing, so its reclaim must stay the single "

@@ -208,6 +208,7 @@ def _failed_run(
     run = types.SimpleNamespace(
         process=types.SimpleNamespace(pid=123),
         tasks=types.SimpleNamespace(discard_on_cancel=asyncio.Event(), stdin_task=None),
+        settlement_started=asyncio.Event(),
         telemetry=types.SimpleNamespace(emit=double.emit),
         execution=execution,
     )
@@ -315,6 +316,7 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
                 # (empty) pair a run with no capture policies holds.
                 captures=(None, None),
             ),
+            settlement_started=asyncio.Event(),
             telemetry=types.SimpleNamespace(emit=double.emit),
         ),
     )
@@ -401,6 +403,7 @@ def test_discard_drain_releases_the_capture_sinks(
                 discard_on_cancel=asyncio.Event(),
                 captures=(sink, stderr_sink),
             ),
+            settlement_started=asyncio.Event(),
             telemetry=types.SimpleNamespace(emit=double.emit),
         ),
     )
@@ -436,7 +439,10 @@ def _teardown_run(order: list[object]) -> _LineStreamRun:
 
     return typ.cast(
         "_LineStreamRun",
-        types.SimpleNamespace(telemetry=types.SimpleNamespace(emit=emit)),
+        types.SimpleNamespace(
+            settlement_started=asyncio.Event(),
+            telemetry=types.SimpleNamespace(emit=emit),
+        ),
     )
 
 

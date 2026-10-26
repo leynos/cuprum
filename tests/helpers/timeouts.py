@@ -212,7 +212,7 @@ def descendant_then_exit_argv(
     pid_file: Path,
     *,
     exit_code: int,
-    stdout_marker: str | None = None,
+    stdout_chunks: tuple[str, ...] | None = None,
 ) -> tuple[str, ...]:
     """Return ``-c`` argv for a child that leaves a pipe-holding descendant behind.
 
@@ -230,24 +230,28 @@ def descendant_then_exit_argv(
     exit_code:
         Status the child exits with, so a caller can choose between a failing
         stage and a successful one that merely left work behind.
-    stdout_marker:
-        When given, a line the child writes to stdout and flushes before it
-        spawns anything. The text is therefore already readable by the run
-        well before the deadline it may go on to overrun.
+    stdout_chunks:
+        When given, chunks written and flushed in order before the child spawns
+        anything. A short pause separates chunks so a reader can observe the
+        boundary between them.
 
     Returns
     -------
     tuple[str, ...]
         ``-c`` argv, ready to spread into a spawn call.
     """
-    announce = (
-        ()
-        if stdout_marker is None
-        else (
-            f"sys.stdout.write({stdout_marker!r} + chr(10))",
-            "sys.stdout.flush()",
-        )
-    )
+    if stdout_chunks is not None:
+        announce_lines: list[str] = []
+        for index, chunk in enumerate(stdout_chunks):
+            announce_lines.extend((
+                f"sys.stdout.write({chunk!r})",
+                "sys.stdout.flush()",
+            ))
+            if index < len(stdout_chunks) - 1:
+                announce_lines.append("time.sleep(0.05)")
+        announce = tuple(announce_lines)
+    else:
+        announce = ()
     lines = (
         *_DESCENDANT_THEN_EXIT_LINES[:1],
         *announce,

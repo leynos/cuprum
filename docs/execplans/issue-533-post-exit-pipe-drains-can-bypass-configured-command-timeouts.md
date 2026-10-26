@@ -88,9 +88,10 @@ After this change a caller of `SafeCmd.run()`, `SafeCmd.lines()`, or
 whatever output the run had already read. The overshoot past the deadline is
 bounded by the existing cleanup allowances and nothing else: the teardown grace
 (`cancel_grace`), the capture end-of-file grace (`_CAPTURE_EOF_GRACE_S`, 0.25
-s), the stdin close grace (`_CLOSE_GRACE_S`, 0.5 s), and — for a run that owns
-its process group — the bounded one-second `_POST_KILL_SETTLEMENT_S` wait after
-the group is forcibly killed.
+s), up to 1.25 s to settle a stdin writer (0.5 s to close the pipe, two 0.25 s
+producer-finalization windows, and one 0.25 s scheduling grace), and — for a
+run that owns its process group — the bounded one-second
+`_POST_KILL_SETTLEMENT_S` wait after the group is forcibly killed.
 
 This plan fixes all three public routes. It is written so that someone with
 only this file, the working tree, and no memory of the investigation can finish
@@ -3492,8 +3493,8 @@ that cannot report it.
 
 Overshoot past the deadline is the cleanup allowances and nothing else:
 `cancel_grace` (0.5 s default), the 0.25 s capture EOF window once per
-capturing run, the 0.5 s stdin close for a run given `stdin` data, and the
-bounded one-second `_POST_KILL_SETTLEMENT_S` after a run with
+capturing run, up to 1.25 s to settle a stdin writer for a run given `stdin`
+data, and the bounded one-second `_POST_KILL_SETTLEMENT_S` after a run with
 `ProcessGroupPolicy.OWN_GROUP` forcibly kills its group — owed by a direct run,
 a streamed run, a `lines()` run, and a pipeline alike, because whether a run
 owes it is decided by the policy rather than by which entry point started it.
@@ -3600,6 +3601,96 @@ snapshot would have hidden the question under 223 rewritten lines.
   already served. Rationale for recording the asymmetry rather than making the
   two uniform: the reviewer asked for a fix where the race exists, and widening
   it to a test that cannot hit it would be change for symmetry's sake.
+
+## Review follow-up — post-exit queue and stdin bounds
+
+The completeness assessment of head 8668bfbacd79bc75c2095421a7f3d1c4f86da185
+found two remaining correctness gaps and one migration-guide inconsistency. The
+line-stream consumer could lose a captured chunk when timeout cancellation
+landed in a full queue publication, or hang again while publishing an
+unterminated final line. A per-run settlement event now releases blocked queue
+publication before reader reconciliation; the raw chunk has already entered
+capture, so the reader can finish settlement without another queue wait.
+Regression coverage pauses iteration across expiry with both complete lines and
+an unterminated tail, then checks the public timeout payload and task census.
+
+The stdin writer reclaim calculation counted pipe close as one 0.25-second
+settle step, although the actual close bound is 0.5 seconds. It now derives the
+budget from that close constant, both 0.25-second producer-finalization waits,
+and one 0.25-second scheduling grace. The cooperative-finalizer test now
+reaches the finalizer's reclaim window and nearly fills it. User and migration
+documentation state the corrected 1.25-second allowance and attribute the
+one-second post-kill settlement to owning command and line-stream teardown as
+well as pipelines. The candidate's validation evidence is recorded below as
+each sequential pass completes.
+
+The first sequential full gate attempt passed `make check-fmt` and stopped at
+`make lint`: classic Pylint reported `R0917` on `_build_unstarted_run` after
+the new event parameter brought its argument count to five. The second attempt
+also passed `make check-fmt`, then found eight `python-lint` issues: the setup
+function still had five arguments, the queue wait needed a `try`/`else` split,
+the imported pytest fixture needed an `__all__` declaration, the paused-tail
+test had too many locals, and the test command helper reported conflicting
+stdout arguments through `ValueError`.
+
+The run now groups queue, telemetry and settlement event in a private frozen
+setup record; the queue wait's normal result is in its `else` block; the
+fixture export and shared paused-run harness remove the lint findings without
+suppression. `descendant_then_exit_argv` now accepts flushed `stdout_chunks`
+only, and its four existing marker call sites were migrated, so the helper no
+longer needs a conflicting-argument error path. Both attempts stopped at lint;
+all later gates were unobserved. After these repairs, the focused regression
+run passed 58 tests with 13 platform skips; log:
+`/tmp/test-cuprum-issue-533-review-targeted-3.out`. The next full sequential
+gate run must validate the updated candidate.
+
+The next sequential round, on HEAD `8668bfbacd79bc75c2095421a7f3d1c4f86da185`
+and staged tree `20bbbbebdbace82e69ddaba03f3db267b3438b35`, passed
+`make check-fmt` and the full `make lint` chain. `make typecheck` then reported
+that `_chain_line_hooks` has an optional return type even though this call
+always appends the queue sink. The hook is now narrowed at that invariant
+before it is passed to the settlement wrapper. The failure log is
+`/tmp/typecheck-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-3.out`;
+the other gates were unobserved. Rerun the full sequential gate set on the
+updated candidate.
+
+The fourth round again passed `make check-fmt` and stopped at `make lint`. Lint
+rejected the type-narrowing assertion, as this repository disallows assertions
+in production code. `_chain_line_hooks` now requires its first hook and returns
+a callable by construction; both call sites supply the queue hook directly and
+add the caller hook only when present. The log is
+`/tmp/lint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-4.out`;
+the other gates were unobserved. `make fmt` and the full sequential gate set
+must run on the resulting candidate.
+
+The fifth sequential round passed all six gates on HEAD
+`8668bfbacd79bc75c2095421a7f3d1c4f86da185` and staged tree
+`6e90d1b0e9b16884a57acfb82410a7e32ac82d1b`: `make check-fmt`, `make lint`,
+`make typecheck`, `make test`, `make markdownlint`, and `make nixie`. Its
+manifest is
+`/tmp/gh533-gates-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-5.meta`.
+Afterwards, `cs delta --staged` found `_line_stream_scenario` had five
+arguments. Its construction inputs now travel together in a frozen payload
+record. Because this is a further candidate change, rerun all gates
+sequentially before commit.
+
+The sixth sequential round passed `make check-fmt` and the lint chain through
+Rustdoc, Clippy, and spelling's preceding checks, then failed because this
+paragraph used the US variant of a temporal adverb. The spelling log is
+`/tmp/lint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-6.out`;
+later workflow lint stages and all remaining gates were unobserved. The word
+is now corrected. Rerun the complete gate sequence on the updated tree.
+
+The seventh sequential round passed all six gates on HEAD
+`8668bfbacd79bc75c2095421a7f3d1c4f86da185` and staged tree
+`044257af2456fc7e1f3efef5f0a47846a139fd4c`: `make check-fmt`, `make lint`,
+`make typecheck`, `make test`, `make markdownlint`, and `make nixie`. The test
+target completed the Python, script, behavioural, 165-case Rust nextest, and
+doctest suites without failure. The manifest is
+`/tmp/gh533-gates-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-7.meta`.
+Afterwards, `cs delta --staged` found no issues after the scenario payload was
+grouped in `_LineStreamPayload`; output:
+`/tmp/codescene-cuprum-issue-533-review-after-payload-fix.out`.
 
 ## Appendix — how to reproduce the hang by hand
 

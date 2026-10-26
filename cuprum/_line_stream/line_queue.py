@@ -71,6 +71,7 @@ class _LineStreamRun:
     process: asyncio.subprocess.Process
     tasks: _RunTaskOwnership
     queue: asyncio.Queue[_LineQueueItem]
+    settlement_started: asyncio.Event
     execution: _SubprocessExecution
     telemetry: _LineStreamTelemetry
 
@@ -83,6 +84,8 @@ def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
 def _queue_line_sink(
     queue: asyncio.Queue[_LineQueueItem],
     telemetry: _LineStreamTelemetry | None = None,
+    *,
+    settlement_started: asyncio.Event | None = None,
 ) -> _LineHookFn:
     """Return an asynchronous hook that posts each ``LineEvent`` to the queue.
 
@@ -103,11 +106,60 @@ def _queue_line_sink(
         """Post one stamped line to the consumer queue."""
         if telemetry is not None:
             telemetry.report_queue_saturation(queue, event)
-        await queue.put(event)
+        if settlement_started is None:
+            await queue.put(event)
+        else:
+            await _put_line_or_settlement(queue, event, settlement_started)
         if telemetry is not None:
             telemetry.is_queue_saturated = queue.full()
 
     return enqueue
+
+
+async def _put_line_or_settlement(
+    queue: asyncio.Queue[_LineQueueItem],
+    event: LineEvent,
+    settlement_started: asyncio.Event,
+) -> bool:
+    """Publish a line unless teardown begins while the bounded queue is full."""
+    if settlement_started.is_set():
+        return False
+    try:
+        queue.put_nowait(event)
+    except asyncio.QueueFull:
+        return await _wait_for_line_slot_or_settlement(
+            queue,
+            event,
+            settlement_started,
+        )
+    return True
+
+
+async def _wait_for_line_slot_or_settlement(
+    queue: asyncio.Queue[_LineQueueItem],
+    event: LineEvent,
+    settlement_started: asyncio.Event,
+) -> bool:
+    """Wait for capacity or teardown, retrieving both helper task outcomes."""
+    put_task = asyncio.create_task(queue.put(event))
+    settlement_task = asyncio.create_task(settlement_started.wait())
+    tasks = (put_task, settlement_task)
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        if not settlement_started.is_set():
+            raise
+        return False
+    else:
+        if put_task.done():
+            await put_task
+            return True
+        return False
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _observed_line_hook(

@@ -42,6 +42,7 @@ import asyncio
 import contextlib
 
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_stdin import _CLOSE_GRACE_S
 
 # How long a stdin writer is given to notice it should stop — both when the
 # child it was feeding has exited and when the writer is being cancelled. Fixed
@@ -70,12 +71,12 @@ _STDIN_SETTLE_GRACE_S = 0.25
 # it has been asked to stop and has not stopped yet.
 _STDIN_FINALIZE_STEPS = 2
 
-# A writer's teardown releases the pipe and *then* finalizes whatever producer
-# it was pulling from, so it is that whole finalization plus the pipe-release
-# wait of its own. This is the nesting CodeRabbit identified: a writer given
-# only one step is cancelled, spends its own three, and outlives the window
-# that was supposed to contain it.
-_STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS
+# A writer closes the pipe for its own grace before finalizing its producer.
+# That close is a different bound from the producer's settle windows, so its
+# actual constant is the first term rather than an assumed settle-grace step.
+_STDIN_WRITER_TEARDOWN_S = (
+    _CLOSE_GRACE_S + _STDIN_SETTLE_GRACE_S * _STDIN_FINALIZE_STEPS
+)
 
 # What a finalizer *task* is allowed when it is reclaimed: one step, on its
 # own. It is deliberately not the writer budget — a finalizer task runs caller
@@ -83,15 +84,13 @@ _STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS
 # giving it the writer's figure would re-open the same nesting one level down.
 _STDIN_FINALIZER_RECLAIM_S = _STDIN_SETTLE_GRACE_S
 
-# What cancelling a *writer* is allowed. It must cover the writer's whole
-# teardown, because the writer runs that teardown inside its own cancellation:
-# `_close_stdin` bounded by one step, then `_finalize_stdin_source` bounded by
-# `_STDIN_FINALIZE_STEPS`. A cooperative writer — one that needs the pipe
-# released and a suspended finalizer cancelled, but never ignores the
-# cancellation it is given — therefore settles inside this window, which is
-# the guarantee a cancelled run depends on before it reports that its tasks
-# are gone.
-_STDIN_RECLAIM_BUDGET_S = _STDIN_SETTLE_GRACE_S * _STDIN_WRITER_TEARDOWN_STEPS
+# The outer wait must outlast the nested waits, not share their final deadline.
+# At an equal boundary the outer asyncio.wait can wake before the writer gets a
+# scheduled turn to observe that its finalizer reclaim completed. One settle
+# grace of slack gives the nested teardown that turn without making its bound
+# depend on whichever task the loop happens to schedule first.
+_STDIN_RECLAIM_SCHEDULING_GRACE_S = _STDIN_SETTLE_GRACE_S
+_STDIN_RECLAIM_BUDGET_S = _STDIN_WRITER_TEARDOWN_S + _STDIN_RECLAIM_SCHEDULING_GRACE_S
 
 
 async def _cancel_stdin_writer(
@@ -321,8 +320,9 @@ __all__ = [
     "_STDIN_FINALIZER_RECLAIM_S",
     "_STDIN_FINALIZE_STEPS",
     "_STDIN_RECLAIM_BUDGET_S",
+    "_STDIN_RECLAIM_SCHEDULING_GRACE_S",
     "_STDIN_SETTLE_GRACE_S",
-    "_STDIN_WRITER_TEARDOWN_STEPS",
+    "_STDIN_WRITER_TEARDOWN_S",
     "_await_task_to_completion",
     "_cancel_stdin_writer",
     "_retrieve_task_outcome",

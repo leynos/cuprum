@@ -2354,8 +2354,9 @@ A run can exceed the deadline by the cleanup allowances and nothing else:
   process to terminate before it is killed.
 - The 0.25 s end-of-file window above, once per capturing run whose readers
   have not already finished.
-- The 0.5 s stdin close window, for a run that was given `stdin` data and is
-  still reconciling its writer.
+- Up to 1.25 s to settle a stdin writer, for a run given `stdin` data: the
+  0.5 s pipe close, two 0.25 s producer-finalization windows, and one 0.25 s
+  scheduling grace.
 
 Any run with `ProcessGroupPolicy.OWN_GROUP` — a command, `lines()`, or a
 pipeline — adds a bounded settlement wait of up to one second after it forcibly
@@ -2439,16 +2440,17 @@ stage gets a `timeout` event, a `cuprum.timeout` record with its `pid`, and one
 the single-command case.
 
 The deadline covers collecting each stage's output as well as waiting for the
-stages to exit. A pipeline takes no `stdin`, so the stdin close window does not
-apply to it, but the same end-of-file window does: a stage that exits while a
-descendant keeps its stderr or the final stage's stdout open does not extend
-the run indefinitely. On expiry, stages are terminated first — including an
-owned group whose leader has already exited — so readers can still capture what
-their stage wrote before they are settled. Output captured that way is
-preserved on the `TimeoutExpired`, and, for `ProcessGroupPolicy.OWN_GROUP`, a
-descendant still in the owned group is reclaimed exactly as it is for a single
-command. Reclamation reaches the group, not the family tree: a descendant that
-has left the group is beyond it, as the bounded guarantee below explains.
+stages to exit. A pipeline takes no `stdin`, so the stdin-writer settlement
+allowance does not apply to it, but the same end-of-file window does: a stage
+that exits while a descendant keeps its stderr or the final stage's stdout open
+does not extend the run indefinitely. On expiry, stages are terminated first —
+including an owned group whose leader has already exited — so readers can still
+capture what their stage wrote before they are settled. Output captured that
+way is preserved on the `TimeoutExpired`, and, for
+`ProcessGroupPolicy.OWN_GROUP`, a descendant still in the owned group is
+reclaimed exactly as it is for a single command. Reclamation reaches the group,
+not the family tree: a descendant that has left the group is beyond it, as the
+bounded guarantee below explains.
 
 #### Reclaim a descendant with process-group ownership
 

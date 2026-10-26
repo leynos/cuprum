@@ -154,24 +154,29 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             queue_capacity=capacity,
         )
         user_hook = self._user_hook(mode)
-        hooks: list[_LineHookFn | None] = [
-            _observed_line_hook(
-                user_hook,
-                "callback",
-                self._telemetry,
+        queue_hook = _observed_line_hook(
+            _queue_line_sink(self._queue, self._telemetry),
+            "queue",
+            self._telemetry,
+        )
+        self._composed = (
+            queue_hook
+            if user_hook is None
+            else _chain_line_hooks(
+                _observed_line_hook(
+                    user_hook,
+                    "callback",
+                    self._telemetry,
+                ),
+                queue_hook,
             )
-            if user_hook is not None
-            else None,
-            _observed_line_hook(
-                _queue_line_sink(self._queue, self._telemetry),
-                "queue",
-                self._telemetry,
-            ),
-        ]
-        self._composed = typ.cast("_LineHookFn", _chain_line_hooks(hooks))
+        )
         self._run_stub = typ.cast(
             "_LineStreamRun",
-            types.SimpleNamespace(telemetry=self._telemetry),
+            types.SimpleNamespace(
+                settlement_started=asyncio.Event(),
+                telemetry=self._telemetry,
+            ),
         )
         self._future: asyncio.Future[CommandResult] = (
             asyncio.get_running_loop().create_future()

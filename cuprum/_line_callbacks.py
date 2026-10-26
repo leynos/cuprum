@@ -305,27 +305,26 @@ def _compose_observation_line_callback(
 
 
 def _chain_line_hooks(
-    hooks: cabc.Iterable[_LineHookFn | None],
-) -> _LineHookFn | None:
+    first: _LineHookFn,
+    *remaining: _LineHookFn,
+) -> _LineHookFn:
     """Chain several line hooks into one, in the order supplied.
 
     ``SafeCmd.lines()`` registers the caller's ``on_line`` alongside the
     driver's queue sink, and both must see every line: the caller's hook runs
     first so its view of the stream never depends on how the driver delivers.
+    Requiring the first hook keeps the result callable by construction.
 
     Returns
     -------
-    _LineHookFn | None
-        ``None`` when nothing was supplied, the sole hook when exactly one was,
-        and a fan-out over all of them otherwise. The fan-out collects every
-        hook's awaitable and returns one awaitable of its own, so the drain
-        loop still waits for each before reading on.
+    _LineHookFn
+        The sole hook when it is the only one, or a fan-out over all hooks.
+        The fan-out collects every hook's awaitable and returns one awaitable
+        of its own, so the drain loop still waits for each before reading on.
     """
-    chain = [hook for hook in hooks if hook is not None]
-    if not chain:
-        return None
+    chain = (first, *remaining)
     if len(chain) == 1:
-        return chain[0]
+        return first
     return _fan_out_hooks(chain)
 
 

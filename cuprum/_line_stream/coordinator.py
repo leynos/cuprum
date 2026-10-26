@@ -207,6 +207,10 @@ async def _run_line_stream_teardown[T](
         never reports completion, so the started boundary is not paired with a
         success it did not reach.
     """  # ruff: ignore[docstring-extraneous-exception] - the operation's failure propagates through this helper
+    # Release a queue putter before cancelling its stream consumer. That lets
+    # the drain finish preserving raw capture while teardown is the only path
+    # allowed to stop line publication.
+    run.settlement_started.set()
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
     result = await _shielded_cleanup(operation)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
