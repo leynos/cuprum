@@ -82,6 +82,32 @@ def test_an_environment_reference_resolves_from_the_job_environment() -> None:
     )
 
 
+def test_modern_stable_cache_scope_requires_a_compiler_version() -> None:
+    """Keep the modern compiler cache key tied to an explicit toolchain pin."""
+    with pytest.raises(
+        AssertionError, match="must declare its explicit compiler-version"
+    ):
+        families._compiler_version_scope(
+            {"compiler-shape": "modern-stable"},
+            {},
+            MESSAGE,
+            job_identity=("w.yml", "j"),
+        )
+
+
+def test_other_cache_shapes_reject_a_compiler_version() -> None:
+    """Keep compiler-version scoping exclusive to modern stable."""
+    with pytest.raises(
+        AssertionError, match="compiler-version only scopes modern-stable"
+    ):
+        families._compiler_version_scope(
+            {"compiler-shape": "debug", "compiler-version": "1.99.1"},
+            {},
+            MESSAGE,
+            job_identity=("w.yml", "j"),
+        )
+
+
 @SETTINGS
 @given(
     flags=st.dictionaries(MATRIX_NAMES, st.booleans(), min_size=1, max_size=4),

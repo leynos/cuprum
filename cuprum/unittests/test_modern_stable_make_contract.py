@@ -80,14 +80,10 @@ def test_modern_route_owns_its_toolchain_flags_and_target_directory() -> None:
     ):
         assert required in output, f"modern Cargo commands must include {required!r}"
     assert "--config" not in output, "modern commands must not select a Cargo fragment"
-    assert "tools/dev-fast/cargo" not in output, (
-        "modern commands must not use the adapter"
-    )
-    assert "nightly-2026-08-23" not in output, (
-        "modern commands must not select dev-fast"
-    )
-    assert "mold" not in output, "modern commands must not select the Linux fast linker"
-    assert "Cranelift" not in output, "modern commands must not select Cranelift"
+    for forbidden in ("dev-fast/cargo", "nightly-2026-08-23", "mold", "Cranelift"):
+        assert forbidden not in output, (
+            f"unexpected option in modern route: {forbidden}"
+        )
 
 
 def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
@@ -213,14 +209,17 @@ def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
 def test_modern_check_runs_all_required_gates_in_order() -> None:
     """Keep checks, Clippy, tests, docs, and doctests sequential and locked."""
     output = _dry_run("modern-stable-check")
+    make = shutil.which("make")
+    assert make is not None, "the route contract requires GNU Make"
     targets = (
-        "make modern-stable-cargo-check",
-        "make modern-stable-clippy",
-        "make modern-stable-test",
-        "make modern-stable-doc",
-        "make modern-stable-doctest",
+        "modern-stable-cargo-check",
+        "modern-stable-clippy",
+        "modern-stable-test",
+        "modern-stable-doc",
+        "modern-stable-doctest",
     )
-    positions = [output.index(target) for target in targets]
+    recipe_lines = output.splitlines()
+    positions = [recipe_lines.index(f"{make} {target}") for target in targets]
     assert positions == sorted(positions), "modern stable gates must run sequentially"
     commands = _modern_commands(output)
     cargo_commands = [line for line in commands if "probe-cargo" in line]
@@ -391,13 +390,9 @@ def test_existing_routes_keep_their_warning_policy() -> None:
         "nightly doctests must retain their separate rustdoc flags"
     )
 
-
-def test_msrv_check_prints_both_actual_toolchain_versions() -> None:
-    """Make the unchanged MSRV check identify its compiler and Cargo versions."""
-    output = _dry_run("msrv-check")
-    assert 'rustup run "1.85.0" rustc -vV' in output, (
+    assert 'rustup run "1.85.0" rustc -vV' in routes, (
         "the MSRV check must print the selected rustc version"
     )
-    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in output, (
+    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in routes, (
         "the MSRV check must print the selected Cargo version"
     )
