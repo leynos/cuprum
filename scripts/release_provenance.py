@@ -10,7 +10,30 @@ if typ.TYPE_CHECKING:
 
 
 def has_matching_record(provenance: pth.Path, name: str, digest: str) -> bool:
-    """Read one verifier record and find its exact release asset subject."""
+    """Read one verifier record and find its exact release asset subject.
+
+    Parameters
+    ----------
+    provenance : pathlib.Path
+        Directory holding one ``<name>.json`` verifier result per asset.
+    name : str
+        Exact release asset filename to find in a statement subject.
+    digest : str
+        Expected SHA-256 hexadecimal digest; comparison ignores letter case.
+
+    Returns
+    -------
+    bool
+        Whether the record exists, is readable JSON, and binds ``name`` to
+        ``digest``. A missing, unreadable, or malformed record returns
+        ``False``.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> has_matching_record(Path("provenance"), "cuprum.whl", "a" * 64)
+    False
+    """
     record = provenance / f"{name}.json"
     try:
         document = json.loads(record.read_text(encoding="utf-8"))
