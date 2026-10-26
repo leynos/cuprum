@@ -1417,7 +1417,7 @@ the issue was filed:
   trusting a line count, because the first two attempts to read the marker
   column undercounted. `range-diff` right-aligns the new-side ordinal, so a
   single-digit commit begins with a leading space that a `^[0-9]+:` anchor
-  silently skips; the correct pattern is `^ *[0-9]+: `.
+  silently skips; the correct pattern is `^ *[0-9]+:` followed by a space.
 
   Three references were compared before deciding to push, not two. HEAD is
   `ed208fdf5`; the tracking ref and `git ls-remote` both read `4832ef74a`, so
@@ -1426,17 +1426,17 @@ the issue was filed:
   commits, which is what a rebased branch looks like and why the push needs a
   lease rather than being a fast-forward. SSH authenticates as `leynos`.
 
-  The push is deliberately held until the gates have run. That head carried
-  the rebase plus two commits no round had observed, and publishing it first
-  would put a claim in front of reviewers that no gate log supports.
+  The push is deliberately held until the gates have run. That head carried the
+  rebase plus two commits no round had observed, and publishing it first would
+  put a claim in front of reviewers that no gate log supports.
 
   **This entry was itself written during the round, which repeats a mistake
   this plan already records.** The round began at `ed208fdf5`; committing this
   paragraph as `d5493a306` moved HEAD underneath it, so the round certifies
-  `ed208fdf5` and not the head that ships. The fix is to state the split
-  rather than to re-run everything: the two heads differ by one Markdown file,
-  so the code gates' evidence is inherited from `ed208fdf5` unchanged and only
-  the Markdown surfaces — `markdownlint`, `nixie`, `check-fmt` — are re-run at
+  `ed208fdf5` and not the head that ships. The fix is to state the split rather
+  than to re-run everything: the two heads differ by one Markdown file, so the
+  code gates' evidence is inherited from `ed208fdf5` unchanged and only the
+  Markdown surfaces — `markdownlint`, `nixie`, `check-fmt` — are re-run at
   `d5493a306`. Editing the plan while its own gates run is the same error as
   amending after a certified round, and the rule that prevents both is to
   finish the record before starting the gates, or to accept the split and say
