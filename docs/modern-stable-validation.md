@@ -159,7 +159,7 @@ record statuses and Cargo freshness; they do not claim a measured speedup.
 | Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
 | Native extension suite                              | 103 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
-| Cargo warning fixture and warm-cache controls       | Passed, 24 tests                        | `make test-modern-stable-contract`                                    |
+| Cargo warning fixture and warm-cache controls       | Passed, 23 tests                        | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
 | Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
 | `rust/Cargo.lock` unchanged                         | Passed; SHA-256 recorded below          | CI lockfile check and local checksum                                  |

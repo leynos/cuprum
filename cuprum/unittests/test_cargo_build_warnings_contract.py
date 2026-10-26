@@ -147,6 +147,7 @@ def _run_cargo(
     environment = os.environ.copy()
     environment.pop("RUSTC", None)
     environment.pop("CARGO_ENCODED_RUSTFLAGS", None)
+    environment.pop("RUSTDOCFLAGS", None)
     environment.update({
         "CARGO_BUILD_WARNINGS": warnings,
         "CARGO_TERM_COLOR": "never",
@@ -338,36 +339,7 @@ def test_rustdoc_warning_policy_probe_records_its_observation(tmp_path: Path) ->
     cargo = _require_toolchain()
     target = _host_target()
     crate = _crate(tmp_path, "rustdoc-policy-probe", RUSTDOC_SOURCE)
-    environment = os.environ.copy()
-    environment.pop("RUSTC", None)
-    environment.pop("CARGO_ENCODED_RUSTFLAGS", None)
-    environment.pop("RUSTDOCFLAGS", None)
-    environment.update({
-        "CARGO_BUILD_WARNINGS": "deny",
-        "CARGO_TERM_COLOR": "never",
-        "CARGO_TARGET_DIR": str(_target_dir(crate)),
-        "RUSTFLAGS": BASE_RUSTFLAGS,
-        "RUSTUP_TOOLCHAIN": MODERN_STABLE_TOOLCHAIN,
-    })
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv.
-        [
-            cargo,
-            "doc",
-            "--locked",
-            "--offline",
-            "--verbose",
-            "--target",
-            target,
-            "--profile",
-            "dev",
-        ],
-        capture_output=True,
-        check=False,
-        cwd=crate,
-        env=environment,
-        timeout=CARGO_COMMAND_TIMEOUT_SECONDS,
-        text=True,
-    )
+    result = _run_cargo(cargo, target, crate, "doc")
     output = _diagnostics(result)
     assert "broken intra-doc link" in output or "broken_intra_doc_links" in output, (
         output

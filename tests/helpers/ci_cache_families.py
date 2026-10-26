@@ -181,6 +181,40 @@ def _key_name(step: Step, message: str) -> str:
     return body.removeprefix("env.")
 
 
+def _compiler_version_scope(
+    inputs: cabc.Mapping[str, object],
+    leg: cabc.Mapping[str, object],
+    message: str,
+    *,
+    job_identity: tuple[str, str],
+) -> tuple[str, ...]:
+    """Resolve the compiler version only for the modern-stable cache family."""
+    compiler_version = inputs.get("compiler-version")
+    if inputs.get("compiler-shape") != "modern-stable":
+        require(
+            condition=not compiler_version,
+            message=f"{message}: compiler-version only scopes modern-stable",
+        )
+        return ()
+
+    require(
+        condition=isinstance(compiler_version, str) and bool(compiler_version),
+        message=(
+            f"{message}: modern-stable compiler cache must declare "
+            "its explicit compiler-version"
+        ),
+    )
+    workflow_name, job_name = job_identity
+    return (
+        _resolve(
+            compiler_version,
+            leg,
+            message,
+            environment=job_env(workflow_name, job_name),
+        ),
+    )
+
+
 def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
     """Resolve every cache family one job publishes.
 
@@ -237,32 +271,12 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
                 _resolve(inputs[name], leg, message) for name in KEY_SCOPES[key_name]
             )
             if key_name == "SCCACHE_CACHE_KEY":
-                compiler_shape = inputs.get("compiler-shape")
-                compiler_version = inputs.get("compiler-version")
-                if compiler_shape == "modern-stable":
-                    require(
-                        condition=isinstance(compiler_version, str)
-                        and bool(compiler_version),
-                        message=(
-                            f"{message}: modern-stable compiler cache must declare "
-                            "its explicit compiler-version"
-                        ),
-                    )
-                    scope += (
-                        _resolve(
-                            compiler_version,
-                            leg,
-                            message,
-                            environment=job_env(workflow_name, job_name),
-                        ),
-                    )
-                else:
-                    require(
-                        condition=not compiler_version,
-                        message=(
-                            f"{message}: compiler-version only scopes modern-stable"
-                        ),
-                    )
+                scope += _compiler_version_scope(
+                    inputs,
+                    leg,
+                    message,
+                    job_identity=(workflow_name, job_name),
+                )
             family = CacheFamily(key_name, lane, scope)
             # Rejected here rather than deduplicated by the set. Two save steps
             # in one job that render the same family are the same collision the
