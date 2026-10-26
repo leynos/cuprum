@@ -86,7 +86,7 @@ def _require_toolchain() -> str:
         if os.environ.get("CUPRUM_REQUIRE_MODERN_STABLE") == "1":
             pytest.fail(message)
         pytest.skip(message)
-    assert cargo is not None
+    assert cargo is not None, "Cargo must remain available after the toolchain check"
     return cargo
 
 
@@ -224,7 +224,9 @@ def _assert_warning_recovery_reuses_artefact(
     output = _diagnostics(result)
     assert result.returncode == 0, output
     assert "Fresh warning-policy-fixture" in output, output
-    assert "Compiling warning-policy-fixture" not in output
+    assert "Compiling warning-policy-fixture" not in output, (
+        "warm warning denial must replay without recompiling the fixture"
+    )
 
 
 def _assert_fixed_warning_rebuilds(cargo: str, target: str, crate: Path) -> None:
@@ -271,7 +273,9 @@ def test_removing_rustflags_invalidates_an_otherwise_warm_build(
     )
     original_output = _diagnostics(original)
     assert original.returncode == 0, original_output
-    assert "Compiling flag-invalidation-fixture" in original_output
+    assert "Compiling flag-invalidation-fixture" in original_output, (
+        "the initial Rustflags build must compile the fixture"
+    )
 
     removed_flag = _run_cargo(
         cargo,
@@ -294,7 +298,9 @@ def test_removing_rustflags_invalidates_an_otherwise_warm_build(
     policy_output = _diagnostics(policy_only)
     assert policy_only.returncode == 0, policy_output
     assert "Fresh flag-invalidation-fixture" in policy_output, policy_output
-    assert "Compiling flag-invalidation-fixture" not in policy_output
+    assert "Compiling flag-invalidation-fixture" not in policy_output, (
+        "changing only warning policy must reuse the post-invalidation artefact"
+    )
 
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
@@ -311,15 +317,19 @@ def test_clippy_warning_is_denied_and_replayed_from_a_warm_build(
     )
     assert "Checking clippy-policy-fixture" in cold_output or (
         "Compiling clippy-policy-fixture" in cold_output
-    ), cold_output
+    ), "the cold Clippy warning must be checked or compiled before denial"
 
     warm = _run_cargo(cargo, target, crate, "clippy")
     warm_output = _assert_fails_on_warning(
         warm, "clippy-policy-fixture", "needless_return"
     )
     assert "Fresh clippy-policy-fixture" in warm_output, warm_output
-    assert "Checking clippy-policy-fixture" not in warm_output
-    assert "Compiling clippy-policy-fixture" not in warm_output
+    assert "Checking clippy-policy-fixture" not in warm_output, (
+        "warm Clippy denial must not re-check the cached fixture"
+    )
+    assert "Compiling clippy-policy-fixture" not in warm_output, (
+        "warm Clippy denial must not recompile the cached fixture"
+    )
 
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
@@ -395,7 +405,9 @@ def test_warning_policy_replay_works_through_the_configured_wrapper(
         warm, "wrapped-warning-fixture", "deliberately_unused"
     )
     assert "Fresh wrapped-warning-fixture" in warm_output, warm_output
-    assert "Compiling wrapped-warning-fixture" not in warm_output
+    assert "Compiling wrapped-warning-fixture" not in warm_output, (
+        "the wrapped warm denial must replay without recompiling the fixture"
+    )
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the modern route runs in Linux CI")
@@ -403,4 +415,4 @@ def test_fixture_target_directory_stays_under_the_rust_workspace() -> None:
     """Keep test artefacts in the shared Cargo target, never under /tmp."""
     assert _target_dir(Path("/pytest-run/warning-policy-fixture")).is_relative_to(
         repo_root() / "rust/target"
-    )
+    ), "Cargo fixtures must stay under the Rust workspace target directory"

@@ -759,6 +759,7 @@ modern-stable-check: modern-stable-toolchain-check ## Run modern stable check, l
 	$(MAKE) modern-stable-doctest
 
 modern-stable-develop: build uv $(VENV_TOOLS) modern-stable-toolchain-check ## Build the native extension with explicitly selected modern stable Rust
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python -m ensurepip --upgrade
 	$(MODERN_STABLE_CARGO_ENV) $(MATURIN) develop --verbose --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml --locked
 
 modern-stable-extension: ## Rebuild and exercise the native extension on modern stable Rust
