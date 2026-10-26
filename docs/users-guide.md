@@ -2013,6 +2013,15 @@ Registrations are context-local, like the policy registrations in
 
 _Table 5: Observation channels and their metrics adapters._
 
+Echo and stream-operation hooks are synchronous and should return `None`.
+Cuprum closes a returned native coroutine without awaiting it; it does not
+await, cancel, or close other awaitables or objects. Other non-`None` returns
+retain their existing warning behaviour. An ordinary `Exception` raised while
+closing a coroutine is logged at `WARNING` and absorbed, so later hooks still
+receive the event. The warning actions are `echo_observer_disposal_failed` and
+`stream_operation_observer_disposal_failed`. `SystemExit`, `KeyboardInterrupt`,
+and `asyncio.CancelledError` raised during closure propagate unchanged.
+
 `EchoMetricsHook` counts bounded-delivery drops, sink write or flush failures,
 and undelivered groups in `cuprum_echo_delivery_events_total`, labelled only by
 the output stream and closed event category. It also adds dropped and

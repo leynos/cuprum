@@ -20,22 +20,15 @@ def _suspend() -> cabc.Generator[None, None, None]:
 def _started_coroutine_raising(
     error: BaseException,
 ) -> cabc.Coroutine[object, object, None]:
-    """Return a started coroutine whose ``finally`` raises ``error`` on close.
+    """Start a coroutine so closing it raises ``error``.
 
-    Parameters
-    ----------
-    error:
-        Failure raised when the coroutine is closed after it has started.
+    ``send(None)`` enters the ``try`` block and suspends at ``_suspend``; closing
+    the coroutine then executes its ``finally`` block.
 
     Returns
     -------
     cabc.Coroutine[object, object, None]
-        A coroutine suspended inside a ``try`` block.
-
-    Notes
-    -----
-    ``send(None)`` enters the ``try`` block and suspends at ``_suspend``;
-    closing the coroutine then executes its ``finally`` block.
+        A started coroutine suspended inside the ``try`` block.
     """
 
     async def body() -> None:
@@ -53,18 +46,7 @@ def _started_coroutine_raising(
 def hook_returning(
     coro: cabc.Coroutine[object, object, None],
 ) -> cabc.Callable[[_EventT], None]:
-    """Build a hook that returns ``coro`` despite its synchronous contract.
-
-    Parameters
-    ----------
-    coro:
-        Started coroutine returned by the hook.
-
-    Returns
-    -------
-    cabc.Callable[[_EventT], None]
-        Hook accepting any event type and returning the supplied coroutine.
-    """
+    """Build a hook that returns a coroutine despite its synchronous contract."""
 
     def hook(_event: _EventT) -> None:
         """Return the coroutine the hook contract forbids."""
