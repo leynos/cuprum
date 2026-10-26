@@ -705,6 +705,8 @@ test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against th
 test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, requiring a container runtime
 	CUPRUM_REQUIRE_ACT=1 $(PYTEST) -v $(ACT_SCENARIO_TARGETS)
 
+# The selected nightly keeps its separate doctest warning flags. The
+# fragment-free modern-stable route uses the stable-compatible RUSTDOC_FLAGS.
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
@@ -713,8 +715,6 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
 	  cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS) -- --test-threads=$(TEST_JOBS); \
 	fi
-	# The selected nightly keeps its separate doctest warning flags. The
-	# fragment-free modern-stable route uses the stable-compatible RUSTDOC_FLAGS.
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV

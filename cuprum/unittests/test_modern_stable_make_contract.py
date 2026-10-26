@@ -129,9 +129,24 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
 def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
     tmp_path: Path,
 ) -> None:
-    """Refuse a Cargo executable that does not honour `+toolchain` selection."""
+    """Reject a Cargo override without requiring an installed modern toolchain."""
     executable = shutil.which("make")
     assert executable is not None, "the toolchain guard requires GNU Make"
+    rustup = tmp_path / "rustup"
+    rustup.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        "  'component list') printf 'clippy-x86_64-unknown-linux-gnu\\n' ;;\n"
+        f"  'run {MODERN_STABLE_TOOLCHAIN}') printf "
+        f"'rustc {MODERN_STABLE_TOOLCHAIN} (fixture)\\n"
+        "binary: rustc\\n"
+        f"release: {MODERN_STABLE_TOOLCHAIN}\\n"
+        "LLVM version: fixture\\n' ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    rustup.chmod(0o755)
     cargo = tmp_path / "cargo-without-rustup-selection"
     cargo.write_text(
         "#!/bin/sh\nprintf 'cargo 1.85.0 (ignored toolchain)\\n'\n",
@@ -143,7 +158,11 @@ def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
         capture_output=True,
         check=False,
         cwd=repo_root(),
-        env={**os.environ, "MAKEFLAGS": ""},
+        env={
+            **os.environ,
+            "MAKEFLAGS": "",
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        },
         text=True,
     )
     output = completed.stdout + completed.stderr
