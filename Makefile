@@ -57,7 +57,7 @@ override MODERN_STABLE_ENV = env -u RUSTC -u CARGO_ENCODED_RUSTFLAGS \
 override MODERN_STABLE_CARGO_ENV = $(MODERN_STABLE_ENV) CARGO_BUILD_WARNINGS=deny
 override MODERN_STABLE_CARGO = $(MODERN_STABLE_CARGO_ENV) $(CARGO)
 override MODERN_STABLE_RUSTDOC_CARGO = $(MODERN_STABLE_ENV) $(CARGO)
-MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND = \
+override MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND = \
 	components="$$(rustup component list --installed --toolchain "$(MODERN_STABLE_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
 	printf '%s\n' "$$components" | grep -q '^clippy' || { printf 'install clippy for %s before using modern-stable\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
 	rustc_output="$$(rustup run "$(MODERN_STABLE_TOOLCHAIN)" rustc -vV)" || { printf 'cannot run rustc with %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
@@ -733,7 +733,7 @@ modern-stable-clippy: modern-stable-toolchain-check ## Run Clippy with Cargo war
 
 # Keep test-thread parallelism separate from Cargo's independently configured
 # build jobs, and preserve the existing nextest version floor.
-MODERN_STABLE_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
+override MODERN_STABLE_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	$(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) $(MODERN_STABLE_CARGO) nextest run --locked --workspace --all-targets --all-features --cargo-verbose --test-threads $(TEST_JOBS); \
 	else echo "cargo-nextest not found; falling back to cargo test." >&2; \

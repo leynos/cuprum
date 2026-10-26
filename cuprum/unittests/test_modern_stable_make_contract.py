@@ -104,6 +104,8 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
                     "MODERN_STABLE_CARGO_ENV": "CARGO_BUILD_WARNINGS=warn",
                     "MODERN_STABLE_CARGO": "ambient-cargo",
                     "MODERN_STABLE_RUSTFLAGS": "-D warnings",
+                    "MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND": "true",
+                    "MODERN_STABLE_TEST_COMMAND": "true",
                 },
             )
         )
@@ -124,6 +126,42 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
     assert "CARGO_ENCODED_RUSTFLAGS=ambient" not in output, (
         "the route must clear encoded caller Rust flags"
     )
+
+    make = shutil.which("make")
+    assert make is not None, "the route contract requires GNU Make"
+    inspection_target = (
+        "modern-stable-override-contract:\n"
+        "\t@printf '%s\\n' "
+        "'$(origin MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND)' "
+        "'$(if $(findstring rustup component list,$(value "
+        "MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND)),preserved,missing)' "
+        "'$(origin MODERN_STABLE_TEST_COMMAND)' "
+        "'$(if $(findstring nextest run,$(value "
+        "MODERN_STABLE_TEST_COMMAND)),preserved,missing)'\n"
+    )
+    inspection = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
+        [
+            make,
+            "--no-print-directory",
+            "MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND=true",
+            "MODERN_STABLE_TEST_COMMAND=true",
+            "--eval",
+            inspection_target,
+            "modern-stable-override-contract",
+        ],
+        capture_output=True,
+        check=False,
+        cwd=repo_root(),
+        env={**os.environ, "MAKEFLAGS": ""},
+        text=True,
+    )
+    assert inspection.returncode == 0, inspection.stderr
+    assert inspection.stdout.splitlines() == [
+        "override",
+        "preserved",
+        "override",
+        "preserved",
+    ], "caller command variables must not replace the toolchain guard or test run"
 
 
 def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
