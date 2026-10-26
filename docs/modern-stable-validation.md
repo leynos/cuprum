@@ -105,11 +105,12 @@ fallback.
 
 The sccache shape is `modern-stable` with the explicit Rust version appended to
 the key. The job is the sole writer for that family. It restores through the
-shared cache-key renderer and saves only on a trunk push after a miss. The
-existing Cargo registry and Git dependency key is unchanged, and `target` trees
-are not archived. Saving also requires sccache to start; a fallback run still
-completes without the cache and does not publish a cache generation.
-`setup-sccache` keeps its existing 4 GiB cap and fallback behaviour.
+shared cache-key renderer and saves on a push to `main` when sccache starts.
+The run-specific key uses prefix restoration, so the save has no cache-hit
+guard. The existing Cargo registry and Git dependency key is unchanged, and
+`target` trees are not archived. A fallback run still completes without the
+cache and does not publish a cache generation. `setup-sccache` keeps its
+existing 4 GiB cap and fallback behaviour.
 
 ## Warning and cache controls
 
