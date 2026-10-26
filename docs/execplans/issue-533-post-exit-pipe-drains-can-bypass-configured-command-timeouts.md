@@ -1442,6 +1442,65 @@ the issue was filed:
   finish the record before starting the gates, or to accept the split and say
   so.
 
+- [x] (2026-10-26) Full six-gate round at `dbce96b24`, all green. This is the
+  round the push cites, and the only log set that certifies the head now
+  published.
+
+  It replaces the round named for `ed208fdf5` rather than extending it. Three
+  commits landed while that round was still writing logs: `d5493a306` at
+  11:19:53, `3e80b9f68` at 11:29:52, and `dbce96b24` at 11:31:07, against
+  `ed208fdf5` at 11:03:37 — and logs carrying the `ed208fdf5` name were still
+  being written at 11:19 and 11:29. `3e80b9f68`'s own message records the
+  further fact that the round did not begin on a clean tree, so inheriting the
+  code gates from it and re-running only the Markdown surfaces was not
+  available either: a run that starts dirty cannot be attributed to a commit,
+  and what it did cover cannot be subtracted from what changed afterwards and
+  still leave a trustworthy remainder.
+
+  The order the runner used was `typecheck`, `nixie`, `check-fmt`,
+  `markdownlint`, `lint`, `test`, and the elapsed times it recorded were 1, 0,
+  1, 20, 147 and 571 seconds — 740 s in total, which the log mtimes corroborate
+  across a 744 s span. Every gate reported the same head before and after and a
+  tracked-tree change count of zero both times. Read from the logs rather than
+  from the runner's summary:
+
+  - `check-fmt` — `1109 files already formatted`, Ruff `All checks passed!`,
+    mdtablefix `106 files left unchanged`.
+  - `test` — 22 pytest sessions aggregating to **5786 passed, 125 skipped**,
+    with zero `FAILED` and zero `ERROR` lines anywhere in the log; nextest
+    `165 tests run: 165 passed, 0 skipped`; three doctest suites reporting
+    `all doctests ran`.
+  - `typecheck` — `ty 0.0.74`, both `ty check` scopes `All checks passed!`.
+  - `lint` — `nose 0.20.0` present, the classic Pylint version check (PyPy
+    8.0.0, pylint 4.0.9), the DF12 pylint check on CPython 3.14.7, the pylint
+    runtime contract suite (7 passed), classic Pylint at 10.00/10, the DF12
+    run with `--disable=too-many-lines` at 10.00/10, Ruff and `interrogate`
+    (100.0%), `ambrleaks`, Skylos' production dead-code gate, the nose
+    duplication gate at `68 allowed by reasoned exceptions`, Rustdoc and
+    Clippy under `-D warnings`, Whitaker across all three crates, the
+    typos-config-builder gate at `current: typos.toml`, then `yamllint
+    --strict` and `actionlint -shellcheck=`. Reaching the last two is the
+    point: an earlier round on this branch stopped at `spelling` and left them
+    unobserved, which is not the same as passing.
+  - `markdownlint` — `Linting: 106 files`, `Summary: 0 issues in 0 files`, and
+    the dependent `make spelling` at `current: typos.toml`.
+  - `nixie` — `All diagrams validated successfully!`.
+
+  One weakness is stated rather than glossed. The plan's rule is that a gate
+  log names its own head; these six do not. The pin lives one file away, in a
+  manifest with one line per gate carrying `head_before`, `head_after`,
+  `tracked_before` and `tracked_after`, and the log is only evidence when read
+  with it. That is weaker than the rule asks and is the first thing to repair
+  in the runner.
+
+  The push was a rewrite and was proved so first: the published head
+  `4832ef74a` is **not** an ancestor of `dbce96b24`, so a fast-forward was
+  impossible and a lease was required. The update ran with `--force-with-lease`
+  bound to the verified old head and reported
+  `4832ef74a...dbce96b24 (forced update)`. Afterwards the remote, `HEAD` and
+  the tracking ref read as one commit, and `rev-list --count @{upstream}..HEAD`
+  was 0.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
