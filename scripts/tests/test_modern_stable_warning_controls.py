@@ -89,7 +89,7 @@ def test_observation_counts_compile_and_fresh_lines() -> None:
 
 
 def test_warning_prewarm_accepts_a_fresh_cached_package() -> None:
-    """A cold denial may already populate the warning artifact for replay."""
+    """A cold denial may already populate the warning artefact for replay."""
     run = GateRun(
         gate="check",
         package="cuprum-streams",
