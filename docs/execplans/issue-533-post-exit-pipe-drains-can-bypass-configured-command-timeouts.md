@@ -1426,10 +1426,21 @@ the issue was filed:
   commits, which is what a rebased branch looks like and why the push needs a
   lease rather than being a fast-forward. SSH authenticates as `leynos`.
 
-  The push is deliberately held until the six gates have run at `ed208fdf5`.
-  That head carries the rebase plus two commits no round has observed, and
-  publishing it first would put a claim in front of reviewers that no gate log
-  supports.
+  The push is deliberately held until the gates have run. That head carried
+  the rebase plus two commits no round had observed, and publishing it first
+  would put a claim in front of reviewers that no gate log supports.
+
+  **This entry was itself written during the round, which repeats a mistake
+  this plan already records.** The round began at `ed208fdf5`; committing this
+  paragraph as `d5493a306` moved HEAD underneath it, so the round certifies
+  `ed208fdf5` and not the head that ships. The fix is to state the split
+  rather than to re-run everything: the two heads differ by one Markdown file,
+  so the code gates' evidence is inherited from `ed208fdf5` unchanged and only
+  the Markdown surfaces — `markdownlint`, `nixie`, `check-fmt` — are re-run at
+  `d5493a306`. Editing the plan while its own gates run is the same error as
+  amending after a certified round, and the rule that prevents both is to
+  finish the record before starting the gates, or to accept the split and say
+  so.
 
 ## Surprises & discoveries
 
