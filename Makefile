@@ -188,6 +188,7 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_loom_model_conformance.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
+  tests/helpers/test_consume_boundary_oracle.py \
   tests/behaviour/test_rust_streams_behaviour.py \
   tests/behaviour/test_rust_streams_errors_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \
@@ -389,7 +390,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         install-nose duplication duplication-test duplication-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
-        $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
+        test-boundary-parity $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
 # Serialize the lint hierarchy. Each aggregate target lists its leaves as plain
 # prerequisites, so a caller's `-f` override file is honoured directly by the
 # one Make process that reads it, with no forwarding to get wrong.
@@ -703,6 +704,24 @@ loom: build ## Run the full bounded Loom model suite
 # a message naming that command, which is the intended diagnostic.
 test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiring the extension
 	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
+	$(MAKE) --no-print-directory test-boundary-parity
+
+# This separate ignored Rust integration target launches the project's Python
+# interpreter and calls the compiled extension. Keep it out of ordinary
+# `make test`: the extension workflow owns it after the guarded pytest suite.
+test-boundary-parity: $(RUST_DEBUG_PREREQUISITE) ## Check consume parity through the compiled Python extension
+	python_path="$$($(UV_RUN_ENV) uv run --no-sync python -c 'import sys; print(sys.executable)')" || exit $$?; \
+	if [ -z "$$python_path" ]; then printf '%s\n' 'could not resolve the project Python interpreter' >&2; exit 1; fi; \
+	log_file="$$(mktemp)"; \
+	trap 'rm -f "$$log_file"' EXIT; \
+	(cd "$(RUST_DIR)" && \
+	  CUPRUM_BOUNDARY_PYTHON="$$python_path" \
+	  RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" \
+	  $(RUST_DEBUG_CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
+	cargo_status=$$?; \
+	cat "$$log_file"; \
+	if [ "$$cargo_status" -ne 0 ]; then exit "$$cargo_status"; fi; \
+	if ! grep -Eq '^running [1-9][0-9]* tests?$$' "$$log_file"; then printf '%s\n' 'boundary parity target selected zero ignored tests' >&2; exit 1; fi
 
 test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
 	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_ci_dev_fast_action.py

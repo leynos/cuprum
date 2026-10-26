@@ -111,7 +111,35 @@ is no elapsed-time limit on planning or implementation work itself.
   lease, verify the remote head, and update draft PR #619.
 - [x] (2026-10-25) Obtain explicit user approval before implementation;
   proceed as written within the stated tolerances.
-- [ ] M1: establish the real-boundary test bridge and prove its failure paths.
+- [x] (2026-10-25) Baseline `make develop` and `make test-extension` passed
+  before implementation; the focused pipeline module also passed with the
+  extension installed.
+- [x] (2026-10-25) M1 bridge implementation completed after the gate-pass
+  iterations below. Gate pass 11 stopped at `make typecheck` on a redundant
+  cast; pass 12 passed `make check-fmt`, `make lint`, and `make typecheck`, then
+  `make test` hit a Rustdoc test setup failure under host resource pressure.
+  Review also found the process tests used plain `#[test]` despite the approved
+  `rstest` requirement; they now use `rstest` fixtures. The first retry passed
+  formatting but Clippy rejected both constant and constructor-return fixture
+  bodies with `unused_braces` in the macro expansion. Pass 15 used the wrong
+  `clippy::` namespace for this Rust lint, so the expectation was unknown and
+  the warning remained. Pass 16 used the correct lint name, but the macro span
+  left both `#[expect]` attributes unfulfilled after suppressing the warning.
+  Pass 17 rejected narrow `#[allow]` attributes under `allow_attributes`; the
+  timeout setup is now one parameterized fixture receiving explicit millisecond
+  values from each test, avoiding both suppressions. Pass 18 showed the fixture
+  parameter also needs an explicit default and its one-expression body still
+  triggers `unused_braces`; the fixture now defaults to 5,000 ms and asserts
+  its budget is positive before returning it. Pass 19 passed formatting, lint,
+  and typechecking, then `make test` failed in the large-input child assertion
+  because the nested Rust test harness adds stdout around its report. The
+  assertion now selects the child's `received=` line. Pass 20 passed all Python
+  tests and reached Rust Nextest, where the small echo test also assumed
+  payload-only stdout. Its child now echoes a binary witness and the assertion
+  searches for the exact byte sequence within the harness output; restart the
+  full sequence. The final candidate then passed every required gate and both
+  bridge failure controls; see the 2026-10-26 evidence below.
+- [x] M1: establish the real-boundary test bridge and prove its failure paths.
 - [ ] M2: add generated parity, error witnesses, and replayable seeds.
 - [ ] M3: complete behavioural coverage, documentation, and full validation.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
@@ -159,6 +187,71 @@ without those temporary packs. On 2026-10-24, the plan branch rebased cleanly
 onto `origin/main`; the replayed two commits matched the originals in
 `range-diff`. No conflict resolution was needed.
 
+The M1 baseline `make develop` passed on the approved candidate and built the
+abi3 extension with the active CPython 3.14 environment after 3m47s of build
+and admission waits. `make test-extension` then passed 103 tests and skipped
+four platform-specific cases. Because that selector intentionally omits
+`cuprum/unittests/test_pipeline.py`, the module was also run directly with the
+extension installed; all 21 tests passed in 1.22s. This single run did not
+reproduce the descriptor close race cited in the Makefile and CI comments. It
+does not establish that an intermittent race is impossible, so retain the
+current test selection and record this as a limited observation.
+
+The first full M1 gate sequence passed formatting and lint, then typechecking
+rejected a redundant cast around the package module path. Removing the cast
+preserves the resolved extension-provenance check; formatting and
+`git diff --check` pass after the correction. The remaining gates from that
+sequence are stale and must be rerun in order on the corrected candidate. The
+next sequence passed formatting, lint, and typecheck, but `make test` reported
+1 failure, 4,341 passes, and 17 skips. Its failure was the existing doctest
+warning-route contract: `build-limits-rustdoc` could not start `rustup` with
+`[Errno 11] Resource temporarily unavailable` while 64 compiler requests were
+queued. This is host contention evidence, not a code assertion failure. The
+process-test `rstest` requirement was also corrected before the next run. That
+retry passed formatting and stopped in Clippy because the `rstest` expansion
+made both constant and constructor-returning timeout fixtures trigger
+`unused_braces`. The first suppression used the wrong `clippy::` namespace;
+then the correct `#[expect]` was reported unfulfilled at the proc-macro span,
+and local `#[allow]` attributes were rejected by the blocking
+`allow_attributes` lint. A single parameterized timeout fixture now receives
+the test's explicit millisecond budget. Pass 18 also showed that fixture
+parameters need `#[default]` unless they resolve to another fixture, and a
+single-expression body still triggers `unused_braces`. It now has a defaulted
+millisecond argument and a positive-budget assertion before returning the
+duration, avoiding lint suppressions. Pass 19 reached Rust Nextest after the
+Python suites passed, then the large-input helper test failed because its
+assertion compared all nested test-harness stdout with only the child's
+byte-count line. The captured stream shows `received=2097152` on its own line
+alongside harness output; the assertion now matches that report line. Evidence
+is in
+`/tmp/test-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-19.out`.
+Pass 20 confirmed the same harness-output issue in the small echo test: the
+exact payload was surrounded by test runner text. The witness now includes NUL
+and `0xff` bytes, and the assertion verifies those exact bytes occur
+contiguously in the captured stream rather than requiring stdout to contain
+nothing else. The full log is
+`/tmp/test-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-20.out`.
+
+On 2026-10-26, the corrected M1 bridge passed the complete sequential gate
+sequence on tree `fe0de82791c9b3d2184a3fc3cb83633d225c04f5`. `make check-fmt`,
+`make lint`, `make typecheck`, `make test`, `make markdownlint`, `make nixie`,
+`make develop`, and `make test-extension` all passed. The ordinary test run
+reported 4,342 passed and 17 skipped; Rust Nextest reported 175 passed and 2
+skipped, with doctests passing and 3 ignored. The extension suite reported 108
+passed and 4 skipped; the dedicated parity command executed both ignored tests
+and passed both in 0.76 seconds. The full gate logs have the `-21.out` suffix
+under `/tmp`.
+
+Two post-gate negative controls confirmed failure sensitivity. Hiding
+`cuprum._rust_backend_native` made the required target fail with exit 2 and the
+missing module named in its traceback. Temporarily adding a NUL to the omitted
+buffer wrapper result made the named witness fail and proptest shrink its
+arbitrary case to `[]`, reporting the mismatch without printing the payload.
+The mutation was restored, its helper SHA-256 matched the saved digest, no
+failure seed was retained, and `git write-tree` remained the validated tree.
+M1's bridge and routing acceptance are satisfied; generated coverage, the
+error-matrix audit, and replay evidence remain for M2/M3.
+
 ## Decision log
 
 - (2026-10-25) The user explicitly approved implementation and selected the
@@ -193,7 +286,9 @@ closed through merged PRs. All requested post-rebase gates passed. The
 validated rebase was pushed with an explicit lease and its remote head
 verified; draft PR #619 records the updated scope and validation. The rebase
 adds no runtime changes or new parity tests and makes no performance claim.
-Approval, implementation, and roadmap completion remain outstanding.
+Approval is recorded and M1 is complete. M2 generated coverage, replay
+evidence, and M3 behavioural acceptance remain outstanding; roadmap 6.1.2 is
+still open.
 
 ## Context and orientation
 
