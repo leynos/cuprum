@@ -43,12 +43,6 @@ from cuprum.unittests._rust_stream_test_support import _safe_close
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
-#: ``PyO3`` extracts every argument before the function body runs, so these
-#: values never reach the converter. The writer is ``-1`` rather than a real
-#: descriptor so that a regression which *did* reach the body could not adopt
-#: anything belonging to the test process.
-_UNUSED_WRITER_FD = -1
-
 # The native module takes the Unix i32 descriptor contract. On Windows the shim
 # converts a CRT descriptor to an OS handle and duplicates it before the native
 # call, so a raw descriptor cannot be handed over there; these orderings are
@@ -180,6 +174,30 @@ def test_consume_reports_a_rejected_buffer_before_reading_the_reader(
     )
 
 
+@_unix_only
+def test_consume_buffer_error_leaves_borrowed_reader_usable(
+    native_streams: ModuleType,
+) -> None:
+    """A rejected buffer neither closes nor reads the caller's valid reader."""
+    payload = b"still available after buffer rejection"
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, writer_fd)
+        os.write(writer_fd, payload)
+        _safe_close(writer_fd)
+
+        with pytest.raises(ValueError, match="buffer_size"):
+            native_streams.rust_consume_stream(reader_fd, buffer_size=0)
+
+        assert _descriptor_state(reader_fd) == "open", (
+            "consume borrows the reader on validation failure"
+        )
+        assert os.read(reader_fd, len(payload)) == payload, (
+            "buffer validation must happen before the reader is consumed"
+        )
+
+
 @pytest.mark.parametrize(
     "wrong",
     [
@@ -198,11 +216,34 @@ def test_wrong_argument_types_keep_pyo3_extraction_errors(
     would not mask a regression that routed an extraction failure through the
     typed boundary.
     """
-    with pytest.raises(TypeError):
-        native_streams.rust_consume_stream(wrong)
+    with contextlib.ExitStack() as stack:
+        reader_fd, reader_writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, reader_writer_fd)
+        writer_fd = _open_writer()
+        stack.callback(_safe_close, writer_fd)
 
-    with pytest.raises(TypeError):
-        native_streams.rust_pump_stream(wrong, _UNUSED_WRITER_FD)
+        with pytest.raises(TypeError):
+            native_streams.rust_consume_stream(wrong)
+
+        with pytest.raises(TypeError):
+            native_streams.rust_pump_stream(wrong, writer_fd)
+
+        with pytest.raises(TypeError):
+            native_streams.rust_pump_stream(reader_fd, wrong)
+
+        with pytest.raises(TypeError):
+            native_streams.rust_consume_stream(reader_fd, buffer_size=wrong)
+
+        with pytest.raises(TypeError):
+            native_streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=wrong)
+
+        assert _descriptor_state(reader_fd) == "open", (
+            "PyO3 extraction failure must leave the borrowed reader open"
+        )
+        assert _descriptor_state(writer_fd) == "open", (
+            "PyO3 extraction failure must happen before writer adoption"
+        )
 
 
 @pytest.mark.parametrize(
@@ -222,8 +263,53 @@ def test_out_of_i64_buffer_keeps_pyo3_overflow_error(
     call, using the message ``PyO3`` uses, so the shim's behaviour alone cannot
     show that ``PyO3`` still does this. Only a direct call separates the two.
     """
-    with pytest.raises(OverflowError):
-        native_streams.rust_consume_stream(-1, buffer_size=beyond_i64)
+    with contextlib.ExitStack() as stack:
+        reader_fd = os.open(os.devnull, os.O_RDONLY)
+        stack.callback(_safe_close, reader_fd)
+        writer_fd = _open_writer()
+        stack.callback(_safe_close, writer_fd)
+        with pytest.raises(OverflowError):
+            native_streams.rust_consume_stream(reader_fd, buffer_size=beyond_i64)
+        with pytest.raises(OverflowError):
+            native_streams.rust_pump_stream(
+                reader_fd,
+                writer_fd,
+                buffer_size=beyond_i64,
+            )
+
+        assert _descriptor_state(reader_fd) == "open", (
+            "PyO3 extraction failure must leave the borrowed reader open"
+        )
+        assert _descriptor_state(writer_fd) == "open", (
+            "PyO3 extraction failure must happen before writer adoption"
+        )
+
+
+@pytest.mark.parametrize(
+    "beyond_i64",
+    [
+        pytest.param(1 << 63, id="above_i64_max"),
+        pytest.param(-((1 << 63) + 1), id="below_i64_min"),
+    ],
+)
+def test_out_of_i64_descriptors_keep_pyo3_overflow_error(
+    native_streams: ModuleType,
+    beyond_i64: int,
+) -> None:
+    """Descriptor extraction outside ``i64`` stays ``OverflowError``."""
+    with contextlib.ExitStack() as stack:
+        writer_fd = _open_writer()
+        stack.callback(_safe_close, writer_fd)
+
+        with pytest.raises(OverflowError):
+            native_streams.rust_consume_stream(beyond_i64)
+
+        with pytest.raises(OverflowError):
+            native_streams.rust_pump_stream(beyond_i64, writer_fd)
+
+        assert _descriptor_state(writer_fd) == "open", (
+            "descriptor extraction failure must happen before writer adoption"
+        )
 
 
 # A valid buffer size is what lets descriptor conversion be the step that

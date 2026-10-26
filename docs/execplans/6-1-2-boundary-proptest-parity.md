@@ -140,8 +140,11 @@ is no elapsed-time limit on planning or implementation work itself.
   full sequence. The final candidate then passed every required gate and both
   bridge failure controls; see the 2026-10-26 evidence below.
 - [x] M1: establish the real-boundary test bridge and prove its failure paths.
-- [ ] M2: add generated parity, error witnesses, and replayable seeds.
-- [ ] M3: complete behavioural coverage, documentation, and full validation.
+- [x] M2: implementation and focused acceptance complete; full sequential
+  gates passed on tree `935680d697def77904afa2619506fcb7420e35c4`; commit
+  pending.
+- [ ] M3: not started; the Windows feasibility condition requires a revised
+  platform disposition before implementation can continue.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -249,14 +252,66 @@ buffer wrapper result made the named witness fail and proptest shrink its
 arbitrary case to `[]`, reporting the mismatch without printing the payload.
 The mutation was restored, its helper SHA-256 matched the saved digest, no
 failure seed was retained, and `git write-tree` remained the validated tree.
-M1's bridge and routing acceptance are satisfied; generated coverage, the
-error-matrix audit, and replay evidence remain for M2/M3.
+M1's bridge and routing acceptance are satisfied. M2 implementation and focused
+acceptance are recorded below. Its full sequential gates passed on the
+candidate tree; the milestone commit remains pending.
+
+On 2026-10-26, M2 added shrinkable generated domains, named UTF-8 and buffer
+split witnesses, all nine 1 MiB boundary lengths, curated fixed-seed replay,
+and resource-preservation assertions. `make test-boundary-parity` passed all 30
+selected tests: 256 small cases across four buffer bands, 16 large cases across
+four buffer sizes, 11 UTF-8 witnesses, 7 split witnesses, 9 exact large
+lengths, and deterministic replay of four labelled seeds. The target now pins
+the expected count at 30 so a future `rstest` attribute change cannot silently
+omit later named cases. The warm run took 140.88 seconds. The replay-only run
+passed before fresh generation; replayed payload lengths were 1,238, 3,063,
+1,048,580, and 1,048,578 bytes. The focused Python error and oracle suites
+passed 63 tests in 1.20 seconds.
+
+The first full M2 gate attempt passed formatting, tests, and typechecking, then
+stopped at Ruff's unnecessary UTF-8 encoding argument. The corrected exact tree
+passed those gates again; Clippy then identified strict lint findings in the
+new test helpers. The helpers now parse seed fields without indexing, build
+valid scalar strategies from `char` ranges, avoid division and modulo
+operators, and group runner settings in a named value. The next Clippy pass
+reduced the remaining findings to one unnecessary ownership transfer of the
+runner settings. The property helper now borrows that value directly, and the
+final candidate passed the full sequential gate bundle on staged tree
+`935680d697def77904afa2619506fcb7420e35c4`. `make test` passed in 741 seconds
+with 175 Nextest tests passed, 30 skipped, and doctests passed with 3 ignored.
+`make lint`, `make markdownlint`, `make nixie`, and `make develop` passed.
+`make test-extension` passed 133 tests with 4 skipped, then selected and passed
+all 30 boundary parity tests in 123.93 seconds. The eight gate logs use the
+`-m2-final-lint-fix` suffix under `/tmp`.
+
+A truncation fault in the Python oracle was detected through the real child
+boundary and shrank to a one-byte payload with persistence disabled. The
+control used a temporary 1–8-byte arbitrary strategy so shrinking finished in
+3.70 seconds; the configured 256-case strategy was restored unchanged. A
+separate broad-strategy attempt reached the 120-second shrink limit, motivating
+a bounded `Payload` debug representation so property failures report only the
+byte length. Temporary mutations were restored and their saved SHA-256 digests
+matched; no regression file was retained because unmodified code has no known
+parity defect.
+
+The V3 audit found that Windows' current PyO3 stream exports deliberately
+reject raw handles before consume I/O. The parity oracle invokes both wrapper
+and direct native consume calls, and `.github/workflows/ci.yml` runs
+`make test-extension` in its Windows job; that target runs the parity suite
+unconditionally. Therefore the approved Linux-and-Windows feasibility condition
+is not met without a scope change. Per the existing tolerance, stop before M3
+and obtain an explicit platform-scope disposition after the M2 candidate passes
+its full local gates. No M3 code or documentation has been started.
 
 ## Decision log
 
 - (2026-10-25) The user explicitly approved implementation and selected the
   plan as written, within its existing tolerances. No scope deviation is
   authorized.
+- (2026-10-26) Pause before M3 because the Windows feasibility condition is not
+  met by the current raw-handle API. Complete and commit the M2 candidate after
+  its local gates, then request a platform-scope disposition; this pause does
+  not authorize a scope change.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle
@@ -286,9 +341,10 @@ closed through merged PRs. All requested post-rebase gates passed. The
 validated rebase was pushed with an explicit lease and its remote head
 verified; draft PR #619 records the updated scope and validation. The rebase
 adds no runtime changes or new parity tests and makes no performance claim.
-Approval is recorded and M1 is complete. M2 generated coverage, replay
-evidence, and M3 behavioural acceptance remain outstanding; roadmap 6.1.2 is
-still open.
+Approval is recorded and M1 is complete. M2 implementation and focused
+acceptance are complete, with the full local gate sequence passed and the
+milestone commit pending. M3 remains unstarted under the plan's Windows
+feasibility stop condition, and roadmap 6.1.2 remains open.
 
 ## Context and orientation
 

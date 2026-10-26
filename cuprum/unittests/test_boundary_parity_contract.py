@@ -55,8 +55,8 @@ def test_extension_route_runs_boundary_parity_once_after_guarded_pytest() -> Non
     ), "the extension lane must exercise the Python oracle helper"
 
 
-def test_boundary_target_selects_only_ignored_parity_cases() -> None:
-    """The dedicated command must be non-vacuous and use the project Python."""
+def test_boundary_target_selects_all_ignored_parity_cases() -> None:
+    """The command pins every witness and uses the project Python."""
     output = _make_dry_run("DEV_FAST_HOST_IS_LINUX=yes", "test-boundary-parity")
     cargo_lines = [
         line
@@ -78,8 +78,8 @@ def test_boundary_target_selects_only_ignored_parity_cases() -> None:
         "the extension child must use the interpreter from the project environment"
     )
     assert "CUPRUM_BOUNDARY_PYTHON=" in output
-    assert "boundary parity target selected zero ignored tests" in output, (
-        "a vacuous ignored-test selection must fail acceptance"
+    assert "boundary parity target did not select all 30 ignored tests" in output, (
+        "a partial ignored-test selection must fail acceptance"
     )
 
 

@@ -173,6 +173,7 @@ def test_rejects_out_of_range_buffer_with_open_reader(
         stack.callback(_safe_close, reader)
         with pytest.raises(ValueError, match="buffer_size"):
             entry_point(rust_streams, reader_fd=reader, buffer_size=bad_size)
+        os.fstat(reader)
 
 
 def _consume_with_reader_and_buffer(
@@ -348,3 +349,4 @@ def test_out_of_i64_buffer_size_stays_an_extraction_error(
         stack.callback(_safe_close, reader)
         with pytest.raises(OverflowError):
             entry_point(rust_streams, reader_fd=reader, buffer_size=beyond_i64)
+        os.fstat(reader)
