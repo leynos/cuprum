@@ -1365,6 +1365,47 @@ the issue was filed:
   configuration, so a fresh round is required before the push is treated as
   evidence-backed.
 
+- [x] (2026-10-26) Rebased the branch onto the current `origin/main`
+  (`7126a1ffb`), replaying `4832ef74a`'s 73 commits. Pre-rebase identities:
+  `OLD_HEAD=4832ef74a`, `OLD_BASE=e2c7592b5`, `TARGET=7126a1ffb`. After the
+  replay, `NEW_HEAD=0d1551058`.
+
+  Weave was bypassed for the operation, not trusted: it is selected only by the
+  ambient `~/.config/git/attributes` rule, and the estate policy is that global
+  ambient selection is not repository consent. The replay ran under
+  `-c core.attributesFile=/dev/null -c rerere.enabled=false`, with
+  `--merge --no-fork-point --no-update-refs --no-autostash
+  --reapply-cherry-picks --keep-empty --empty=stop`
+  and a per-commit `python -m compileall -q -f cuprum` tripwire. `rerere` was
+  disabled because an earlier aborted attempt had recorded resolutions from a
+  shape we no longer wanted to inherit.
+
+  Five conflicts, all resolved to the union of both sides' intent: the
+  duplication-gate `reason` prose (single-line TOML, so the whole line
+  conflicts whenever both sides extend it), the `_line_stream/__init__.py`
+  import block, the maturin wheel snapshot, and two plan excerpts. The
+  `members` lists merged cleanly on their own. Every resolution took both
+  sides; none discarded target work.
+
+  Audit of the replay: 73 commits to 73, no merges introduced, `TARGET` is an
+  ancestor of `NEW_HEAD`, `git diff --check` clean. `range-diff` shows 66
+  byte-identical patches and exactly 7 diverging — the five conflict commits
+  plus two that only moved context — each with a minimal, explained file set.
+  No target file was deleted, all main-only modules are byte-identical to the
+  target, and all 49 branch-only files carry byte-identical deltas. The
+  `_coordinate_line_stream` arity is consistent across production and test call
+  sites, and the "bundle from the run" invariant the module exists to protect
+  is intact.
+
+  The composed merge result broke a gate that neither parent broke:
+  `cuprum/_line_iteration.py` was 393 lines at `OLD_BASE`, 399 at the target,
+  398 on the branch, and **404** after the union — over Pylint's 400-line cap.
+  This is the `composed-merge-ref-line-cap` hazard: the cap binds the tree that
+  ships, not either input. Fixed at `9d539176c` by tightening four comments and
+  one docstring sentence, preserving every claim while writing it in fewer
+  lines. Pylint `too-many-lines` then reports 10.00/10 on the module at 399
+  lines. No cap was relaxed and no lint suppressed.
+
 ## Surprises & discoveries
 
 - **A docstring that describes the fixed behaviour can conceal the unfixed
