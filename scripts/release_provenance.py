@@ -10,7 +10,7 @@ if typ.TYPE_CHECKING:
 
 
 class ProvenanceRecordError(Exception):
-    """A verifier record could not be read or decoded.
+    """A verifier record is absent, unreadable, malformed, or mismatching.
 
     Parameters
     ----------
