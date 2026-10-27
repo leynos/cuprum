@@ -1143,7 +1143,8 @@ jobs:
             readonly STAGING="$(mktemp -d)"
             trap 'rm -rf "${STAGING}"' EXIT
             readonly ARCHIVE="${STAGING}/${CARGO_NEXTEST_ASSET}"
-            curl --fail --location --proto '=https' --tlsv1.2 \
+            curl --fail --location --retry 3 --retry-connrefused \
+              --proto '=https' --tlsv1.2 \
               --max-filesize 209715200 "${CARGO_NEXTEST_URL}" --output "${ARCHIVE}"
             printf '%s  %s\n' "${CARGO_NEXTEST_ARCHIVE_SHA256}" "${ARCHIVE}" | sha256sum --check --status
             readonly MEMBER="$(tar --list --gzip --file "${ARCHIVE}" | awk '/(^|\/)cargo-nextest$/ { print; exit }')"

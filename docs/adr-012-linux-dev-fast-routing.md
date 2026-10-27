@@ -64,12 +64,6 @@ for release, coverage, verification, Whitaker, MSRV checks, and macOS and
 Windows. Every workspace member inherits Rust 1.85.0, and `make msrv-check`
 compiles every target at that version without the fragment.
 
-The independent `modern-stable` validation route is fragment-free and selects
-Rust/Cargo `1.99.1` explicitly. It does not change the workspace's Rust 1.85.0
-source contract or replace the MSRV check. Its Cargo warning-policy migration
-is recorded in [modern-stable validation](modern-stable-validation.md); the
-dev-fast route continues to use its existing `-D warnings` compiler flags.
-
 ## Consequences
 
 Contributors gain faster Linux debug builds after installing the explicit
@@ -83,6 +77,15 @@ release flag orderings, and exercise adapter argv and environment behaviour.
 They complement Make dry-run tests, which prove routing text but not shell
 installer behaviour. Pin changes must update the version metadata, checksums,
 configuration digest, tests, and this decision if the routing boundary changes.
+
+## Addendum (2026-10-27): independent modern-stable route
+
+Issue #506 added an independent, fragment-free validation route that explicitly
+selects Rust/Cargo `1.99.1`. It preserves the workspace's Rust 1.85.0 source
+contract and the separate MSRV check. Its Cargo warning-policy migration is
+recorded in [modern-stable validation](modern-stable-validation.md). The
+dev-fast route keeps its existing `-D warnings` compiler flags because it uses
+an independently pinned nightly toolchain.
 
 ## Addendum, 2026-10-31: the fast path meets the build standard, and the exception is recorded
 

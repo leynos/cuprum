@@ -190,7 +190,8 @@ def _compiler_version_scope(
 ) -> tuple[str, ...]:
     """Resolve the compiler version only for the modern-stable cache family."""
     compiler_version = inputs.get("compiler-version")
-    if inputs.get("compiler-shape") != "modern-stable":
+    compiler_shape = _resolve(inputs.get("compiler-shape", ""), leg, message)
+    if compiler_shape != "modern-stable":
         require(
             condition=not compiler_version,
             message=f"{message}: compiler-version only scopes modern-stable",
