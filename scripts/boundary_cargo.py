@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import tempfile
 import time
@@ -19,6 +20,45 @@ from scripts.cargo_state import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+def offline_cargo_environment(
+    workspace: Path,
+    target_directory: Path,
+    caller_environment: cabc.Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return an offline Cargo environment rooted in its prepared run home.
+
+    Parameters
+    ----------
+    workspace : Path
+        Copied workspace whose parent contains the run-local Cargo home.
+    target_directory : Path
+        Configuration-compatible Cargo target directory for this invocation.
+    caller_environment : Mapping of str to str, optional
+        Environment to preserve before setting the Cargo-specific paths.
+        Defaults to the current process environment.
+
+    Returns
+    -------
+    dict of str to str
+        Environment selecting the prepared run home, target directory and
+        offline network mode while preserving caller-selected Cargo jobs.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the run-local Cargo home is missing or is a symlink.
+    """
+    cargo_home = workspace.parent / "cargo-home"
+    if not cargo_home.is_dir() or cargo_home.is_symlink():
+        msg = f"prepared run-local Cargo home is unavailable: {cargo_home}"
+        raise FileNotFoundError(msg)
+    environment = dict(os.environ if caller_environment is None else caller_environment)
+    environment["CARGO_HOME"] = str(cargo_home)
+    environment["CARGO_TARGET_DIR"] = str(target_directory)
+    environment["CARGO_NET_OFFLINE"] = "true"
+    return environment
 
 
 def prepare_run_cargo_home(

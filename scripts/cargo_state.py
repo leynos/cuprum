@@ -193,7 +193,7 @@ def _cargo_version(
         If Cargo exits unsuccessfully or returns no version.
     """
     environment = _cargo_environment(cargo_home, rustup_home, caller_environment)
-    result = _run_cargo(("--version",), repository_root, environment)
+    result = _run_cargo(("--version",), repository_root / "rust", environment)
     if result.exit_code != 0:
         msg = f"cargo --version failed with exit code {result.exit_code}"
         raise CargoStatePreparationError(msg)
@@ -255,7 +255,7 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
         )
         result = _run_cargo(
             fetch_arguments,
-            request.repository_root,
+            request.repository_root / "rust",
             fetch_environment,
         )
         if result.exit_code != 0:

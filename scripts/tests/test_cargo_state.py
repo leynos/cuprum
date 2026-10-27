@@ -63,18 +63,18 @@ def _snapshot_inputs(tmp_path: Path) -> _SnapshotInputs:
 
 
 def _record_snapshot_cargo(
-    calls: list[tuple[tuple[str, ...], dict[str, str]]],
+    calls: list[tuple[tuple[str, ...], Path, dict[str, str]]],
     fetch_credentials: list[bool],
 ) -> cabc.Callable[[tuple[str, ...], Path, dict[str, str]], SimpleNamespace]:
     """Return a Cargo stub that records commands and adds a fetch marker."""
 
     def run_cargo(
         arguments: tuple[str, ...],
-        _cwd: Path,
+        cwd: Path,
         environment: dict[str, str],
     ) -> SimpleNamespace:
         """Record Cargo and add a marker after dependency preparation."""
-        calls.append((arguments, environment.copy()))
+        calls.append((arguments, cwd, environment.copy()))
         if arguments[0] == "fetch":
             fetch_credentials.append(
                 (Path(environment["CARGO_HOME"]) / "credentials.toml").is_file()
@@ -90,7 +90,7 @@ def _record_snapshot_cargo(
 def _assert_fetch_setup(
     inputs: _SnapshotInputs,
     prepared: cargo_state.PreparedCargoSnapshot,
-    calls: list[tuple[tuple[str, ...], dict[str, str]]],
+    calls: list[tuple[tuple[str, ...], Path, dict[str, str]]],
     fetch_credentials: list[bool],
 ) -> None:
     """Verify Cargo fetch used the staged home and preserved caller policy."""
@@ -103,7 +103,11 @@ def _assert_fetch_setup(
             str(inputs.repository / "rust/Cargo.toml"),
         ),
     ], "preparation must fetch the locked workspace without restricting targets"
-    fetch_environment = calls[1][1]
+    assert [call[1] for call in calls] == [
+        inputs.repository / "rust",
+        inputs.repository / "rust",
+    ], "Cargo version and fetch commands must use the pinned Rust workspace"
+    fetch_environment = calls[1][2]
     staging_home = Path(fetch_environment["CARGO_HOME"])
     assert staging_home != inputs.source_home, (
         "Cargo fetch must populate a staged home, not the caller cache"
@@ -180,7 +184,7 @@ def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
 ) -> None:
     """Fetch uses the copied home, preserves caller jobs, and publishes atomically."""
     inputs = _snapshot_inputs(tmp_path)
-    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+    calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
     fetch_credentials: list[bool] = []
     monkeypatch.setattr(
         cargo_state,

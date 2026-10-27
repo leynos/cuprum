@@ -7,7 +7,6 @@ focused external-test compilation without admitting arbitrary Cargo arguments.
 from __future__ import annotations
 
 import dataclasses
-import os
 import re
 import typing as typ
 
@@ -20,6 +19,7 @@ from cuprum import (
     scoped,
     sh,
 )
+from scripts.boundary_cargo import offline_cargo_environment
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -169,12 +169,7 @@ def _compile(
         noise_rules=(),
     )
     cargo = sh.make(cargo_program, catalogue=ProgramCatalogue(projects=(project,)))
-    environment = os.environ.copy()
-    environment["CARGO_TARGET_DIR"] = str(target_directory)
-    environment["CARGO_NET_OFFLINE"] = "true"
-    run_cargo_home = workspace.parent / "cargo-home"
-    if run_cargo_home.is_dir():
-        environment["CARGO_HOME"] = str(run_cargo_home)
+    environment = offline_cargo_environment(workspace, target_directory)
     context = sh.ExecutionContext(
         cwd=workspace,
         env=environment,

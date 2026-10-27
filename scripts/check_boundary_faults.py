@@ -31,6 +31,7 @@ from scripts.boundary_cargo import (
 from scripts.boundary_cargo import (
     new_run_root as _new_boundary_run_root,
 )
+from scripts.boundary_cargo import offline_cargo_environment
 from scripts.boundary_cargo import (
     prepare_run_cargo_home as _prepare_boundary_cargo_home,
 )
@@ -147,21 +148,21 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
     kani = Path.home() / f".kani/kani-{pins.kani}"
+    target_directory = workspace.parent / "target/boundary-faults-debug-all-features"
     environment = os.environ.copy()
     environment.update({
-        "CARGO_TARGET_DIR": str(
-            workspace.parent / "target/boundary-faults-debug-all-features"
-        ),
+        "CARGO_TARGET_DIR": str(target_directory),
         "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
         "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
         "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
     })
     command_arguments = args
     if program == "cargo":
-        environment["CARGO_NET_OFFLINE"] = "true"
-        cargo_home = workspace.parent / "cargo-home"
-        if cargo_home.is_dir():
-            environment["CARGO_HOME"] = str(cargo_home)
+        environment = offline_cargo_environment(
+            workspace,
+            target_directory,
+            caller_environment=environment,
+        )
         command_arguments = ("--frozen", *args)
     context = sh.ExecutionContext(
         cwd=workspace,

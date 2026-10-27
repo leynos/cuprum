@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import boundary_compile, check_boundary_faults
+from scripts.boundary_cargo import offline_cargo_environment
 from scripts.tests import boundary_harness_support
 
 if typ.TYPE_CHECKING:
@@ -29,6 +30,8 @@ def test_compile_passes_its_named_timeout_to_execution_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The copied Cargo check receives the explicit cold-build budget."""
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "cargo-home").mkdir()
     command_result = SimpleNamespace(exit_code=0, stdout="checked", stderr="")
     contexts: list[ExecutionContext] = []
     cargo_arguments: list[tuple[str, ...]] = []
@@ -59,9 +62,10 @@ def test_compile_passes_its_named_timeout_to_execution_context(
     )
     monkeypatch.setattr(boundary_compile, "scoped", lambda _config: nullcontext())
     monkeypatch.setenv("CARGO_BUILD_JOBS", "9")
-    target_directory = tmp_path / "target"
-
-    exit_code, output = boundary_compile._compile(tmp_path, target_directory)
+    exit_code, output = boundary_compile._compile(
+        tmp_path / "workspace",
+        tmp_path / "target",
+    )
 
     assert contexts[0].timeout == 3600, (
         "the Cargo execution context must enforce a 3600-second compile budget"
@@ -70,11 +74,14 @@ def test_compile_passes_its_named_timeout_to_execution_context(
     assert compile_context.env is not None, (
         "the compile must receive an explicit Cargo environment"
     )
-    assert compile_context.env["CARGO_TARGET_DIR"] == str(target_directory), (
+    assert compile_context.env["CARGO_TARGET_DIR"] == str(tmp_path / "target"), (
         "the compile must keep its isolated target directory"
     )
     assert compile_context.env["CARGO_NET_OFFLINE"] == "true", (
         "the timed compile must use dependencies prepared before execution"
+    )
+    assert compile_context.env["CARGO_HOME"] == str(tmp_path / "cargo-home"), (
+        "the timed compile must use its run-local writable Cargo home"
     )
     assert compile_context.env["CARGO_BUILD_JOBS"] == "9", (
         "the boundary compile must preserve caller-selected Cargo parallelism"
@@ -91,6 +98,17 @@ def test_compile_passes_its_named_timeout_to_execution_context(
     assert (exit_code, output) == (0, "checked"), (
         "the compile helper must return the command result"
     )
+
+
+def test_offline_cargo_environment_rejects_a_missing_run_home(
+    tmp_path: Path,
+) -> None:
+    """A missing prepared home must not fall back to the ambient Cargo cache."""
+    workspace = tmp_path / "run" / "workspace"
+    workspace.mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="prepared run-local Cargo home"):
+        offline_cargo_environment(workspace, tmp_path / "run" / "target")
 
 
 def test_cargo_metadata_passes_its_named_timeout_and_propagates_expiry(

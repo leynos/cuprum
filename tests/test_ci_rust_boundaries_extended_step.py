@@ -101,6 +101,14 @@ def test_failing_make_fails_the_step_despite_tee(tmp_path: Path) -> None:
 
 def test_kani_fault_sensitivity_logs_are_archived() -> None:
     """The Kani fault harness must retain its run-local verifier logs."""
+    summary_archive = next(
+        (
+            step
+            for step in workflow_steps(WORKFLOW, JOB)
+            if step.get("name") == "Archive proof summaries and failures"
+        ),
+        None,
+    )
     archive = next(
         (
             step
@@ -109,6 +117,17 @@ def test_kani_fault_sensitivity_logs_are_archived() -> None:
         ),
         None,
     )
+
+    assert isinstance(summary_archive, dict), (
+        "the extended verification logs need an archive step"
+    )
+    summary_inputs = summary_archive.get("with")
+    assert isinstance(summary_inputs, dict), (
+        "the extended verification archive must declare its inputs"
+    )
+    assert summary_inputs.get("name") == (
+        "extended-${{ matrix.check }}-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), "each matrix attempt must receive a unique artefact name"
 
     assert isinstance(archive, dict), "the Kani fault logs need an archive step"
     assert archive.get("if") == "always() && matrix.check == 'kani'", (
@@ -119,6 +138,9 @@ def test_kani_fault_sensitivity_logs_are_archived() -> None:
     ), "the archive must use the pinned artefact uploader"
     inputs = archive.get("with")
     assert isinstance(inputs, dict), "the archive must declare its inputs"
+    assert inputs.get("name") == (
+        "boundary-fault-runs-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), "each Kani rerun must receive a unique artefact name"
     assert inputs.get("path") == ".cache/boundary-faults/runs", (
         "the archive must include the fault harness's retained run directories"
     )
