@@ -9,37 +9,62 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-def has_matching_record(provenance: pth.Path, name: str, digest: str) -> bool:
-    """Read one verifier record and find its exact release asset subject.
+class ProvenanceRecordError(Exception):
+    """A verifier record could not be read or decoded.
 
     Parameters
     ----------
-    provenance : pathlib.Path
-        Directory holding one ``<name>.json`` verifier result per asset.
-    name : str
-        Exact release asset filename to find in a statement subject.
-    digest : str
-        Expected SHA-256 hexadecimal digest; comparison ignores letter case.
+    message : str
+        Safe diagnostic that identifies the record failure category.
+
+    Notes
+    -----
+    Missing records are represented by ``None`` from
+    :func:`read_provenance_record`, then rejected by
+    :func:`require_matching_record`.
+    """
+
+
+def read_provenance_record(record: pth.Path) -> object | None:
+    """Read one verifier record, returning ``None`` when it is absent.
+
+    Parameters
+    ----------
+    record : pathlib.Path
+        Verifier result file to read.
 
     Returns
     -------
-    bool
-        Whether the record exists, is readable JSON, and binds ``name`` to
-        ``digest``. A missing, unreadable, or malformed record returns
-        ``False``.
+    object | None
+        Decoded JSON from the verifier, or ``None`` when the file is absent.
+
+    Raises
+    ------
+    ProvenanceRecordError
+        If the file cannot be read, is not UTF-8, or contains invalid JSON.
 
     Examples
     --------
     >>> from pathlib import Path
-    >>> has_matching_record(Path("provenance"), "cuprum.whl", "a" * 64)
-    False
+    >>> read_provenance_record(Path("missing.json")) is None
+    True
     """
-    record = provenance / f"{name}.json"
     try:
-        document = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return has_matching_subject(document, name, digest)
+        content = record.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        msg = "cannot read provenance record"
+        raise ProvenanceRecordError(msg) from error
+    except UnicodeError as error:
+        msg = "provenance record is not valid UTF-8"
+        raise ProvenanceRecordError(msg) from error
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as error:
+        msg = "provenance record is not valid JSON"
+        raise ProvenanceRecordError(msg) from error
 
 
 def has_matching_subject(document: object, name: str, digest: str) -> bool:
@@ -76,6 +101,32 @@ def has_matching_subject(document: object, name: str, digest: str) -> bool:
     if not isinstance(document, list) or not document:
         return False
     return any(_result_matches(result, name, digest) for result in document)
+
+
+def require_matching_record(record_path: pth.Path, name: str, digest: str) -> None:
+    """Require one verifier record to bind an asset name to its SHA-256.
+
+    Parameters
+    ----------
+    record_path : pathlib.Path
+        JSON file returned by ``gh attestation verify --format json``.
+    name : str
+        Exact release asset filename to find in the record's subject.
+    digest : str
+        Expected SHA-256 hexadecimal digest; comparison ignores letter case.
+
+    Raises
+    ------
+    ProvenanceRecordError
+        If the record is absent, unreadable, malformed, or does not match.
+    """
+    record = read_provenance_record(record_path)
+    if record is None:
+        msg = "no verified build provenance record"
+        raise ProvenanceRecordError(msg)
+    if not has_matching_subject(record, name, digest):
+        msg = "no matching verified build provenance"
+        raise ProvenanceRecordError(msg)
 
 
 def _result_matches(result: object, name: str, digest: str) -> bool:

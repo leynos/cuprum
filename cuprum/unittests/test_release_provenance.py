@@ -8,6 +8,7 @@ import typing as typ
 import pytest
 
 from scripts.release_assets import PypiFile, ReleaseAssetError, State, stage_pypi
+from scripts.release_provenance import ProvenanceRecordError, read_provenance_record
 from tests.helpers.release_asset_provenance import provenance_record, sha256_hex
 
 if typ.TYPE_CHECKING:
@@ -28,6 +29,71 @@ def release_paths(
     for directory in (publish, github_files, provenance):
         directory.mkdir()
     return publish, github_files, provenance
+
+
+def test_read_provenance_record_distinguishes_an_absent_file(
+    tmp_path: pth.Path,
+) -> None:
+    """An absent attestation is distinct from a record that cannot be read."""
+    assert read_provenance_record(tmp_path / "missing.json") is None
+
+
+@pytest.mark.parametrize(
+    ("record_content", "expected_message"),
+    [
+        (b"not-json", "not valid JSON"),
+        (b"\xff", "not valid UTF-8"),
+    ],
+    ids=["invalid-json", "invalid-utf8"],
+)
+def test_read_provenance_record_reports_decode_failures(
+    tmp_path: pth.Path, record_content: bytes, expected_message: str
+) -> None:
+    """Malformed verifier records raise a dedicated decoding error."""
+    record = tmp_path / "record.json"
+    record.write_bytes(record_content)
+
+    with pytest.raises(ProvenanceRecordError, match=expected_message):
+        read_provenance_record(record)
+
+
+def test_read_provenance_record_reports_filesystem_failures(
+    tmp_path: pth.Path,
+) -> None:
+    """Filesystem errors remain visible to the release command boundary."""
+    record = tmp_path / "record.json"
+    record.mkdir()
+
+    with pytest.raises(ProvenanceRecordError, match="cannot read provenance record"):
+        read_provenance_record(record)
+
+
+def test_unreadable_provenance_preserves_the_publish_directory(
+    release_paths: tuple[pth.Path, pth.Path, pth.Path],
+) -> None:
+    """A verifier read error fails before staging mutates any published bytes."""
+    local_bytes = b"attested bytes from this run"
+    pypi_bytes = b"already published"
+    carried_bytes = b"bytes from a prior run"
+    publish, github_files, provenance = release_paths
+    (publish / _PYPI_ASSET).write_bytes(pypi_bytes)
+    (publish / _ASSET).write_bytes(local_bytes)
+    (github_files / _ASSET).write_bytes(carried_bytes)
+    (provenance / f"{_ASSET}.json").mkdir()
+    before = {path.name: path.read_bytes() for path in publish.iterdir()}
+    state = State(
+        publish=publish,
+        pypi={},
+        github={_ASSET: sha256_hex(carried_bytes)},
+    )
+
+    with pytest.raises(
+        ReleaseAssetError, match="cannot read provenance record"
+    ) as error:
+        stage_pypi(state, github_files, provenance)
+
+    assert _ASSET in str(error.value)
+    assert {path.name: path.read_bytes() for path in publish.iterdir()} == before
 
 
 def test_unattested_carried_bytes_cannot_replace_the_local_build(

@@ -21,7 +21,7 @@ import typing as typ
 import urllib.parse
 from pathlib import Path
 
-from scripts.release_provenance import has_matching_record
+from scripts.release_provenance import ProvenanceRecordError, require_matching_record
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -211,11 +211,10 @@ def _check_digest(path: Path, expected: str | None) -> None:
 
 def _carried_asset_error(name: str, reason: str) -> ReleaseAssetError:
     """Build an actionable error for an untrusted carried asset."""
-    msg = (
+    return ReleaseAssetError(
         f"cannot safely carry GitHub asset {name} to PyPI: {reason}; "
         "rerun once; if still untrusted, delete the named asset and rerun"
     )
-    return ReleaseAssetError(msg)
 
 
 def _require_github_digest(name: str, digest: str | None) -> str:
@@ -231,14 +230,12 @@ def _verify_carried_asset(
     """Validate carried bytes and provenance, with an actionable error."""
     try:
         _check_digest(asset, expected)
-    except ReleaseAssetError as error:
-        raise _carried_asset_error(name, str(error)) from error
+        require_matching_record(provenance / f"{name}.json", name, expected)
     except OSError as error:
         reason = "cannot read the downloaded GitHub bytes"
         raise _carried_asset_error(name, reason) from error
-
-    if not has_matching_record(provenance, name, expected):
-        raise _carried_asset_error(name, "no matching verified build provenance")
+    except (ReleaseAssetError, ProvenanceRecordError) as error:
+        raise _carried_asset_error(name, str(error)) from error
 
 
 def write_output(name: str, *, value: bool) -> None:
