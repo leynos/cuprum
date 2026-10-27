@@ -607,7 +607,7 @@ land in Ubicloud's store rather than GitHub's.
 
 `PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
 `typecheck-test` job collect. It is a list of glob patterns, not a directory
-sweep, so a test module that matches no pattern is simply never named — the the
+sweep, so a test module that matches no pattern is simply never named. The
 `test-python` recipe loops over the patterns in `PYTEST_INDIVIDUAL_TARGETS`, and
 `[ -e "$1" ] || continue` skips any whose first expansion does not exist.
 `PYTEST_GROUPED_DESELECT` excludes grouped modules from those individual runs.
