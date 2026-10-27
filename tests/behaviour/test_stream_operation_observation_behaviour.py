@@ -69,10 +69,17 @@ def test_coroutine_disposal_failure_preserves_public_command_and_later_hooks(
     payload = b"stream-operation-disposal-behaviour"
     coroutine = _started_coroutine_raising(RuntimeError("close failed"))
     received: list[StreamOperationEvent] = []
+    failing_events: list[StreamOperationEvent] = []
+    returning_hook = hook_returning(coroutine)
+
+    def failing_hook(event: StreamOperationEvent) -> None:
+        """Record the event before returning the coroutine that fails to close."""
+        failing_events.append(event)
+        return returning_hook(event)
 
     with (
         scoped(ScopeConfig(allowlist=frozenset((python_program,)))),
-        observe_stream_operation(hook_returning(coroutine)),
+        observe_stream_operation(failing_hook),
         observe_stream_operation(received.append),
     ):
         result = command(
@@ -82,7 +89,10 @@ def test_coroutine_disposal_failure_preserves_public_command_and_later_hooks(
 
     assert result.ok, "disposal failure must not fail the public command"
     assert result.stdout == payload.decode(), "the command must preserve its output"
-    assert received, "the later hook must receive a completed operation event"
+    assert failing_events, "the failing hook must receive a completed operation event"
+    assert any(event is failing_events[0] for event in received), (
+        "the later hook must receive the event whose disposal failed"
+    )
     disposal_records = [
         record
         for record in caplog.records
