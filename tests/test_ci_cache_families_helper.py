@@ -108,8 +108,17 @@ def test_other_cache_shapes_reject_a_compiler_version() -> None:
         )
 
 
-def test_matrix_compiler_shape_resolves_its_modern_version_scope() -> None:
-    """Resolve the modern cache family from the selected workflow matrix leg."""
+def test_matrix_compiler_shape_resolves_its_modern_version_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a matrix leg with a synthetic modern compiler pin."""
+
+    def synthetic_job_environment(
+        _workflow_name: str, _job_name: str
+    ) -> dict[str, str]:
+        return {"MODERN_STABLE_TOOLCHAIN": "test-toolchain"}
+
+    monkeypatch.setattr(families, "job_env", synthetic_job_environment)
     scope = families._compiler_version_scope(
         {
             "compiler-shape": "${{ matrix.shape }}",
@@ -119,7 +128,7 @@ def test_matrix_compiler_shape_resolves_its_modern_version_scope() -> None:
         MESSAGE,
         job_identity=("ci.yml", "modern-stable"),
     )
-    assert scope == ("1.99.1",), (
+    assert scope == ("test-toolchain",), (
         "the selected modern-stable matrix leg must include its compiler version"
     )
 
