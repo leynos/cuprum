@@ -147,16 +147,17 @@ _Table 2: Local packaging route timing observations._
 | Maturin wheel, cold target | 38.6–49.1 s | Empty targets; `CARGO_BUILD_JOBS` unset         |
 | Maturin wheel, warm target | 23.8 s      | Separate home; same target; `sccache` available |
 
-The command's 180 s timeout contains these measured cold invocations, and its
-240 s pytest mark remains finite. The 49.1 s Maturin wheel was measured in the
-grouped session; the 38.6 s sample used a separate empty target. This was a
-developer-host observation, not a CI-runner or concurrent-run measurement. The
-host-wide compiler pool was full while other work queued, and its `sccache`
-state was healthy. The measured wall time therefore includes any per-compiler
-admission waits. It does not establish the workload-only budget under a
-top-level resource lease. Repeat the measurement on the target CI runner and
-under the coordinator's documented workload lease before revising timeout
-contracts.
+The command's 180 s timeout contains these measured cold invocations by default;
+`CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise that end-to-end cap for a runner
+with more queueing. The pytest mark stays 60 s above the configured command
+cap. The 49.1 s Maturin wheel was measured in the grouped session; the 38.6 s
+sample used a separate empty target. This was a developer-host observation, not
+a CI-runner or concurrent-run measurement. The host-wide compiler pool was full
+while other work queued, and its `sccache` state was healthy. The measured wall
+time therefore includes any per-compiler admission waits. It does not establish
+the workload-only budget under a top-level resource lease. Repeat the
+measurement on the target CI runner and under the coordinator's documented
+workload lease before revising timeout contracts.
 
 The current compiler coordinator exposes bounded compiler scopes only, not a
 bounded outer Cargo-workload lease; its queue wait has no finite limit. Until

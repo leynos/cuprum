@@ -608,10 +608,17 @@ land in Ubicloud's store rather than GitHub's.
 `PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
 `typecheck-test` job collect. It is a list of glob patterns, not a directory
 sweep, so a test module that matches no pattern is simply never named — the
-target loops over the patterns, and `[ -e "$1" ] || continue` skips any whose
-first expansion does not exist. Nothing reports the omission: the loop exits
-zero having run only the modules its patterns named, and the contracts inside
-the module can regress unnoticed.
+`test-python` loops over the patterns in `PYTEST_INDIVIDUAL_TARGETS`, and
+`[ -e "$1" ] || continue` skips any whose first expansion does not exist.
+`PYTEST_GROUPED_DESELECT` excludes grouped modules from those individual runs.
+Nothing reports a missing expansion: the loop exits zero having run only the
+modules its patterns named, and the contracts inside the module can regress
+unnoticed.
+
+After the per-pattern runs, one grouped pytest invocation runs the existing
+paths from `PYTEST_GROUPED_TARGETS`, selected through
+`PYTEST_SELECTED_TARGETS`. This lets grouped modules share session-scoped
+builds without also running in each per-pattern invocation.
 
 Absent from this suite is not the same as absent from CI. The `coverage` job
 runs a bare `pytest` from the repository root through an out-of-repo composite
@@ -5049,9 +5056,13 @@ caller's cache. Copies contain ordinary files, not links to the snapshot or
 caller cache. Snapshot preparation and copying are recorded as
 dependency-preparation time; current packaging and doctest timeout marks remain
 finite end-to-end bounds and include any compiler-admission wait inside Cargo.
-The snapshot key follows the Cargo lockfile, toolchain, Cargo version, and
-runner scope. Do not hand the snapshot itself to Cargo: Cargo coordinates cache
-access only within one home, and offline mode does not remove those locks.
+The packaging frontend timeout defaults to 180 seconds and can be raised with
+`CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. The
+packaging consumer mark is derived from that value with a 60-second margin.
+This timeout remains an end-to-end watchdog, not an execution-only budget. The
+snapshot key follows the Cargo lockfile, toolchain, Cargo version, and runner
+scope. Do not hand the snapshot itself to Cargo: Cargo coordinates cache access
+only within one home, and offline mode does not remove those locks.
 `CARGO_BUILD_JOBS` remains caller-owned. CPU, memory, and the host-wide
 compiler-admission limit remain separate resource constraints.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import os
 import time
 import typing as typ
 from pathlib import Path
@@ -38,7 +39,32 @@ _MATURIN_SUBCOMMANDS: dict[_Format, str] = {
     "wheel": "build",
     "sdist": "sdist",
 }
-_BUILD_TIMEOUT_SECONDS = 180
+_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE = "CUPRUM_PACKAGING_BUILD_TIMEOUT"
+_DEFAULT_BUILD_TIMEOUT_SECONDS = 180
+_BUILD_TIMEOUT_MARGIN_SECONDS = 60
+
+
+def _configured_build_timeout_seconds(value: str | None) -> int:
+    """Parse a positive packaging command timeout, defaulting to 180 seconds."""
+    if value is None:
+        return _DEFAULT_BUILD_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = int(value)
+    except ValueError as error:
+        msg = f"{_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive integer"
+        raise ValueError(msg) from error
+    if timeout_seconds <= 0:
+        msg = f"{_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive integer"
+        raise ValueError(msg)
+    return timeout_seconds
+
+
+DISTRIBUTION_BUILD_TIMEOUT_SECONDS = _configured_build_timeout_seconds(
+    os.environ.get(_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE)
+)
+DISTRIBUTION_TEST_TIMEOUT_SECONDS = (
+    DISTRIBUTION_BUILD_TIMEOUT_SECONDS + _BUILD_TIMEOUT_MARGIN_SECONDS
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -154,7 +180,7 @@ def _build_distribution(request: _BuildRequest) -> _BuildOutcome:
             context=sh.ExecutionContext(
                 cwd=request.repository_root,
                 env=dict(request.environment),
-                timeout=_BUILD_TIMEOUT_SECONDS,
+                timeout=DISTRIBUTION_BUILD_TIMEOUT_SECONDS,
                 process_group=ProcessGroupPolicy.OWN_GROUP,
             )
         )

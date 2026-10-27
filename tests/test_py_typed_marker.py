@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.distribution_artefacts import DISTRIBUTION_TEST_TIMEOUT_SECONDS
+
 if typ.TYPE_CHECKING:
     from tests.helpers.distribution_artefacts import DistributionArtefactFactory
 
@@ -56,7 +58,7 @@ def _wheel_marker(wheel_path: Path) -> str | None:
 
 
 # The test budget includes the first lazy build and its archive assertions.
-@pytest.mark.timeout(240, func_only=True)
+@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_wheel_ships_the_pep561_marker(
     backend: typ.Literal["uv", "maturin"],
@@ -85,7 +87,7 @@ def test_wheel_ships_the_pep561_marker(
 
 
 # The test budget includes the first lazy build and its archive assertions.
-@pytest.mark.timeout(240, func_only=True)
+@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
     backend: typ.Literal["uv", "maturin"],

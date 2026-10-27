@@ -8,13 +8,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.distribution_artefacts import DISTRIBUTION_TEST_TIMEOUT_SECONDS
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     from tests.helpers.distribution_artefacts import DistributionArtefactFactory
 
 
-@pytest.mark.timeout(240, func_only=True)
+@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_retains_native_workspace(
     backend: typ.Literal["uv", "maturin"],

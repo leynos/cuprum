@@ -9,13 +9,46 @@ import pytest
 
 from tests.helpers import distribution_artefacts
 from tests.helpers.distribution_artefacts import (
+    DISTRIBUTION_BUILD_TIMEOUT_SECONDS,
+    DISTRIBUTION_TEST_TIMEOUT_SECONDS,
     DistributionArtefactFactory,
+    _configured_build_timeout_seconds,
     _FactorySettings,
 )
 from tests.helpers.grouped_recipe_flow import require_grouped_selector_drives_pytest
 from tests.helpers.makefile import recipe_of, variable_expansion
 
 _FRONTEND_TIMEOUT_MESSAGE = "frontend exceeded its limit"
+
+
+@pytest.mark.parametrize(
+    ("configured_value", "expected_seconds"),
+    [(None, 180), ("300", 300)],
+)
+def test_packaging_timeout_uses_positive_override_or_default(
+    configured_value: str | None,
+    expected_seconds: int,
+) -> None:
+    """A configured frontend limit is positive and defaults to 180 seconds."""
+    assert _configured_build_timeout_seconds(configured_value) == expected_seconds, (
+        "the packaging command must use configured seconds or its default"
+    )
+
+
+@pytest.mark.parametrize("configured_value", ["0", "-1", "invalid"])
+def test_packaging_timeout_rejects_invalid_override(
+    configured_value: str,
+) -> None:
+    """Invalid frontend limits fail clearly instead of disabling the watchdog."""
+    with pytest.raises(ValueError, match="CUPRUM_PACKAGING_BUILD_TIMEOUT"):
+        _configured_build_timeout_seconds(configured_value)
+
+
+def test_packaging_test_timeout_covers_frontend_limit_with_margin() -> None:
+    """Consumer tests leave 60 seconds beyond the configured frontend limit."""
+    assert (
+        DISTRIBUTION_TEST_TIMEOUT_SECONDS - DISTRIBUTION_BUILD_TIMEOUT_SECONDS == 60
+    ), "the consumer timeout must stay 60 seconds above the build cap"
 
 
 def _new_factory(tmp_path: Path) -> DistributionArtefactFactory:
