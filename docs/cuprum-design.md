@@ -1408,6 +1408,18 @@ sequenceDiagram
     end
 ```
 
+#### Observation-hook coroutine disposal boundary
+
+The pump, echo, and stream-operation observation channels share the
+module-private `cuprum._hook_disposal._close_returned_coroutine` helper for one
+narrow responsibility: closing a native coroutine returned by a synchronous
+observer hook. Each channel supplies its own logger, warning action, and event
+context, so the shared close boundary does not merge their diagnostics. An
+ordinary `Exception` from `close()` is logged at `WARNING` with its traceback
+and absorbed, allowing delivery to continue. Other awaitables and objects are
+not awaited, cancelled, or closed. `SystemExit`, `KeyboardInterrupt`, and
+`asyncio.CancelledError` propagate unchanged.
+
 #### Aggregate Python stream-operation observation
 
 The pure-Python stream paths have a separate, opt-in completion channel for

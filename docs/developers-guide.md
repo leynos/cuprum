@@ -2366,6 +2366,9 @@ observation channels; each channel retains its own log message and context
 fields. `SystemExit`, `KeyboardInterrupt`, and `asyncio.CancelledError`
 propagate unchanged from disposal.
 
+The cross-channel design boundary is recorded in
+[Cuprum design: observation-hook coroutine disposal](cuprum-design.md#observation-hook-coroutine-disposal-boundary).
+
 `cuprum/unittests/test_echo_hook_disposal.py` and
 `cuprum/unittests/test_stream_operation_hook_disposal.py` cover these
 contracts. They share the started-coroutine fixtures in
