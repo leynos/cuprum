@@ -14,7 +14,20 @@ _SAFE_CRATES = frozenset({"cuprum-streams"})
 
 
 def check_members(manifest: str) -> None:
-    """Require review before the approved crate set can grow."""
+    """Require review before the audited crate set can grow.
+
+    Parameters
+    ----------
+    manifest : str
+        TOML text containing the workspace member list.
+
+    Raises
+    ------
+    ValueError
+        If the workspace member list is missing, malformed, or unaudited.
+    tomllib.TOMLDecodeError
+        If ``manifest`` is not valid TOML.
+    """  # ruff: ignore[docstring-extraneous-exception] - validation failures propagate from the parser and manifest checker.
     _check_members_manifest(tomllib.loads(manifest))
 
 
