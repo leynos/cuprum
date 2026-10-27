@@ -27,7 +27,7 @@ WARNING_DOCTEST = """//! Warning-bearing doctest fixture.
 /// ```
 pub struct WarningFixture;
 """
-CARGO_COMMAND_TIMEOUT_SECONDS = 7200
+CARGO_COMMAND_TIMEOUT_SECONDS = 1800
 
 
 def _run_doctests(

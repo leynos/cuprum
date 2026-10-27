@@ -243,7 +243,8 @@ def _read_modern_stable_pin_sites(root: pth.Path) -> dict[str, str]:
 
     guide = (root / "docs/developers-guide.md").read_text(encoding="utf-8")
     guide_match = re.search(
-        r"Modern-stable validation is pinned to Rust/Cargo `([\d.]+)`\.", guide
+        r"Modern-stable\s+validation\s+is\s+pinned\s+to\s+Rust/Cargo\s+`([\d.]+)`\.",
+        guide,
     )
     assert guide_match is not None, "the developer guide must publish the modern pin"
     return {"Makefile": match.group(1), "ci.yml": ci_pin, "guide": guide_match.group(1)}

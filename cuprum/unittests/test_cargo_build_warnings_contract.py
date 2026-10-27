@@ -16,7 +16,7 @@ MODERN_STABLE_TOOLCHAIN = "1.99.1"
 TARGET_DIR = repo_root() / "rust/target/cargo-build-warnings-contract"
 RUSTDOC_PROBE_REPORT = TARGET_DIR / "rustdoc-warning-probe.txt"
 BASE_RUSTFLAGS = "-C codegen-units=1"
-CARGO_COMMAND_TIMEOUT_SECONDS = 7200
+CARGO_COMMAND_TIMEOUT_SECONDS = 1800
 WARNING_SOURCE = "fn deliberately_unused() {}\npub fn ready() {}\n"
 FIXED_SOURCE = "pub fn ready() {}\n"
 CLIPPY_SOURCE = (

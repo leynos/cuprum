@@ -1,8 +1,3 @@
-#!/usr/bin/env -S uv run python
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["cuprum==0.1.0"]
-# ///
 """Prove modern-stable warning denial reaches the Rust build boundaries.
 
 The harness edits only a temporary Git worktree. It denies a cold warning,
