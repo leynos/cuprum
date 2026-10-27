@@ -144,6 +144,9 @@ def test_kani_fault_sensitivity_logs_are_archived() -> None:
     assert inputs.get("path") == ".cache/boundary-faults/runs", (
         "the archive must include the fault harness's retained run directories"
     )
+    assert inputs.get("include-hidden-files") is True, (
+        "the uploader must include logs beneath the hidden .cache directory"
+    )
     assert inputs.get("if-no-files-found") == "ignore", (
         "a failure before the harness creates a run must not hide its original error"
     )

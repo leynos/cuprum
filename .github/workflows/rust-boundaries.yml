@@ -258,6 +258,7 @@ jobs:
         with:
           name: boundary-fault-runs-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/boundary-faults/runs
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: ignore
 
