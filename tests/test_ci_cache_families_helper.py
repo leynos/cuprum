@@ -108,6 +108,22 @@ def test_other_cache_shapes_reject_a_compiler_version() -> None:
         )
 
 
+def test_matrix_compiler_shape_resolves_its_modern_version_scope() -> None:
+    """Resolve the modern cache family from the selected workflow matrix leg."""
+    scope = families._compiler_version_scope(
+        {
+            "compiler-shape": "${{ matrix.shape }}",
+            "compiler-version": "${{ env.MODERN_STABLE_TOOLCHAIN }}",
+        },
+        {"shape": "modern-stable"},
+        MESSAGE,
+        job_identity=("ci.yml", "modern-stable"),
+    )
+    assert scope == ("1.99.1",), (
+        "the selected modern-stable matrix leg must include its compiler version"
+    )
+
+
 @SETTINGS
 @given(
     flags=st.dictionaries(MATRIX_NAMES, st.booleans(), min_size=1, max_size=4),

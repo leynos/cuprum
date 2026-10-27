@@ -12,23 +12,19 @@ technical dependency of the modern compiler route.
 ## Toolchain selection
 
 The issue proposal named Rust/Cargo 1.98.1, while rejecting 1.98.0 because of a
-vtable miscompilation fixed by the
-[1.98.1 patch release](https://blog.rust-lang.org/2026/09/03/Rust-1.98.1/). At
-implementation, the
-[official Rust release index](https://blog.rust-lang.org/releases/latest/)
-identified Rust 1.99.1, released on 15 October 2026, as current stable. The
-route therefore selects Rust/Cargo 1.99.1. It is an explicit Makefile pin;
-`rust/rust-toolchain.toml` and the workspace's `rust-version = "1.85.0"` remain
-unchanged.
+vtable miscompilation fixed by the 1.98.1 patch release[^1]. At implementation,
+the official Rust release index[^2] identified Rust 1.99.1, released on
+15 October 2026, as current stable. The route therefore selects Rust/Cargo
+1.99.1. It is an explicit Makefile pin; `rust/rust-toolchain.toml` and the
+workspace's `rust-version = "1.85.0"` remain unchanged.
 
 Cargo 1.97 introduced `build.warnings` and the matching `CARGO_BUILD_WARNINGS`
-environment variable. See the [Cargo configuration reference][cargo-warnings]
-and [Rust 1.97 release notes][rust-1-97]. Cargo's setting changes local package
-lint-warning fatality without changing the compiler flags that identify the
-build artefact. The probe below found that Cargo also makes a warn-level
-Rustdoc lint on the local package fatal when this setting is present. The
-setting does not define every diagnostic emitted by dependency crates, build
-tools, or packaging tools.
+environment variable. See the Cargo configuration reference[^3] and Rust 1.97
+release notes[^4]. Cargo's setting changes local package lint-warning fatality
+without changing the compiler flags that identify the build artefact. The probe
+below found that Cargo also makes a warn-level Rustdoc lint on the local
+package fatal when this setting is present. The setting does not define every
+diagnostic emitted by dependency crates, build tools, or packaging tools.
 
 The pinned modern toolchain reported these versions on the Linux development
 host:
@@ -90,8 +86,8 @@ not a Rustdoc migration claim.
 
 The wheel action's existing `toolchain: stable` selection is outside this route
 and remains unchanged. The separate Maturin `build-backend` packaging
-diagnostic tracked by [issue #430](https://github.com/leynos/cuprum/issues/430)
-is not a Rust lint warning and is not addressed by Cargo's warning setting.
+diagnostic tracked by issue #430[^5] is not a Rust lint warning and is not
+addressed by Cargo's warning setting.
 
 ## CI and compiler-cache scope
 
@@ -227,7 +223,8 @@ and does not make compiler outputs interchangeable between Rust versions or
 backends. No speedup is claimed. The wheel route's mutable `stable` selection
 remains a separately reviewable follow-up.
 
-[cargo-warnings]:
-  <https://doc.rust-lang.org/cargo/reference/config.html#buildwarnings>
-[rust-1-97]:
-  <https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/>
+[^1]: <https://blog.rust-lang.org/2026/09/03/Rust-1.98.1/>
+[^2]: <https://blog.rust-lang.org/releases/latest/>
+[^3]: <https://doc.rust-lang.org/cargo/reference/config.html#buildwarnings>
+[^4]: <https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/>
+[^5]: <https://github.com/leynos/cuprum/issues/430>

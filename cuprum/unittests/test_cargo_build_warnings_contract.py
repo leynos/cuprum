@@ -113,6 +113,12 @@ def _host_target() -> str:
     return target
 
 
+@pytest.fixture(scope="session")
+def modern_stable_toolchain() -> tuple[str, str]:
+    """Probe the selected Cargo path and host triple once per test session."""
+    return _require_toolchain(), _host_target()
+
+
 def _crate(tmp_path: Path, name: str, source: str) -> Path:
     """Create one dependency-free library with a fixed lockfile."""
     crate = tmp_path / name
@@ -242,10 +248,11 @@ def _assert_fixed_warning_rebuilds(cargo: str, target: str, crate: Path) -> None
 
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
-def test_warning_policy_toggles_reuse_the_same_build_artefact(tmp_path: Path) -> None:
+def test_warning_policy_toggles_reuse_the_same_build_artefact(
+    tmp_path: Path, modern_stable_toolchain: tuple[str, str]
+) -> None:
     """Show warn/deny changes replay warnings without recompiling the crate."""
-    cargo = _require_toolchain()
-    target = _host_target()
+    cargo, target = modern_stable_toolchain
     crate = _crate(tmp_path, "warning-policy-fixture", WARNING_SOURCE)
 
     _assert_compiles_warning(cargo, target, crate)
@@ -257,11 +264,10 @@ def test_warning_policy_toggles_reuse_the_same_build_artefact(tmp_path: Path) ->
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
 def test_removing_rustflags_invalidates_an_otherwise_warm_build(
-    tmp_path: Path,
+    tmp_path: Path, modern_stable_toolchain: tuple[str, str]
 ) -> None:
     """Prove dropping the old warning flag causes only a one-off rebuild."""
-    cargo = _require_toolchain()
-    target = _host_target()
+    cargo, target = modern_stable_toolchain
     crate = _crate(tmp_path, "flag-invalidation-fixture", FIXED_SOURCE)
     old_flags = f"-D warnings {BASE_RUSTFLAGS}"
     original = _run_cargo(
@@ -306,11 +312,10 @@ def test_removing_rustflags_invalidates_an_otherwise_warm_build(
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
 def test_clippy_warning_is_denied_and_replayed_from_a_warm_build(
-    tmp_path: Path,
+    tmp_path: Path, modern_stable_toolchain: tuple[str, str]
 ) -> None:
     """Cargo policy denial also covers a local Clippy warning on a fresh build."""
-    cargo = _require_toolchain()
-    target = _host_target()
+    cargo, target = modern_stable_toolchain
     crate = _crate(tmp_path, "clippy-policy-fixture", CLIPPY_SOURCE)
     cold = _run_cargo(cargo, target, crate, "clippy")
     cold_output = _assert_fails_on_warning(
@@ -334,10 +339,11 @@ def test_clippy_warning_is_denied_and_replayed_from_a_warm_build(
 
 
 @pytest.mark.timeout(CARGO_COMMAND_TIMEOUT_SECONDS)
-def test_rustdoc_warning_policy_probe_records_its_observation(tmp_path: Path) -> None:
+def test_rustdoc_warning_policy_probe_records_its_observation(
+    tmp_path: Path, modern_stable_toolchain: tuple[str, str]
+) -> None:
     """Record Cargo's effect on a rustdoc warning without claiming migration."""
-    cargo = _require_toolchain()
-    target = _host_target()
+    cargo, target = modern_stable_toolchain
     crate = _crate(tmp_path, "rustdoc-policy-probe", RUSTDOC_SOURCE)
     result = _run_cargo(cargo, target, crate, "doc")
     output = _diagnostics(result)
@@ -361,11 +367,10 @@ def test_rustdoc_warning_policy_probe_records_its_observation(tmp_path: Path) ->
     reason="a configured compiler wrapper is required for the wrapper variant",
 )
 def test_warning_policy_replay_works_through_the_configured_wrapper(
-    tmp_path: Path,
+    tmp_path: Path, modern_stable_toolchain: tuple[str, str]
 ) -> None:
     """Preserve warm warning replay when the environment uses sccache."""
-    cargo = _require_toolchain()
-    target = _host_target()
+    cargo, target = modern_stable_toolchain
     crate = _crate(tmp_path, "wrapped-warning-fixture", WARNING_SOURCE)
     cold = _run_cargo(cargo, target, crate, "build", warnings="warn")
     cold_output = _diagnostics(cold)
