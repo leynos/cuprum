@@ -156,7 +156,7 @@ def test_a_deadline_expiry_still_reports_what_the_child_printed(
         *descendant_then_exit_argv(
             pid_file,
             exit_code=0,
-            stdout_marker=_CHILD_MARKER,
+            stdout_chunks=(f"{_CHILD_MARKER}\n",),
         ),
     )
 

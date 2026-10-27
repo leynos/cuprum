@@ -30,6 +30,7 @@ from cuprum._subprocess_stdin_reclaim import (
     _STDIN_FINALIZER_RECLAIM_S,
     _STDIN_SETTLE_GRACE_S,
     _cancel_stdin_writer,
+    _retrieve_task_outcome,
 )
 
 if typ.TYPE_CHECKING:
@@ -112,7 +113,7 @@ async def _finalize_stdin_source(
     # paths that matter most are the ones it is hardest to reach — a task
     # cancelled by the reclaim that then fails as it unwinds raises *after* the
     # reclaim returns, where no later statement of this function runs at all.
-    task.add_done_callback(_retrieve_finalizer_outcome)
+    task.add_done_callback(_retrieve_task_outcome)
     try:
         await asyncio.wait((task,), timeout=_STDIN_SETTLE_GRACE_S)
     except asyncio.CancelledError:
@@ -159,36 +160,3 @@ def _schedule_finalizer(
     with contextlib.suppress(Exception):
         return asyncio.ensure_future(aclose())
     return None
-
-
-def _retrieve_finalizer_outcome(task: asyncio.Task[None]) -> None:
-    """Retrieve a finished finalizer's outcome so the loop never reports it.
-
-    A finalizer that raised after the window, or that failed while the reclaim
-    was cancelling it, would otherwise leave its exception on the task with
-    nothing to retrieve it, and the loop reports that as an unretrieved task
-    exception — noise attributing a failure to a producer cuprum has already
-    stopped caring about. This is what makes the bounded window mean
-    *bounded*: past the window the outcome cannot reach the caller, so the
-    only question left is whether the loop is told about it.
-
-    Registered as a done callback rather than called from the waiting paths,
-    because the outcome this exists for is the one no waiting path reaches. It
-    cannot change the run's outcome, which the caller has already decided.
-
-    Parameters
-    ----------
-    task : asyncio.Task[None]
-        The finalization that has just finished.
-    """
-    if task.cancelled():
-        # ``exception()`` raises ``CancelledError`` for a cancelled task, so
-        # the cancellation is consumed by checking for it rather than by
-        # calling it and suppressing what comes back. A finalizer cuprum
-        # cancelled itself is the ordinary expiry case, not a fault.
-        return
-    # One deliberate blind retrieval: this is the only way to mark a task's
-    # exception as observed, and retrieving it is the entire purpose. Nothing
-    # here can report it — the run it belonged to has already ended.
-    with contextlib.suppress(BaseException):
-        task.exception()

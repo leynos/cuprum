@@ -14,9 +14,9 @@ re-exported across a module boundary for the step to resolve.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_callbacks import _chain_line_hooks
@@ -37,11 +37,11 @@ from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
-    import asyncio
+    import collections.abc as cabc
 
     from cuprum._line_stream.line_queue import _LineQueueItem
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum.lines import _LineHookFn
+    from cuprum.lines import LineEvent, _LineHookFn
 
 __all__ = [
     "_abandon_unstarted_run",
@@ -49,6 +49,16 @@ __all__ = [
     "_start_line_stream_run",
     "_with_line_sink_hooks",
 ]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _LineStreamSetup:
+    """Share the queue, telemetry and settlement boundary for one run."""
+
+    queue: asyncio.Queue[_LineQueueItem]
+    telemetry: _LineStreamTelemetry
+    settlement_started: asyncio.Event
+    discard_on_cancel: asyncio.Event
 
 
 async def _start_line_stream_run(
@@ -87,27 +97,32 @@ async def _start_line_stream_run(
         exec_id=execution.observation.exec_id,
         queue_capacity=queue.maxsize,
     )
+    setup = _LineStreamSetup(queue, telemetry, asyncio.Event(), asyncio.Event())
     # Rebound, not passed straight to the spawn: the stream consumers read
     # ``on_line`` off the execution too, so a chained hook that only reached
     # ``_spawn_subprocess`` would leave the queue sink uninstalled and starve
     # the iterator.
-    execution = _with_line_sink_hooks(execution, queue, telemetry)
+    execution = _with_line_sink_hooks(execution, setup)
     # Sampled *before* the spawn await, matching ``_sample_run_start`` on the
-    # direct path. ``started_at`` is the reference ``duration_s`` and every
-    # per-line ``at`` stamp are measured against, and the exit event's
-    # ``started_at`` is published from it, so a reading taken afterwards would
-    # report a run shorter than the time it actually took — by however long the
-    # spawn blocked. Stamping the bundle reads no clock, so doing it first does
-    # not disturb the ordering this reference exists to establish.
+    # direct path. ``started_at`` is the reference every per-line ``at`` stamp
+    # is measured against and the exit event's ``started_at`` is published
+    # from, so a reading taken afterwards would report a run shorter than the
+    # time it actually took — by however long the spawn blocked. Stamping the
+    # bundle reads no clock, so doing it first does not disturb the ordering
+    # this reference exists to establish.
+    # Read from the observation rather than a module-level clock, because the
+    # post-exit deadline subtracts it from that same injectable reading: a
+    # start taken from a different clock would make the subtraction the
+    # difference between two clocks rather than a duration.
     # Rebuilt, not mutated: the stream consumers read ``started_at`` off the
     # execution when stamping each ``LineEvent``. Left at its ``0.0`` default,
     # every ``at`` would be the machine's monotonic uptime rather than seconds
     # since this command started.
-    started_at = perf_counter()
+    started_at = execution.observation.monotonic_clock()
     execution = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(execution)
     pid = process.pid
-    run = _build_unstarted_run(process, execution, queue, telemetry)
+    run = _build_unstarted_run(process, execution, setup)
     try:
         if execution.idle is not None:
             # Armed here, once the child is running, exactly as the streamed
@@ -150,6 +165,7 @@ async def _abandon_unstarted_run(
     # this one for the rest of the spawn machinery.
     from cuprum._line_stream.coordinator import _discard_drain
 
+    run.settlement_started.set()
     await _stop_idle_monitor(execution.idle)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
     await _terminate_all_shielded(
@@ -166,8 +182,7 @@ async def _abandon_unstarted_run(
 
 def _with_line_sink_hooks(
     execution: _SubprocessExecution,
-    queue: asyncio.Queue[_LineQueueItem],
-    telemetry: _LineStreamTelemetry,
+    setup: _LineStreamSetup,
 ) -> _SubprocessExecution:
     """Chain the caller's ``on_line`` ahead of the driver's queue sink.
 
@@ -181,20 +196,51 @@ def _with_line_sink_hooks(
         The execution whose per-line callback feeds both the caller and the
         queue.
     """
-    hooks: list[_LineHookFn] = []
-    if execution.on_line is not None:
-        hooks.append(_observed_line_hook(execution.on_line, "callback", telemetry))
-    hooks.append(
-        _observed_line_hook(_queue_line_sink(queue, telemetry), "queue", telemetry)
+    queue_hook = _observed_line_hook(
+        _queue_line_sink(
+            setup.queue,
+            setup.telemetry,
+            settlement_started=setup.settlement_started,
+        ),
+        "queue",
+        setup.telemetry,
     )
-    return dc.replace(execution, on_line=_chain_line_hooks(hooks))
+    chained_hook = (
+        queue_hook
+        if execution.on_line is None
+        else _chain_line_hooks(
+            _observed_line_hook(execution.on_line, "callback", setup.telemetry),
+            queue_hook,
+        )
+    )
+    return dc.replace(
+        execution,
+        on_line=_stop_line_hook_after_settlement(
+            chained_hook,
+            setup.settlement_started,
+        ),
+    )
+
+
+def _stop_line_hook_after_settlement(
+    hook: _LineHookFn,
+    settlement_started: asyncio.Event,
+) -> _LineHookFn:
+    """Stop decoded line side effects after teardown takes ownership."""
+
+    def deliver(event: LineEvent) -> cabc.Awaitable[None] | None:
+        """Skip unpublished lines once the run begins settling."""
+        if settlement_started.is_set():
+            return None
+        return hook(event)
+
+    return deliver
 
 
 def _build_unstarted_run(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
-    queue: asyncio.Queue[_LineQueueItem],
-    telemetry: _LineStreamTelemetry,
+    setup: _LineStreamSetup,
 ) -> _LineStreamRun:
     """Build the run and own every task it will need, before anything can fail.
 
@@ -212,11 +258,17 @@ def _build_unstarted_run(
     """
     # The same wiring ``run()`` uses, so iterating lines can never silently
     # diverge from it on capture, echo, or sink selection.
-    spawn = _prepare_stream_spawn(execution, process.pid)
+    spawn = _prepare_stream_spawn(
+        execution,
+        process.pid,
+        discard_on_cancel=setup.discard_on_cancel,
+        settlement_started=setup.settlement_started,
+    )
     return _LineStreamRun(
         process=process,
         tasks=_build_run_task_ownership(process, execution, spawn),
-        queue=queue,
-        started_at=execution.started_at,
-        telemetry=telemetry,
+        queue=setup.queue,
+        settlement_started=setup.settlement_started,
+        execution=execution,
+        telemetry=setup.telemetry,
     )

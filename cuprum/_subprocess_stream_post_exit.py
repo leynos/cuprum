@@ -37,7 +37,10 @@ import asyncio
 import typing as typ
 
 from cuprum._process_lifecycle import _terminate_all_shielded
-from cuprum._subprocess_stdin_reclaim import _settle_stdin_writer
+from cuprum._subprocess_stdin_reclaim import (
+    _await_task_to_completion,
+    _settle_stdin_writer,
+)
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
@@ -56,9 +59,32 @@ async def _settle_owned_group_before_draining(
     child left behind is still in the group, still holds the write end of the
     run's pipes, and no signal aimed at the leader can reach it. Draining first
     would spend the bounded capture grace on readers that cannot reach EOF and
-    then discard output the descendant was still producing. The teardown is
-    shielded like every other one on a failure path, so a cancellation arriving
-    during its grace period cannot skip the escalation.
+    then discard output the descendant was still producing.
+
+    So the group is settled on every teardown that would otherwise be blocked
+    by it, and it lives here rather than beside any one run shape because
+    three of them call it: the streamed run before its gather, the line stream
+    before its post-exit drain, and the direct run's teardown — which reclaims
+    its writer first and settles the group second, hence the ordering note
+    below. Two neighbouring shapes answer the same question without calling
+    it. The owned handle has its own helper in
+    :mod:`cuprum._process_handle.coordinator`, which takes the handle's record
+    rather than a bundle; pipelines reach the capped wait through
+    ``_terminate_all_shielded``, because they own several stage groups rather
+    than one.
+
+    Only the exit paths that are already tearing a run down settle. The
+    success path of a direct run, whose child exited within its budget and
+    whose writer finished, does not: descendants a caller deliberately left
+    running are the caller's to manage, and killing the group there would
+    contradict what ``run()`` promises. The direct run's own teardown reclaims
+    the writer *first* and settles the group second, so the pair shares one
+    shield; that order is the opposite of the gather-based paths, where
+    settlement must precede a drain that would otherwise wait for EOF the
+    descendant never provides.
+
+    The teardown is shielded like every other one on a failure path, so a
+    cancellation arriving during its grace period cannot skip the escalation.
 
     A run that does not own its group has nothing to do here — its only
     teardown target is the direct child, which has already exited on every path
@@ -101,10 +127,33 @@ async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     child already reaped and outlast the run's own deadline. The settle window
     plus the cancel it falls back to is what makes the wait terminate in that
     case, and it reclaims the task rather than leaving it parked.
+
+    The settle is wrapped in a task this frame keeps, rather than handed to
+    ``asyncio.shield`` as a bare coroutine, and the wrapper is what keeps a
+    late failure from being reported against no one. A bare
+    ``asyncio.shield(coro)`` creates the task itself and holds no reference to
+    it, and once the outer future is cancelled ``shield``'s done callback is
+    removed from the inner task — CPython does that deliberately, so that a
+    cancelled shield stops propagating the inner result. A settle that then
+    finishes with a failure, which is exactly what happens when the writer
+    fails inside the grace window, is left with nothing to retrieve it, and the
+    loop reports ``Task exception was never retrieved`` against a run that has
+    already ended.
+
+    The await itself therefore goes through
+    :func:`~cuprum._subprocess_stdin_reclaim._await_task_to_completion` rather
+    than ``asyncio.shield``, which retrieves the outcome whichever side of the
+    cancellation it lands on. That is not merely tidier than retaining the
+    settle and shielding it: from Python 3.14 ``shield`` re-registers its own
+    reporter on a still-pending inner task when the awaiting future is
+    cancelled, and the report it produces cannot be prevented by retrieving the
+    outcome first. A failure that arrives *before* the cancellation still
+    propagates as before.
     """
     if tasks.stdin_task is None:
         return
-    await asyncio.shield(_settle_stdin_writer(tasks.stdin_task))
+    settle = asyncio.ensure_future(_settle_stdin_writer(tasks.stdin_task))
+    await _await_task_to_completion(settle)
 
 
 __all__ = [

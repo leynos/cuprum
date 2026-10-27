@@ -12,6 +12,13 @@ this module keep working unchanged. Timing and child resource usage are
 measured here, with ``cuprum._wait4_spawn`` owning the direct child's
 ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps the three
 pre-spawn readings together so their shared ordering cannot drift.
+
+What a settled run is — :class:`~cuprum._subprocess_outcome._DirectCompletion`
+— and the result class it becomes are assembled in
+``cuprum._subprocess_outcome``: this module owns *when* a run settles, that one
+owns *what* it reports. Its relay-fallback flattening and its completion record
+are re-exported here, because two reporting paths and the tests that replace
+them have always named this module.
 """
 
 from __future__ import annotations
@@ -22,20 +29,25 @@ import typing as typ
 from cuprum import _wait4_spawn
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._result_assembly import (
-    _is_captured_text_pair,
-    _recorded_captures,
-    _require_bytes,
-    _require_captured_text,
-    _require_text,
-    _RunMeasurements,
+from cuprum._result_assembly import _RunMeasurements
+from cuprum._subprocess_direct_run import (
+    # Imported, not merely re-exported: the direct run path below is the caller.
+    _run_subprocess_without_streams,
 )
-from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_outcome import (
+    _build_command_result,
+    _DirectCompletion,
+)
+
+# Re-exported so the two importers that have always reached for this under
+# this module's name, and the tests that patch it here, keep resolving. The
+# construction itself lives in the outcome module.
+from cuprum._subprocess_outcome import (
+    _relay_fallbacks_for_result as _relay_fallbacks_for_result,
+)
 from cuprum._subprocess_spawn import _start_owned_process, _SubprocessExecution
 from cuprum._subprocess_stream_run import (
-    # Imported, not merely re-exported: the direct run path below is the caller.
     _run_subprocess_with_streams,
-    _run_subprocess_without_streams,
 )
 from cuprum._subprocess_streams import (
     _build_stream_config as _build_stream_config,
@@ -50,11 +62,9 @@ from cuprum._subprocess_streams import (
     _StreamConsumerSpawnContext as _StreamConsumerSpawnContext,
 )
 from cuprum._subprocess_timeout import (
-    _emit_exit_event,
-    _ExitEventDetails,
-    _handle_subprocess_timeout,
-    _SubprocessTimeoutContext,
+    _emit_run_exit_event,
     _SubprocessTimeoutError,
+    _translate_run_timeout,
 )
 from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout as _wait_for_exit_code_within_timeout,
@@ -69,8 +79,6 @@ if typ.TYPE_CHECKING:
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.capture_policy import CapturedStream
-    from cuprum.echo_events import RelayFallback
-    from cuprum.program import Program
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -101,62 +109,11 @@ def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
     )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _DirectCompletion:
-    """The settled facts of a direct run, once its streams have reconciled.
-
-    ``stdout_text``, ``stderr_text``, ``captures``, and ``relay_diagnostics``
-    stay ``None`` (or, for ``captures``, empty) on the direct path, which
-    captures nothing; the stream path overwrites all four. Returning them as
-    one record keeps the waiting and the result assembly in separate helpers,
-    so neither accumulates enough locals to trip the repository's
-    ``too-many-locals`` ceiling.
-
-    The two payload fields are typed ``str | bytes`` because the drain reports
-    whichever the run's mode asked for. Nothing here inspects the type: the
-    mode is read once, at the seam that chooses which result class to build,
-    so the payload reaches its field unexamined.
-
-    ``captures`` carries the drain's own records, in stdout-then-stderr order,
-    and travels beside the payloads rather than being read off the drain a
-    second time: the drain happens exactly once per run, and only its result
-    knows how each policy retained its stream.
-    """
-
-    exit_code: int
-    exited_at: float
-    stdout_text: _StreamPayload | None
-    stderr_text: _StreamPayload | None
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
-    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
-
-
-def _relay_fallbacks_for_result(
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None,
-) -> tuple[RelayFallback, ...]:
-    """Flatten per-stream diagnostics into one result tuple.
-
-    The order is stdout's records then stderr's; each record carries its own
-    stream, and this order does not reconstruct chronological interleaving
-    between the two streams.
-
-    Returns
-    -------
-    tuple[RelayFallback, ...]
-        The command's categorical echo-failure and delivery-loss records,
-        empty when its diagnostics are absent or recorded nothing.
-    """
-    if relay_diagnostics is None:
-        return ()
-    return relay_diagnostics[0].snapshot() + relay_diagnostics[1].snapshot()
-
-
 async def _await_direct_completion(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     *,
     pid: int | None,
-    started_at: float,
 ) -> _DirectCompletion:
     """Wait for the child to settle and report how it ended as one record."""
     # The direct path captures nothing; the stream path overwrites these values.
@@ -164,8 +121,11 @@ async def _await_direct_completion(
     stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
+    # Read once: the same fact chooses the run shape and decides, below, whether
+    # a bare ``TimeoutError`` is the run's expiry or a reader's own failure.
+    has_consumers = execution.consumes_stdout or execution.consumes_stderr
     try:
-        if execution.consumes_stdout or execution.consumes_stderr:
+        if has_consumers:
             (
                 exit_code,
                 exited_at,
@@ -185,15 +145,27 @@ async def _await_direct_completion(
                 process,
                 execution,
             )
-    except (TimeoutError, _SubprocessTimeoutError) as exc:
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=execution,
-                process=process,
-                started_at=started_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-            ),
+    except _SubprocessTimeoutError as exc:
+        _translate_run_timeout(
+            execution,
+            process,
+            (stdout_text, stderr_text),
+            exc,
+        )
+    except TimeoutError as exc:
+        if has_consumers:
+            # The streamed path translates every expiry of its own before this
+            # frame sees it, so a bare ``TimeoutError`` escaping it is a
+            # reader's own failure — an ``on_line`` hook using
+            # ``asyncio.timeout`` internally, say — and must reach the caller
+            # unchanged. Only the direct path can still raise one here: its
+            # exit wait re-raises the bare ``TimeoutError`` on both the
+            # non-positive and the elapsed positive deadline routes.
+            raise
+        _translate_run_timeout(
+            execution,
+            process,
+            (stdout_text, stderr_text),
             exc,
         )
     finally:
@@ -230,22 +202,17 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandRes
         process,
         execution,
         pid=pid,
-        started_at=started_at,
     )
 
     rusage = _wait4_spawn.resource_usage_for(process, run_start.rusage_before)
-    _emit_exit_event(
-        execution.observation,
-        _ExitEventDetails(
-            pid=pid,
-            exit_code=completion.exit_code,
-            started_at=started_at,
-            exited_at=completion.exited_at,
-            # The same measurement the returned result carries, so a consumer
-            # reading the event stream sees the figures the caller sees rather
-            # than having to correlate an event with a result object.
-            resource_usage=rusage,
-        ),
+    # The same measurement the returned result carries, so a consumer reading
+    # the event stream sees the figures the caller sees rather than having to
+    # correlate an event with a result object.
+    _emit_run_exit_event(
+        execution,
+        completion,
+        pid=pid,
+        resource_usage=rusage,
     )
     return _build_command_result(
         execution,
@@ -259,119 +226,6 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandRes
             relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
         ),
     )
-
-
-def _build_command_result(
-    execution: _SubprocessExecution,
-    completion: _DirectCompletion,
-    measurements: _RunMeasurements,
-) -> _AnyCommandResult:
-    """Assemble the run's result, choosing the class its mode calls for.
-
-    This is the only place either result class is constructed, and the only
-    place the run's mode is read on the way out. One builder rather than two
-    keeps every measurement — duration, rusage, the relay diagnostics — from
-    being computed twice under two names, which is how a binary run would come
-    to report figures that a text run of the same command did not. The two
-    constructions differ in the class, in the narrowing of the captured
-    payloads, and in the capture records the class can carry; both narrowing
-    rules are read from :mod:`cuprum._result_assembly` rather than restated
-    here.
-
-    Every class carries ``captures``. A byte-exact run needs it most: a spilled
-    stream is read back, so a failed write or a failed flush can shorten the
-    payload it hands over, and the payload alone cannot say so. The text run
-    needs it for the complementary reason: a ``FileBackedCapture`` that spilled
-    reports ``None`` rather than text, and the record is then the only thing
-    naming the file that holds the stream.
-
-    Text capture narrows to ``CapturedResult`` only when *both* settled
-    payloads are decoded text. That class promises two strings, and a run that
-    captured one stream alone, or spilled one to a file, settles the other as
-    ``None`` — a stream it did capture, which the narrowed class would have to
-    reject. Those runs report the payloads and their records as an ordinary
-    ``CommandResult``.
-
-    Returns
-    -------
-    CommandResult | BytesCommandResult
-        A ``BytesCommandResult`` when the run captured bytes, a
-        ``CapturedResult`` when both text streams are decoded text, or an
-        ordinary ``CommandResult`` otherwise.
-    """
-    sh = _sh_module()
-    shared = _shared_result_fields(execution, completion, measurements)
-    if execution.capture_bytes:
-        return sh.BytesCommandResult(
-            **shared,
-            stdout=_require_bytes(completion.stdout_text, "stdout"),
-            stderr=_require_bytes(completion.stderr_text, "stderr"),
-        )
-    if _is_captured_text_pair(completion.stdout_text, completion.stderr_text):
-        return sh.CapturedResult(
-            **shared,
-            stdout=_require_captured_text(
-                completion.stdout_text,
-                "stdout",
-                program=execution.cmd.program,
-                exec_id=str(execution.observation.exec_id),
-            ),
-            stderr=_require_captured_text(
-                completion.stderr_text,
-                "stderr",
-                program=execution.cmd.program,
-                exec_id=str(execution.observation.exec_id),
-            ),
-        )
-    return sh.CommandResult(
-        **shared,
-        stdout=_require_text(completion.stdout_text, "stdout"),
-        stderr=_require_text(completion.stderr_text, "stderr"),
-    )
-
-
-class _SharedResultFields(typ.TypedDict):
-    """The result fields every output mode of a settled run declares.
-
-    Declared rather than left as ``dict[str, object]`` so unpacking it into a
-    result constructor keeps each field's type: an opaque value type would
-    make the ``**`` argument unrepresentable to the type checker, and the
-    fields would stop being checked against the declarations they fill.
-    """
-
-    program: Program
-    argv: tuple[str, ...]
-    exit_code: int
-    pid: int
-    started_at: float
-    duration: float
-    max_rss_bytes: int | None
-    user_cpu_seconds: float | None
-    system_cpu_seconds: float | None
-    resolved_path: str | None
-    relay_fallbacks: tuple[RelayFallback, ...]
-    captures: tuple[CapturedStream, ...]
-
-
-def _shared_result_fields(
-    execution: _SubprocessExecution,
-    completion: _DirectCompletion,
-    measurements: _RunMeasurements,
-) -> _SharedResultFields:
-    """Build the fields every result class of a settled run declares.
-
-    Returns
-    -------
-    _SharedResultFields
-        The shared constructor fields, keyed by parameter name.
-    """
-    return {
-        "program": execution.cmd.program,
-        "argv": execution.cmd.argv,
-        "exit_code": completion.exit_code,
-        **measurements.as_kwargs(),
-        "captures": _recorded_captures(completion.captures),
-    }
 
 
 # The execution bundle, its spawn start, the spawn seam itself, and the
@@ -388,6 +242,10 @@ __all__ = [
     "_build_stream_config",
     "_create_stream_callback",
     "_execute_subprocess",
+    # Re-exported from ``cuprum._subprocess_outcome`` so the process-handle
+    # and line-stream reporting paths keep importing it by this name; the
+    # direct path above calls it from here.
+    "_relay_fallbacks_for_result",
     "_run_subprocess_with_streams",
     # Re-exported so the tests that neutralize the direct path can keep
     # patching it where they always have.

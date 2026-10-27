@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import types
 import typing as typ
 
 from cuprum import RunOutputOptions
@@ -55,27 +57,74 @@ def test_line_event_queue_is_finite() -> None:
     )
 
 
-def test_lines_stamp_events_from_the_spawn_clock(
+def test_lines_stamp_events_from_the_observation_clock(
     monkeypatch: pytest.MonkeyPatch,
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """The line event clock subtracts the reference stamped after spawning."""
-    from cuprum import _line_callbacks
-    from cuprum._line_stream import spawn
+    """Line stamps, start reference, and deadline all read one clock.
 
-    # The spawn phase samples its own reference clock.
-    monkeypatch.setattr(spawn, "perf_counter", lambda: 40.0)
-    monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
+    One injected clock serves the whole run: its first reading becomes the
+    start reference, and every later reading the stamp and the post-exit
+    deadline are computed against. Two things are asserted, and neither is
+    reachable by a coincidence of the machine's own uptime:
+
+    * the stamp is the injected elapsed time, which can only hold if the start
+      reference and the stamping read came from the same callable;
+    * the run completes inside its deadline. The injected origin sits far
+      above the machine's uptime, so a start taken from the real clock would
+      compute an elapsed time larger than the whole timeout, which the
+      post-exit drain reports as ``TimeoutExpired``.
+
+    A stamp read from some *other* clock fails the first assertion instead: it
+    subtracts the injected origin from a real reading, which is negative and
+    therefore floors to ``0.0``. So each of the two ways to split the clock —
+    a start from elsewhere, or a stamp from elsewhere — fails on its own.
+
+    The clock is installed by replacing ``_command_internals.time``, the
+    construction site that resolves the observation's ``monotonic_clock``,
+    with a namespace of this test's own. Patching ``perf_counter`` on the
+    standard-library module instead would reach every caller in the process:
+    a start or stamp read directly from ``time.perf_counter()`` would receive
+    the injected value too, so the split-clock regression this test exists to
+    catch would pass. Patching the ``_StageObservation`` field default would
+    not reach the run either: it binds at class creation, before any test
+    patches anything.
+    """
+    from cuprum import _command_internals
+
+    # Deliberately above any real ``perf_counter`` reading (the machine's
+    # uptime, in seconds), so a stray real reading cannot be mistaken for the
+    # injected one: a real stamp reads *below* this origin and floors to
+    # ``0.0``, and a real deadline read leaves no time at all.
+    clock_origin = 1e12
+    readings = iter([clock_origin])
+
+    def observation_clock() -> float:
+        """Answer the injected start once, then the injected "now"."""
+        return next(readings, clock_origin + 3.25)
+
+    monkeypatch.setattr(
+        _command_internals,
+        "time",
+        types.SimpleNamespace(perf_counter=observation_clock, time=time.time),
+    )
     command = python_builder("-c", "print('clock')")
 
-    async def collect() -> list[LineEvent]:
-        """Iterate the command and retain its one clock-stamped event."""
-        return [event async for event in command.lines()]
+    async def collect() -> tuple[list[LineEvent], object]:
+        """Iterate the command, reporting its events and its result."""
+        stream = command.lines(timeout=30.0)
+        events = [event async for event in stream]
+        return events, stream.result
 
-    events = asyncio.run(collect())
+    events, result = asyncio.run(collect())
 
     assert [event.at for event in events] == [3.25], (
-        f"line timestamps must use the injected spawn reference, got {events!r}"
+        "line timestamps must be measured from the observation clock the "
+        f"start reference was sampled from, got {events!r}"
+    )
+    assert result is not None, (
+        "a run whose post-exit drain stays inside its deadline must complete "
+        "rather than report an expiry"
     )
 
 

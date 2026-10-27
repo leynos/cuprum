@@ -1,34 +1,36 @@
 """A cancelled run must *settle* cooperative cleanup, not cancel it part-way.
 
 ``cuprum.unittests.test_stdin_finalizer_bound`` pins the budget that makes this
-possible as arithmetic: a writer's reclaim window is one pipe-release step plus
-the finalization's two. Arithmetic is not the property a caller depends on,
+possible as arithmetic: the actual pipe-close grace, both finalization windows,
+and a scheduling grace. Arithmetic is not the property a caller depends on,
 though, and this module measures the one that is — that a producer which
 releases promptly is allowed to *finish* releasing when the run that owns it is
 cancelled, rather than being cut off at the first suspension.
 
 The producer here is cooperative in the sense the budget was derived for: it
-parks, and when it is finalized it releases over a bounded interval that fits
-inside the window it is given. Cleanup that ignores cancellation is the
+parks, then finishes its release inside the reclaim window after cancellation.
+Cleanup that ignores cancellation is the
 documented cooperation limit — cuprum bounds its own wait and says so — and is
 measured by the bound module instead.
 
-Two readings were tried against a collapsed budget, and only one of them is
-worth asserting. The obvious one, a census of pending tasks when the cancelled
+Two readings separate the corrected bound from the old budget, and only one of
+them is worth asserting. The obvious one, a census of pending tasks when the cancelled
 run returns, does not distinguish the budgets at all: a later reconcile path
 sweeps the writer up under both, so the census reads empty either way and a
 test built on it would be vacuous. The reading that does distinguish them is
-whether the producer's release completed. Measured with the budget collapsed
-back to a single window:
+whether the producer's release completed. The expected outcomes under the
+corrected and old budgets are:
 
-    budget 0.75  entered=True completed=True  cancelled=False
-    budget 0.25  entered=True completed=False cancelled=True
+    budget 1.25  entered=True completed=True  cancelled=False
+    budget 0.75  entered=True completed=False cancelled=True
 
-The reason the small budget cannot cover it is structural rather than a matter
-of margin. Release (close) costs a full window on its own, and it is the grand-
-child holding the child's stdin read end that makes it do so: the pipe cannot
-be closed while that descriptor lives, so the close waits its window out and
-the collapsed budget is exhausted before the producer's cleanup is reached.
+The old budget cannot cover the nested sequence because its pipe-close term
+was counted as one 0.25-second settle step, although the actual close grace is
+0.5 seconds. The grandchild keeps the child's stdin read end open, so the close
+spends its full 0.5 seconds; the finalizer then uses its initial 0.25-second
+wait and nearly all of its 0.25-second reclaim window. The extra settle grace
+in the outer budget lets that finalizer finish before the writer is reported
+reclaimed.
 
 The model is a class rather than an async generator so that ``aclose`` is
 plainly the producer's own hook, reachable exactly as the writer reaches it,
@@ -65,16 +67,11 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, SafeCmd
     from cuprum.unittests._stdin_run_cancellation_support import _CancellationProbe
 
-# How long the producer's release takes, handwritten rather than derived from
-# the production constants: deriving it would restate the budget instead of
-# measuring it. It has to satisfy two conditions, and both are the point.
-#
-# It must fit inside the finalization window, which is what makes the producer
-# cooperative — a release longer than the window is one cuprum would be right to
-# cancel, and the bound module already covers that case. It must also be long
-# enough that a writer holding only the collapsed budget cannot reach it, which
-# the close window's cost guarantees rather than this figure.
-_FINALIZER_RELEASE_S = 0.10
+# How long the producer needs after cancellation to finish its release. It is
+# handwritten rather than derived from the production constants: deriving it
+# would restate the budget instead of measuring it. It nearly fills the
+# finalizer reclaim window, exercising the outer budget's scheduling margin.
+_FINALIZER_RELEASE_AFTER_CANCEL_S = 0.24
 
 # The child hands its own stdin read end to a grandchild and exits at once
 # without reading a byte. Two things follow, and the test needs both. The writer
@@ -107,7 +104,7 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
 
 
 class _CooperativeProducer:
-    """A producer that parks, then releases when finalized, and records how.
+    """A producer that releases after cancellation and records completion.
 
     The record distinguishes *finishing* the release from being interrupted
     inside it, because that distinction is the whole subject: the two budgets
@@ -146,16 +143,17 @@ class _CooperativeProducer:
         return b"x" * drain_blocking_payload_size()
 
     async def aclose(self) -> None:
-        """Release over a bounded interval, recording whether it finished.
+        """Wait for cancellation, then complete a bounded release.
 
-        ``release_completed`` is set only on the path that ran the whole
-        interval, so it is the reading that separates being waited for from
-        being cancelled at the first suspension. ``release_started`` is what
-        keeps that honest: a run that never reached this hook would leave the
-        flag clear too, and the two must not be confusable.
+        The initial wait forces the writer's finalizer window to expire. The
+        release then takes nearly the whole reclaim window, so the outer writer
+        budget must include enough time for both nested stages to finish.
         """
         self.release_started = True
-        await asyncio.sleep(_FINALIZER_RELEASE_S)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(_FINALIZER_RELEASE_AFTER_CANCEL_S)
         self.release_completed = True
         self.probe.finalized.append(_FINALIZED)
 
@@ -235,15 +233,14 @@ def test_a_cooperative_finalizer_is_settled_before_the_run_returns(
     monkeypatch: pytest.MonkeyPatch,
     capture: bool,
 ) -> None:
-    """A cancelled run lets a prompt release finish instead of cutting it off.
+    """A cancelled run lets a cooperative release finish instead of cutting it off.
 
     The writer's teardown is real work rather than a formality: release the
     pipe, which costs its full window here because the child's read end is
-    still held, and then finalize a producer that needs a bounded moment to let
-    go. cuprum asks the writer to stop, the writer runs that teardown inside its
-    own cancellation, and the reclaim window has to cover both — which is what
-    deriving it from the steps it spans buys, and all that the collapsed figure
-    fails to buy.
+    still held, then wait out the producer's first finalization window, and
+    finally let its cancellation-aware release finish near the end of the
+    reclaim window. The writer reclaim budget has to cover that nested sequence
+    and a scheduling margin.
 
     The caller then sees a settled loop as well: the producer finalized, the
     child reaped, the writer done, the pipe closed, and no run-owned task

@@ -17,6 +17,7 @@ from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.telemetry import _LineStreamTelemetry
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.line_stream_events import LineStreamSink
     from cuprum.lines import LineEvent, _LineHookFn
@@ -56,15 +57,22 @@ class _LineStreamRun:
     queue:
         The queue every ``LineEvent`` is posted to; the sentinel ends
         iteration.
-    started_at:
-        Monotonic reference the per-line ``at`` stamps are measured from.
+    execution:
+        The bundle stamped with the run's monotonic start reference and wired
+        with the queue sink. It travels with the run rather than being handed
+        alongside it because the two are only meaningful together: the
+        post-exit deadline is a remainder from this bundle's ``started_at``,
+        so a coordinator holding the process without the stamping would
+        measure the child against whatever ``0.0`` default the caller's bundle
+        was built with.
 
     """
 
     process: asyncio.subprocess.Process
     tasks: _RunTaskOwnership
     queue: asyncio.Queue[_LineQueueItem]
-    started_at: float
+    settlement_started: asyncio.Event
+    execution: _SubprocessExecution
     telemetry: _LineStreamTelemetry
 
 
@@ -76,6 +84,8 @@ def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
 def _queue_line_sink(
     queue: asyncio.Queue[_LineQueueItem],
     telemetry: _LineStreamTelemetry | None = None,
+    *,
+    settlement_started: asyncio.Event | None = None,
 ) -> _LineHookFn:
     """Return an asynchronous hook that posts each ``LineEvent`` to the queue.
 
@@ -96,11 +106,59 @@ def _queue_line_sink(
         """Post one stamped line to the consumer queue."""
         if telemetry is not None:
             telemetry.report_queue_saturation(queue, event)
-        await queue.put(event)
+        if settlement_started is None:
+            await queue.put(event)
+        else:
+            await _put_line_or_settlement(
+                queue,
+                event,
+                settlement_started,
+            )
         if telemetry is not None:
             telemetry.is_queue_saturated = queue.full()
 
     return enqueue
+
+
+async def _put_line_or_settlement(
+    queue: asyncio.Queue[_LineQueueItem],
+    event: LineEvent,
+    settlement_started: asyncio.Event,
+) -> bool:
+    """Publish a line unless teardown begins while the bounded queue is full."""
+    if settlement_started.is_set():
+        return False
+    try:
+        queue.put_nowait(event)
+    except asyncio.QueueFull:
+        return await _wait_for_line_slot_or_settlement(
+            queue,
+            event,
+            settlement_started,
+        )
+    return True
+
+
+async def _wait_for_line_slot_or_settlement(
+    queue: asyncio.Queue[_LineQueueItem],
+    event: LineEvent,
+    settlement_started: asyncio.Event,
+) -> bool:
+    """Wait for capacity or teardown, retrieving both helper task outcomes."""
+    put_task = asyncio.create_task(queue.put(event))
+    settlement_task = asyncio.create_task(settlement_started.wait())
+    tasks = (put_task, settlement_task)
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if put_task.done():
+            await put_task
+            return True
+        return False
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _observed_line_hook(

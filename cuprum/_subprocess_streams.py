@@ -22,12 +22,13 @@ the case where a newline-less echo can strand the diagnostic mid-line.
 
 The per-line callback for each stream is composed here — the observe-hook
 emission plus the caller's ``on_line``, both via
-``cuprum._line_callbacks._compose_line_callbacks`` — so ``SafeCmd.run()`` and
-``SafeCmd.lines()`` share one composition seam. Each consumer drains into the
-collector the run built for it: index ``0`` is stdout's, index ``1`` is
-stderr's. The spawn helper does not own those collectors; the run retains the
-same tuple so its single reconciliation point settles and reads them exactly
-once.
+``cuprum._line_callbacks._compose_observation_line_callback`` — so
+``SafeCmd.run()`` and ``SafeCmd.lines()`` share one composition seam, and the
+clock every stamp is measured against is bound by that seam rather than by each
+caller. Each consumer drains into the collector the run built for it: index
+``0`` is stdout's, index ``1`` is stderr's. The spawn helper does not own those
+collectors; the run retains the same tuple so its single reconciliation point
+settles and reads them exactly once.
 """
 
 from __future__ import annotations
@@ -37,7 +38,10 @@ import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
+from cuprum._line_callbacks import (
+    _compose_observation_line_callback,
+    _StageStreamCallbacks,
+)
 from cuprum._stream_config import (
     # Re-exported under this module's names as well as imported for use: both
     # once lived here, and ``_command_internals`` still reaches the sink
@@ -67,16 +71,26 @@ def _create_stream_callback(
     event_type: LineStreamName,
     pid: int | None,
 ) -> cabc.Callable[[str], _LineHookOutcome] | None:
-    """Create the composed per-line callback for one stream, or ``None``."""
-    emission = _LineEmissionContext(
-        stream="stdout",
-        pid=pid,
-        on_line=execution.on_line,
-        started_at=execution.started_at,
-    )
-    return _compose_line_callbacks(
+    """Create the composed per-line callback for one stream, or ``None``.
+
+    Composed through the observation-taking helper, which binds the stamp's
+    clock itself. Building the emission context here would let this path pair
+    ``execution.started_at`` with a clock other than the one it was sampled
+    from, and every stamp would then be a difference between two clocks.
+
+    Returns
+    -------
+    collections.abc.Callable[[str], _LineHookOutcome] | None
+        The composed callback, or ``None`` when nothing observes this stream.
+    """
+    return _compose_observation_line_callback(
         execution.observation,
-        dc.replace(emission, stream=event_type),
+        event_type,
+        _StageStreamCallbacks(
+            pid=pid,
+            on_line=execution.on_line,
+            started_at=execution.started_at,
+        ),
     )
 
 
@@ -275,6 +289,7 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
 def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
+    settlement_started: asyncio.Event | None = None,
 ) -> _StreamConfig:
     """Build the stdout ``_StreamConfig`` for an execution context.
 
@@ -310,6 +325,7 @@ def _build_stream_config(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
+        settlement_started=settlement_started,
         read_size=_current_read_size(),
         activity=execution.idle.note_activity if execution.idle is not None else None,
     )
@@ -318,29 +334,23 @@ def _build_stream_config(
 def _prepare_stream_spawn(
     execution: _SubprocessExecution,
     pid: int | None,
+    *,
+    discard_on_cancel: asyncio.Event | None = None,
+    settlement_started: asyncio.Event | None = None,
 ) -> _StreamSpawnInputs:
-    """Build the stream wiring a run needs before it starts any consumer.
+    """Build stream inputs, reusing caller latches before any consumer starts.
 
-    Every streamed run reaches this point with a live child and nothing else
-    started, so the work here is deliberately infallible: it reads the
-    execution, allocates an event and either reuses the run's collectors or
-    creates two, and builds a frozen context. A caller can therefore build
-    these inputs without risking a half-started run, which is the property the
-    direct-run and handle paths both document.
-
-    Parameters
-    ----------
-    execution : _SubprocessExecution
-        The resolved run bundle the child was spawned from.
-    pid : int | None
-        The child's process id, or ``None`` when it was not reported.
+    The settlement event identifies line-stream teardown; an omitted discard
+    latch is created here for routes that do not supply one.
 
     Returns
     -------
     _StreamSpawnInputs
-        The discard latch, the spawn context, and the diagnostics collectors.
+        The latches, diagnostics collectors, and resolved stream configs for
+        the consumers this run starts.
     """
-    discard_on_cancel = asyncio.Event()
+    if discard_on_cancel is None:
+        discard_on_cancel = asyncio.Event()
     # The run's own collectors when it made them, so bounded-delivery loss
     # reaches the same result the bounded echo path writes to; a fresh pair
     # only for the paths that never allocated any.
@@ -352,7 +362,7 @@ def _prepare_stream_spawn(
     # reachable from the run's single reconciliation point.
     stdout_config, stderr_config = _resolve_stream_configs(
         execution,
-        _build_stream_config(execution, discard_on_cancel),
+        _build_stream_config(execution, discard_on_cancel, settlement_started),
     )
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,

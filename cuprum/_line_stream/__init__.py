@@ -10,6 +10,7 @@ split that work by responsibility:
 - ``spawn`` starts, builds, and on failure unwinds a run before it is handed
   back.
 - ``drain`` drains the settled stream consumers once the child has exited.
+- ``reader_wait`` waits on those consumers and attributes the first failure.
 - ``telemetry`` emits the correlated lifecycle events for one run.
 
 Every helper is re-exported here so callers import from ``cuprum._line_stream``
@@ -19,6 +20,7 @@ regardless of which submodule defines it.
 from __future__ import annotations
 
 from cuprum._line_stream.authorization import _refresh_line_stream_execution
+from cuprum._line_stream.captures import _finalize_line_stream_captures
 from cuprum._line_stream.coordinator import (
     _cleanup_failed_line_stream_run,
     _coordinate_line_stream,
@@ -27,7 +29,7 @@ from cuprum._line_stream.coordinator import (
     _run_to_command_result,
     _wait_for_line_stream_exit,
 )
-from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._line_stream.drain import _collect_line_stream_after_exit
 from cuprum._line_stream.line_queue import (
     _LINE_QUEUE_CAPACITY,
     _line_event_queue,
@@ -35,6 +37,10 @@ from cuprum._line_stream.line_queue import (
     _LineStreamRun,
     _observed_line_hook,
     _queue_line_sink,
+)
+from cuprum._line_stream.reader_wait import (
+    _await_consumers,
+    _first_reader_failure,
 )
 from cuprum._line_stream.spawn import (
     _abandon_unstarted_run,
@@ -54,11 +60,14 @@ __all__ = [
     "_LineStreamRun",
     "_LineStreamTelemetry",
     "_abandon_unstarted_run",
+    "_await_consumers",
     "_build_unstarted_run",
     "_cleanup_failed_line_stream_run",
+    "_collect_line_stream_after_exit",
     "_coordinate_line_stream",
     "_discard_drain",
-    "_drain_after_exit",
+    "_finalize_line_stream_captures",
+    "_first_reader_failure",
     "_line_event_queue",
     "_observed_line_hook",
     "_queue_line_sink",

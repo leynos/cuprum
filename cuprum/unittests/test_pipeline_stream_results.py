@@ -20,9 +20,9 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum._pipeline_stream_results import (
+    _bounded_payloads,
     _collect_pipe_results,
     _flatten_stream_tasks,
-    _gather_optional_text_tasks,
     _surface_unexpected_pipe_failures,
 )
 from cuprum._pipeline_streams import _create_pipe_tasks
@@ -249,10 +249,10 @@ def test_flatten_drops_absent_tasks_and_appends_stdout_last(
     asyncio.run(drive())
 
 
-def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
+def test_bounded_payloads_keeps_none_placeholders_aligned_with_inputs() -> None:
     """Absent capture tasks yield ``None`` in place, preserving stage order."""
 
-    async def drive() -> tuple[CapturedDrain | None, ...]:
+    async def drive() -> tuple[tuple[CapturedDrain | None, ...], bool]:
         """Await a mix of present and absent capture tasks."""
         tasks: list[ConsumerTask | None] = [
             None,
@@ -261,11 +261,22 @@ def test_gather_keeps_none_placeholders_aligned_with_inputs() -> None:
             asyncio.create_task(_immediate("second")),
             None,
         ]
-        return await _gather_optional_text_tasks(tasks)
+        return await _bounded_payloads(tasks, deadline=None)
 
-    assert tuple(
-        None if drained is None else drained.payload for drained in asyncio.run(drive())
-    ) == (None, "first", None, "second", None)
+    payloads, finished = asyncio.run(drive())
+
+    assert tuple(None if drain is None else drain.payload for drain in payloads) == (
+        None,
+        "first",
+        None,
+        "second",
+        None,
+    ), (
+        "every slot must keep the position of the task it was given, so an "
+        "absent stage stays absent and a present one does not shift: got "
+        f"{payloads!r}"
+    )
+    assert finished, "every present reader finished, so the wait did not expire"
 
 
 async def _failing(error: BaseException) -> None:  # ruff: ignore[unused-async]

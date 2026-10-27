@@ -12,9 +12,10 @@ timeout, caller ``break``, generator close, and external cancellation.
 
 This module holds the exit wait, the teardown steps, and the coordination that
 turns a settled run into a result. Queue plumbing, telemetry, spawn setup, and
-post-exit draining live in sibling modules and are re-exported by the package.
-Tests patch this module because its coordination functions resolve
-collaborators through this module's globals.
+post-exit draining live in sibling modules and are re-exported by the package,
+as is the result assembly that follows a clean exit. Tests patch this module
+because its coordination functions resolve collaborators through this module's
+globals.
 """
 
 from __future__ import annotations
@@ -22,26 +23,14 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-from cuprum._capture_cleanup import (
-    _cleanup_capture_sinks,
-    _finalize_capture_handles,
-)
-from cuprum._delivery_lifecycle import _close_delivery_worker
-from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._capture_cleanup import _cleanup_capture_sinks
+from cuprum._line_stream.drain import _collect_line_stream_after_exit
+from cuprum._line_stream.result_assembly import _assemble_line_stream_result
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._result_assembly import _recorded_captures, _require_text
 from cuprum._stream_drain import _drain_stream_consumers
-from cuprum._subprocess_execution import _relay_fallbacks_for_result
-from cuprum._subprocess_timeout import (
-    _emit_exit_event,
-    _ExitEventDetails,
-    _handle_stream_timeout,
-    _handle_subprocess_timeout,
-    _SubprocessTimeoutContext,
-    _SubprocessTimeoutError,
-)
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
+from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
     _drain_context,
@@ -56,8 +45,7 @@ if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _DrainPair, _StreamPayload
-    from cuprum.capture_policy import CapturedStream
+    from cuprum._subprocess_wait_types import _DrainPair
     from cuprum.sh import CommandResult
 
 __all__ = [
@@ -72,13 +60,20 @@ __all__ = [
 
 async def _wait_for_line_stream_exit(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
 ) -> tuple[int, float, _CapturedDrain, _CapturedDrain]:
-    """Await process exit, reconciling every task when the wait fails.
+    """Await process exit, then collect the drains under the remaining budget.
 
     Mirrors ``_wait_for_streamed_process_exit`` so a ``lines()`` run applies
     its deadline, terminates the child, and drains its consumers exactly the
-    way ``run()`` does.
+    way ``run()`` does. The wait and its failure reconciliation belong to
+    :func:`_await_line_stream_exit`; what stays here is the post-exit
+    collection that follows a clean exit.
+
+    The execution bundle is read from the run rather than accepted alongside
+    it. The spawn helper rebuilds that bundle with the run's monotonic start
+    reference stamped on, and the post-exit deadline is a remainder measured
+    from it, so a second bundle would let this function time the child from a
+    ``started_at`` other than the one the spawn actually recorded.
 
     Returns
     -------
@@ -92,13 +87,74 @@ async def _wait_for_line_stream_exit(
     ------
     asyncio.CancelledError
         If the caller cancels line iteration while the subprocess is running.
+    TimeoutError
+        When the run's configured deadline expires. A stdin writer that failed
+        with a ``TimeoutError`` of its own raises that same exception too,
+        reconciled but untranslated: it is the producer's error, not this
+        run's deadline.
+    """  # ruff: ignore[docstring-extraneous-exception] - both propagate from the called helpers
+    execution = run.execution
+    exit_code, exited_at = await _await_line_stream_exit(run, execution)
+    # The child has exited, so silence no longer means anything; the heartbeat
+    # stops inside the bounded collection below, along with the writer wait and
+    # the consumers, because a grandchild's inherited pipe can hold that read
+    # open long after its parent is gone and every one of the three would then
+    # wait for ever on a deadline the exit wait has already spent.
+    stdout_drain, stderr_drain = await _collect_line_stream_after_exit(
+        run,
+        run.process.pid,
+        execution,
+    )
+    return exit_code, exited_at, stdout_drain, stderr_drain
+
+
+async def _await_line_stream_exit(
+    run: _LineStreamRun,
+    execution: _SubprocessExecution,
+) -> tuple[int, float]:
+    """Await the child's exit, reconciling the run on every failure route.
+
+    The reconciliation is what makes each route terminal: the caller sees the
+    outcome only once every task the run still owns has been settled, so a
+    failure re-raised here never leaves a reader or writer behind.
+
+    Returns
+    -------
+    tuple[int, float]
+        The exit code and exit timestamp.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the caller cancels line iteration while the subprocess is running.
+    TimeoutError
+        When the run's configured deadline expires, or when a stdin writer
+        failed with a ``TimeoutError`` of its own — reconciled but
+        untranslated, because that is the producer's error.
     """
     try:
-        exit_code, exited_at = await _await_exit_or_writer_failure(
+        return await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(run.process, execution),
             run.tasks.stdin_task,
         )
     except TimeoutError as exc:
+        # A ``TimeoutError`` can arrive here two ways, and only one of them is
+        # this run's deadline. The exit wait reports its own expiry as this
+        # type; so would a stdin writer that failed with one, because the
+        # rendezvous above re-raises a failed writer unchanged and
+        # ``TimeoutError`` is an ``OSError`` subclass. Identity is what tells
+        # them apart, and it is exact: the rendezvous raises the very object
+        # ``_stdin_writer_failure`` reads back off the task. Translating the
+        # writer's failure instead would report a deadline the caller never
+        # configured, which ``_handle_stream_timeout`` rejects as an invariant
+        # violation, so the caller would lose the producer's real error.
+        if _stdin_writer_failure(run.tasks.stdin_task) is exc:
+            await _cleanup_failed_line_stream_run(
+                run,
+                execution,
+                preserve=False,
+            )
+            raise
         run.telemetry.emit(LineStreamPhase.TIMEOUT, _LineStreamEventDetails(error=exc))
         stdout_drain, stderr_drain = await _cleanup_failed_line_stream_run(
             run,
@@ -126,16 +182,6 @@ async def _wait_for_line_stream_exit(
             preserve=False,
         )
         raise
-    # The child has exited, so silence no longer means anything: stop before
-    # waiting on stream EOF, which a grandchild's inherited pipe can hold open
-    # long after its parent is gone.
-    await _stop_idle_monitor(execution.idle)
-    stdout_drain, stderr_drain = await _drain_after_exit(
-        run,
-        run.process.pid,
-        execution,
-    )
-    return exit_code, exited_at, stdout_drain, stderr_drain
 
 
 async def _run_line_stream_teardown[T](
@@ -161,6 +207,10 @@ async def _run_line_stream_teardown[T](
         never reports completion, so the started boundary is not paired with a
         success it did not reach.
     """  # ruff: ignore[docstring-extraneous-exception] - the operation's failure propagates through this helper
+    # Release a queue putter before cancelling its stream consumer. That lets
+    # the drain finish preserving raw capture while teardown is the only path
+    # allowed to stop line publication.
+    run.settlement_started.set()
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
     result = await _shielded_cleanup(operation)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
@@ -232,7 +282,6 @@ async def _discard_drain(
 
 async def _coordinate_line_stream(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
     queue: asyncio.Queue[_LineQueueItem],
     result_future: asyncio.Future[CommandResult],
 ) -> None:
@@ -246,6 +295,10 @@ async def _coordinate_line_stream(
     is published, so a waiter that wins the race on the future can still read
     it off the queue.
 
+    The execution bundle is taken from the run, not accepted alongside it: see
+    :func:`_wait_for_line_stream_exit` for why a second source of that value is
+    the defect this module exists to avoid.
+
     Raises
     ------
     asyncio.CancelledError
@@ -254,7 +307,7 @@ async def _coordinate_line_stream(
         ``CancelledError`` they did not issue.
     """
     try:
-        result = await _run_to_command_result(run, execution)
+        result = await _run_to_command_result(run)
     except asyncio.CancelledError:
         # Teardown, never a caller-requested cancellation: the iterator cancels
         # this coordinator only after it has stopped consuming. Re-raised so the
@@ -273,35 +326,8 @@ async def _coordinate_line_stream(
     result_future.set_result(result)
 
 
-async def _finalize_line_stream_captures(
-    run: _LineStreamRun,
-    stdout_drain: _CapturedDrain,
-    stderr_drain: _CapturedDrain,
-) -> None:
-    """Close the spill files a completed ``lines()`` run still owns.
-
-    ``run()`` closes its handles right after collecting the streams, and the
-    ``lines()`` success path reaches the same place — every consumer has
-    settled and the drain results are in hand — so it owes the same removal.
-    Without this, a ``FileBackedCapture`` would return a record reporting
-    ``owned=True`` for a file that outlives the run, with nothing left to
-    remove it.
-
-    Shielded because the drains are already settled: a cancellation landing
-    between the collect and the close would leave the file on disk while the
-    caller was still about to be handed the result.
-    """
-    await _shielded_cleanup(
-        _finalize_capture_handles(
-            (stdout_drain, stderr_drain),
-            run.tasks.captures,
-        )
-    )
-
-
 async def _run_to_command_result(
     run: _LineStreamRun,
-    execution: _SubprocessExecution,
 ) -> CommandResult:
     """Run to exit, assemble the ``CommandResult``, and emit the exit event.
 
@@ -315,60 +341,4 @@ async def _run_to_command_result(
     CommandResult
         The completed run's exit code, captured text, and relay diagnostics.
     """
-    started_at = run.started_at
-    stdout_text: _StreamPayload | None = None
-    stderr_text: _StreamPayload | None = None
-    captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
-    try:
-        (
-            exit_code,
-            exited_at,
-            stdout_drain,
-            stderr_drain,
-        ) = await _wait_for_line_stream_exit(run, execution)
-        stdout_text = stdout_drain.payload
-        stderr_text = stderr_drain.payload
-        captures = (stdout_drain.capture, stderr_drain.capture)
-        await _finalize_line_stream_captures(run, stdout_drain, stderr_drain)
-    except (TimeoutError, _SubprocessTimeoutError) as exc:
-        _handle_subprocess_timeout(
-            _SubprocessTimeoutContext(
-                execution=execution,
-                process=run.process,
-                started_at=started_at,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-            ),
-            exc,
-        )
-
-    await _shielded_cleanup(
-        _close_delivery_worker(
-            execution.delivery_worker,
-            drain_grace_s=execution.delivery_grace_s,
-        ),
-    )
-
-    run.telemetry.emit(LineStreamPhase.COMPLETED)
-    _emit_exit_event(
-        execution.observation,
-        _ExitEventDetails(
-            pid=run.process.pid,
-            exit_code=exit_code,
-            started_at=started_at,
-            exited_at=exited_at,
-        ),
-    )
-    from cuprum._subprocess_context import _sh_module
-
-    return _sh_module().CommandResult(
-        program=execution.cmd.program,
-        argv=execution.cmd.argv,
-        exit_code=exit_code,
-        pid=run.process.pid if run.process.pid is not None else -1,
-        stdout=_require_text(stdout_text, "stdout"),
-        stderr=_require_text(stderr_text, "stderr"),
-        relay_fallbacks=_relay_fallbacks_for_result(run.tasks.relay_diagnostics),
-        resolved_path=execution.observation.resolved_path,
-        captures=_recorded_captures(captures),
-    )
+    return await _assemble_line_stream_result(run, _wait_for_line_stream_exit)

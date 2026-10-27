@@ -35,6 +35,7 @@ where to find the fix. A row that does not match the application can be skipped.
 | [Disjoint nested scopes deny](#disjoint-nested-scopes-now-deny-everything)                        | nests scopes whose allowlists share no program                      |
 | [Scope managers derive policy on entry](#scope-managers-derive-policy-on-entry)                   | constructs a manager before entering under a restriction            |
 | [Execution options are not child flags](#execution-options-are-no-longer-child-flags)             | passes `cwd=`, `env=`, `timeout=`, and similar to a builder         |
+| [Configured timeouts include post-exit work](#configured-timeouts-include-post-exit-work)         | uses `timeout=` where post-exit stdin or pipe work now counts       |
 | [Builder arguments are typed](#builder-arguments-are-a-typed-contract)                            | passes `bytes`, lists, or other objects to a builder                |
 | [`rsync_sync()` takes local operands only](#rsync_sync-takes-local-operands-only)                 | passes a remote `host:path` or `rsync://` operand to `rsync_sync()` |
 | [`sh.make` uses the scoped catalogue](#shmake-resolves-the-scoped-catalogue)                      | calls `sh.make()` inside `scoped(catalogue=...)`                    |
@@ -51,9 +52,12 @@ _Table 1: Upgrade checklist for applications using Cuprum 0.1._
 ## Upgrading from 0.2.0-beta1
 
 Beta testers already have most of 0.2.0. These changes arrived after beta1; the
-first seven can need an edit:
+first eight can need an edit:
 
 - [Execution options are no longer child flags](#execution-options-are-no-longer-child-flags).
+- [Configured timeouts include post-exit work](#configured-timeouts-include-post-exit-work):
+  existing `timeout=` calls now also bound direct stdin reconciliation,
+  `SafeCmd.lines()` output and backpressure, and pipeline output collection.
 - [Builder arguments are a typed contract](#builder-arguments-are-a-typed-contract):
   `bytes` and other non-`ArgValue` values are rejected.
 - [`sh.make` resolves the scoped catalogue](#shmake-resolves-the-scoped-catalogue).
@@ -466,6 +470,28 @@ start:
   [Wrap commands in project builders](users-guide.md#wrap-commands-in-project-builders).
 
 The sections that follow cover the remaining additions.
+
+### Configured timeouts include post-exit work
+
+A configured `timeout=` now bounds the work after the direct child exits as
+well as the wait for that child. This includes reconciling a direct run's stdin
+writer, draining `SafeCmd.lines()` output (including time spent under consumer
+backpressure), and collecting pipeline output. A descendant that inherited a
+pipe can no longer keep one of these runs open past its deadline. Expiry raises
+`TimeoutExpired`; output already captured, and lines already delivered, are
+preserved.
+
+Cleanup can extend the run beyond its deadline by the documented allowances:
+`cancel_grace` (0.5 s by default), the 0.25 s capture EOF window once per
+capturing run, and up to 1.25 s to settle a stdin writer when the run has stdin
+data: a 0.5 s pipe close, two 0.25 s producer-finalization windows, and a 0.25
+s scheduling grace. An `OWN_GROUP` command, `lines()` run, or pipeline can also
+use up to one second after forcibly killing the group for settlement.
+`OWN_GROUP` permits Cuprum to reclaim descendants in the owned group; under
+`INHERIT`, only the direct child may be signalled. A pipeline starts its
+timeout budget when output collection begins, after stage spawn. With
+`timeout=None`, there is no run deadline or timeout expiry, as before; the
+direct run's stdin writer still uses its shared settle window.
 
 ### Single-project catalogue construction
 

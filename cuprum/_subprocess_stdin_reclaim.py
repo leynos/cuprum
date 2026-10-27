@@ -16,13 +16,33 @@ whatever is still parked after its bounded window
 in one module is what makes them agree: every path that bounds a writer's exit
 bounds it with the same figure, and a change to that figure cannot leave one
 path behind.
+
+The direct run (``cuprum._subprocess_direct_run``) *awaits* its writer without
+settling it whenever the caller configured a deadline, and the exception is a
+considered one rather than an omission. That run has no stream consumers, so
+there is no output still arriving that the window would protect, and a writer
+parked behind a payload the caller supplied has not delivered what it was asked
+to deliver. Bound by the run's remaining deadline, the wait ends with the
+public ``TimeoutExpired`` — the run saying the input was not delivered and the
+budget ran out — where the settle window would have reported the child's
+success over truncated input. It still uses this module's
+``_cancel_stdin_writer`` when the deadline expires or the run is cancelled, so
+the reclaim itself stays shared even though the bound does not.
+
+That exception is scoped to a run that has a deadline to spend. A direct run
+with no ``timeout=`` has no remainder and no expiry, so it settles through this
+module's window like every other caller: an await bounded by ``None`` is not
+bounded at all, and the alternative would be the unbounded hang the window
+exists to prevent, arriving on the one path that cannot report it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_stdin import _CLOSE_GRACE_S
 
 # How long a stdin writer is given to notice it should stop — both when the
 # child it was feeding has exited and when the writer is being cancelled. Fixed
@@ -51,12 +71,12 @@ _STDIN_SETTLE_GRACE_S = 0.25
 # it has been asked to stop and has not stopped yet.
 _STDIN_FINALIZE_STEPS = 2
 
-# A writer's teardown releases the pipe and *then* finalizes whatever producer
-# it was pulling from, so it is that whole finalization plus the pipe-release
-# wait of its own. This is the nesting CodeRabbit identified: a writer given
-# only one step is cancelled, spends its own three, and outlives the window
-# that was supposed to contain it.
-_STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS
+# A writer closes the pipe for its own grace before finalizing its producer.
+# That close is a different bound from the producer's settle windows, so its
+# actual constant is the first term rather than an assumed settle-grace step.
+_STDIN_WRITER_TEARDOWN_S = (
+    _CLOSE_GRACE_S + _STDIN_SETTLE_GRACE_S * _STDIN_FINALIZE_STEPS
+)
 
 # What a finalizer *task* is allowed when it is reclaimed: one step, on its
 # own. It is deliberately not the writer budget — a finalizer task runs caller
@@ -64,15 +84,13 @@ _STDIN_WRITER_TEARDOWN_STEPS = 1 + _STDIN_FINALIZE_STEPS
 # giving it the writer's figure would re-open the same nesting one level down.
 _STDIN_FINALIZER_RECLAIM_S = _STDIN_SETTLE_GRACE_S
 
-# What cancelling a *writer* is allowed. It must cover the writer's whole
-# teardown, because the writer runs that teardown inside its own cancellation:
-# `_close_stdin` bounded by one step, then `_finalize_stdin_source` bounded by
-# `_STDIN_FINALIZE_STEPS`. A cooperative writer — one that needs the pipe
-# released and a suspended finalizer cancelled, but never ignores the
-# cancellation it is given — therefore settles inside this window, which is
-# the guarantee a cancelled run depends on before it reports that its tasks
-# are gone.
-_STDIN_RECLAIM_BUDGET_S = _STDIN_SETTLE_GRACE_S * _STDIN_WRITER_TEARDOWN_STEPS
+# The outer wait must outlast the nested waits, not share their final deadline.
+# At an equal boundary the outer asyncio.wait can wake before the writer gets a
+# scheduled turn to observe that its finalizer reclaim completed. One settle
+# grace of slack gives the nested teardown that turn without making its bound
+# depend on whichever task the loop happens to schedule first.
+_STDIN_RECLAIM_SCHEDULING_GRACE_S = _STDIN_SETTLE_GRACE_S
+_STDIN_RECLAIM_BUDGET_S = _STDIN_WRITER_TEARDOWN_S + _STDIN_RECLAIM_SCHEDULING_GRACE_S
 
 
 async def _cancel_stdin_writer(
@@ -98,6 +116,24 @@ async def _cancel_stdin_writer(
     else — a bare finalizer task, which nests nothing — passes its own smaller
     figure rather than inheriting a window sized for work it will never do.
 
+    ``asyncio.wait`` only *observes* a task; it never retrieves the outcome, so
+    a writer that fails inside this window would leave its exception on a task
+    nothing else awaits and the loop would report it as unretrieved. That is
+    why the outcome is retrieved whichever way the wait ends.
+
+    The retrieval is a done callback rather than a statement after the wait,
+    and the difference is the case this helper exists for. When the budget
+    expires the wait returns with the task *still pending* — which is the
+    ordinary outcome here, not a corner case — and ``exception()`` on a
+    pending task raises ``InvalidStateError`` instead of marking anything, so
+    a retrieval placed after the wait records nothing at exactly the moment
+    the task is being reclaimed rather than waited out. Measured on 3.12.15
+    and 3.14.7: with the wait alone, a writer that absorbs the cancellation,
+    parks past the budget and then fails is reported as ``Task exception was
+    never retrieved``; with the callback registered first, nothing is reported.
+    The callback fires whenever the task actually finishes: inside the window,
+    during the reclaim, or after this helper has returned.
+
     Parameters
     ----------
     stdin_task : asyncio.Task[None] | None
@@ -110,7 +146,91 @@ async def _cancel_stdin_writer(
     if stdin_task is None:
         return
     stdin_task.cancel()
+    # Registered before the wait, so it covers every way the writer can end:
+    # finishing inside the window, failing while being reclaimed, and failing
+    # after this helper has returned. A call after the wait would land on a
+    # pending task in the case that matters most — the budget expiring — where
+    # ``exception()`` raises ``InvalidStateError`` and retrieves nothing.
+    stdin_task.add_done_callback(_retrieve_task_outcome)
     await asyncio.wait((stdin_task,), timeout=budget)
+
+
+def _retrieve_task_outcome(task: asyncio.Task[object]) -> None:
+    """Mark a settled task's outcome as observed so the loop never reports it.
+
+    ``asyncio.wait`` reports *whether* a task finished, never *how*; a task
+    nobody reports on would otherwise keep its exception attached and be
+    reported by the loop as an unretrieved task exception, attributing a
+    failure to a writer or a producer cuprum has already stopped caring about.
+    Calling ``exception()`` is the only way to say the outcome was seen.
+
+    Registered as a done callback rather than called from the waiting paths,
+    because the outcome this exists for is the one no waiting path reaches: a
+    task that fails *after* its waiter was cancelled, or after the helper that
+    bounded it has already returned. On the paths that do go on to await the
+    task, retrieval changes nothing the caller sees — ``exception()`` marks the
+    traceback as logged without consuming the exception, so a later ``await``
+    still raises it.
+
+    ``Task.exception()`` raises ``CancelledError`` for a cancelled task, so the
+    cancellation is consumed by checking for it instead. Nothing can come of
+    the call itself, which is why it is suppressed rather than propagated: a
+    task cuprum cancelled itself is the ordinary expiry case, not a fault.
+    """
+    if task.cancelled():
+        return
+    with contextlib.suppress(BaseException):
+        task.exception()
+
+
+async def _await_task_to_completion(task: asyncio.Task[object]) -> None:
+    """Await a task's completion without letting the caller's cancellation in.
+
+    A bare ``await task`` makes the task this await's ``_fut_waiter``, and
+    ``Task.cancel()`` forwards, so the caller's cancellation would be delivered
+    only once the task had finished dying. The waits this is used for exist
+    precisely to bound a writer that may never finish, so waiting for it before
+    honouring the cancellation would hand back the hang they contain.
+
+    ``asyncio.wait`` supplies the separation ``asyncio.shield`` does, without
+    ``shield``'s reporting hook — and that hook is why this is not spelled
+    ``shield``. When the awaiting future is cancelled, ``shield`` detaches its
+    own completion callback from a still-pending inner task, and from Python
+    3.14 it *re-registers* ``asyncio.tasks._log_on_exception`` in its place.
+    That callback reports the inner task's failure through the loop's exception
+    handler however carefully the outcome has been retrieved, so a settle that
+    failed after its run had ended produced
+    ``... exception in shielded future`` on 3.14 and nothing on 3.12 or 3.13.
+    ``asyncio.wait`` registers no such reporter on the tasks it observes.
+
+    The completion is awaited a second time because ``asyncio.wait`` observes
+    *whether* a task finished and never *how*. Re-awaiting reproduces the
+    outcome — the value, the task's own failure, or its cancellation — so a
+    failure that arrived before the caller left still propagates unchanged.
+
+    The retrieval is registered first, because a caller cancelled *during* the
+    wait leaves with the task still pending and whatever it later raises would
+    have no other observer.
+
+    Parameters
+    ----------
+    task : asyncio.Task[object]
+        The task to await. It must outlive this call's cancellation, which
+        every caller here guarantees: the task is owned either by the run's
+        task bundle or by a frame that holds it.
+
+    Raises
+    ------
+    BaseException
+        Whatever the task raised, or ``asyncio.CancelledError`` when the task
+        was cancelled rather than completing.
+    asyncio.CancelledError
+        If the caller is cancelled while the task is still pending. The task is
+        left running, for the caller's own teardown to reclaim.
+    """  # ruff: ignore[docstring-extraneous-exception] - the task's own exception propagates.
+    task.add_done_callback(_retrieve_task_outcome)
+    await asyncio.wait((task,))
+    await task
 
 
 async def _settle_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
@@ -200,8 +320,11 @@ __all__ = [
     "_STDIN_FINALIZER_RECLAIM_S",
     "_STDIN_FINALIZE_STEPS",
     "_STDIN_RECLAIM_BUDGET_S",
+    "_STDIN_RECLAIM_SCHEDULING_GRACE_S",
     "_STDIN_SETTLE_GRACE_S",
-    "_STDIN_WRITER_TEARDOWN_STEPS",
+    "_STDIN_WRITER_TEARDOWN_S",
+    "_await_task_to_completion",
     "_cancel_stdin_writer",
+    "_retrieve_task_outcome",
     "_settle_stdin_writer",
 ]
