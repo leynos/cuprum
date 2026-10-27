@@ -17,15 +17,21 @@ import codecs
 import dataclasses as dc
 import logging
 import typing as typ
+from asyncio import CancelledError
 
 from cuprum._result_assembly import _require_bytes, _require_text
-from cuprum._stream_drain_finish import _CapturedDrain, _empty_capture
+from cuprum._stream_drain_finish import (
+    _CapturedDrain,
+    _discard_on_cancel,
+    _empty_capture,
+)
 from cuprum._stream_line_boundaries import _LineAccumulator
 
 if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
 
+    from cuprum._capture_types import CaptureSink
     from cuprum._streams import _LineSink, _RelayDiagnostics, _StreamConfig
 
 
@@ -105,6 +111,12 @@ async def _consume_stream_with_lines(
     -------
     _CapturedDrain
         The captured payload, record, and spill handle from the drain.
+
+    Raises
+    ------
+    CancelledError
+        If teardown discards this reader's output, or cancellation interrupts
+        the consumer before a preserving capture can be finalized.
     """
     if stream is None:
         return _empty_capture(consumption.config)
@@ -115,12 +127,17 @@ async def _consume_stream_with_lines(
         _LineAccumulator(consumption.config.max_line_chars),
     )
 
-    captured = await consumption.drain(
-        stream,
-        consumption.config,
-        on_chunk=publisher.feed_decoder,
-        relay_diagnostics=consumption.relay_diagnostics,
-    )
+    try:
+        captured = await consumption.drain(
+            stream,
+            consumption.config,
+            on_chunk=publisher.feed_decoder,
+            relay_diagnostics=consumption.relay_diagnostics,
+        )
+    except CancelledError:
+        captured = await _finalize_cancelled_capture(consumption)
+        if captured is None:
+            raise
     await publisher.finish()
     if captured.payload is not None:
         if consumption.config.capture_bytes:
@@ -128,6 +145,33 @@ async def _consume_stream_with_lines(
         else:
             _require_text(captured.payload, "line-observed stream")
     return captured
+
+
+async def _finalize_cancelled_capture(
+    consumption: _LineConsumption,
+) -> _CapturedDrain | None:
+    """Keep bytes absorbed before a preserving teardown cancelled line output."""
+    capture_sink = _capture_sink_for_preserving_settlement(consumption.config)
+    if capture_sink is None:
+        return None
+    final = await capture_sink.finalize()
+    return _CapturedDrain(final.payload, final.capture, final.handle)
+
+
+def _capture_sink_for_preserving_settlement(
+    config: _StreamConfig,
+) -> CaptureSink | None:
+    """Return the sink only while a preserving line-stream teardown is active."""
+    if config.capture_sink is None:
+        return None
+    if _discard_on_cancel(config):
+        return None
+    settlement_started = config.settlement_started
+    if settlement_started is None:
+        return None
+    if not settlement_started.is_set():
+        return None
+    return config.capture_sink
 
 
 def _report_line_fragmentation(config: _StreamConfig) -> None:

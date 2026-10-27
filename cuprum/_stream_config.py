@@ -148,6 +148,9 @@ class _StreamConfig:
     # event carries, while ``echo_max_line_bytes`` bounds the mirrored copy.
     max_line_chars: int | None = DEFAULT_MAX_LINE_CHARS
     discard_on_cancel: asyncio.Event | None = None
+    settlement_started: asyncio.Event | None = dc.field(
+        default=None, repr=False, compare=False
+    )
     # How a broken pipe on this stream's sink is handled. Defaults to strict
     # propagation, so a config built without naming a policy keeps the
     # behaviour every caller had before the policy existed.

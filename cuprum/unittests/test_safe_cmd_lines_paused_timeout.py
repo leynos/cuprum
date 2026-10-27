@@ -17,6 +17,7 @@ import typing as typ
 
 import pytest
 
+from cuprum import _stream_drain
 from cuprum._line_stream import _LINE_QUEUE_CAPACITY
 from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
@@ -33,10 +34,15 @@ from cuprum.unittests._post_exit_teardown_support import (
     RUN_BUDGET_S,
     assert_reclaimed,
     owned_builder,
+    process_is_running,
     reap_descendant,
     recorded_descendant_or_fail,
 )
-from tests.helpers.timeouts import descendant_then_exit_argv, pending_tasks
+from tests.helpers.timeouts import (
+    descendant_then_exit_argv,
+    pending_tasks,
+    wait_for_pid_file,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -59,6 +65,7 @@ _OUTPUT_OPTIONS = RunOutputOptions(capture=True, echo=False)
 _OWNED_SETTLEMENT_LIMIT_S = (
     _DEADLINE_S + _CANCEL_GRACE_S + _CAPTURE_EOF_GRACE_S + _POST_KILL_SETTLEMENT_S + 1.0
 )
+_INHERITED_SETTLEMENT_LIMIT_S = _DEADLINE_S + _CANCEL_GRACE_S + 1.0
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -90,6 +97,21 @@ class _PausedRunOutcome:
     pending_tasks: set[asyncio.Task[object]]
     elapsed: float
     descendant_pid: int
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _InheritedPausedRunOutcome:
+    """Evidence that an inherited pipe did not outlive line-stream teardown."""
+
+    settled_before_reap: bool
+    descendant_survived: bool
+    elapsed: float
+    pending_tasks: set[asyncio.Task[object]]
+    output: str | bytes | None
+
+
+async def _skip_capture_eof_grace(_consumers: object) -> None:
+    """Force cancellation to race the line queue's settlement waiter."""
 
 
 async def _read_first_line_then_pause(
@@ -244,3 +266,91 @@ def test_unterminated_tail_does_not_block_timeout_delivery(
     assert not outcome.pending_tasks, (
         f"the timed-out line stream left tasks pending: {outcome.pending_tasks!r}"
     )
+
+
+@pytest.mark.parametrize("capture", [False, True], ids=["discard", "capture"])
+def test_inherited_pipe_does_not_block_paused_lines_after_deadline(
+    owned_builder: cabc.Callable[..., SafeCmd],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capture: bool,
+) -> None:
+    """A paused reader settles after timeout without signalling an inherited child."""
+    monkeypatch.setattr(_stream_drain, "_await_eof_grace", _skip_capture_eof_grace)
+    scenario = _complete_line_scenario(owned_builder, tmp_path)
+    output_options = RunOutputOptions(capture=capture, echo=False)
+    outcome = asyncio.run(_run_inherited_paused_case(scenario, output_options))
+
+    assert outcome.settled_before_reap, (
+        "the paused line reader stayed blocked until cleanup killed the "
+        "descendant holding its inherited pipe"
+    )
+    assert outcome.descendant_survived, (
+        "INHERIT teardown must leave the descendant alive"
+    )
+    assert outcome.elapsed < _INHERITED_SETTLEMENT_LIMIT_S, (
+        f"the paused line stream settled too slowly: {outcome.elapsed:.2f}s"
+    )
+    assert not outcome.pending_tasks, (
+        f"the timeout left line-stream tasks pending: {outcome.pending_tasks!r}"
+    )
+    expected_output = scenario.expected_output if capture else None
+    assert outcome.output == expected_output, (
+        "the timeout must retain captured output while the reader is cancelled; "
+        f"got {outcome.output!r}"
+    )
+
+
+async def _run_inherited_paused_case(
+    scenario: _LineStreamScenario,
+    output_options: RunOutputOptions,
+) -> _InheritedPausedRunOutcome:
+    """Observe inherited-group teardown before its child is explicitly reaped."""
+    settled = asyncio.Event()
+    descendant_pid: int | None = None
+
+    def observe(event: LineStreamEvent) -> None:
+        """Record teardown completion while the iterator remains paused."""
+        if event.phase is LineStreamPhase.TEARDOWN_COMPLETED:
+            settled.set()
+
+    try:
+        with observe_line_stream(observe):
+            stream = scenario.command.lines(
+                output=output_options,
+                timeout=_DEADLINE_S,
+                context=ExecutionContext(
+                    cancel_grace=_CANCEL_GRACE_S,
+                    process_group=ProcessGroupPolicy.INHERIT,
+                ),
+            )
+            await asyncio.wait_for(anext(stream), timeout=RUN_BUDGET_S)
+            descendant_pid = await asyncio.to_thread(
+                wait_for_pid_file,
+                scenario.pid_file,
+                context="the inherited paused-lines descendant",
+            )
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    settled.wait(), timeout=_INHERITED_SETTLEMENT_LIMIT_S
+                )
+                settled_before_reap = True
+            except TimeoutError:
+                settled_before_reap = False
+            elapsed = time.monotonic() - started
+            descendant_survived = process_is_running(descendant_pid)
+            if not settled_before_reap:
+                reap_descendant(scenario.pid_file, descendant_pid)
+                await asyncio.wait_for(settled.wait(), timeout=RUN_BUDGET_S)
+            with pytest.raises(TimeoutExpired) as caught:
+                await asyncio.wait_for(anext(stream), timeout=RUN_BUDGET_S)
+            return _InheritedPausedRunOutcome(
+                settled_before_reap=settled_before_reap,
+                descendant_survived=descendant_survived,
+                elapsed=elapsed,
+                pending_tasks=pending_tasks(),
+                output=caught.value.output,
+            )
+    finally:
+        reap_descendant(scenario.pid_file, descendant_pid)

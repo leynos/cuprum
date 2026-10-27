@@ -109,7 +109,11 @@ def _queue_line_sink(
         if settlement_started is None:
             await queue.put(event)
         else:
-            await _put_line_or_settlement(queue, event, settlement_started)
+            await _put_line_or_settlement(
+                queue,
+                event,
+                settlement_started,
+            )
         if telemetry is not None:
             telemetry.is_queue_saturated = queue.full()
 
@@ -146,11 +150,6 @@ async def _wait_for_line_slot_or_settlement(
     tasks = (put_task, settlement_task)
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    except asyncio.CancelledError:
-        if not settlement_started.is_set():
-            raise
-        return False
-    else:
         if put_task.done():
             await put_task
             return True

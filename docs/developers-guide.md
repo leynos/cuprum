@@ -31,9 +31,10 @@ assumptions, and current proof status.
 
 ## Captured single-command result assembly
 
-`cuprum._subprocess_execution._build_command_result` selects the result class
-for a settled single command: a text run builds `CapturedResult` when both
-settled payloads are decoded text, and `CommandResult` otherwise.
+`cuprum._subprocess_outcome._build_command_result` selects the result class for
+a settled single command: a text run builds `CapturedResult` when both settled
+payloads are decoded text, and `CommandResult` otherwise. The orchestration
+module, `cuprum._subprocess_execution`, re-exports this builder.
 `_is_captured_text_pair` in `cuprum._result_assembly` makes that decision from
 the payloads rather than from the capture configuration, so a run that captured
 one stream alone, or spilled one to a file, is not narrowed into a class whose
@@ -7561,21 +7562,21 @@ the spawn call itself belong in `_subprocess_spawn`; choosing each mirrored
 stream's destination and single-command stream-consumer construction — the
 stdout `_StreamConfig`, the stderr config derived from it, and the consumer
 tasks that drain into it — belong in `_subprocess_streams`; orchestration that
-coordinates them — spawning, deciding which streams are consumed, and
-assembling the result — belongs in `_subprocess_execution`; and everything
-after the child exists — driving it, invoking the after-hooks, and settling the
-sink bracket, the terminal event, and the observer tasks on every exit path —
-belongs in `_command_finalization`. On the pipeline side, starting stages — and
-cleaning up whatever a failed startup left running — belongs in
-`_pipeline_spawn`, while terminating stages that are already running belongs in
-`_process_lifecycle` alongside `_shielded_cleanup`. Deciding *when* to signal —
-the two-phase grace and its escalation — is `_process_lifecycle`'s; deciding
-*what* the signal reaches (`signal_target_or_report`, which lives in
-`_group_teardown` and is called from `_process_signal`), and what a completed
-teardown waits for (`_settlement`, `_terminate_process_with_wait`,
-`_settle_after_escalation`), belongs in `_process_signal`. The idle heartbeat's
-timing belongs in `_idle_heartbeat` and its rendering and write-failure policy
-in `_idle_diagnostic`.
+coordinates them — spawning and deciding which streams are consumed — belongs in
+`_subprocess_execution`; constructing the settled result belongs in
+`_subprocess_outcome`; and everything after the child exists — driving it,
+invoking the after-hooks, and settling the sink bracket, the terminal event,
+and the observer tasks on every exit path — belongs in `_command_finalization`.
+On the pipeline side, starting stages — and cleaning up whatever a failed
+startup left running — belongs in `_pipeline_spawn`, while terminating stages
+that are already running belongs in `_process_lifecycle` alongside
+`_shielded_cleanup`. Deciding *when* to signal — the two-phase grace and its
+escalation — is `_process_lifecycle`'s; deciding *what* the signal reaches
+(`signal_target_or_report`, which lives in `_group_teardown` and is called from
+`_process_signal`), and what a completed teardown waits for (`_settlement`,
+`_terminate_process_with_wait`, `_settle_after_escalation`), belongs in
+`_process_signal`. The idle heartbeat's timing belongs in `_idle_heartbeat` and
+its rendering and write-failure policy in `_idle_diagnostic`.
 
 The public `cuprum.sh` package has its own split, and `stdio` is the one module
 there with a sibling rules module rather than an adapter. All three are
@@ -7635,13 +7636,14 @@ tests that monkeypatch them by module path resolve the same names as before:
 
 `cuprum/_subprocess_execution.py` stays the composition root. It spawns through
 `_start_owned_process`, decides in `_await_direct_completion` which streams to
-consume, and assembles the result in `_build_command_result`;
-`_build_stream_config` and `_spawn_stream_consumers` it only re-exports, so a
-change in *which* streams a run consumes is an orchestration change and belongs
-there, while a change to how one `_StreamConfig` is assembled or how its
-consumer task is created belongs in `_subprocess_streams`. The split is what
-keeps the execution module under the Pylint module ceiling now that the
-idle-heartbeat wiring reaches into the stream configs; see the
+consume, and leaves result construction to `_build_command_result` in
+`_subprocess_outcome.py`, which it re-exports. It also re-exports
+`_build_stream_config` and `_spawn_stream_consumers`, so a change in *which*
+streams a run consumes is an orchestration change and belongs here, while a
+change to how one `_StreamConfig` is assembled or how its consumer task is
+created belongs in `_subprocess_streams`. The split is what keeps the execution
+module under the Pylint module ceiling now that the idle-heartbeat wiring
+reaches into the stream configs; see the
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
@@ -7736,10 +7738,11 @@ reason its deadline names are re-exported.
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
 settles the per-stream relay-diagnostics collectors before returning captured
-output. `_subprocess_execution.py` retains orchestration and final
-`CommandResult` assembly, re-exporting `_run_subprocess_without_streams` from
-`_subprocess_direct_run.py`, `_start_owned_process` and the execution bundle
-from `cuprum/_subprocess_spawn.py`, and stream-consumer construction and stream
+output. `_subprocess_execution.py` retains orchestration and re-exports
+`_build_command_result` from `_subprocess_outcome.py`, alongside
+`_run_subprocess_without_streams` from `_subprocess_direct_run.py`,
+`_start_owned_process` and the execution bundle from
+`cuprum/_subprocess_spawn.py`, and stream-consumer construction and stream
 configuration from `_subprocess_streams`. `_StreamConsumerSpawnContext` is the
 private bundle of stream configuration, PID, and the stdout/stderr diagnostics
 collectors that the streamed run creates before handing those values to the
@@ -7799,8 +7802,9 @@ bring that module back under the 400-line ceiling once the post-exit deadline
 work pushed it over, on the boundary the code already drew: the orchestration
 module owns *when* a run settles, this one owns *what* it reports.
 `_subprocess_execution` re-exports `_DirectCompletion` and
-`_relay_fallbacks_for_result`, so the reporting paths and the tests that
-monkeypatch them by module path resolve the same names as before.
+`_build_command_result` and `_relay_fallbacks_for_result`, so the reporting
+paths and the tests that monkeypatch them by module path resolve the same names
+as before.
 
 `cuprum/_subprocess_wait.py` holds `_drain_context` and `_reconcile_run_tasks`
 (see the wait-path detail below). The child-exit wait — `_wait_for_exit_code`,

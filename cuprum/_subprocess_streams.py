@@ -289,6 +289,7 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
 def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
+    settlement_started: asyncio.Event | None = None,
 ) -> _StreamConfig:
     """Build the stdout ``_StreamConfig`` for an execution context.
 
@@ -324,6 +325,7 @@ def _build_stream_config(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
+        settlement_started=settlement_started,
         read_size=_current_read_size(),
         activity=execution.idle.note_activity if execution.idle is not None else None,
     )
@@ -332,29 +334,23 @@ def _build_stream_config(
 def _prepare_stream_spawn(
     execution: _SubprocessExecution,
     pid: int | None,
+    *,
+    discard_on_cancel: asyncio.Event | None = None,
+    settlement_started: asyncio.Event | None = None,
 ) -> _StreamSpawnInputs:
-    """Build the stream wiring a run needs before it starts any consumer.
+    """Build stream inputs, reusing caller latches before any consumer starts.
 
-    Every streamed run reaches this point with a live child and nothing else
-    started, so the work here is deliberately infallible: it reads the
-    execution, allocates an event and either reuses the run's collectors or
-    creates two, and builds a frozen context. A caller can therefore build
-    these inputs without risking a half-started run, which is the property the
-    direct-run and handle paths both document.
-
-    Parameters
-    ----------
-    execution : _SubprocessExecution
-        The resolved run bundle the child was spawned from.
-    pid : int | None
-        The child's process id, or ``None`` when it was not reported.
+    The settlement event identifies line-stream teardown; an omitted discard
+    latch is created here for routes that do not supply one.
 
     Returns
     -------
     _StreamSpawnInputs
-        The discard latch, the spawn context, and the diagnostics collectors.
+        The latches, diagnostics collectors, and resolved stream configs for
+        the consumers this run starts.
     """
-    discard_on_cancel = asyncio.Event()
+    if discard_on_cancel is None:
+        discard_on_cancel = asyncio.Event()
     # The run's own collectors when it made them, so bounded-delivery loss
     # reaches the same result the bounded echo path writes to; a fresh pair
     # only for the paths that never allocated any.
@@ -366,7 +362,7 @@ def _prepare_stream_spawn(
     # reachable from the run's single reconciliation point.
     stdout_config, stderr_config = _resolve_stream_configs(
         execution,
-        _build_stream_config(execution, discard_on_cancel),
+        _build_stream_config(execution, discard_on_cancel, settlement_started),
     )
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,

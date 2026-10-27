@@ -13,7 +13,7 @@ its CodeScene Bumpy Road Ahead finding on `_pipeline_payloads` were addressed
 on the branch; this plan now also tracks the review follow-up against the
 current published candidate.
 
-At the start of this review follow-up, PR
+At an earlier checkpoint in this review follow-up, PR
 [#652](https://github.com/leynos/cuprum/pull/652) was open and ready at
 `351b4d762212720807d6d913972964caf0e72cc9`, based on `main` at
 `7126a1ffb495efe7608d093f5439ca727ba3e0a6`. The local branch was two commits
@@ -23,8 +23,10 @@ replayed commits have counterparts, and the later checkpoint commits are
 accounted for there. The published-head review left two current inline threads
 and six pre-merge findings outstanding: deadline and clock coverage, inherited
 descendant behaviour, property coverage, timeout telemetry, and the migration
-and developer documentation. This review follow-up is in progress; its final
-candidate and gates are recorded in `Progress` after they complete.
+and developer documentation. Later publications and review rounds are recorded
+in `Progress`; this snapshot is historical, not the current candidate. This
+review follow-up remains in progress, and its latest candidate and gates are
+recorded in `Progress` after they complete.
 
 Every gate round is recorded in `Progress` beside the head it ran at, and the
 `Progress` record — not this paragraph — is the source of truth for which round
@@ -606,8 +608,10 @@ the issue was filed:
 - [x] (2026-10-26) Gate the review follow-up through `scrutineer`; the six
   sequential gates passed on candidate tree
   `e64491c381747ee90367ec904d8d73c2d2ee4d52`.
-- [ ] Publish the validated candidate, complete the fresh review and
-  pre-merge reconciliation, then merge PR #652 at its exact head.
+- [ ] For current review `5662177292` of head
+  `80ab7ee4ac2c65608a52da257392b0a779924e3a`, gate the integrated candidate,
+  commit and publish it, reconcile the fresh review and hosted checks, then
+  merge PR #652 at the exact approved head.
 - [x] (2026-10-21) Push and open the draft PR:
       [#652](https://github.com/leynos/cuprum/pull/652),
   draft, head `8936c9bfa`, with the Lody session link and `Fixes #533`.
@@ -1633,12 +1637,16 @@ the issue was filed:
     `Task.exception()` on a pending task raises `InvalidStateError`, so a
     retrieval placed after this wait could not have marked anything anyway.
 
-  Both sites now await through `asyncio.wait` plus a re-await, with
-  `_retrieve_task_outcome` registered as a done callback *before* the wait so
-  it fires whenever the task actually finishes. `_shielded_cleanup` was probed
-  as a suspected fourth site (`settle_self_cancel.py`) and is clean on both
-  interpreters, so it is unchanged. Cancellation still propagates unchanged:
-  the caller's `CancelledError` is not consumed anywhere in the new path.
+  Both sites register `_retrieve_task_outcome` as a done callback before their
+  `asyncio.wait`, so an eventual task failure is retrieved even after the
+  bounded wait returns. `_cancel_stdin_writer` cancels the writer and waits
+  only up to its reclaim budget; it does not re-await the writer. The separate
+  `_await_task_to_completion` helper waits for completion and then re-awaits
+  the task so its failure or cancellation propagates to the caller.
+  `_shielded_cleanup` was probed as a suspected fourth site
+  (`settle_self_cancel.py`) and is clean on both interpreters, so it is
+  unchanged. Cancellation still propagates unchanged: the caller's
+  `CancelledError` is not consumed anywhere in the new path.
 
   Tests: `cuprum/unittests/test_stdin_settle_outcome.py` (new) parametrizes the
   three awaiting sites and asserts two things per site — a writer failing after
@@ -1722,7 +1730,39 @@ the issue was filed:
   `typos.toml` was current; Nixie validated every diagram. The manifest beside
   the logs is
   `/tmp/gh533-gates-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-2.meta`.
-  Local CodeScene checks and publication of this candidate remain pending.
+  At that checkpoint, local CodeScene checks and publication remained pending;
+  later entries record the resulting publication and CodeScene review.
+
+- [x] (2026-10-27) Assessed CodeRabbit review `5662177292` of head
+  `80ab7ee4ac2c65608a52da257392b0a779924e3a`. Its major line-stream
+  cancellation finding, minor writer-reclaim wording finding, and Developer
+  Documentation warning are addressed in the working tree. A focused
+  `capture=False` `ProcessGroupPolicy.INHERIT` regression failed without the
+  runtime change and passed with it. The full sequential gates, publication of
+  these repairs, and current-head review reconciliation are not complete; the
+  pending checklist above records the remaining work.
+
+  At this review, PR author is `leynos`, the base is
+  `7126a1ffb495efe7608d093f5439ca727ba3e0a6`, and local and remote heads both
+  equal `80ab7ee4ac2c65608a52da257392b0a779924e3a`. The branch is unprotected
+  and its commits are unsigned. Commits `5886a0a6` and `31bb91a2` are
+  same-session Lody Archive snapshots authored by `Lody Archive`
+  (`archive@lody.ai`) and committed as `leynos`; the other implementation
+  commits are from this assigned task. No signature verification is implied by
+  that provenance.
+
+- [x] (2026-10-27) Extended the paused-reader repair to cover cancellation
+  racing the line queue's settlement waiter. The `capture=False` regression
+  passed, but inspection showed that a capture-preserving drain leaves the
+  discard latch clear; if cancellation arrived before the waiter resumed, the
+  reader could absorb cancellation and block again on an inherited pipe. The
+  regression now forces that ordering by removing only the test's capture EOF
+  grace. It failed for `capture=True` before the fix and passes for both
+  capture modes after the queue propagates cancellation and the line consumer
+  finalizes the raw prefix already absorbed. The red log is
+  `/tmp/test-gh533-paused-inherited-capture-red.out`; the green focused run is
+  `/tmp/test-gh533-paused-inherited-capture-green.out`. Full sequential gates
+  and publication remain pending.
 
 ## Surprises & discoveries
 
@@ -2957,8 +2997,10 @@ the issue was filed:
   hand-editing the same one line, and the diff remains as reviewable as before.
 
 - Decision (third CodeRabbit review, 2026-10-26): replace the `asyncio.shield`
-  spelling with `asyncio.wait` + re-await at every post-exit writer await,
-  rather than adopting either of the two remedies the review offered. The
+  spelling with `asyncio.wait`-based task observation at the post-exit writer
+  boundaries, rather than adopting either of the two remedies the review
+  offered. Only `_await_task_to_completion` re-awaits the task after its wait;
+  `_cancel_stdin_writer` cancels and waits only up to its reclaim budget. The
   review proposed retaining the settle task through reconciliation, or
   attaching a completion callback that calls `task.exception()`. Both were
   measured, and neither is sufficient on 3.14: `shield` re-registers
@@ -3691,6 +3733,39 @@ doctest suites without failure. The manifest is
 Afterwards, `cs delta --staged` found no issues after the scenario payload was
 grouped in `_LineStreamPayload`; output:
 `/tmp/codescene-cuprum-issue-533-review-after-payload-fix.out`.
+
+The next candidate passed `make check-fmt`, `make lint`, and `make typecheck`,
+then `make test` exposed an over-broad cancellation catch:
+`test_line_observer_cancellation_propagates` expected caller cancellation to
+propagate, but the line consumer finalized capture for any cancellation. The
+consumer now preserves an absorbed capture prefix only when the line-stream
+teardown event is set and the discard latch is clear. This scopes the recovery
+to timeout settlement while retaining cancellation propagation elsewhere. The
+failing full-suite log is
+`/tmp/test-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-0c70468e.out`.
+The focused rerun passed 13 cases across the paused timeout, reader failure,
+and line-emission modules, plus the 78-case selection contract; log:
+`/tmp/test-gh533-cancellation-scope.out`. A new full sequential gate round on
+this fix remains pending.
+
+The next round passed `make check-fmt` and stopped in `make lint` because the
+shortened `_prepare_stream_spawn` docstring had lost its required Returns
+section. The section now describes `_StreamSpawnInputs`; `make typecheck`,
+`make test`, `make markdownlint`, and `make nixie` were unobserved. The lint
+log is
+`/tmp/lint-e82aaf4b-38bb-456f-9cd2-e0b8abf09619-issue-533-post-exit-pipe-drains-can-bypass-configured-command-timeouts-81bb8310.out`.
+The complete sequential round must restart on the updated candidate.
+
+The following round passed all six gates sequentially on HEAD
+`80ab7ee4ac2c65608a52da257392b0a779924e3a` and staged tree
+`758854a13320d3b987cef6fba348c5cdc89204be`: `make check-fmt`, `make lint`,
+`make typecheck`, `make test`, `make markdownlint`, and `make nixie`. Its
+manifest is `/tmp/gh533-gates-758854a1.meta`; the six gate logs use the same
+`758854a1` suffix under `/tmp`. `make test` reported 5,818 pytest passes and
+130 skips across 22 sessions, 165/165 Rust tests, and 8 passing doctests with 3
+ignored. `cs delta --staged` found no issues. The exact before/after
+fingerprints are in the manifest; the subsequent documentation-only record will
+be checked with the Markdown gates.
 
 ## Appendix — how to reproduce the hang by hand
 

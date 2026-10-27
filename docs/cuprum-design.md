@@ -3447,10 +3447,12 @@ splitting rule.
 
 Each line stream also carries a settlement event. Teardown sets it before
 cancelling readers, so a publisher parked on a full queue can stop trying to
-publish. The drain absorbs each raw chunk into capture before decoding its
-lines, so stopping publication does not discard the captured prefix. The same
-event covers the final unterminated line, which is otherwise published after
-the read loop returns.
+publish. If cancellation reaches that publisher before the settlement waiter
+resumes, it propagates rather than being absorbed. A capturing line consumer
+then finalizes the raw chunk it absorbed before publishing its lines; a
+discarding consumer still propagates cancellation without retaining output. The
+same event covers the final unterminated line, which is otherwise published
+after the read loop returns.
 
 The accumulator exists because the earlier concatenate-and-rescan approach was
 quadratic: every chunk copied the whole pending line and searched it again, so

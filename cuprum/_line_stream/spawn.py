@@ -58,6 +58,7 @@ class _LineStreamSetup:
     queue: asyncio.Queue[_LineQueueItem]
     telemetry: _LineStreamTelemetry
     settlement_started: asyncio.Event
+    discard_on_cancel: asyncio.Event
 
 
 async def _start_line_stream_run(
@@ -96,7 +97,7 @@ async def _start_line_stream_run(
         exec_id=execution.observation.exec_id,
         queue_capacity=queue.maxsize,
     )
-    setup = _LineStreamSetup(queue, telemetry, asyncio.Event())
+    setup = _LineStreamSetup(queue, telemetry, asyncio.Event(), asyncio.Event())
     # Rebound, not passed straight to the spawn: the stream consumers read
     # ``on_line`` off the execution too, so a chained hook that only reached
     # ``_spawn_subprocess`` would leave the queue sink uninstalled and starve
@@ -257,7 +258,12 @@ def _build_unstarted_run(
     """
     # The same wiring ``run()`` uses, so iterating lines can never silently
     # diverge from it on capture, echo, or sink selection.
-    spawn = _prepare_stream_spawn(execution, process.pid)
+    spawn = _prepare_stream_spawn(
+        execution,
+        process.pid,
+        discard_on_cancel=setup.discard_on_cancel,
+        settlement_started=setup.settlement_started,
+    )
     return _LineStreamRun(
         process=process,
         tasks=_build_run_task_ownership(process, execution, spawn),
