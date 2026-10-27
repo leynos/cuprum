@@ -119,7 +119,8 @@ NEXTEST_MIN_VERSION ?= 0.9.100
 # therefore carry LOCAL_TOOL_ENV as well, so both see one PATH; the guard
 # keeps the check honest for any other way the output can go missing.
 NEXTEST_VERSION_OK = awk -v min="$(NEXTEST_MIN_VERSION)" 'NR == 1 { for (i = 1; i <= NF; i++) if ($$i ~ /^[0-9]+([.][0-9]+)+$$/) { split($$i, found, "."); split(min, floor, "."); for (j = 1; j <= 3; j++) { if (found[j] + 0 > floor[j] + 0) exit 0; if (found[j] + 0 < floor[j] + 0) exit 1 } exit 0 } exit 1 } END { if (NR == 0) exit 1 }'
-NEXTEST_FLOOR_MESSAGE = printf 'cargo-nextest %s or newer is required: rust/.config/nextest.toml declares a global-timeout that earlier releases ignore without failing\n' "$(NEXTEST_MIN_VERSION)" >&2; exit 1
+NEXTEST_FLOOR_DIAGNOSTIC = printf 'cargo-nextest %s or newer is required: its version probe was empty, unparsable, or below the global-timeout support floor in rust/.config/nextest.toml\n' "$(NEXTEST_MIN_VERSION)" >&2
+NEXTEST_FLOOR_MESSAGE = $(NEXTEST_FLOOR_DIAGNOSTIC); exit 1
 DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
@@ -177,18 +178,24 @@ ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py \
   tests/integration/test_extension_typecheck_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_distribution_artefacts.py \
+  tests/test_native_sdist.py \
   tests/test_native_pipeline_hand_off_support.py \
   tests/test_native_pipeline_liveness.py \
   tests/test_native_pipeline_liveness_runner.py \
   tests/test_native_pipeline_stall_diagnostic.py \
   tests/test_native_pipeline_stall_properties.py \
   tests/test_native_pipeline_stdout_capture.py \
-  tests/test_native_sdist.py \
   tests/test_process_state_degradations.py \
   tests/test_process_state_helper.py \
   tests/test_py_typed_marker.py \
+  tests/test_rust_pump_writer_handoff_terminal_paths.py \
   tests/test_running_command_children_contract.py \
   scripts/tests/test_boundary_*.py \
+  scripts/tests/test_cargo_state.py \
+  scripts/tests/test_cargo_snapshot_key.py \
+  scripts/tests/test_cargo_snapshot_root.py \
+  scripts/tests/test_cargo_workspace_state.py \
   scripts/tests/test_check_fmt_import_order_contract.py \
   scripts/tests/test_install_pypy312.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
@@ -196,6 +203,12 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py \
   $(ACT_PARSER_TARGETS)
+# Packaging consumers share session-scoped builds, so run them in one pytest process.
+PYTEST_GROUPED_TARGETS ?= tests/test_native_sdist.py tests/test_py_typed_marker.py \
+  cuprum/unittests/test_doctest_warning_contract.py
+PYTEST_INDIVIDUAL_TARGETS = $(filter-out $(PYTEST_GROUPED_TARGETS),$(PYTEST_TARGETS))
+PYTEST_SELECTED_TARGETS = $(sort $(foreach target,$(PYTEST_TARGETS),$(wildcard $(target))))
+PYTEST_GROUPED_DESELECT = $(foreach target,$(PYTEST_GROUPED_TARGETS),--deselect $(target))
 # The modules gated on the compiled extension. Deliberately not the whole
 # suite: with the extension installed, test_pipeline.py trips the descriptor
 # close race in issue #124 and aborts the interpreter. One definition here,
@@ -431,13 +444,14 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 # 3.79, and `.NOTPARALLEL` with prerequisites from 4.4. Naming the aggregates
 # here therefore works on both, and degrades safely in the direction that
 # matters: Make 4.3 ignores the prerequisites and serializes the whole run,
-# while Make 4.4 serializes exactly the two named subtrees. Both were verified
+# while Make 4.4 serializes exactly the named aggregates. Both were verified
 # against real 4.3 and 4.4 binaries, so the hosted runners' Make needs no pin.
 #
 # Leaves are deliberately not named here. Naming `lint` alone would leave
 # `rust-lint`'s own prerequisites free to interleave under `-j`; naming both
-# subtrees is what fixes the order without serializing unrelated work.
-.NOTPARALLEL: lint rust-lint
+# lint aggregates and `test` also keeps each aggregate's ordered prerequisites
+# together without serializing unrelated work on Make 4.4.
+.NOTPARALLEL: lint rust-lint test
 
 .DEFAULT_GOAL := all
 
@@ -675,13 +689,17 @@ makeutil: ## Verify the Makefile parser used by contract tests
 # coverage job is the only place the Rust suite runs, under instrumentation, so
 # the interpreter matrix calls `test-python` alone. See "One execution per
 # suite" in docs/developers-guide.md.
-test: makeutil test-selection test-python test-rust ## Run the Python and Rust suites
+test: test-selection test-python test-rust ## Run the Python and Rust suites sequentially
 
 test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
-	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
+	@for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
-	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
+	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) $(PYTEST_GROUPED_DESELECT) "$$@" || exit $$?; \
 	done
+	@set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
+	if [ "$$#" -gt 0 ]; then \
+	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
+	fi
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
 # every assertion about it lives in a module *that selector collects* — and a
@@ -709,14 +727,38 @@ test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, 
 # The selected nightly keeps its separate doctest warning flags. The
 # fragment-free modern-stable route uses the stable-compatible RUSTDOC_FLAGS.
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
-	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
-	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(NEXTEST_FLAGS) $(BUILD_JOBS); \
+	@set -eu; \
+	target_root="$(abspath $(RUST_DIR))/target"; \
+	mkdir -p "$$target_root"; \
+	run_root=$$(mktemp -d "$$target_root/.cuprum-test-run.XXXXXX"); \
+	cleanup() { rm -rf "$$run_root"; }; \
+	trap cleanup EXIT; \
+	$(UV_RUN_ENV) $(UV) run --frozen python -m scripts.prepare_cargo_state "$$run_root" > "$$run_root/preparation.json"; \
+	export CARGO_HOME="$$run_root/cargo-home"; \
+	target_route="$(if $(DEV_FAST_HOST_IS_LINUX),dev-fast-$(DEV_FAST_TOOLCHAIN),stable-$(MSRV_TOOLCHAIN))"; \
+	target_key=$$($(UV_RUN_ENV) $(UV) run --frozen python -c 'import hashlib, sys; print(hashlib.sha256("\0".join(sys.argv[1:]).encode()).hexdigest()[:16])' "$$target_route" "$(DEV_FAST_RUST_CONFIG)" "$(DEV_FAST_TEST_RUSTFLAGS)" "$(DOCTEST_RUSTDOC_FLAGS)"); \
+	export CARGO_TARGET_DIR="$$target_root/test-rust-$$target_route-$$target_key"; \
+	mkdir -p "$$CARGO_TARGET_DIR"; \
+	export CARGO_NET_OFFLINE=true; \
+	run_started=$$($(UV_RUN_ENV) $(UV) run --frozen python -c 'import time; print(time.monotonic())'); \
+	suite_status=0; \
+	if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
+	  if $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK); then \
+	    (cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(NEXTEST_FLAGS) --frozen $(BUILD_JOBS)) || suite_status=$$?; \
+	  else \
+	    $(NEXTEST_FLOOR_DIAGNOSTIC); \
+	    suite_status=1; \
+	  fi; \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS) -- --test-threads=$(TEST_JOBS); \
-	fi
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
+	  (cd $(RUST_DIR) && RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) --frozen $(BUILD_JOBS) -- --test-threads=$(TEST_JOBS)) || suite_status=$$?; \
+	fi; \
+	if [ "$$suite_status" -eq 0 ]; then \
+	  (cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS) --frozen) || suite_status=$$?; \
+	fi; \
+	$(UV_RUN_ENV) $(UV) run --frozen python -c 'import sys, time; from pathlib import Path; from scripts.cargo_state import record_phase; record_phase(Path(sys.argv[1]), "rust_test_workload", time.monotonic() - float(sys.argv[2]))' "$$run_root/timings.jsonl" "$$run_started" || printf '%s\n' 'warning: failed to record Rust workload timing' >&2; \
+	$(UV_RUN_ENV) $(UV) run --frozen python -c 'import json, sys; rows=[json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]; [print("{}: {:.1f}s".format(row["phase"], row["seconds"])) for row in rows]' "$$run_root/timings.jsonl" || printf '%s\n' 'warning: failed to report Rust workload timing' >&2; \
+	exit "$$suite_status"
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV
 	rustup run "$(MSRV_TOOLCHAIN)" rustc -vV

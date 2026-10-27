@@ -47,6 +47,7 @@ from tests.helpers.suite_selection import (
 #: A real module of this tree, collected by `SELECTOR`. Naming a module that
 #: exists is what stops a refusal test from passing on an unknown name.
 _VALID_MODULE = "tests/test_native_sdist.py"
+_VALID_SCENARIO_MODULE = "tests/integration/test_workflow_integration.py"
 
 
 def _seed(monkeypatch: pytest.MonkeyPatch, module: str, entry: Exemption) -> None:
@@ -145,7 +146,7 @@ def test_an_exemption_whose_target_never_consumes_the_selector_is_refused(
     the entry records does not exist. This is the claim the two-field
     `Exemption` exists to make checkable.
     """
-    module = "tests/integration/test_workflow_integration.py"
+    module = _VALID_SCENARIO_MODULE
     assert module in {
         str(path) for path in selected_paths(variable_expansion(SCENARIO_SELECTOR))
     }, f"{module} must be collected by {SCENARIO_SELECTOR}, or the seed is wrong"
@@ -162,25 +163,52 @@ def test_an_exemption_whose_target_never_consumes_the_selector_is_refused(
         exceptions_verified()
 
 
+def test_an_exemption_running_only_filtered_individual_targets_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject an individual-only route that leaves grouped modules unrun."""
+    _seed(
+        monkeypatch,
+        _VALID_MODULE,
+        Exemption(
+            selector="PYTEST_TARGETS",
+            target="test-python",
+            reason="seeded fault: individual route omits grouped targets",
+        ),
+    )
+    live_recipe = recipe_of("test-python")
+    grouped_binding = (
+        "set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS));"
+    )
+    assert grouped_binding in live_recipe, (
+        "the live recipe must contain its grouped selection branch"
+    )
+    individual_only_recipe = live_recipe.split(grouped_binding, maxsplit=1)[0]
+    _target_recipe(monkeypatch, individual_only_recipe)
+
+    with pytest.raises(AssertionError, match="grouped pytest branch"):
+        exceptions_verified()
+
+
 @pytest.mark.parametrize(
     ("fault", "recipe", "expected"),
     [
         (
             "commented out",
             (
-                "# for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+                "# for p in $(foreach t,$(ACT_SCENARIO_TARGETS),$(t)); do "
                 "set -- $$p; $(PYTEST) $$@; done"
             ),
             "does not expand",
         ),
         (
             "echoed, not expanded",
-            "echo 'for p in $(foreach t,$(PYTEST_TARGETS),$(t))'",
+            "echo 'for p in $(foreach t,$(ACT_SCENARIO_TARGETS),$(t))'",
             "prints them",
         ),
         (
             "in a comment beside a live command",
-            "echo collecting nothing # $(PYTEST_TARGETS)",
+            "echo collecting nothing # $(ACT_SCENARIO_TARGETS)",
             "does not expand",
         ),
     ],
@@ -192,7 +220,7 @@ def test_a_selector_only_named_in_dead_text_is_refused(
     recipe: str,
     expected: str,
 ) -> None:
-    """Refuse an exemption whose selector survives only in text the shell drops.
+    """Refuse a directly selected exemption whose selector never reaches pytest.
 
     Reading the recipe as a string cannot tell these from a live expansion: the
     selector's own spelling is present in all three, and the shell runs none of
@@ -207,10 +235,10 @@ def test_a_selector_only_named_in_dead_text_is_refused(
     """
     _seed(
         monkeypatch,
-        _VALID_MODULE,
+        _VALID_SCENARIO_MODULE,
         Exemption(
-            selector="PYTEST_TARGETS",
-            target="test-python",
+            selector=SCENARIO_SELECTOR,
+            target="test-act",
             reason=f"seeded fault: selector {fault}",
         ),
     )

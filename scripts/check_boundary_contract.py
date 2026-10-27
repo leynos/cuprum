@@ -10,10 +10,7 @@ The isolated copy preserves Cargo target topology and leaves source untouched.
 
 from __future__ import annotations
 
-import base64
-import contextlib
 import itertools
-import shutil
 import stat
 import sys
 import tomllib
@@ -23,18 +20,31 @@ from pathlib import Path
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+from scripts.boundary_cargo import (
+    boundary_cargo_run as _boundary_cargo_run,
+)
+from scripts.boundary_cargo import (
+    new_run_root as _new_boundary_run_root,
+)
+from scripts.boundary_cargo import (
+    prepare_run_cargo_home as _prepare_boundary_cargo_home,
+)
 from scripts.boundary_compile import CompileTargets
 from scripts.boundary_compile import _compile as _compile_workspace
+from scripts.boundary_members import (
+    _check_members_manifest,
+    check_member_lint_inheritance,
+)
+from scripts.boundary_probe import (
+    UNSAFE_PROBES as PROBES,
+)
+from scripts.boundary_probe import _ProbeConfiguration
+from scripts.boundary_probe import (
+    check_target as _check_probe_target,
+)
 from scripts.boundary_workspace import copy_workspace
 
 ROOT = Path(__file__).resolve().parent.parent
-BOUNDARIES = frozenset({"cuprum-rust", "cuprum-native-io"})
-SAFE_CRATES = frozenset({"cuprum-streams"})
-PROBES = (
-    "pub fn unsafe_probe() { unsafe {} }",
-    "pub unsafe fn unsafe_probe() {}",
-    "unsafe trait Probe {} unsafe impl Probe for () {}",
-)
 AUTOMATIC_TARGET_ROOTS = (("autolib", "src/lib.rs"), ("autobins", "src/main.rs"))
 AUTOMATIC_TARGET_DIRECTORIES = (
     ("autobins", "src/bin"),
@@ -43,48 +53,6 @@ AUTOMATIC_TARGET_DIRECTORIES = (
     ("autobenches", "benches"),
 )
 EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
-
-
-def check_members(manifest: str) -> None:
-    """Require review before the approved crate set can grow."""
-    _check_members_manifest(tomllib.loads(manifest))
-
-
-def _check_members_manifest(manifest: cabc.Mapping[str, object]) -> None:
-    """Validate audited workspace membership from parsed manifest data."""
-    workspace = manifest.get("workspace")
-    members = workspace.get("members") if isinstance(workspace, dict) else None
-    if not isinstance(members, list) or not all(
-        isinstance(member, str) for member in members
-    ):
-        msg = "workspace membership differs from the audited boundary inventory"
-        raise ValueError(msg)
-    if set(members) != BOUNDARIES | SAFE_CRATES or len(members) != len(
-        BOUNDARIES | SAFE_CRATES
-    ):
-        msg = "workspace membership differs from the audited boundary inventory"
-        raise ValueError(msg)
-
-
-def check_member_lint_inheritance(workspace: Path) -> None:
-    """Require each audited package to inherit the workspace lint baseline.
-
-    Parameters
-    ----------
-    workspace : Path
-        Root of the Rust workspace containing audited member manifests.
-
-    Raises
-    ------
-    ValueError
-        If an audited package replaces or weakens the shared policy locally.
-    """
-    for member in BOUNDARIES | SAFE_CRATES:
-        manifest_path = workspace / member / "Cargo.toml"
-        manifest = _load_toml(manifest_path)
-        if manifest.get("lints") != {"workspace": True}:
-            msg = f"{member} must inherit the workspace lint baseline"
-            raise ValueError(msg)
 
 
 def safe_target_roots(workspace: Path) -> tuple[Path, ...]:
@@ -317,9 +285,18 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
 
 def _compile(workspace: Path, targets: CompileTargets | None = None) -> tuple[int, str]:
     """Keep the harness's compiler seam injectable for its probe tests."""
-    return _compile_workspace(
-        workspace, ROOT / "rust/target/boundary-contract", targets
-    )
+    target_directory = workspace.parent / "target/boundary-contract-debug-all-features"
+    return _compile_workspace(workspace, target_directory, targets)
+
+
+def _new_run_root() -> Path:
+    """Create a unique workspace root so concurrent harnesses cannot collide."""
+    return _new_boundary_run_root(ROOT / ".cache/boundary-contract/runs")
+
+
+def _prepare_run_cargo_home(run_root: Path, workspace: Path) -> float:
+    """Prepare the copied workspace with this harness's selected repository root."""
+    return _prepare_boundary_cargo_home(ROOT, run_root, workspace)
 
 
 def main() -> None:
@@ -327,59 +304,36 @@ def main() -> None:
     _check_members_manifest(_load_toml(ROOT / "rust/Cargo.toml"))
     check_member_lint_inheritance(ROOT / "rust")
     safe_targets = check_safe_policy(ROOT / "rust")
-    workspace = ROOT / ".cache/boundary-contract/workspace"
-    if workspace.exists():
-        shutil.rmtree(workspace)
+    run_root = _new_run_root()
+    workspace = run_root / "workspace"
     copy_workspace(ROOT / "rust", workspace, safe_targets)
-    logs = ROOT / "rust/target/boundary-verification"
-    logs.mkdir(parents=True, exist_ok=True)
-    code, output = _compile(workspace)
-    baseline_log = logs / "safe-positive.log"
-    baseline_log.write_text(output, encoding="utf-8")
-    if code != 0:
-        print(
-            f"safe baseline did not compile (cargo exit {code}); see {baseline_log}",
-            file=sys.stderr,
-        )
-        raise SystemExit(code)
-    for target in safe_targets:
-        _check_target(workspace, workspace / target.relative_to(ROOT / "rust"), logs)
-
-
-def _unsafe_was_forbidden(code: int, output: str) -> bool:
-    """Return whether a compiler result names the required unsafe prohibition."""
-    markers = ("forbid(unsafe_code)", "-F unsafe-code")
-    return code != 0 and any(marker in output for marker in markers)
-
-
-@contextlib.contextmanager
-def _probe_appended(path: Path, probe: str) -> cabc.Iterator[None]:
-    """Temporarily append a byte-preserving probe, then restore the source."""
-    original = path.read_bytes()
-    try:
-        path.write_bytes(original + b"\n" + probe.encode() + b"\n")
-        yield
-    finally:
-        path.write_bytes(original)
-
-
-def _probe_log_name(workspace: Path, path: Path, index: int) -> str:
-    """Return a filesystem-safe, reversible workspace-relative probe log name."""
-    relative = path.relative_to(workspace).as_posix()
-    encoded = base64.urlsafe_b64encode(relative.encode()).decode().rstrip("=")
-    return f"{path.stem}-{encoded}-unsafe-{index}.log"
+    with _boundary_cargo_run(run_root, workspace, _prepare_run_cargo_home):
+        logs = run_root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        code, output = _compile(workspace)
+        baseline_log = logs / "safe-positive.log"
+        baseline_log.write_text(output, encoding="utf-8")
+        if code != 0:
+            print(
+                "safe baseline did not compile "
+                f"(cargo exit {code}); see {baseline_log}",
+                file=sys.stderr,
+            )
+            raise SystemExit(code)
+        for target in safe_targets:
+            _check_target(
+                workspace, workspace / target.relative_to(ROOT / "rust"), logs
+            )
 
 
 def _check_target(workspace: Path, path: Path, logs: Path) -> None:
-    """Probe one target and archive each compiler result."""
-    for index, probe in enumerate(PROBES):
-        with _probe_appended(path, probe):
-            code, output = _compile(workspace)
-            name = _probe_log_name(workspace, path, index)
-            (logs / name).write_text(output, encoding="utf-8")
-            if not _unsafe_was_forbidden(code, output):
-                msg = f"safe target did not reject unsafe probe: {name}"
-                raise RuntimeError(msg)
+    """Probe one target through the shared byte-safe compiler harness."""
+    _check_probe_target(
+        workspace=workspace,
+        path=path,
+        logs=logs,
+        configuration=_ProbeConfiguration(PROBES, _compile),
+    )
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import boundary_compile
+from scripts import boundary_compile, check_boundary_faults
 from scripts.tests import boundary_harness_support
 
 if typ.TYPE_CHECKING:
@@ -58,6 +58,7 @@ def test_compile_passes_its_named_timeout_to_execution_context(
         lambda _program, *, catalogue: cargo,
     )
     monkeypatch.setattr(boundary_compile, "scoped", lambda _config: nullcontext())
+    monkeypatch.setenv("CARGO_BUILD_JOBS", "9")
     target_directory = tmp_path / "target"
 
     exit_code, output = boundary_compile._compile(tmp_path, target_directory)
@@ -72,8 +73,20 @@ def test_compile_passes_its_named_timeout_to_execution_context(
     assert compile_context.env["CARGO_TARGET_DIR"] == str(target_directory), (
         "the compile must keep its isolated target directory"
     )
+    assert compile_context.env["CARGO_NET_OFFLINE"] == "true", (
+        "the timed compile must use dependencies prepared before execution"
+    )
+    assert compile_context.env["CARGO_BUILD_JOBS"] == "9", (
+        "the boundary compile must preserve caller-selected Cargo parallelism"
+    )
+    assert (
+        compile_context.process_group is boundary_compile.ProcessGroupPolicy.OWN_GROUP
+    ), "a timed compile must own its group for descendant cleanup"
     assert cargo_arguments == [boundary_compile.compile_arguments()], (
         "the timeout contract must preserve the production Cargo arguments"
+    )
+    assert "--frozen" in cargo_arguments[0], (
+        "the timed compile must preserve its copied lockfile and stay offline"
     )
     assert (exit_code, output) == (0, "checked"), (
         "the compile helper must return the command result"
@@ -141,4 +154,80 @@ def test_cargo_metadata_passes_its_named_timeout_and_propagates_expiry(
 
     assert raised.value is timeout_error, (
         "metadata timeouts must propagate instead of becoming an empty target list"
+    )
+
+
+def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fault Cargo child inherits jobs but terminates as one owned group."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    cargo_home = tmp_path / "cargo-home"
+    cargo_home.mkdir()
+    monkeypatch.setattr(check_boundary_faults, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        check_boundary_faults,
+        "read_tool_pins",
+        lambda: SimpleNamespace(kani="0.1", verus="0.2"),
+    )
+    monkeypatch.setenv("CARGO_BUILD_JOBS", "6")
+    contexts: list[ExecutionContext] = []
+    calls: list[tuple[str, ...]] = []
+
+    class RecordingCommand:
+        """Capture the process policy used for Cargo fault checks."""
+
+        def run_sync(self, *, context: ExecutionContext) -> SimpleNamespace:
+            """Record the context and return a passing Cargo result."""
+            contexts.append(context)
+            return SimpleNamespace(exit_code=0, stdout="checked", stderr="")
+
+    command = RecordingCommand()
+
+    class RecordingCargo:
+        """Capture Cargo's fixed fault-check argument tuple."""
+
+        def __call__(self, *arguments: str) -> RecordingCommand:
+            """Record the Cargo arguments and return the command double."""
+            calls.append(arguments)
+            return command
+
+    monkeypatch.setattr(
+        check_boundary_faults.sh,
+        "make",
+        lambda _program, *, catalogue: RecordingCargo(),
+    )
+    monkeypatch.setattr(
+        check_boundary_faults,
+        "scoped",
+        lambda _config: nullcontext(),
+    )
+
+    code, output = check_boundary_faults._run(
+        "cargo", ("test", "--package", "cuprum-native-io"), workspace
+    )
+
+    assert code == 0, "the controlled Cargo result must preserve its exit code"
+    assert output == "checked", "the controlled Cargo result must preserve output"
+    assert calls == [("--frozen", "test", "--package", "cuprum-native-io")], (
+        "Cargo fault checks must run offline without changing the lockfile"
+    )
+    context = contexts[0]
+    assert (
+        context.process_group is check_boundary_faults.ProcessGroupPolicy.OWN_GROUP
+    ), "fault checks must own descendants for bounded termination"
+    assert context.timeout == 1200, "the fault workload must keep its finite timeout"
+    assert context.env is not None, (
+        "the Cargo fault route must receive an explicit environment"
+    )
+    assert context.env["CARGO_HOME"] == str(cargo_home), (
+        "Cargo fault checks must use the run-local writable home"
+    )
+    assert context.env["CARGO_NET_OFFLINE"] == "true", (
+        "fault Cargo commands must use dependencies prepared before execution"
+    )
+    assert context.env["CARGO_BUILD_JOBS"] == "6", (
+        "the fault route must preserve caller-selected Cargo parallelism"
     )

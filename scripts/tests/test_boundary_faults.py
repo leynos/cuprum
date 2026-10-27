@@ -7,6 +7,7 @@ and what it requires of each result — without launching Verus, Kani, or Cargo.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -114,8 +115,20 @@ def _drive(
     runner = _RecordedRun(root / "rust")
     monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
+    monkeypatch.setattr(
+        faults,
+        "_prepare_run_cargo_home",
+        lambda _run, _workspace: 0.0,
+    )
     faults.main()
     return root, runner
+
+
+def _latest_run_root(root: Path) -> Path:
+    """Return the unique retained run directory produced by the harness."""
+    runs = sorted((root / ".cache/boundary-faults/runs").glob("run-*"))
+    assert len(runs) == 1, "the fault run must use one private workspace root"
+    return runs[0]
 
 
 def test_the_harness_launches_the_pinned_installer_versions() -> None:
@@ -179,7 +192,8 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
 ) -> None:
     """main() copies the workspace and drives the proof and ownership faults."""
     root, runner = _drive(tmp_path, monkeypatch)
-    workspace = root / ".cache/boundary-faults/workspace"
+    run_root = _latest_run_root(root)
+    workspace = run_root / "workspace"
     assert workspace.is_dir(), "the harness must copy the workspace before mutating"
     assert not (workspace / "target").exists(), (
         "the workspace copy must exclude Cargo build output"
@@ -192,6 +206,16 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
     assert runner.names().count("cargo") == 4, (
         "each ownership fault must be preceded by a control"
     )
+    timings = [
+        json.loads(line)
+        for line in (run_root / "timings.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["phase"] for record in timings] == [
+        "dependency_preparation",
+        "workload",
+    ], "preparation and fault execution must have separate timing records"
 
 
 def test_every_proof_fault_reaches_the_verus_input(

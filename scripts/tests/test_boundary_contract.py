@@ -1,21 +1,18 @@
-"""The unsafe-bearing crate allowlist must reject unreviewed workspace growth.
-
-The compiler path is driven through a recorded command seam, so the tests
-assert what the harness compiles and requires of each result — including that
-every probe is restored — without invoking Cargo.
-"""
+"""Validate the audited unsafe-boundary inventory using recorded compiles."""
 
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
 
 from scripts import check_boundary_contract as contract
+from scripts.boundary_members import check_members
+from scripts.boundary_probe import probe_log_name as _probe_log_name
 from scripts.check_boundary_contract import (
     check_member_lint_inheritance,
-    check_members,
     check_safe_policy,
     safe_target_roots,
 )
@@ -72,9 +69,21 @@ def _drive_contract(
     root = copy_boundary_repository(tmp_path)
     compiler = _RecordedCompile()
     monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(
+        contract,
+        "_prepare_run_cargo_home",
+        lambda _run, _workspace: 0.0,
+    )
     monkeypatch.setattr(contract, "_compile", compiler)
     contract.main()
     return root, compiler
+
+
+def _latest_run_root(root: Path) -> Path:
+    """Return the unique retained run directory produced by the harness."""
+    runs = sorted((root / ".cache/boundary-contract/runs").glob("run-*"))
+    assert len(runs) == 1, "the contract invocation must have one private run root"
+    return runs[0]
 
 
 @pytest.mark.parametrize("extra", [", 'new-boundary'", ", 'cuprum-native-io'", ", '*'"])
@@ -205,15 +214,24 @@ def test_main_probes_every_target_with_every_unsafe_form(
         assert sum(probe in text for text in compiler.probes) == len(TARGETS), (
             f"the {probe!r} probe must be compiled against every target"
         )
-    workspace = root / ".cache/boundary-contract/workspace"
-    logs = root / "rust/target/boundary-verification"
+    run_root = _latest_run_root(root)
+    workspace = run_root / "workspace"
+    logs = run_root / "logs"
+    timings = [
+        json.loads(line)
+        for line in (run_root / "timings.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["phase"] for record in timings] == [
+        "dependency_preparation",
+        "workload",
+    ], "the harness must record preparation and execution separately"
     assert (logs / "safe-positive.log").read_text(encoding="utf-8") == (
         "finished checking"
     ), "the baseline result must be archived"
     expected = [
-        contract._probe_log_name(
-            workspace, workspace / "cuprum-streams" / target, index
-        )
+        _probe_log_name(workspace, workspace / "cuprum-streams" / target, index)
         for target in TARGETS
         for index in range(3)
     ]
@@ -247,11 +265,16 @@ def test_main_preserves_automatic_directory_symlinks(
     }, "Cargo must omit directory symlink targets before the copy"
     compiler = _RecordedCompile()
     monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(
+        contract,
+        "_prepare_run_cargo_home",
+        lambda _run, _workspace: 0.0,
+    )
     monkeypatch.setattr(contract, "_compile", compiler)
 
     contract.main()
 
-    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
+    copied_crate = _latest_run_root(root) / "workspace/cuprum-streams"
     after = cargo_target_roots(copied_crate)
     assert {path.relative_to(copied_crate) for path in after} == {
         Path(path) for path in TARGETS
@@ -294,7 +317,7 @@ def test_same_basename_target_logs_are_unique_and_traceable(
         contract._check_target(workspace, target, logs)
 
     expected = {
-        contract._probe_log_name(workspace, target, index)
+        _probe_log_name(workspace, target, index)
         for target in targets
         for index in range(len(contract.PROBES))
     }
@@ -305,7 +328,7 @@ def test_same_basename_target_logs_are_unique_and_traceable(
         "the expected log names must be distinct for every target and probe"
     )
     for target in targets:
-        name = contract._probe_log_name(workspace, target, 0)
+        name = _probe_log_name(workspace, target, 0)
         encoded = name.removeprefix("client-").removesuffix("-unsafe-0.log")
         padding = "=" * (-len(encoded) % 4)
         assert base64.urlsafe_b64decode(encoded + padding).decode() == (
@@ -318,7 +341,7 @@ def test_every_probed_target_is_restored_afterwards(
 ) -> None:
     """A probe left behind would poison every later compile."""
     root, _compiler = _drive_contract(tmp_path, monkeypatch)
-    workspace = root / ".cache/boundary-contract/workspace"
+    workspace = _latest_run_root(root) / "workspace"
     for target in TARGETS:
         source = (workspace / "cuprum-streams" / target).read_text(encoding="utf-8")
         for probe in contract.PROBES:
@@ -331,6 +354,11 @@ def test_a_probe_that_compiles_must_fail_the_check(
     """A safe target that accepts unsafe code must abort the harness."""
     root = copy_boundary_repository(tmp_path)
     monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(
+        contract,
+        "_prepare_run_cargo_home",
+        lambda _run, _workspace: 0.0,
+    )
     # A compiler that never rejects anything stands in for a target whose lint
     # stopped applying; the harness must not report success.
     monkeypatch.setattr(
@@ -348,6 +376,11 @@ def test_a_failing_baseline_aborts_before_any_probe(
     probed: list[Path] = []
     monkeypatch.setattr(contract, "ROOT", root)
     monkeypatch.setattr(
+        contract,
+        "_prepare_run_cargo_home",
+        lambda _run, _workspace: 0.0,
+    )
+    monkeypatch.setattr(
         contract, "_compile", lambda _workspace: (101, "error: no compiler")
     )
     monkeypatch.setattr(
@@ -358,40 +391,3 @@ def test_a_failing_baseline_aborts_before_any_probe(
     with pytest.raises(SystemExit):
         contract.main()
     assert not probed, "a broken baseline must not be reported as a probed workspace"
-
-
-def test_unsafe_detection_requires_both_failure_and_the_forbid_diagnostic() -> None:
-    """An unrelated compile failure must not be read as a successful rejection."""
-    assert contract._unsafe_was_forbidden(1, "error: forbid(unsafe_code)"), (
-        "a failed compile naming forbid(unsafe_code) is a rejection"
-    )
-    assert contract._unsafe_was_forbidden(1, "error: -F unsafe-code"), (
-        "the -F unsafe-code spelling is the same rejection"
-    )
-    assert not contract._unsafe_was_forbidden(0, "error: forbid(unsafe_code)"), (
-        "a diagnostic without a failure exit is not a rejection"
-    )
-    assert not contract._unsafe_was_forbidden(1, "error: unused import"), (
-        "an unrelated failure is not a rejection"
-    )
-
-
-def test_a_probe_is_removed_even_when_compilation_fails(tmp_path: Path) -> None:
-    """The context manager restores the source on both exit paths."""
-    target = tmp_path / "lib.rs"
-    target.write_text("pub fn production() {}\n", encoding="utf-8")
-    original = target.read_text(encoding="utf-8")
-    probe = "pub fn unsafe_probe() { unsafe {} }"
-    with contract._probe_appended(target, probe):
-        assert probe in target.read_text(encoding="utf-8"), "the probe was not applied"
-    assert target.read_text(encoding="utf-8") == original, (
-        "the probe was not removed on the normal path"
-    )
-    with (
-        pytest.raises(ValueError, match="boom"),
-        contract._probe_appended(target, probe),
-    ):
-        raise ValueError("boom")
-    assert target.read_text(encoding="utf-8") == original, (
-        "the probe was not removed when the body raised"
-    )

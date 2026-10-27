@@ -3,61 +3,25 @@
 from __future__ import annotations
 
 import tarfile
+import typing as typ
 from pathlib import Path
 
 import pytest
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 from tests.helpers.docs import repo_root
 
-
-def _build_source_archive(backend: str, destination: Path) -> Path:
-    """Build one real source archive using the repository's packaging frontend."""
-    program = Program("uv")
-    catalogue = ProgramCatalogue(
-        projects=(
-            ProjectSettings(
-                name="sdist-test",
-                programs=(program,),
-                documentation_locations=("docs/rust-boundary-verification.md",),
-                noise_rules=(),
-            ),
-        )
-    )
-    command = sh.make(program, catalogue=catalogue)
-    arguments = (
-        ("build", "--sdist", "--out-dir", str(destination))
-        if backend == "uv"
-        else (
-            "run",
-            "maturin",
-            "sdist",
-            "--manifest-path",
-            "rust/cuprum-rust/Cargo.toml",
-            "--out",
-            str(destination),
-        )
-    )
-    with scoped(ScopeConfig(allowlist=frozenset({program}))):
-        result = command(*arguments).run_sync(
-            # Maturin inspects the Rust workspace while sharing Cargo's cache
-            # and compiler admission queues with other repository work.
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=3600)
-        )
-    assert result.exit_code == 0, f"source build failed: {result.stderr}"
-    archives = list(destination.glob("*.tar.gz"))
-    assert len(archives) == 1, "source build must produce exactly one archive"
-    return archives[0]
+if typ.TYPE_CHECKING:
+    from tests.helpers.distribution_artefacts import DistributionArtefactFactory
 
 
-@pytest.mark.timeout(3720)
+@pytest.mark.timeout(240, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_retains_native_workspace(
-    backend: str,
-    tmp_path: Path,
+    backend: typ.Literal["uv", "maturin"],
+    distribution_artefact_factory: DistributionArtefactFactory,
 ) -> None:
     """Every crate source and lockfile survives packaging without build output."""
-    with tarfile.open(_build_source_archive(backend, tmp_path)) as archive:
+    with tarfile.open(distribution_artefact_factory(backend, "sdist")) as archive:
         members = {Path(name).parts[1:] for name in archive.getnames()}
     workspace = repo_root() / "rust"
     expected: set[tuple[str, ...]] = {

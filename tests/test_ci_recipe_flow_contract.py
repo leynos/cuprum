@@ -21,14 +21,40 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers.grouped_recipe_flow import (
+    require_grouped_selector_drives_pytest,
+)
 from tests.helpers.makefile import recipe_of
-from tests.helpers.recipe_flow import require_selector_drives_pytest
+from tests.helpers.makefile_references import variables_referencing
+from tests.helpers.makeutil import makeutil_document
+from tests.helpers.recipe_flow import (
+    require_selector_drives_pytest,
+    require_selector_is_consumed,
+)
 from tests.helpers.suite_selection import SELECTOR
 
 #: The pytest invocation the recipe must route the selector into. The variable
 #: is named rather than assumed so the endpoint table can pair each step of the
 #: flow with what breaks when it is lost.
 PYTEST_INVOCATION = "PYTEST"
+_INDIVIDUAL_SELECTOR = "PYTEST_INDIVIDUAL_TARGETS"
+
+
+def _variable_record(
+    variables: list[object], variable_name: str
+) -> dict[object, object]:
+    """Return one named Make variable record, failing with a useful message."""
+    record = next(
+        (
+            record
+            for record in variables
+            if isinstance(record, dict) and record.get("name") == variable_name
+        ),
+        None,
+    )
+    assert isinstance(record, dict), f"Make variable {variable_name} must be assigned"
+    return record
+
 
 #: Each step of the data flow through the `test-python` recipe, paired with the
 #: shape that satisfies every substring test while breaking the flow. Held as
@@ -39,7 +65,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "the endpoints appear only as echo arguments",
         (
-            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do "
             "echo '$(foreach' '$(PYTEST_TARGETS)' '$(PYTEST)' '$$@'; done"
         ),
         "must invoke",
@@ -55,7 +81,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "the loop binds the positional parameters but pytest discards them",
         (
-            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do "
             "set -- $$p; $(PYTEST) -v -n 4; done"
         ),
         "does not expand",
@@ -63,7 +89,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "the endpoints sit in comments and disconnected echoes",
         (
-            "# for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do set -- $$p; "
+            "# for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do set -- $$p; "
             "$(PYTEST) $$@; done\necho collecting nothing"
         ),
         "must iterate",
@@ -71,7 +97,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "pytest runs before the loop binds anything",
         (
-            "$(PYTEST) $$@; for p in $(foreach t,$(PYTEST_TARGETS),$(t)); "
+            "$(PYTEST) $$@; for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); "
             "do set -- $$p; done"
         ),
         "must invoke",
@@ -79,7 +105,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "the binding is printed rather than performed",
         (
-            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do "
             "echo set -- $$p; $(PYTEST) $$@; done"
         ),
         "must bind",
@@ -87,7 +113,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "pytest runs after the loop has finished",
         (
-            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do "
             "set -- $$p; done\n$(PYTEST) $$@"
         ),
         "must invoke",
@@ -95,7 +121,7 @@ _RECIPE_FLOW_FAULTS = (
     (
         "the binding is overwritten before pytest reads it",
         (
-            "for p in $(foreach t,$(PYTEST_TARGETS),$(t)); do "
+            "for p in $(foreach t,$(PYTEST_INDIVIDUAL_TARGETS),$(t)); do "
             "set -- $$p; set -- other.py; $(PYTEST) $$@; done"
         ),
         "overwrites",
@@ -105,7 +131,7 @@ _RECIPE_FLOW_FAULTS = (
 #: The loop the real recipe uses, so a seeded fault can break one step of it
 #: rather than replacing the whole shape with an unrelated one.
 _LOOP_HEADER = (
-    "for pattern in $(foreach target,$(PYTEST_TARGETS),"
+    "for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),"
     "$(call shell_quote,$(target))); do"
 )
 
@@ -122,25 +148,112 @@ def test_the_suite_target_recipe_consumes_the_selector() -> None:
     workflow check while collecting everything under `tests/` — including the
     container-bound scenarios this repository keeps out of the default suite.
     So the check pins the *data flow*, not the presence of a name: the recipe
-    iterates `$(foreach ... $(PYTEST_TARGETS) ...)`, binds each iterated value
-    with `set --`, and invokes `$(PYTEST)` over the positional parameters.
-    That chain is what ties the workflow check to the selector the coverage
-    checks read, and it is checked structurally by
+    iterates `PYTEST_INDIVIDUAL_TARGETS`, binds each value with `set --`, and
+    invokes `$(PYTEST)` over the positional parameters. A companion assertion
+    ensures that list is exactly `PYTEST_TARGETS` with the grouped modules
+    removed. Together they tie the workflow check to the selector the
+    coverage checks read, and it is checked structurally by
     `tests.helpers.recipe_flow.require_selector_drives_pytest`, which refuses
     the faults in `_RECIPE_FLOW_FAULTS` rather than describing them.
 
     The helper is bounded rather than a shell interpreter: it recognizes the
     loop shape this repository's suite target is written in and refuses
     anything else by name. Refusal is the safe direction. A recipe that merely
-    mentioned `$(PYTEST_TARGETS)` somewhere — as an `echo` argument, in a
-    comment, or in a loop that iterated something else — would satisfy a
+    mentioned `PYTEST_INDIVIDUAL_TARGETS` somewhere — as an `echo` argument, in
+    a comment, or in a loop that iterated something else — would satisfy a
     substring test and is reported here instead.
     """
     require_selector_drives_pytest(
         recipe_of("test-python"),
-        selector=SELECTOR,
+        selector=_INDIVIDUAL_SELECTOR,
         pytest_variable=PYTEST_INVOCATION,
     )
+
+
+def test_individual_targets_filter_grouped_invocations() -> None:
+    """Keep grouped test files out of the ordinary one-file pytest loop."""
+    variables = makeutil_document().get("variables")
+    assert isinstance(variables, list), "makeutil must return Makefile variables"
+    individual = _variable_record(variables, _INDIVIDUAL_SELECTOR)
+    assert individual.get("raw_value") == (
+        f"$(filter-out $(PYTEST_GROUPED_TARGETS),$({SELECTOR}))"
+    ), "individual pytest targets must exclude exactly the grouped modules"
+
+    selected = _variable_record(variables, "PYTEST_SELECTED_TARGETS")
+    assert selected.get("raw_value") == (
+        "$(sort $(foreach target,$(PYTEST_TARGETS),$(wildcard $(target))))"
+    ), "group selection must respect the caller's PYTEST_TARGETS selector"
+    assert {
+        "PYTEST_INDIVIDUAL_TARGETS",
+        "PYTEST_SELECTED_TARGETS",
+    } <= variables_referencing("PYTEST_TARGETS"), (
+        "the test-python selection aliases must retain their PYTEST_TARGETS lineage"
+    )
+    recipe = recipe_of("test-python")
+    require_selector_is_consumed(
+        recipe,
+        selector="PYTEST_GROUPED_DESELECT",
+    )
+    require_grouped_selector_drives_pytest(
+        recipe,
+        grouped_targets="PYTEST_GROUPED_TARGETS",
+        selected_targets="PYTEST_SELECTED_TARGETS",
+        pytest_variable=PYTEST_INVOCATION,
+    )
+    deselect = _variable_record(variables, "PYTEST_GROUPED_DESELECT")
+    assert deselect.get("raw_value") == (
+        "$(foreach target,$(PYTEST_GROUPED_TARGETS),--deselect $(target))"
+    ), "every individual pytest process must deselect all grouped modules"
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected"),
+    [
+        ("wrong intersection", "the grouped pytest branch must pass"),
+        ("filter mentioned but dropped", "the grouped pytest branch must pass"),
+        ("arguments discarded", "the grouped pytest branch must pass"),
+    ],
+    ids=("wrong-intersection", "filter-dropped", "arguments-discarded"),
+)
+def test_grouped_selector_must_reach_pytest(
+    fault: str,
+    expected: str,
+) -> None:
+    """Reject grouped recipes that name the right variables but run another set."""
+    recipe = recipe_of("test-python")
+    grouped_binding = (
+        "set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS));"
+    )
+    grouped_invocation = '$(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?;'
+    match fault:
+        case "wrong intersection":
+            recipe = recipe.replace(
+                "$(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS))",
+                "$(filter-out $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS))",
+                1,
+            )
+        case "filter mentioned but dropped":
+            recipe = recipe.replace(
+                grouped_binding,
+                "echo $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS));",
+                1,
+            )
+        case "arguments discarded":
+            recipe = recipe.replace(
+                grouped_invocation,
+                "$(PYTEST) -v -n $(PYTEST_WORKERS) || exit $$?;",
+                1,
+            )
+    assert recipe != recipe_of("test-python"), (
+        f"the seeded {fault} fault must alter the recipe"
+    )
+    with pytest.raises(AssertionError, match=expected):
+        require_grouped_selector_drives_pytest(
+            recipe,
+            grouped_targets="PYTEST_GROUPED_TARGETS",
+            selected_targets="PYTEST_SELECTED_TARGETS",
+            pytest_variable=PYTEST_INVOCATION,
+        )
 
 
 @pytest.mark.parametrize(
@@ -173,7 +286,7 @@ def test_a_recipe_that_breaks_the_flow_is_refused(
     with pytest.raises(AssertionError, match=expected):
         require_selector_drives_pytest(
             recipe,
-            selector=SELECTOR,
+            selector=_INDIVIDUAL_SELECTOR,
             pytest_variable=PYTEST_INVOCATION,
         )
 
@@ -217,6 +330,6 @@ def test_a_single_step_removed_from_the_real_recipe_is_refused(
     with pytest.raises(AssertionError):
         require_selector_drives_pytest(
             recipe,
-            selector=SELECTOR,
+            selector=_INDIVIDUAL_SELECTOR,
             pytest_variable=PYTEST_INVOCATION,
         )

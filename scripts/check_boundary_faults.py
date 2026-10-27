@@ -16,7 +16,24 @@ import os
 import shutil
 from pathlib import Path
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    ProcessGroupPolicy,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    scoped,
+    sh,
+)
+from scripts.boundary_cargo import (
+    boundary_cargo_run as _boundary_cargo_run,
+)
+from scripts.boundary_cargo import (
+    new_run_root as _new_boundary_run_root,
+)
+from scripts.boundary_cargo import (
+    prepare_run_cargo_home as _prepare_boundary_cargo_home,
+)
 from scripts.render_boundary_proofs import render
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -130,18 +147,30 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
     kani = Path.home() / f".kani/kani-{pins.kani}"
+    environment = os.environ.copy()
+    environment.update({
+        "CARGO_TARGET_DIR": str(
+            workspace.parent / "target/boundary-faults-debug-all-features"
+        ),
+        "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
+        "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
+        "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
+    })
+    command_arguments = args
+    if program == "cargo":
+        environment["CARGO_NET_OFFLINE"] = "true"
+        cargo_home = workspace.parent / "cargo-home"
+        if cargo_home.is_dir():
+            environment["CARGO_HOME"] = str(cargo_home)
+        command_arguments = ("--frozen", *args)
     context = sh.ExecutionContext(
         cwd=workspace,
-        env={
-            "CARGO_TARGET_DIR": str(ROOT / "rust/target/boundary-faults"),
-            "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
-            "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
-            "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
-        },
+        env=environment,
         timeout=1200,
+        process_group=ProcessGroupPolicy.OWN_GROUP,
     )
     with scoped(ScopeConfig(allowlist=frozenset({executable}))):
-        result = command(*args).run_sync(context=context)
+        result = command(*command_arguments).run_sync(context=context)
     return result.exit_code, (result.stdout or "") + (result.stderr or "")
 
 
@@ -170,14 +199,24 @@ def _check(check: _Check, workspace: Path, logs: Path) -> None:
 
 def main() -> None:
     """Execute controls and four deliberate faults without editing live sources."""
-    workspace = ROOT / ".cache/boundary-faults/workspace"
-    if workspace.exists():
-        shutil.rmtree(workspace)
+    run_root = _new_run_root()
+    workspace = run_root / "workspace"
     shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
-    logs = ROOT / "rust/target/boundary-verification/faults"
-    logs.mkdir(parents=True, exist_ok=True)
-    _verify_progress_faults(workspace, logs)
-    _verify_ownership_faults(workspace, logs)
+    with _boundary_cargo_run(run_root, workspace, _prepare_run_cargo_home):
+        logs = run_root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        _verify_progress_faults(workspace, logs)
+        _verify_ownership_faults(workspace, logs)
+
+
+def _new_run_root() -> Path:
+    """Create a private workspace root for one fault-sensitivity run."""
+    return _new_boundary_run_root(ROOT / ".cache/boundary-faults/runs")
+
+
+def _prepare_run_cargo_home(run_root: Path, workspace: Path) -> float:
+    """Prepare the copied workspace with this harness's repository root."""
+    return _prepare_boundary_cargo_home(ROOT, run_root, workspace)
 
 
 def _verify_progress_faults(workspace: Path, logs: Path) -> None:

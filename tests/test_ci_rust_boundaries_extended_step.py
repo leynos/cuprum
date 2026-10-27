@@ -16,6 +16,7 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.ci_workflows import steps as workflow_steps
 from tests.helpers.workflow_steps import install_tool, run_bash, step_script
 
 if typ.TYPE_CHECKING:
@@ -96,3 +97,31 @@ def test_failing_make_fails_the_step_despite_tee(tmp_path: Path) -> None:
     )
 
     assert returncode != 0, "pipefail must carry make's failure through tee"
+
+
+def test_kani_fault_sensitivity_logs_are_archived() -> None:
+    """The Kani fault harness must retain its run-local verifier logs."""
+    archive = next(
+        (
+            step
+            for step in workflow_steps(WORKFLOW, JOB)
+            if step.get("name") == "Archive Kani fault-sensitivity logs"
+        ),
+        None,
+    )
+
+    assert isinstance(archive, dict), "the Kani fault logs need an archive step"
+    assert archive.get("if") == "always() && matrix.check == 'kani'", (
+        "fault logs must be archived even when the Kani step fails"
+    )
+    assert archive.get("uses") == (
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ), "the archive must use the pinned artefact uploader"
+    inputs = archive.get("with")
+    assert isinstance(inputs, dict), "the archive must declare its inputs"
+    assert inputs.get("path") == ".cache/boundary-faults/runs", (
+        "the archive must include the fault harness's retained run directories"
+    )
+    assert inputs.get("if-no-files-found") == "ignore", (
+        "a failure before the harness creates a run must not hide its original error"
+    )

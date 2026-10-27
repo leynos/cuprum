@@ -27,11 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
-from tests.helpers.docs import repo_root
-
 if typ.TYPE_CHECKING:
-    from cuprum.sh import CommandResult
+    from tests.helpers.distribution_artefacts import DistributionArtefactFactory
 
 #: The marker's path inside an installed package, as PEP 561 requires it.
 MARKER_PATH = "cuprum/py.typed"
@@ -39,77 +36,6 @@ MARKER_PATH = "cuprum/py.typed"
 #: declares partial typing; anything else, including an empty file, declares
 #: the package fully typed.
 PARTIAL_MARKER_CONTENT = "partial"
-#: Maturin spells the wheel build ``build``; ``uv`` spells it ``--wheel``.
-_MATURIN_SUBCOMMANDS = {"wheel": "build", "sdist": "sdist"}
-_ARCHIVE_SUFFIXES = {"wheel": "*.whl", "sdist": "*.tar.gz"}
-
-
-def _run_packaging_frontend(
-    arguments: tuple[str, ...], *, timeout: int
-) -> CommandResult:
-    """Run one packaging command through Cuprum's own safe-command layer."""
-    program = Program("uv")
-    catalogue = ProgramCatalogue.from_programs(
-        program,
-        name="py-typed-distribution",
-        documentation_locations=("docs/developers-guide.md",),
-    )
-    command = sh.make(program, catalogue=catalogue)
-    with scoped(ScopeConfig(allowlist=frozenset({program}))):
-        return command(*arguments).run_sync(
-            context=sh.ExecutionContext(cwd=repo_root(), timeout=timeout)
-        )
-
-
-def _distribution_arguments(
-    backend: str, kind: str, destination: Path
-) -> tuple[str, ...]:
-    """Return the command line that builds one distribution with one frontend."""
-    if backend == "uv":
-        return ("build", f"--{kind}", "--out-dir", str(destination))
-    return (
-        "run",
-        "maturin",
-        _MATURIN_SUBCOMMANDS[kind],
-        "--manifest-path",
-        "rust/cuprum-rust/Cargo.toml",
-        "--out",
-        str(destination),
-    )
-
-
-def _build_distribution(backend: str, kind: str, destination: Path) -> Path:
-    """Build one archive and return it, failing the test unless exactly one appears.
-
-    Parameters
-    ----------
-    backend : str
-        ``"uv"`` for the ``uv_build`` frontend, or ``"maturin"``.
-    kind : str
-        ``"wheel"`` or ``"sdist"``.
-    destination : Path
-        Directory the archive is written to.
-
-    Returns
-    -------
-    Path
-        The single archive the build produced.
-    """
-    suffix = _ARCHIVE_SUFFIXES[kind]
-    result = _run_packaging_frontend(
-        _distribution_arguments(backend, kind, destination),
-        # Maturin inspects the Rust workspace and queues on shared Cargo locks.
-        timeout=3600 if backend == "maturin" else 180,
-    )
-    assert result.exit_code == 0, (
-        f"{backend} {kind} build failed with {result.exit_code}: {result.stderr}"
-    )
-    archives = sorted(destination.glob(suffix))
-    assert len(archives) == 1, (
-        f"{backend} {kind} build must produce exactly one {suffix} archive, "
-        f"found {[archive.name for archive in archives]}"
-    )
-    return archives[0]
 
 
 def _wheel_marker(wheel_path: Path) -> str | None:
@@ -129,10 +55,13 @@ def _wheel_marker(wheel_path: Path) -> str | None:
         return archive.read(MARKER_PATH).decode("utf-8")
 
 
-# The outer budget must outlast the Maturin command's shared-Cargo allowance.
-@pytest.mark.timeout(3720)
+# The test budget includes the first lazy build and its archive assertions.
+@pytest.mark.timeout(240, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
-def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
+def test_wheel_ships_the_pep561_marker(
+    backend: typ.Literal["uv", "maturin"],
+    distribution_artefact_factory: DistributionArtefactFactory,
+) -> None:
     """Every wheel carries an empty, complete ``py.typed`` marker.
 
     The native wheel is built here even though
@@ -141,7 +70,7 @@ def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     *content*, which decides whether a type checker reads the annotations at
     all or reads them as a partial stub.
     """
-    wheel_path = _build_distribution(backend, "wheel", tmp_path)
+    wheel_path = distribution_artefact_factory(backend, "wheel")
     marker = _wheel_marker(wheel_path)
 
     assert marker is not None, (
@@ -155,12 +84,12 @@ def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     )
 
 
-# The outer budget must outlast the Maturin command's shared-Cargo allowance.
-@pytest.mark.timeout(3720)
+# The test budget includes the first lazy build and its archive assertions.
+@pytest.mark.timeout(240, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
-    backend: str,
-    tmp_path: Path,
+    backend: typ.Literal["uv", "maturin"],
+    distribution_artefact_factory: DistributionArtefactFactory,
 ) -> None:
     """Both source archives carry the marker, so a from-source install stays typed.
 
@@ -168,7 +97,7 @@ def test_source_distribution_ships_the_pep561_marker(
     cuprum cuprum`` builds from the sdist, so the marker must travel in the
     archive that build unpacks.
     """
-    archive_path = _build_distribution(backend, "sdist", tmp_path)
+    archive_path = distribution_artefact_factory(backend, "sdist")
 
     with tarfile.open(archive_path) as archive:
         # Both frontends nest the tree under a single ``cuprum-<version>/``

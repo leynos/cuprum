@@ -277,12 +277,12 @@ def _documented_whitelist_names(skylos: dict[str, object]) -> frozenset[str]:
 
 def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     """`make lint` must scan production code with Skylos's strict gate."""
-    test_prerequisites = _text_sequence(
-        _sole_recipe_rule("test", require_recipes=False).get("prerequisites"),
-        subject="test target prerequisites",
+    test_python_prerequisites = _text_sequence(
+        _sole_recipe_rule("test-python", require_recipes=False).get("prerequisites"),
+        subject="test-python target prerequisites",
     )
-    assert "makeutil" in test_prerequisites, (
-        "Make test prerequisite contract must require makeutil"
+    assert "makeutil" in test_python_prerequisites, (
+        "Make test-python prerequisite contract must require makeutil"
     )
     assert _variable_tokens("SKYLOS_VERSION") == _SKYLOS_VERSION_TOKENS, (
         "Skylos version contract must pin 4.33.2"

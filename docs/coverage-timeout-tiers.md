@@ -120,9 +120,46 @@ s), and its two Cargo metadata calls are each bounded by
 `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` (3900 s). The outer marker leaves 60 s
 for surrounding test work and catches a wedged test process.
 
-The marker covers the cold `CARGO_BUILD_JOBS=1` build measured at 181 s. The
-test does not set Cargo's job count; parallelism belongs to its caller, so the
-allowance does not depend on the caller's `-j` value. The suite-wide global
-`timeout = 30` remains tight, and only this test raises its bound. The fast
-contract test `test_real_compile_test_timeout_exceeds_compile_budget` pins the
-marker and both timeout relationships.
+The historical 181-second observation used `CARGO_BUILD_JOBS=1` outside the
+resource contract. It is not a current execution-budget measurement. The test
+does not set Cargo's job count; parallelism belongs to its caller. The
+suite-wide global `timeout = 30` remains tight, and only this test raises its
+bound. The fast contract test
+`test_real_compile_test_timeout_exceeds_compile_budget` pins the marker and
+both timeout relationships.
+
+## Packaging build measurement
+
+On 2026-10-26, the grouped packaging consumers built each frontend and archive
+once through `DistributionArtefactFactory`. The focused session used a prepared
+snapshot and fresh run-local Cargo homes. A second Maturin wheel build used a
+new Cargo home and the same configuration-keyed target as the first, so the
+target was cold for the first build and warm for the second.
+
+_Table 2: Local packaging route timing observations._
+
+| Phase                      | Duration    | Conditions                                      |
+| -------------------------- | ----------: | ----------------------------------------------- |
+| Dependency preparation     | 21.2 s      | Snapshot reused; run-local home copied          |
+| uv source archive          | 0.10 s      | Grouped session; prepared snapshot              |
+| uv wheel                   | 0.05 s      | Grouped session; prepared snapshot              |
+| Maturin source archive     | 7.15 s      | Grouped session; prepared snapshot              |
+| Maturin wheel, cold target | 38.6–49.1 s | Empty targets; `CARGO_BUILD_JOBS` unset         |
+| Maturin wheel, warm target | 23.8 s      | Separate home; same target; `sccache` available |
+
+The command's 180 s timeout contains these measured cold invocations, and its
+240 s pytest mark remains finite. The 49.1 s Maturin wheel was measured in the
+grouped session; the 38.6 s sample used a separate empty target. This was a
+developer-host observation, not a CI-runner or concurrent-run measurement. The
+host-wide compiler pool was full while other work queued, and its `sccache`
+state was healthy. The measured wall time therefore includes any per-compiler
+admission waits. It does not establish the workload-only budget under a
+top-level resource lease. Repeat the measurement on the target CI runner and
+under the coordinator's documented workload lease before revising timeout
+contracts.
+
+The current compiler coordinator exposes bounded compiler scopes only, not a
+bounded outer Cargo-workload lease; its queue wait has no finite limit. Until
+that contract exists, no concurrent workload timing or admission bound is
+claimed here. See the
+[external compiler admission contract](developers-guide.md#external-compiler-admission-contract).
