@@ -370,29 +370,26 @@ def test_existing_routes_keep_their_warning_policy() -> None:
     ):
         assert required in makefile, f"the retained route policy omitted {required!r}"
 
-    routes = _dry_run(
-        "lint-clippy",
-        "lint-whitaker",
-        "test-rust",
-        "msrv-check",
-        variables={"DEV_FAST_HOST_IS_LINUX": "no"},
-    )
-    assert "clippy --all-targets --all-features -- -D warnings" in routes, (
+    clippy_route = _dry_run("lint-clippy", variables={"DEV_FAST_HOST_IS_LINUX": ""})
+    test_route = _dry_run("test-rust", variables={"DEV_FAST_HOST_IS_LINUX": ""})
+    msrv_route = _dry_run("msrv-check")
+    assert "clippy --all-targets --all-features -- -D warnings" in clippy_route, (
         "the retained Clippy route must keep warning fatality in compiler flags"
     )
-    assert 'RUSTFLAGS="-D warnings -C codegen-units=1"' in routes, (
-        "the retained test route must keep its established warning flags"
-    )
-    assert "RUSTUP_TOOLCHAIN=1.85.0" in routes, (
+    assert re.search(
+        r'RUSTFLAGS="-D warnings -C codegen-units=1 ?"\s+probe-cargo test\b',
+        test_route,
+    ), "the retained test route must keep its established warning flags"
+    assert "RUSTUP_TOOLCHAIN=1.85.0" in msrv_route, (
         "the MSRV route must remain pinned to Rust 1.85.0"
     )
     assert "DOCTEST_RUSTDOC_FLAGS" in makefile, (
         "nightly doctests must retain their separate rustdoc flags"
     )
 
-    assert 'rustup run "1.85.0" rustc -vV' in routes, (
+    assert 'rustup run "1.85.0" rustc -vV' in msrv_route, (
         "the MSRV check must print the selected rustc version"
     )
-    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in routes, (
+    assert 'RUSTUP_TOOLCHAIN="1.85.0" probe-cargo -V' in msrv_route, (
         "the MSRV check must print the selected Cargo version"
     )
