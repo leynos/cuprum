@@ -2344,6 +2344,37 @@ observed command: a pump observer must not be able to turn a hop that would
 have succeeded into a failure. `cuprum/unittests/test_pump_observation.py` and
 `cuprum/unittests/test_pump_hook_disposal.py` carry the regression coverage.
 
+#### Echo and stream-operation hook disposal policy
+
+Echo hooks and stream-operation hooks are synchronous and must return `None`.
+Other return values are reported by the existing `echo_observer_returned_value`
+and `stream_operation_observer_returned_value` warnings. Each channel closes a
+returned native coroutine, but does not await, cancel, or close other
+awaitables or objects.
+
+If a native coroutine's `close()` raises an ordinary `Exception`, its channel
+reports the traceback at `WARNING`, absorbs the exception, and continues
+delivery to later hooks. Echo reports `echo_observer_disposal_failed` on the
+`cuprum.echo_observation` logger with `cuprum_stream` context. Stream-operation
+reports `stream_operation_observer_disposal_failed` on the
+`cuprum.stream_observation` logger with `cuprum_operation` context. The shared
+module-private `cuprum._hook_disposal._close_returned_coroutine` helper accepts
+one channel-specific context carrying its logger, action, message, and event
+fields, keeping the close guard and exception boundary consistent. Its reuse
+scope is synchronous hook disposal in the pump, echo, and stream-operation
+observation channels; each channel retains its own log message and context
+fields. `SystemExit`, `KeyboardInterrupt`, and `asyncio.CancelledError`
+propagate unchanged from disposal.
+
+The cross-channel design boundary is recorded in
+[Cuprum design: observation-hook coroutine disposal](cuprum-design.md#observation-hook-coroutine-disposal-boundary).
+
+`cuprum/unittests/test_echo_hook_disposal.py` and
+`cuprum/unittests/test_stream_operation_hook_disposal.py` cover these
+contracts. They share the started-coroutine fixtures in
+`cuprum/unittests/_hook_disposal_test_helpers.py`; that module is scoped to
+hook-disposal tests and is also used by the pump disposal suite.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same command-query

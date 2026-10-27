@@ -802,18 +802,9 @@ reason = "Two tar builders that share a docstring skeleton and a boolean-flag no
 [[tool.duplication_gate.allow]]
 members = [
     "cuprum/capture_observation.py::_discard_capture_hook_result",
-    "cuprum/echo_observation.py::_discard_echo_hook_result",
     "cuprum/control_observation.py::_discard_hook_result",
-    "cuprum/stream_observation.py::_discard_hook_result",
 ]
-reason = "Four hook-result reporters, one per observation channel. Each logs the channel's own event fields (`event.stream` against `event.operation`) under its own log action, and the family value has already fallen from the shared shape alone. Merging them would couple four channels whose log records are separately observable API. Widened on this branch for the new capture channel, and earlier for the control channel `main` added."
-
-[[tool.duplication_gate.allow]]
-members = [
-    "cuprum/line_stream_observation.py",
-    "cuprum/pump_observation.py",
-]
-reason = "The same warning record — action, phase, result type — emitted by two observation channels. The log message and every `extra` key are per-channel, and both channels are separately observable, so the shared text is the house log format rather than a shared implementation."
+reason = "Capture and control retain parallel hook-return reporters with channel-specific log actions and event context. Echo, stream-operation, and pump now delegate coroutine disposal to cuprum._hook_disposal, so those disposal implementations are shared."
 
 [[tool.duplication_gate.allow]]
 members = [
