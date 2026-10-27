@@ -608,10 +608,12 @@ the issue was filed:
 - [x] (2026-10-26) Gate the review follow-up through `scrutineer`; the six
   sequential gates passed on candidate tree
   `e64491c381747ee90367ec904d8d73c2d2ee4d52`.
-- [ ] For current review `5662177292` of head
-  `80ab7ee4ac2c65608a52da257392b0a779924e3a`, gate the integrated candidate,
-  commit and publish it, reconcile the fresh review and hosted checks, then
-  merge PR #652 at the exact approved head.
+- [ ] For review `5665671110` of head
+  `4c1f15a7a38e6a48eddedcb75bcb0b41ffc70fa4` on base
+  `7126a1ffb495efe7608d093f5439ca727ba3e0a6`, gate and publish the integrated
+  documentation repairs, commit and publish them, reconcile the pre-merge rows
+  and hosted checks, request approval of the published head, then merge PR #652
+  at the exact approved head.
 - [x] (2026-10-21) Push and open the draft PR:
       [#652](https://github.com/leynos/cuprum/pull/652),
   draft, head `8936c9bfa`, with the Lody session link and `Fixes #533`.
@@ -1763,6 +1765,15 @@ the issue was filed:
   `/tmp/test-gh533-paused-inherited-capture-red.out`; the green focused run is
   `/tmp/test-gh533-paused-inherited-capture-green.out`. Full sequential gates
   and publication remain pending.
+
+- [x] (2026-10-27) Recorded CodeRabbit review `5665671110`, which approved
+  exact head `4c1f15a7a38e6a48eddedcb75bcb0b41ffc70fa4` with no actionable
+  inline findings. Its fresh pre-merge Developer Documentation row still
+  requested the line-stream module ownership and export-status entries below
+  and this ExecPlan update; both are now recorded in the working tree. No gate
+  result was available at that checkpoint. The documentation edits then passed
+  `make check-fmt`, `make markdownlint`, and `make nixie` on the unchanged
+  tracked diff; publication and merge remain pending.
 
 ## Surprises & discoveries
 
