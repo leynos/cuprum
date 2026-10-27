@@ -161,21 +161,23 @@ Each phase writes one bounded JSONL record through
 `.github/actions/release-telemetry`, following the benchmark-gate telemetry
 precedent
 ([ADR-014](adr-014-benchmark-gate-telemetry-sink.md), [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md)).
-The metric is `release_phase_outcomes_total`, schema version 1, with labels
-`operation` (`check_version`, `attest`, `draft_release`, `publish_pypi`,
+`release_phase_outcomes_total` was first written as schema version 1, with
+labels `operation` (`check_version`, `attest`, `draft_release`, `publish_pypi`,
 `github_upload`, `publish_release`), `outcome` (`success`, `failure`,
 `skipped`), `failure_category` (`none`, `setup`, `version_mismatch`,
 `collection`, `attestation`, `index_http`, `github_api`, `upload`,
 `digest_mismatch`), `retry_bucket` (`0`, `1-2`, `3+`), `elapsed_bucket`
 (`under_1m`, `1m_5m`, `5m_15m`, `over_15m`, `unknown`), and `http_status_class`
 (`none`, `network`, `2xx`, `3xx`, `4xx`, `5xx`). `run_id`, `run_attempt`,
-`tag`, and `recorded_at` are metadata outside `labels`. Records are written
-fail-open and, when the job was not cancelled, uploaded as the artefact
-`release-telemetry-<job>-<attempt>` with 90-day retention. The PyPI index fetch
-is an explicit bounded retry loop, up to six attempts on a network failure,
-`429`, or a `5xx` status, because the runner's `curl` cannot report
-`%{num_retries}`; the loop counts its own attempts and reports the final status
-for `retry_bucket` and `http_status_class`.
+`tag`, and `recorded_at` are metadata outside `labels`. The current schema is
+version 2 and adds the bounded `verification_failure_bucket` label (`0`, `1`,
+`2-5`, `6+`). Records are written fail-open and, when the job was not
+cancelled, uploaded as the artefact `release-telemetry-<job>-<attempt>` with
+90-day retention. The PyPI index fetch is an explicit bounded retry loop, up to
+six attempts on a network failure, `429`, or a `5xx` status, because the
+runner's `curl` cannot report `%{num_retries}`; the loop counts its own
+attempts and reports the final status for `retry_bucket` and
+`http_status_class`.
 
 Tracing spans were considered for the release phases and declined: unlike the
 ecosystem this repository's CI otherwise runs in, these GitHub Actions
