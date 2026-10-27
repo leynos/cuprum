@@ -35,7 +35,9 @@ def test_read_provenance_record_distinguishes_an_absent_file(
     tmp_path: pth.Path,
 ) -> None:
     """An absent attestation is distinct from a record that cannot be read."""
-    assert read_provenance_record(tmp_path / "missing.json") is None
+    assert read_provenance_record(tmp_path / "missing.json") is None, (
+        "an absent record must read as None, not as an error"
+    )
 
 
 @pytest.mark.parametrize(
@@ -92,8 +94,10 @@ def test_unreadable_provenance_preserves_the_publish_directory(
     ) as error:
         stage_pypi(state, github_files, provenance)
 
-    assert _ASSET in str(error.value)
-    assert {path.name: path.read_bytes() for path in publish.iterdir()} == before
+    assert _ASSET in str(error.value), "the error must name the carried asset"
+    assert {path.name: path.read_bytes() for path in publish.iterdir()} == before, (
+        "an unreadable record must leave every publish-directory byte unchanged"
+    )
 
 
 def test_unattested_carried_bytes_cannot_replace_the_local_build(
