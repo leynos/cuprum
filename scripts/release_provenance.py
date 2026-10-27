@@ -1,4 +1,10 @@
-"""Inspect GitHub CLI attestation JSON for a matching release asset subject."""
+"""Parse `gh attestation verify --format json` output for release provenance.
+
+Match the exact asset filename and SHA-256 subject. GitHub CLI policy flags
+establish repository, signer-workflow and tag identity; this parser does not
+independently verify cryptographic trust. `stage_pypi()` uses this check before
+carrying GitHub asset bytes.
+"""
 
 from __future__ import annotations
 

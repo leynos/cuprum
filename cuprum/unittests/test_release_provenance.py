@@ -126,6 +126,53 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
     )
 
 
+@pytest.mark.parametrize(
+    ("reported_digest", "expected_detail"),
+    [
+        (sha256_hex(b"different bytes reported by GitHub"), "expected"),
+        (None, "reports no SHA-256 digest"),
+    ],
+    ids=["mismatched-github-digest", "missing-github-digest"],
+)
+def test_github_digest_failures_preserve_the_publish_directory(
+    release_paths: tuple[pth.Path, pth.Path, pth.Path],
+    reported_digest: str | None,
+    expected_detail: str,
+) -> None:
+    """Reject absent or incorrect API digests despite valid carried provenance."""
+    local_bytes = b"attested bytes from this run"
+    pypi_bytes = b"already published"
+    carried_bytes = b"bytes from an interrupted release"
+    carried_digest = sha256_hex(carried_bytes)
+    publish, github_files, provenance = release_paths
+    (publish / _PYPI_ASSET).write_bytes(pypi_bytes)
+    (publish / _ASSET).write_bytes(local_bytes)
+    (github_files / _ASSET).write_bytes(carried_bytes)
+    (provenance / f"{_ASSET}.json").write_text(
+        json.dumps(provenance_record(_ASSET, carried_digest)), encoding="utf-8"
+    )
+    state = State(
+        publish=publish,
+        pypi={_PYPI_ASSET: PypiFile(sha256_hex(pypi_bytes), "https://pypi.test/file")},
+        github={_ASSET: reported_digest},
+    )
+    before = {path.name: path.read_bytes() for path in publish.iterdir()}
+
+    with pytest.raises(ReleaseAssetError, match=_ASSET) as error:
+        stage_pypi(state, github_files, provenance)
+
+    assert expected_detail in str(error.value), (
+        "the failure must identify why GitHub's digest cannot authorize these bytes"
+    )
+    assert "rerun" in str(error.value), "the error must explain the recovery path"
+    assert "delete the named asset and rerun" in str(error.value), (
+        "the error must direct deletion of the untrusted GitHub asset"
+    )
+    assert {path.name: path.read_bytes() for path in publish.iterdir()} == before, (
+        "a missing or incorrect GitHub digest must leave every publish byte unchanged"
+    )
+
+
 def test_missing_carried_file_is_reported_as_an_asset_read_error(
     release_paths: tuple[pth.Path, pth.Path, pth.Path],
 ) -> None:
