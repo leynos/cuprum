@@ -13,6 +13,9 @@ import typing as typ
 from pathlib import Path
 
 from scripts.cargo_cache_tree import (
+    _prune_registry_archives,
+)
+from scripts.cargo_cache_tree import (
     make_tree_read_only as _make_tree_read_only,
 )
 from scripts.cargo_cache_tree import (
@@ -265,6 +268,8 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             msg = "cargo fetch changed rust/Cargo.lock despite --locked"
             raise CargoStatePreparationError(msg)
 
+        _reject_tree_symlinks(temporary_path)
+        _prune_registry_archives(temporary_path, lockfile)
         _remove_credentials(temporary_path)
         _reject_tree_symlinks(temporary_path)
         _make_tree_read_only(temporary_path)

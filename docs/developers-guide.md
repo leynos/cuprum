@@ -5048,15 +5048,18 @@ separately. `make test` runs `test-python` before `test-rust`, so their sibling
 build workloads cannot overlap under parallel Make. The pytest session fixture
 shares one copied home within an invocation and xdist worker; the boundary
 harness prepares one for each run. The snapshot seeds registry indexes and
-crate archives, Cargo git databases, and Cargo configuration. Credentials are
-copied into staging only while the locked fetch runs, then removed before
-publication. Locked fetch materializes the sources and checkouts selected by
-the current lockfile, without copying stale extracted versions from the
-caller's cache. Copies contain ordinary files, not links to the snapshot or
-caller cache. Snapshot preparation and copying are recorded as
-dependency-preparation time; current packaging and doctest timeout marks remain
-finite end-to-end bounds and include any compiler-admission wait inside Cargo.
-The packaging frontend timeout defaults to 180 seconds and can be raised with
+Cargo git databases from the caller's cache. After locked fetch, it retains
+only registry `.crate` archives whose package names and versions appear in the
+workspace lockfile; registry indexes and Git databases remain copied as cache
+metadata. Cargo configuration is copied separately. Credentials are copied into
+staging only while the locked fetch runs, then removed before publication.
+Locked fetch materializes the sources and checkouts selected by the current
+lockfile, without copying stale extracted versions from the caller's cache.
+Copies contain ordinary files, not links to the snapshot or caller cache.
+Snapshot preparation and copying are recorded as dependency-preparation time;
+current packaging and doctest timeout marks remain finite end-to-end bounds and
+include any compiler-admission wait inside Cargo. The packaging frontend
+timeout defaults to 180 seconds and can be raised with
 `CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. The
 packaging consumer mark is derived from that value with a 60-second margin.
 This timeout remains an end-to-end watchdog, not an execution-only budget. The

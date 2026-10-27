@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses as dc
 import errno
 import stat
 import typing as typ
@@ -13,53 +12,15 @@ import pytest
 
 from scripts import cargo_state
 from scripts.cargo_cache_tree import publish_snapshot
-from scripts.tests.cargo_state_support import create_repository
+from scripts.tests.cargo_state_support import (
+    SEEDED_CARGO_FILES,
+    SnapshotInputs,
+    create_repository,
+    create_snapshot_inputs,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-_SEEDED_CARGO_FILES = {
-    "registry/cache/registry.crate": "registry bytes",
-    "registry/src/registry-1.0.0/Cargo.toml": "stale extracted source",
-    "git/db/source.git/config": "git bytes",
-    "git/checkouts/stale-source/checkout/Cargo.toml": "stale git checkout",
-    "config.toml": "[net]\noffline = false\n",
-    "credentials.toml": "token = 'private-token'\n",
-}
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _SnapshotInputs:
-    """Hold inputs used to verify one staged Cargo snapshot preparation."""
-
-    repository: Path
-    source_home: Path
-    snapshot_root: Path
-    original_lock: bytes
-    caller_environment: dict[str, str]
-
-
-def _snapshot_inputs(tmp_path: Path) -> _SnapshotInputs:
-    """Create the workspace and seeded caller cache for a snapshot test."""
-    repository = create_repository(tmp_path / "repo")
-    source_home = tmp_path / "caller-cargo"
-    for relative, contents in _SEEDED_CARGO_FILES.items():
-        path = source_home / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents, encoding="utf-8")
-    lockfile = repository / "rust/Cargo.lock"
-    return _SnapshotInputs(
-        repository=repository,
-        source_home=source_home,
-        snapshot_root=tmp_path / "snapshots",
-        original_lock=lockfile.read_bytes(),
-        caller_environment={
-            "CARGO_HOME": str(source_home),
-            "RUSTUP_HOME": str(tmp_path / "rustup-home"),
-            "CARGO_BUILD_JOBS": "7",
-            "CARGO_NET_OFFLINE": "true",
-        },
-    )
 
 
 def _record_snapshot_cargo(
@@ -88,7 +49,7 @@ def _record_snapshot_cargo(
 
 
 def _assert_fetch_setup(
-    inputs: _SnapshotInputs,
+    inputs: SnapshotInputs,
     prepared: cargo_state.PreparedCargoSnapshot,
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]],
     fetch_credentials: list[bool],
@@ -131,11 +92,11 @@ def _assert_fetch_setup(
 
 
 def _assert_snapshot_contents(
-    inputs: _SnapshotInputs,
+    inputs: SnapshotInputs,
     prepared: cargo_state.PreparedCargoSnapshot,
 ) -> None:
     """Verify seeded cache copies, fetched state, credentials, and lockfile."""
-    for relative, contents in _SEEDED_CARGO_FILES.items():
+    for relative, contents in SEEDED_CARGO_FILES.items():
         if relative in {"credentials", "credentials.toml"}:
             assert not (prepared.path / relative).exists(), (
                 "published Cargo snapshots must not retain authentication secrets"
@@ -162,6 +123,13 @@ def _assert_snapshot_contents(
     assert not (prepared.path / "git/checkouts/stale-source").exists(), (
         "stale git checkouts must not inflate the prepared snapshot"
     )
+    for archive_name in ("stale-9.9.9.crate", "git-source-3.0.0.crate"):
+        assert not (
+            prepared.path / "registry/cache/crates-io" / archive_name
+        ).exists(), f"snapshot must prune unselected registry archive {archive_name}"
+        assert (
+            inputs.source_home / "registry/cache/crates-io" / archive_name
+        ).is_file(), f"snapshot preparation must preserve caller archive {archive_name}"
     assert (prepared.path / "registry/fetched.marker").is_file(), (
         "the successful fetch must be present in the published snapshot"
     )
@@ -174,7 +142,7 @@ def _assert_snapshot_contents(
         "successful publication must leave no staging directory behind"
     )
     assert (inputs.source_home / "credentials.toml").read_text(encoding="utf-8") == (
-        _SEEDED_CARGO_FILES["credentials.toml"]
+        SEEDED_CARGO_FILES["credentials.toml"]
     ), "seeding must not modify caller credentials"
 
 
@@ -183,7 +151,7 @@ def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fetch uses the copied home, preserves caller jobs, and publishes atomically."""
-    inputs = _snapshot_inputs(tmp_path)
+    inputs = create_snapshot_inputs(tmp_path)
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
     fetch_credentials: list[bool] = []
     monkeypatch.setattr(
@@ -230,7 +198,7 @@ def test_losing_snapshot_publication_removes_read_only_staging_tree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A read-only staging home is made writable before its cleanup."""
-    inputs = _snapshot_inputs(tmp_path)
+    inputs = create_snapshot_inputs(tmp_path)
 
     def run_cargo(
         arguments: tuple[str, ...],

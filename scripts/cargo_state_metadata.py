@@ -31,7 +31,7 @@ def default_snapshot_root() -> Path:
         the user's default cache directory.
     """
     cache_home = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
-    return cache_home / "cuprum" / "cargo-snapshots-v2"
+    return cache_home / "cuprum" / "cargo-snapshots-v3"
 
 
 def cargo_snapshot_key(

@@ -20,5 +20,5 @@ def test_default_snapshot_root_uses_the_shared_cache_location(
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
 
     assert cargo_state.default_snapshot_root() == (
-        tmp_path / "cuprum" / "cargo-snapshots-v2"
+        tmp_path / "cuprum" / "cargo-snapshots-v3"
     ), "Cargo routes must share the same snapshot-root definition"
