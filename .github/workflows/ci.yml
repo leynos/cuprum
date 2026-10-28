@@ -1002,6 +1002,10 @@ jobs:
 
   modern-stable:
     name: Modern stable Rust validation
+    needs: changes
+    if: >-
+      github.event_name != 'pull_request'
+      || needs.changes.outputs.modern == 'true'
     # Fork and Dependabot pull requests use GitHub-hosted runners, which they
     # can obtain on a public repository. The author field is stable when a
     # different user pushes to the pull request branch.
@@ -1584,6 +1588,7 @@ jobs:
       pull-requests: read
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
+      modern: ${{ steps.filter.outputs.modern }}
       rust: ${{ steps.filter.outputs.rust }}
     steps:
       - name: Check out repository
@@ -1605,6 +1610,18 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/ci.yml'
+            modern:
+              - 'cuprum/**'
+              - 'rust/**'
+              - 'tools/dev-fast/**'
+              - 'Makefile'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'scripts/modern_stable_warning_controls.py'
+              - 'scripts/tests/test_modern_stable_warning_controls.py'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/cache-keys/action.yml'
+              - '.github/actions/setup-sccache/**'
             rust:
               - 'rust/**'
               - 'pyproject.toml'
