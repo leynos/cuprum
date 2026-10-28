@@ -263,9 +263,13 @@ required `--provenance PATH` option. The standard-library-only
 the GitHub CLI JSON subject shape. It must not import third-party packages while
 `publish-pypi` holds its OIDC credential; identity policy is established by
 the workflow's verifier flags. Missing, malformed, or mismatched provenance
-fails closed and names the asset. The error directs maintainers to rerun once
-to retry verification, then delete the GitHub Release asset and rerun if it
-remains unverified.
+fails closed and names the asset. When staging needs the carried GitHub bytes,
+they must also match GitHub's reported digest; a mismatch blocks staging even
+if the provenance record verifies. The error directs maintainers to rerun once
+to recheck verification and the reported digest. If the mismatch persists while
+staging needs those bytes and PyPI lacks the filename, delete the named GitHub
+Release asset and rerun. The same recovery applies when provenance remains
+unverified.
 
 ### Least privilege
 
@@ -314,8 +318,9 @@ fails before publication and its existing `digest_mismatch` telemetry mapping
 records the blocking outcome. Schema version 2 adds the bounded
 `verification_failure_bucket` label (`0`, `1`, `2-5`, or `6+`) to count failed
 per-asset verification outcomes, including warnings that do not require
-recovery. Recovery may be needed only when PyPI lacks the filename, the
-existing GitHub bytes differ from this run's build, and verification remains
-untrusted after retrying the tag workflow. The release phases still have no
-tracing spans: GitHub Actions has no tracing collector or backend to receive
-them.
+recovery. Recovery is needed only when PyPI lacks the filename and staging
+needs the carried GitHub bytes: retry the tag workflow to recheck the reported
+digest and provenance, then delete the named asset and rerun if downloaded
+bytes still disagree with GitHub's reported digest or provenance remains
+untrusted. The release phases still have no tracing spans: GitHub Actions has
+no tracing collector or backend to receive them.

@@ -3684,19 +3684,21 @@ this run's build, `publish-pypi` fails before upload and `publish-release` does
 not run. The workflow retries verification three times with short backoffs. A
 failed verification warning does not always require recovery: staging skips a
 name already on PyPI, and uses the current build when its bytes match. If PyPI
-lacks the filename, the GitHub bytes differ from this run's build, and
-verification remains untrusted after retrying the tag workflow, delete the
-GitHub asset and rerun. An asset with a valid repository, workflow, tag-ref,
-runner, filename, and digest match can be carried over from an interrupted
-attempt. If its bytes already match the current attested build, the current
-build is retained without a prior-run record. During `stage_pypi()`, names
-already on PyPI are skipped without checking or copying the GitHub asset;
-`draft-release` has already attempted provenance verification for each
-carryover asset. The standard-library-only `scripts/release_provenance.py`
-module implements `has_matching_subject` to check the verifier JSON subject
-shape; it must not import third-party packages while `publish-pypi` holds its
-OIDC credential. When carried assets need verification, the GitHub CLI minimum
-of 2.102.0 fixes
+lacks the filename and staging needs differing GitHub bytes, rerun the tag
+workflow once to recheck the reported digest and provenance. Downloaded bytes
+that disagree with GitHub's reported digest block staging even when their
+provenance verifies. If that mismatch persists, or provenance remains
+untrusted, delete the named GitHub asset and rerun. An asset with a valid
+repository, workflow, tag-ref, runner, filename, and digest match can be
+carried over from an interrupted attempt. If its bytes already match the
+current attested build, the current build is retained without a prior-run
+record. During `stage_pypi()`, names already on PyPI are skipped without
+checking or copying the GitHub asset; `draft-release` has already attempted
+provenance verification for each carryover asset. The standard-library-only
+`scripts/release_provenance.py` module implements `has_matching_subject` to
+check the verifier JSON subject shape; it must not import third-party packages
+while `publish-pypi` holds its OIDC credential. When carried assets need
+verification, the GitHub CLI minimum of 2.102.0 fixes
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected versions from accepting a different signer workflow
 whose path merely shares the configured prefix, and
