@@ -10,7 +10,9 @@ inputs:
     description: The release phase, from the writer's closed vocabulary
     required: true
   steps:
-    description: Whitespace-separated category=outcome pairs, the action last
+    description: >-
+      Whitespace-separated failure-category=outcome pairs; the carried-asset
+      verifier maps to attestation, and the action is last.
     required: true
   job-status:
     description: The caller's job.status when the record is written
@@ -23,6 +25,10 @@ inputs:
     description: The PyPI index request's final HTTP status, if any
     required: false
     default: ''
+  verification-failures:
+    description: Count of carried assets without verified provenance
+    required: false
+    default: '0'
   upload:
     description: Whether to upload the job's records after this one
     required: false
@@ -40,6 +46,7 @@ runs:
         RELEASE_JOB_STATUS: ${{ inputs.job-status }}
         RELEASE_ATTEMPTS: ${{ inputs.attempts }}
         RELEASE_HTTP_STATUS: ${{ inputs.http-status }}
+        RELEASE_VERIFICATION_FAILURES: ${{ inputs.verification-failures }}
       run: python3 "${GITHUB_WORKSPACE}/scripts/release_telemetry.py"
     # One artefact per job and attempt. A job that writes two records uploads
     # once, after the second; `warn` keeps a missing file visible.

@@ -1,17 +1,11 @@
-"""Reconcile the release artefacts so PyPI and the GitHub Release agree.
+"""Reconcile release artefacts across PyPI and the GitHub Release.
 
-A re-pushed tag rebuilds every artefact, and rebuilt wheels are rarely
-byte-identical, so each filename's canonical bytes are the ones already
-published: PyPI's first, then an existing GitHub Release asset, and this run's
-freshly built and attested file only when neither destination has the name.
-Each destination receives only the names it lacks and nothing is overwritten.
+PyPI bytes remain canonical. Carried GitHub bytes require approved provenance.
+Identical local bytes remain, unverified differences stop staging, and each
+destination receives only missing names.
 
-``scripts/release_assets_cli.py`` wraps this module in the command-line
-interface ``release.yml`` calls, importing it wholesale, so it inherits that
-wrapper's constraint: it executes inside the job that holds the PyPI
-publishing token, so it resolves no third-party code (Cyclopts or Cuprum) at
-release time, and every network call stays in the workflow's ``curl`` and
-``gh`` steps.
+The CLI imports this module in the PyPI-token job, so it stays
+standard-library-only; workflow ``curl``/``gh`` steps own network access.
 """
 
 from __future__ import annotations
@@ -27,6 +21,8 @@ import typing as typ
 import urllib.parse
 from pathlib import Path
 
+from scripts.release_provenance import ProvenanceRecordError, require_matching_record
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -40,7 +36,7 @@ _DIGEST_PREFIX = "sha256:"
 
 
 class ReleaseAssetError(Exception):
-    """A release asset is missing, unsafe, or holds unexpected bytes."""
+    """A release asset is missing, unsafe, untrusted, or holds unexpected bytes."""
 
 
 class Source(enum.StrEnum):
@@ -213,6 +209,35 @@ def _check_digest(path: Path, expected: str | None) -> None:
         raise ReleaseAssetError(msg)
 
 
+def _carried_asset_error(name: str, reason: str) -> ReleaseAssetError:
+    """Build an actionable error for an untrusted carried asset."""
+    return ReleaseAssetError(
+        f"cannot safely carry GitHub asset {name} to PyPI: {reason}; "
+        "rerun once; if still untrusted, delete the named asset and rerun"
+    )
+
+
+def _require_github_digest(name: str, digest: str | None) -> str:
+    """Require the release API to report a SHA-256 digest for ``name``."""
+    if digest is None:
+        raise _carried_asset_error(name, "GitHub reports no SHA-256 digest")
+    return digest
+
+
+def _verify_carried_asset(
+    asset: Path, provenance: Path, name: str, expected: str
+) -> None:
+    """Validate carried bytes and provenance, with an actionable error."""
+    try:
+        _check_digest(asset, expected)
+        require_matching_record(provenance / f"{name}.json", name, expected)
+    except OSError as error:
+        reason = "cannot read the downloaded GitHub bytes"
+        raise _carried_asset_error(name, reason) from error
+    except (ReleaseAssetError, ProvenanceRecordError) as error:
+        raise _carried_asset_error(name, str(error)) from error
+
+
 def write_output(name: str, *, value: bool) -> None:
     """Append one ``true``/``false`` step output for the workflow."""
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
@@ -243,7 +268,43 @@ def carryover(state: State) -> list[str]:
     return sorted(set(local_names(state.publish)) & set(state.github))
 
 
-def stage_pypi(state: State, github_files: Path) -> bool:
+def _prepare_carried_asset(
+    state: State, name: str, github_files: Path, provenance: Path
+) -> Path | None:
+    """Validate a carried asset, or return ``None`` when local bytes match."""
+    if not _SAFE_NAME.fullmatch(name):
+        msg = f"refusing unsafe GitHub asset name: {name!r}"
+        raise ReleaseAssetError(msg)
+
+    artefact = state.publish / name
+    expected = _require_github_digest(name, state.github[name])
+    if sha256_of(artefact) == expected:
+        return None
+    asset = github_files / name
+    _verify_carried_asset(asset, provenance, name, expected)
+    return asset
+
+
+def _apply_pypi_choice(
+    name: str,
+    source: Source,
+    artefact: Path,
+    carried: cabc.Mapping[str, Path],
+) -> None:
+    """Apply one already-validated source choice to the publish directory."""
+    if source is Source.PYPI:
+        print(f"::notice::Skipping {name}: already on PyPI")
+        artefact.unlink()
+    elif source is Source.GITHUB:
+        asset = carried.get(name)
+        if asset is None:
+            print(f"::notice::Retaining this run's attested bytes for {name}")
+        else:
+            print(f"::notice::Uploading verified GitHub Release bytes for {name}")
+            shutil.copyfile(asset, artefact)
+
+
+def stage_pypi(state: State, github_files: Path, provenance: Path) -> bool:
     """Leave in ``publish`` exactly the canonical bytes PyPI lacks.
 
     Parameters
@@ -252,6 +313,8 @@ def stage_pypi(state: State, github_files: Path) -> bool:
         The staged artefacts and both destinations' holdings.
     github_files : Path
         The GitHub Release assets ``draft-release`` downloaded.
+    provenance : Path
+        The verifier's JSON results for carried GitHub assets.
 
     Returns
     -------
@@ -259,16 +322,15 @@ def stage_pypi(state: State, github_files: Path) -> bool:
         Whether any artefact remains to upload.
     """
     decided = state.plan()
+    carried: dict[str, Path] = {}
     for name, source in sorted(decided.canonical.items()):
-        artefact = state.publish / name
-        if source is Source.PYPI:
-            print(f"::notice::Skipping {name}: already on PyPI")
-            artefact.unlink()
-        elif source is Source.GITHUB:
-            carried = github_files / name
-            _check_digest(carried, state.github[name])
-            print(f"::notice::Uploading the GitHub Release's bytes for {name}")
-            shutil.copyfile(carried, artefact)
+        if source is Source.GITHUB:
+            asset = _prepare_carried_asset(state, name, github_files, provenance)
+            if asset is not None:
+                carried[name] = asset
+
+    for name, source in sorted(decided.canonical.items()):
+        _apply_pypi_choice(name, source, state.publish / name, carried)
     if not decided.pypi_uploads:
         print("Every artefact is already on PyPI; nothing to publish.")
     return bool(decided.pypi_uploads)
