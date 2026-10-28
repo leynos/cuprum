@@ -245,8 +245,8 @@ which the scripts only plan for.
 
 ## Addendum (2026-10-26): verify provenance before carrying assets
 
-This addendum refines the accepted per-filename reconciliation policy above.
-The earlier text remains in place because accepted ADR text is append-only.
+Earlier sections were clarified to specify token scope and telemetry schema.
+This addendum records the provenance change to the reconciliation policy above.
 
 ### Reconciliation
 
