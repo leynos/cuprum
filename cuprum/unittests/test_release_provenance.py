@@ -16,6 +16,9 @@ if typ.TYPE_CHECKING:
 
 _ASSET = "cuprum-1.2.3-py3-none-any.whl"
 _PYPI_ASSET = "a-cuprum-1.2.3.tar.gz"
+_CARRIED_BYTES = b"bytes from an interrupted release"
+_CARRIED_DIGEST = sha256_hex(_CARRIED_BYTES)
+_REPORTED_DIGEST = sha256_hex(b"different bytes reported by GitHub")
 
 
 @pytest.fixture
@@ -127,29 +130,29 @@ def test_unattested_carried_bytes_cannot_replace_the_local_build(
 
 
 @pytest.mark.parametrize(
-    ("reported_digest", "expected_detail"),
+    ("reported_digest", "record_digest", "expected_detail"),
     [
-        (sha256_hex(b"different bytes reported by GitHub"), "expected"),
-        (None, "reports no SHA-256 digest"),
+        (_REPORTED_DIGEST, _CARRIED_DIGEST, "expected"),
+        (_REPORTED_DIGEST, _REPORTED_DIGEST, "expected"),
+        (None, _CARRIED_DIGEST, "reports no SHA-256 digest"),
     ],
-    ids=["mismatched-github-digest", "missing-github-digest"],
+    ids=["actual-attestation", "reported-attestation", "missing-github-digest"],
 )
 def test_github_digest_failures_preserve_the_publish_directory(
     release_paths: tuple[pth.Path, pth.Path, pth.Path],
     reported_digest: str | None,
+    record_digest: str,
     expected_detail: str,
 ) -> None:
-    """Reject absent or incorrect API digests despite valid carried provenance."""
+    """Reject absent or incorrect API digests for either provenance subject."""
     local_bytes = b"attested bytes from this run"
     pypi_bytes = b"already published"
-    carried_bytes = b"bytes from an interrupted release"
-    carried_digest = sha256_hex(carried_bytes)
     publish, github_files, provenance = release_paths
     (publish / _PYPI_ASSET).write_bytes(pypi_bytes)
     (publish / _ASSET).write_bytes(local_bytes)
-    (github_files / _ASSET).write_bytes(carried_bytes)
+    (github_files / _ASSET).write_bytes(_CARRIED_BYTES)
     (provenance / f"{_ASSET}.json").write_text(
-        json.dumps(provenance_record(_ASSET, carried_digest)), encoding="utf-8"
+        json.dumps(provenance_record(_ASSET, record_digest)), encoding="utf-8"
     )
     state = State(
         publish=publish,

@@ -135,9 +135,13 @@ class AttestationOverrides:
 
 @dc.dataclass(frozen=True, slots=True)
 class FakeRelease:
-    """Directories standing in for the GitHub Release and PyPI, and a call log."""
+    """Fake release state, with metadata overrides separate from asset bytes.
+
+    ``reported_digests`` changes release metadata, not files or attestations.
+    """
 
     root: pth.Path
+    reported_digests: dict[str, str] = dc.field(default_factory=dict)
 
     @property
     def github(self) -> pth.Path:
@@ -185,6 +189,7 @@ class FakeRelease:
             "PATH": os.pathsep.join((str(self.root / "tools"), os.defpath)),
             "PYTHONPATH": python_path,
             "FAKE_GITHUB_ASSETS": str(self.github),
+            "FAKE_GITHUB_DIGEST_OVERRIDES": json.dumps(self.reported_digests),
             "FAKE_PYPI_FILES": str(self.pypi),
             "FAKE_ATTESTATIONS": str(self.attestations),
             "FAKE_ATTEST_FAIL": "",

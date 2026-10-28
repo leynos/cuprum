@@ -3637,9 +3637,11 @@ The jobs do the following:
    because, under Trusted Publishing, it also signs and uploads a PEP 740
    attestation for every file; `skip-existing` takes the place of uv's
    `--check-url`. When every artefact is already on PyPI, the upload step is
-   skipped and the job succeeds. `publish-pypi` holds no GitHub token: its
-   `contents: read` scope is only for a sparse checkout of `scripts/` and the
-   telemetry action.
+   skipped and the job succeeds. `publish-pypi` has `contents: read` for a
+   sparse checkout of `scripts/` and the telemetry action, plus the separate
+   `id-token: write` permission for PyPI Trusted Publishing. Checkout uses the
+   job's read-only `GITHUB_TOKEN`, with credentials not persisted. The release
+   scripts receive no `GH_TOKEN`, and the job has no attestation permission.
 5. `publish-release` re-reads the PyPI index and the release's current asset
    list, then uploads to the GitHub Release exactly the names it still lacks —
    fetching PyPI's bytes when PyPI already has the name, checked against PyPI's
@@ -3679,19 +3681,22 @@ reconciliation scheme.
 The provenance check adds a recovery case before that final digest check. When
 an existing GitHub asset lacks a matching approved attestation and differs from
 this run's build, `publish-pypi` fails before upload and `publish-release` does
-not run. The workflow retries verification three times with short backoffs. If
-all attempts fail, rerun the tag workflow once to retry provenance
-verification; if it still fails, delete the GitHub asset and rerun. An asset
-with a valid repository, workflow, tag-ref, runner, filename, and digest match
-can be carried over from an interrupted attempt. If its bytes already match the
-current attested build, the current build is retained without a prior-run
-record. During `stage_pypi()`, names already on PyPI are skipped without
-checking or copying the GitHub asset; `draft-release` has already attempted
-provenance verification for each carryover asset. The standard-library-only
-`scripts/release_provenance.py` module implements `has_matching_subject` to
-check the verifier JSON subject shape; it must not import third-party packages
-while `publish-pypi` holds its OIDC credential. When carried assets need
-verification, the GitHub CLI minimum of 2.102.0 fixes
+not run. The workflow retries verification three times with short backoffs. A
+failed verification warning does not always require recovery: staging skips a
+name already on PyPI, and uses the current build when its bytes match. If PyPI
+lacks the filename, the GitHub bytes differ from this run's build, and
+verification remains untrusted after retrying the tag workflow, delete the
+GitHub asset and rerun. An asset with a valid repository, workflow, tag-ref,
+runner, filename, and digest match can be carried over from an interrupted
+attempt. If its bytes already match the current attested build, the current
+build is retained without a prior-run record. During `stage_pypi()`, names
+already on PyPI are skipped without checking or copying the GitHub asset;
+`draft-release` has already attempted provenance verification for each
+carryover asset. The standard-library-only `scripts/release_provenance.py`
+module implements `has_matching_subject` to check the verifier JSON subject
+shape; it must not import third-party packages while `publish-pypi` holds its
+OIDC credential. When carried assets need verification, the GitHub CLI minimum
+of 2.102.0 fixes
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected versions from accepting a different signer workflow
 whose path merely shares the configured prefix, and
@@ -3726,9 +3731,9 @@ Each job/phase writes one bounded JSONL record through
 [ADR-017](adr-017-release-pipeline.md#telemetry) for the original label
 vocabulary and
 [its addendum](adr-017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
-for schema version 2 and `verification_failure_bucket`. The draft phase
-records unresolved per-asset verifier warnings in that bucket, even when PyPI
-already holds those names and the release can continue.
+for schema version 2 and `verification_failure_bucket`. The draft phase counts
+failed per-asset verifier outcomes in that bucket, even when PyPI already holds
+those names and the release can continue without recovery.
 
 Records are written even when a step fails, guarded by `!cancelled()`, and are
 uploaded as the artefact `release-telemetry-<job>-<attempt>`, retained for 90

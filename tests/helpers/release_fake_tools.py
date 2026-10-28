@@ -8,6 +8,8 @@ checked-in step scripts execute unchanged against state the test controls:
 - ``FAKE_GITHUB_ASSETS``: a directory holding one file per release asset.
 - ``FAKE_PYPI_FILES``: a directory holding one file per PyPI file.
 - ``FAKE_ATTESTATIONS``: JSON records for repository build attestations.
+- ``FAKE_GITHUB_DIGEST_OVERRIDES``: JSON filename-to-SHA-256 hex metadata
+  overrides, without the ``sha256:`` prefix.
 - ``FAKE_CALLS``: a file each call appends its argument vector to, as JSON.
 - ``FAKE_CURL_STATUSES``: comma-separated HTTP statuses the index returns in
   turn; the last repeats. Defaults to ``200``.
@@ -53,8 +55,17 @@ def _record(tool: str, args: list[str]) -> None:
 
 def _assets_json() -> str:
     """Render the release's assets as ``gh release view --json assets`` does."""
+    overrides = typ.cast(
+        "dict[str, str]",
+        json.loads(os.environ.get("FAKE_GITHUB_DIGEST_OVERRIDES", "{}")),
+    )
     assets = [
-        {"name": path.name, "digest": f"sha256:{sha256_hex(path.read_bytes())}"}
+        {
+            "name": path.name,
+            "digest": (
+                f"sha256:{overrides.get(path.name, sha256_hex(path.read_bytes()))}"
+            ),
+        }
         for path in sorted(_directory("FAKE_GITHUB_ASSETS").iterdir())
     ]
     return json.dumps({"assets": assets})

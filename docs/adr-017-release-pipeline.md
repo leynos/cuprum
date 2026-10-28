@@ -31,10 +31,11 @@ broke the invariant that a downloaded artefact's digest never changes under a
 fixed filename, and it could silently replace an asset a consumer had already
 verified against an attestation from an earlier run.
 
-The workflow also needed to run the PyPI upload from a job holding an OIDC
-credential and nothing else: no GitHub token, no third-party Python dependency
-resolution at the moment the credential is live, and no more privilege than
-each phase strictly needs.
+The workflow also needed to run the PyPI upload from a job using an OIDC
+credential, with no `GH_TOKEN` passed to its release scripts and no third-party
+Python dependency resolution while the credential is live. Its read-only
+`contents` permission supports the sparse checkout; checkout credentials are
+not persisted. Each phase should receive no more privilege than it needs.
 
 ## Decision drivers
 
@@ -93,7 +94,9 @@ it did not declare:
   hold one.
 - `publish-pypi` (the `pypi` environment; `contents: read` for a sparse
   checkout of the reconciliation scripts, plus `id-token: write`; needs
-  `attest`, `draft-release`) holds no GitHub token. It stages only the
+  `attest`, `draft-release`) has a read-only job `GITHUB_TOKEN` for checkout,
+  but does not pass `GH_TOKEN` to its release scripts and has no attestation
+  permission. The OIDC `id-token` permission is separate. It stages only the
   filenames PyPI does not already list in its JSON simple index, using GitHub's
   carried-over bytes (checked against the asset digest) when GitHub already has
   a name this run rebuilt. It uploads the remainder with
@@ -208,8 +211,10 @@ which the scripts only plan for.
   example, a leftover from the retired `--clobber` flow — blocks
   `publish-release` and requires a manual GitHub Release asset deletion. This
   is intentional friction rather than an oversight.
-- `publish-pypi` never holds a GitHub token, and no job other than
-  `draft-release` and `publish-release` can write to the release.
+- `publish-pypi` has only read-only `contents` permission for checkout and
+  `id-token: write`; its scripts receive no `GH_TOKEN`, and it has no
+  attestation permission. No job other than `draft-release` and
+  `publish-release` can write to the release.
 - Publication history is durably observable through the `release-telemetry-*`
   artefacts without adding an external telemetry service, secret, or dashboard,
   mirroring [ADR-014](adr-014-benchmark-gate-telemetry-sink.md).
@@ -270,10 +275,12 @@ verification, it requires GitHub CLI `2.102.0` or newer and applies the
 repository, release workflow, `GITHUB_REF` tag, and
 `--deny-self-hosted-runners` policy. An empty carryover list records zero
 verification failures without invoking the attestation CLI. Successful JSON
-records are transferred with `release-github-state`. `publish-pypi` remains
-token-free and receives no attestation permission; it decides whether a missing
-record matters after it knows PyPI's holdings. The `2.102.0` minimum includes
-fixes for
+records are transferred with `release-github-state`. `publish-pypi` receives no
+`GH_TOKEN` in its staging or publishing steps and has no attestation
+permission. Its job's read-only `contents` token is used for checkout with
+credentials not persisted; `id-token: write` is the separate PyPI OIDC
+permission. The publisher decides whether a missing record matters after it
+knows PyPI's holdings. The `2.102.0` minimum includes fixes for
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected CLI versions from accepting a different signer
 workflow whose path merely shares the configured prefix, and
@@ -293,9 +300,9 @@ must not retarget a tag as a recovery method.
 
 The draft job retries each verifier call up to three times, with two- and
 four-second backoffs. If all attempts fail, it removes partial JSON, warns for
-the asset, and continues so the token-free publisher can decide whether PyPI
-needs those bytes. A differing, unverified asset fails staging before any
-publish-directory mutation or PyPI upload.
+the asset, and continues so the publisher scripts, which receive no `GH_TOKEN`,
+can decide whether PyPI needs those bytes. A differing, unverified asset fails
+staging before any publish-directory mutation or PyPI upload.
 
 ### Telemetry and verifier retry outcomes
 
@@ -305,7 +312,10 @@ job failure because `draft-release` cannot know whether PyPI already holds that
 name. If PyPI needs differing bytes and provenance is absent, `stage-pypi`
 fails before publication and its existing `digest_mismatch` telemetry mapping
 records the blocking outcome. Schema version 2 adds the bounded
-`verification_failure_bucket` label (`0`, `1`, `2-5`, or `6+`) so a successful
-draft phase still records when one or more asset verifications needed manual
-recovery. The release phases still have no tracing spans: GitHub Actions has no
-tracing collector or backend to receive them.
+`verification_failure_bucket` label (`0`, `1`, `2-5`, or `6+`) to count failed
+per-asset verification outcomes, including warnings that do not require
+recovery. Recovery may be needed only when PyPI lacks the filename, the
+existing GitHub bytes differ from this run's build, and verification remains
+untrusted after retrying the tag workflow. The release phases still have no
+tracing spans: GitHub Actions has no tracing collector or backend to receive
+them.

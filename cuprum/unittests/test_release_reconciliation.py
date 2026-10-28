@@ -11,12 +11,14 @@ taken from PyPI first, then GitHub, then this run, and nothing is replaced.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import typing as typ
 
 import pytest
 
+from tests.helpers.release_asset_provenance import provenance_record, sha256_hex
 from tests.helpers.release_workflow import (
     FakeRelease,
     fake_release,
@@ -179,6 +181,54 @@ def test_unverified_differing_asset_stops_before_pypi_upload(
         "failed provenance validation must preserve this run's local bytes"
     )
     assert not (fake.pypi / _GITHUB_ONLY).exists(), "PyPI receives no bytes"
+
+
+def test_reported_digest_mismatch_stops_before_pypi_upload(fake: FakeRelease) -> None:
+    """Reject carried bytes that disagree with GitHub's release metadata."""
+    reported_digest = sha256_hex(b"different release metadata")
+    fake.reported_digests[_GITHUB_ONLY] = reported_digest
+    draft, env = _job_directory(fake, "draft-release")
+    _step("draft-release", "Snapshot the release assets", draft, env)
+    _step("draft-release", "Verify carried asset provenance", draft, env)
+
+    record = draft / "github-state" / "provenance" / f"{_GITHUB_ONLY}.json"
+    assert json.loads(record.read_text(encoding="utf-8")) == provenance_record(
+        _GITHUB_ONLY, sha256_hex(b"github")
+    ), "the verifier must attest the downloaded bytes, not the metadata override"
+
+    pypi, env = _job_directory(fake, "publish-pypi")
+    shutil.copytree(draft / "github-state", pypi / "github-state")
+    _step("publish-pypi", "Fetch the PyPI index", pypi, env)
+    publish = pypi / "dist" / "publish"
+    before_publish = _holdings(publish)
+    before_pypi = _holdings(fake.pypi)
+    completed = run_bash(
+        step_script("publish-pypi", "Skip artefacts already on PyPI"), pypi, env
+    )
+
+    if completed.returncode == 0:
+        for staged in publish.iterdir():
+            destination = fake.pypi / staged.name
+            if not destination.exists():
+                shutil.copyfile(staged, destination)
+        _publish_release(fake)
+
+    assert completed.returncode != 0, "mismatched release metadata must stop staging"
+    assert _GITHUB_ONLY in completed.stderr, "the error must name the carried asset"
+    assert f"expected {reported_digest}" in completed.stderr, (
+        "the error must identify the independently reported digest"
+    )
+    assert "delete the named asset and rerun" in completed.stderr, (
+        "the error must explain the recovery action"
+    )
+    assert _holdings(publish) == before_publish, "staging must not change local bytes"
+    assert _holdings(fake.pypi) == before_pypi, "PyPI must receive no uploaded bytes"
+    assert not (fake.root / "publish-release").exists(), (
+        "a failed staging step must prevent the publish-release job"
+    )
+    assert not any(call[:2] == ["release", "upload"] for call in fake.calls("gh")), (
+        "a failed staging step must not upload to the GitHub release"
+    )
 
 
 def test_each_destination_is_sent_only_what_it_lacks(fake: FakeRelease) -> None:
