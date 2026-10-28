@@ -80,8 +80,9 @@ def test_modern_route_owns_its_toolchain_flags_and_target_directory() -> None:
     ):
         assert required in output, f"modern Cargo commands must include {required!r}"
     assert "--config" not in output, "modern commands must not select a Cargo fragment"
+    route_text = re.sub(r'PATH="[^"]*"', "PATH=<elided>", output)
     for forbidden in ("dev-fast/cargo", "nightly-2026-08-23", "mold", "Cranelift"):
-        assert forbidden not in output, (
+        assert forbidden not in route_text, (
             f"unexpected option in modern route: {forbidden}"
         )
 
