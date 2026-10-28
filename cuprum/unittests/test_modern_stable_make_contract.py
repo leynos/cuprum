@@ -113,6 +113,9 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
     assert "CARGO_BUILD_WARNINGS=warn" not in output, (
         "caller warning policy must not weaken the modern route"
     )
+    assert "-u CARGO_BUILD_WARNINGS" in output, (
+        "rustdoc and doctest routes must clear ambient Cargo warning policy"
+    )
     assert 'RUSTFLAGS="-C codegen-units=1"' in output, (
         "ambient Rust flags must be replaced by the modern code-generation flag"
     )

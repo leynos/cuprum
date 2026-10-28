@@ -45,6 +45,54 @@ def test_modern_stable_job_is_one_bounded_linux_lane() -> None:
     )
 
 
+def test_modern_stable_pull_requests_use_a_dedicated_changes_filter() -> None:
+    """Skip the paid route for pull requests outside its validation inputs."""
+    selected_job = job("ci.yml", "modern-stable")
+    needs = selected_job.get("needs")
+    assert needs == "changes" or (isinstance(needs, list) and "changes" in needs), (
+        "modern stable must wait for its dedicated change detector"
+    )
+    assert selected_job.get("if") == (
+        "github.event_name != 'pull_request' || needs.changes.outputs.modern == 'true'"
+    ), "only pull requests without modern-stable inputs may skip the paid job"
+
+    changes = job("ci.yml", "changes")
+    outputs = changes.get("outputs")
+    assert isinstance(outputs, dict), "the changes job must expose filter outputs"
+    assert outputs.get("modern") == "${{ steps.filter.outputs.modern }}", (
+        "modern stable must have its own filter output"
+    )
+    filter_step = next(
+        step for step in steps("ci.yml", "changes") if step.get("id") == "filter"
+    )
+    filter_inputs = filter_step.get("with")
+    assert isinstance(filter_inputs, dict), "the change detector needs its filters"
+    filters = filter_inputs.get("filters")
+    assert isinstance(filters, str), "the change detector filters must be readable"
+    modern_filter = filters.split("modern:\n", maxsplit=1)[1].split(
+        "rust:\n", maxsplit=1
+    )[0]
+    for relevant_path in (
+        "cuprum/**",
+        "rust/**",
+        "tools/dev-fast/**",
+        "Makefile",
+        "pyproject.toml",
+        "uv.lock",
+        "scripts/modern_stable_warning_controls.py",
+        "scripts/tests/test_modern_stable_warning_controls.py",
+        ".github/workflows/ci.yml",
+        ".github/actions/cache-keys/action.yml",
+        ".github/actions/setup-sccache/**",
+    ):
+        assert f"'{relevant_path}'" in modern_filter, (
+            f"modern-stable filter must include {relevant_path!r}"
+        )
+    assert "docs/" not in modern_filter, (
+        "documentation-only changes must not spend a modern-stable runner"
+    )
+
+
 def test_job_installs_both_toolchains_without_changing_the_default() -> None:
     """Retain the 1.85 project toolchain and install modern stable separately."""
     project = _named_step("Install project Rust toolchain")

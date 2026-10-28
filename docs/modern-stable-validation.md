@@ -92,12 +92,14 @@ addressed by Cargo's warning setting.
 ## CI and compiler-cache scope
 
 CI adds one Linux `modern-stable` job, with a 90-minute ceiling and no matrix.
-It installs the project Rust 1.85.0 toolchain and separately installs the
-modern pin with the minimal profile and Clippy, without changing rustup's
-default toolchain. Cargo build jobs and test threads follow
-`LINUX_RUNNER_VCPUS`. Nextest is installed from the official prebuilt release
-and checked against pinned archive and binary digests; there is no source-build
-fallback.
+Pull requests run it only when the dedicated `modern` path filter finds a
+validation input; documentation-only changes skip this paid route. Pushes to
+`main` and manual dispatches continue to run it. It installs the project Rust
+1.85.0 toolchain and separately installs the modern pin with the minimal
+profile and Clippy, without changing rustup's default toolchain. Cargo build
+jobs and test threads follow `LINUX_RUNNER_VCPUS`. Nextest is installed from
+the official prebuilt release and checked against pinned archive and binary
+digests; there is no source-build fallback.
 
 The sccache shape is `modern-stable` with the explicit Rust version appended to
 the key. The job is the sole writer for that family. It restores through the
