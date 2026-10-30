@@ -492,7 +492,45 @@ policies.
 `BrokenPipePolicy` is exported from the package root next to
 `RunOutputOptions`, so an existing
 `from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
-needs `BrokenPipePolicy` added to it.
+needs `BrokenPipePolicy` added to it. Echo policy covers only cuprum's own
+writes during a run;
+[Preserve the exit status through a closed pipe](#preserve-the-exit-status-through-a-closed-pipe)
+covers the interpreter's final flush at shutdown.
+
+### Preserve the exit status through a closed pipe
+
+`BrokenPipePolicy` governs cuprum's own echo writes while a run is in progress.
+A command-line tool has a second, later opportunity to lose its status: CPython
+flushes `sys.stdout` and `sys.stderr` after every `atexit` callback has run, so
+a reader that has gone away by then makes that final flush fail, and the
+interpreter reports status 120 in place of the status the application asked for.
+[When an echo destination fails](#when-an-echo-destination-fails) cannot help
+here, because the run is already over.
+
+`cuprum.install_exit_status_guard()` arms a process-level guard. It registers
+one `atexit` callback; the callback flushes each of `sys.stdout` and
+`sys.stderr`, and when — and only when — a flush raises `BrokenPipeError` it
+points that stream's descriptor at the null device, so the interpreter's own
+final flush succeeds harmlessly. A dead stream with no usable descriptor is
+replaced by a sink that discards writes. Wherever a descriptor exists the
+stream object keeps its identity, so later writes and `fileno()` calls still
+address the same stream. A stream that is `None`, healthy, or deliberately
+closed (which raises `ValueError` rather than `BrokenPipeError`) is left
+untouched, and the callback never raises.
+
+The guard is opt-in and per process, and calling it more than once is harmless.
+Importing `cuprum` does not install it. `atexit` runs handlers in reverse
+registration order, so the guard protects only output still buffered when its
+callback runs: a handler registered after the guard runs before it and must
+handle its own `BrokenPipeError` if it flushes a closed stream. Install the
+guard at the entry point rather than in a library, since only the entry point
+chooses the process's exit status.
+
+The guard does not repair writes that fail while the application runs, and it
+cannot make a captured or redirected stream writable; those remain the province
+of `BrokenPipePolicy` and of the application itself. It observes CPython's
+finalization order, and `os._exit` skips finalization, so neither a different
+interpreter nor an immediate exit is protected.
 
 ### Quiet children
 
