@@ -148,7 +148,11 @@ WORKER_SOURCE = "\n".join((
     "    'stdin_eof': stdin_chunk == b'',",
     "    'fd_targets': {str(fd): fd_target(fd) for fd in (0, 1, 2)},",
     "}",
-    "report_path.write_text(json.dumps(report))",
+    # Published by rename so the polling reader never sees a partial report:
+    # creating the destination directly exposes an empty file before the write.
+    "tmp_report = report_path.with_name(report_path.name + '.tmp')",
+    "tmp_report.write_text(json.dumps(report))",
+    "os.replace(tmp_report, report_path)",
     f"time.sleep({WORKER_SLEEP_SECONDS})",
 ))
 
