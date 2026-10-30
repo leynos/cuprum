@@ -34,6 +34,7 @@ from tests.helpers.release_workflow import (
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
+    import subprocess
 
 _TAG = "v1.2.3"
 _BUNDLE = "cuprum-v1.2.3-run7-1.sigstore.json"
@@ -382,6 +383,18 @@ def _no_github_upload(fake: FakeRelease) -> None:
     assert not uploads, "a failed provenance gate must not upload anything"
 
 
+def _assert_gate_refuses(
+    fake: FakeRelease, cwd: pth.Path, env: dict[str, str], *, named: str = _PYPI_ONLY
+) -> subprocess.CompletedProcess[str]:
+    """Run the provenance gate and require it to refuse and upload nothing."""
+    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
+    assert completed.returncode != 0, "the provenance gate must refuse"
+    assert named in completed.stderr, "the failure must name the file"
+    assert _PYPI_ONLY not in _holdings(fake.github), "nothing may reach the release"
+    _no_github_upload(fake)
+    return completed
+
+
 def test_a_fetched_file_without_provenance_is_never_uploaded(
     tmp_path: pth.Path,
 ) -> None:
@@ -389,13 +402,9 @@ def test_a_fetched_file_without_provenance_is_never_uploaded(
     fake = _seeded(tmp_path)
     cwd, env = _ready_to_verify(fake)
 
-    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
+    completed = _assert_gate_refuses(fake, cwd, env)
 
-    assert completed.returncode != 0, "an unattested file must stop the upload"
-    assert _PYPI_ONLY in completed.stderr, "the failure must name the file"
     assert "Could not verify build provenance" in completed.stderr
-    assert _PYPI_ONLY not in _holdings(fake.github)
-    _no_github_upload(fake)
 
 
 def test_the_index_digest_cannot_authorize_other_bytes(tmp_path: pth.Path) -> None:
@@ -405,14 +414,7 @@ def test_the_index_digest_cannot_authorize_other_bytes(tmp_path: pth.Path) -> No
     (fake.pypi / _PYPI_ONLY).write_bytes(b"malicious bytes matching the index")
     cwd, env = _ready_to_verify(fake)
 
-    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
-
-    assert completed.returncode != 0, (
-        "bytes the index describes but no run attested must stop the upload"
-    )
-    assert _PYPI_ONLY in completed.stderr
-    assert _PYPI_ONLY not in _holdings(fake.github)
-    _no_github_upload(fake)
+    _assert_gate_refuses(fake, cwd, env)
 
 
 def test_an_attested_pypi_file_carries_over_to_the_release(
@@ -451,12 +453,7 @@ def test_evidence_for_another_identity_does_not_authorize_the_bytes(
     fake.add_attestation(fake.pypi / _PYPI_ONLY, overrides)
     cwd, env = _ready_to_verify(fake)
 
-    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
-
-    assert completed.returncode != 0, "a foreign identity must not authorize bytes"
-    assert _PYPI_ONLY in completed.stderr
-    assert _PYPI_ONLY not in _holdings(fake.github)
-    _no_github_upload(fake)
+    _assert_gate_refuses(fake, cwd, env)
 
 
 def test_a_subject_name_mismatch_is_rejected(tmp_path: pth.Path) -> None:
@@ -467,13 +464,9 @@ def test_a_subject_name_mismatch_is_rejected(tmp_path: pth.Path) -> None:
     )
     cwd, env = _ready_to_verify(fake)
 
-    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
+    completed = _assert_gate_refuses(fake, cwd, env)
 
-    assert completed.returncode != 0, "the digest alone must not authorize the file"
-    assert _PYPI_ONLY in completed.stderr
     assert "has no approved build provenance" in completed.stderr
-    assert _PYPI_ONLY not in _holdings(fake.github)
-    _no_github_upload(fake)
 
 
 def test_a_later_unattested_file_stops_the_whole_upload(tmp_path: pth.Path) -> None:
@@ -484,14 +477,19 @@ def test_a_later_unattested_file_stops_the_whole_upload(tmp_path: pth.Path) -> N
     (fake.pypi / later).write_bytes(b"second pypi file")
     cwd, env = _ready_to_verify(fake, extra=later)
 
-    completed = run_bash(step_script("publish-release", _PROVENANCE_STEP), cwd, env)
+    _assert_gate_refuses(fake, cwd, env, named=later)
 
-    assert completed.returncode != 0, "the later candidate must stop the upload"
-    assert later in completed.stderr, "the failure must name the later file"
-    assert _PYPI_ONLY not in _holdings(fake.github), (
-        "an earlier verified file must not be uploaded either"
-    )
-    _no_github_upload(fake)
+
+def test_every_unattested_file_is_named_in_one_run(tmp_path: pth.Path) -> None:
+    """The gate reports every file it could not verify, not just the first."""
+    later = "c-2-py3-none-any.whl"
+    fake = _seeded(tmp_path)
+    (fake.pypi / later).write_bytes(b"second pypi file")
+    cwd, env = _ready_to_verify(fake, extra=later)
+
+    completed = _assert_gate_refuses(fake, cwd, env)
+
+    assert later in completed.stderr, "the later failure must be named too"
 
 
 def test_an_old_github_cli_fails_before_any_verification(fake: FakeRelease) -> None:

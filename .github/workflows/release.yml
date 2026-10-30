@@ -416,6 +416,7 @@ jobs:
           set -euo pipefail
           gh --version | python3 scripts/release_gh_version.py
           mkdir -p pypi-provenance
+          failed=0
           while IFS=$'\t' read -r name url; do
             [ -n "${name}" ] || continue
             record="pypi-provenance/${name}.json"
@@ -430,9 +431,12 @@ jobs:
               rm -f "${record}"
               echo "::error title=pypi-provenance::Could not verify build provenance" \
                 "for ${name}." >&2
-              exit 1
+              failed=1
             fi
           done < pypi-fetch.tsv
+          # Verify every file before stopping, so one run names every
+          # unattested file rather than only the first one it meets.
+          [ "${failed}" -eq 0 ] || exit 1
           python3 -m scripts.release_assets_cli check-provenance --publish dist/publish \
             --index pypi-index.json --assets release-assets.json \
             --output github-upload --provenance pypi-provenance

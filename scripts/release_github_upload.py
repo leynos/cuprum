@@ -30,17 +30,6 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
-def _pypi_fetch_list(
-    lacking: cabc.Iterable[str], pypi: cabc.Mapping[str, PypiFile]
-) -> list[tuple[str, str]]:
-    """Return the PyPI (name, url) pairs to fetch, insisting on HTTPS."""
-    fetch = [(name, pypi[name].url) for name in lacking if name in pypi]
-    if any(not url.startswith("https://") for _, url in fetch):
-        msg = "every PyPI download must use HTTPS"
-        raise ReleaseAssetError(msg)
-    return fetch
-
-
 def _copy_pypi_gap(
     lacking: cabc.Iterable[str],
     pypi: cabc.Mapping[str, PypiFile],
@@ -63,9 +52,32 @@ def _copy_unattached_bundles(
 
 
 def stage_github(state: State, bundles: Path, output: Path) -> list[tuple[str, str]]:
-    """Stage what the GitHub Release lacks; return the PyPI files to fetch."""
+    """Stage what the GitHub Release lacks; return the PyPI files to fetch.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and both destinations' holdings.
+    bundles : Path
+        The directory holding this run's Sigstore bundles.
+    output : Path
+        The GitHub upload directory, created when absent.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        One ``(name, url)`` pair per file the workflow must fetch from PyPI.
+
+    Raises
+    ------
+    ReleaseAssetError
+        If any PyPI download URL does not use HTTPS.
+    """
     lacking = sorted(state.plan().github_uploads)
-    fetch = _pypi_fetch_list(lacking, state.pypi)
+    fetch = [(name, state.pypi[name].url) for name in lacking if name in state.pypi]
+    if any(not url.startswith("https://") for _, url in fetch):
+        msg = "every PyPI download must use HTTPS"
+        raise ReleaseAssetError(msg)
     output.mkdir(parents=True, exist_ok=True)
     _copy_pypi_gap(lacking, state.pypi, state.publish, output)
     _copy_unattached_bundles(bundles, state.github, output)
@@ -73,7 +85,15 @@ def stage_github(state: State, bundles: Path, output: Path) -> list[tuple[str, s
 
 
 def check_fetched(state: State, output: Path) -> None:
-    """Raise unless every file fetched from PyPI matches PyPI's digest."""
+    """Raise ``ReleaseAssetError`` unless every fetched file matches PyPI.
+
+    Parameters
+    ----------
+    state : State
+        The staged artefacts and both destinations' holdings.
+    output : Path
+        The GitHub upload directory holding the fetched files.
+    """
     for name in sorted(state.plan().github_uploads & set(state.pypi)):
         require_digest(output / name, state.pypi[name].sha256)
 

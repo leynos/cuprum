@@ -292,6 +292,9 @@ def test_pypi_bytes_are_verified_before_the_release_upload() -> None:
         "--format json",
         f'record="{_PROVENANCE_DIR}/${{name}}.json"',
         'rm -f "${record}"',
+        "failed=0",
+        "failed=1",
+        '[ "${failed}" -eq 0 ] || exit 1',
         "::error title=pypi-provenance::",
         "check-provenance --publish dist/publish",
         "--index pypi-index.json",
@@ -305,6 +308,13 @@ def test_pypi_bytes_are_verified_before_the_release_upload() -> None:
     assert "done < pypi-fetch.tsv" in script, (
         "only the files actually fetched from PyPI need verification"
     )
+    loop = script.partition("done < pypi-fetch.tsv")[0]
+    assert "exit 1" not in loop, (
+        "a failed verification must not stop the remaining checks"
+    )
+    assert script.index("done < pypi-fetch.tsv") < script.index(
+        '[ "${failed}" -eq 0 ] || exit 1'
+    ), "the gate must finish verifying every file before it exits"
     telemetry = next(
         item
         for item in _job("publish-release")["steps"]
