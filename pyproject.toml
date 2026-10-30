@@ -1090,6 +1090,9 @@ reason = "The adjacent metric calls intentionally keep the public broken-pipe an
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_group_teardown.py", "cuprum/_pipeline_stream_native_cleanup.py", "cuprum/_pipeline_wait_records.py", "cuprum/_sink_lifecycle.py", "cuprum/_timeout_reporting.py"]
 reason = "`if <field> is None: return` in six places across five modules: an observation (three times, in two modules), native file descriptors, a session, and a teardown report. Each is a same-module early return guarding a different optional collaborator, and the shared text is the None-tolerance guard idiom this codebase uses at every optional-collaborator boundary, not a shared operation. The two `_pipeline_wait_records.py` matches remain separately named under one module. The `output_rules.py` match was removed when the shared positive-bound validator replaced its early return. Widened rather than extracted for the reason the seven-module and two-module siblings above record."
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_detached_launch.py", "cuprum/sh/line_options.py"]
+reason = "`_enforce_allowlist(cmd)` as the first statement of a function in each module: one launches a detached child, the other rejects line-iteration conflicts. The shared text is the single call to the shared allowlist helper, which is already the extracted implementation, so there is nothing left to factor out; every path carries the same check at the same point so none can skip it. The detector reports the match anonymously, so these paths are the narrowest keys available."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"
