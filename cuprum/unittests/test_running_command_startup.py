@@ -30,6 +30,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._subprocess_spawn import _SubprocessExecution
+    from cuprum._subprocess_streams import _StreamConsumerSpawnContext
     from cuprum.program import Program
     from cuprum.sh import SafeCmd
 
@@ -221,6 +222,76 @@ def test_failed_task_attachment_is_reclaimed_and_settled() -> None:
         )
         assert events[-1].terminal_outcome is TerminalOutcome.ERROR, (
             f"the terminal outcome must be error, got {events[-1].terminal_outcome}"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_a_consumer_started_before_the_failure_is_reclaimed() -> None:
+    """The consumer that did start must not outlive the attach that failed.
+
+    ``_attach_run_tasks`` starts one consumer per stream, so a failure raising
+    while the pair is built is the one case where a task exists at the moment
+    attaching fails. Recording each task as it is created is what puts that
+    consumer in the reclaim's hands; a set recorded only once it is complete
+    would lose it, and a reader nobody holds cannot be cancelled.
+
+    The child outlives the failed attach until the handle's own termination
+    path stops it, so its consumers are genuinely parked when the assertion
+    runs — a child that had already exited could let them finish on their own
+    and hide the omission.
+    """
+
+    async def run_case() -> None:
+        """Fail the consumer spawn around a real, still-running child."""
+        catalogue, python_program = python_catalogue()
+        builder = sh.make(python_program, catalogue=catalogue)
+        command = builder("-c", "import time; time.sleep(30)")
+        _, observe = _observations()
+        real_consumers = handle_tasks._spawn_stream_consumers
+        recorded_by_handle: list[asyncio.Task[typ.Any]] | None = None
+
+        def failing_consumers(
+            process: asyncio.subprocess.Process,
+            execution: _SubprocessExecution,
+            spawn_context: _StreamConsumerSpawnContext,
+            *,
+            recorded: list[asyncio.Task[typ.Any]] | None = None,
+        ) -> typ.NoReturn:
+            """Start the real consumers, then fail the attach.
+
+            Raises
+            ------
+            RuntimeError
+                Always, once both consumers exist and the handle's own list
+                has been offered to the real spawn.
+            """
+            nonlocal recorded_by_handle
+            recorded_by_handle = recorded
+            real_consumers(process, execution, spawn_context, recorded=recorded)
+            raise RuntimeError(_START_FAILURE)
+
+        with (
+            scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+            sh.observe(observe),
+            pytest.MonkeyPatch.context() as patch,
+        ):
+            patch.setattr(handle_tasks, "_spawn_stream_consumers", failing_consumers)
+            with pytest.raises(RuntimeError, match=_START_FAILURE):
+                await command.start()
+
+        assert recorded_by_handle is not None, (
+            "the handle must offer its own list to the spawn, so a consumer "
+            "is recorded as soon as it is created"
+        )
+        assert len(recorded_by_handle) == 2, (
+            f"both consumers must be recorded, got {len(recorded_by_handle)}"
+        )
+        # Asserted before the loop is torn down: teardown cancels every task
+        # still pending, so an omission would look like a clean reclaim here.
+        assert all(task.done() for task in recorded_by_handle), (
+            "a consumer started before the failed attach must be settled, not "
+            "left pending with no owner"
         )
 
     asyncio.run(run_case())
