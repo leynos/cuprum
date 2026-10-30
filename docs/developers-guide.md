@@ -1640,6 +1640,57 @@ and the event loop does not pre-empt an `emit()` call halfway through the list
 append, so no explicit lock is required. Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
 
+That list is bounded. `_OBSERVE_TASK_CEILING` (256, in
+`cuprum/_observability.py`) caps the unfinished tasks one execution retains. It
+matches `_LINE_QUEUE_CAPACITY` in `cuprum/_line_stream.py`: the two describe the
+same quantity — how much asynchronous work one observed run may have in flight.
+Because a line event is emitted per decoded line even with capture off, an
+unbounded list lets a chatty child exhaust parent memory. The rules:
+
+- `_prune_finished_hook_tasks(pending_tasks)` mutates the list **in place**.
+  Never rebind it: every pipeline stage retains into the same object, and a new
+  list would leave the other stages appending somewhere finalization never
+  drains. It keeps every unfinished task plus the earliest failed or cancelled
+  task in list order, because that is exactly what `_wait_for_exec_hook_tasks`
+  would raise from an unpruned gather. Later failures are dropped only after
+  `task.exception()` has retrieved them, so pruning cannot manufacture a
+  "Task exception was never retrieved" warning. Check `task.cancelled()` before
+  `task.exception()`: calling the latter on a cancelled task raises its
+  `CancelledError`.
+- `_StageObservation._retain_hook_tasks` extends the shared list and prunes once
+  its raw length reaches the ceiling. It also retains the prefix tasks carried
+  by `_ExecEventEmissionError`, so a failing synchronous hook cannot orphan work
+  scheduled before it.
+- `_has_hook_capacity` is the admission query and `_await_hook_capacity` the
+  wait. The query takes a fast path while the raw list is below the ceiling and
+  otherwise prunes before counting unfinished tasks. The wait uses
+  `asyncio.wait(..., FIRST_COMPLETED)` rather than `asyncio.gather`: gathering
+  would block until every task settled, and cancelling the waiter must release
+  only the wait, never the observer tasks the execution still owns and drains.
+  Capacity is admitted once per event rather than once per task, so the bound
+  to assert is `ceiling + hooks_per_event - 1` unfinished tasks, plus at most
+  one retained settled failure in the raw list.
+- `_compose_line_callbacks` admits before dispatch. With capacity it emits the
+  line's observation synchronously and returns the caller's `on_line` outcome
+  unchanged, with no suspension point between the check and the task append.
+  Without capacity it returns a coroutine that awaits capacity, dispatches the
+  observation, then calls `on_line`. Observation stays ahead of `on_line`, and a
+  failing synchronous observation prevents `on_line` from running at all.
+
+Tests for the bound are split by level.
+`cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity,
+cancellation isolation, and the composed callback with a patched ceiling
+(patch `cuprum._line_callbacks._OBSERVE_TASK_CEILING`, never the shared
+constant). Its Hypothesis property compares the failure finalization reports
+with and without pruning over success, failure, cancellation, and pending
+sequences. `cuprum/unittests/test_line_observe_backpressure.py` runs a
+real child writing 20,000 lines with capture off and spies on
+`_StageObservation._emit_event`, recording `len(observation.pending_tasks)`
+after each emission to measure the high-water mark. Gated async hooks hold
+tasks open, which is what lets the tests assert saturation, the child pausing,
+and lossless ordered resumption. Install the spy through `monkeypatch` so a
+failing test cannot leave the dispatcher wrapped for the rest of the session.
+
 ### Presentation-sink session lifecycle
 
 `SessionStart` remains unchanged. Single-command sessions pass the full argv to

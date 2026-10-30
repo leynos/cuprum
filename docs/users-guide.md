@@ -425,7 +425,9 @@ assert [(line.stream, line.text) for line in lines] == [
 ```
 
 The callback runs synchronously and should return promptly. Line order is
-guaranteed within each stream, not across streams.
+guaranteed within each stream, not across streams. An awaitable observe hook
+observing the same lines is retained and bounded differently; see
+[Awaitable hooks and line backpressure](#awaitable-hooks-and-line-backpressure).
 
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
@@ -2819,6 +2821,35 @@ reject unknown values. The set of phases can grow between releases, so such a
 hook raises on a new phase — and so fails the run — until it grows an arm for
 it. Give exhaustive hooks a default arm that ignores phases they do not track.
 A hook that must never influence the run should catch its own exceptions.
+
+#### Awaitable hooks and line backpressure
+
+An awaitable observe hook is scheduled as one task per event and retained
+until the run finishes. Cuprum therefore bounds retention per execution: the
+unfinished count is admitted against a ceiling of 256 tasks, shared by every
+stage of a pipeline. A child that floods output cannot grow the list with the
+number of lines it writes, whether or not capture and echo are enabled.
+
+Settled successes are pruned as the run proceeds, along with every failure
+later than the first: finalization reports the earliest failed or cancelled
+task, and a later failure could never be raised. Each failure is still logged
+when its task fails, so pruning hides nothing from the logs. Delivery stays
+lossless and per-stream ordered throughout.
+
+When the bound is reached, Cuprum stops reading new output until a hook task
+settles. A slow hook therefore slows how fast the child's output is read; a
+hook blocked indefinitely eventually pauses the child once the operating
+system's pipe buffers fill. Final completion also waits for pending hook
+tasks, so a blocked hook holds the run open even after the child has exited:
+a `timeout` bounds the child's run, not that final wait. Pass a `timeout` when
+observing output you do not control, and make awaitable hooks finish promptly
+rather than waiting indefinitely; a hook that must block should observe
+cancellation or apply its own deadline.
+
+Capacity is checked once per event, so an event that schedules several
+awaitable hooks can briefly take the list to the ceiling plus one fewer than
+the number of hooks it schedules. The bound is still independent of how many
+lines the child writes.
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
