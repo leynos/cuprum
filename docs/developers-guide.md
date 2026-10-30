@@ -2603,6 +2603,22 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 the consume and pipeline pump paths without changing public runtime
 configuration.
 
+### Bounded echo copy-volume regression
+
+`_encode_prefix` in `cuprum/_echo_truncation.py` must stay linear in the line
+it is given: the text-sink path records the last safe source and encoded
+lengths and copies each prefix once, and each marker-adjustment pass re-runs
+that linear search. `cuprum/unittests/test_echo_truncation_cost.py` guards the
+contract without wall-clock timing by counting copied bytes directly. A
+duck-typed stand-in for the source line records every slice it is given, and a
+module-local shadow of `bytes` counts conversions from a `bytearray` or
+`memoryview` while excluding the per-byte `bytes((byte,))` decode probe. The
+shadow is a callable rather than a type, so an `isinstance(..., bytes)` check
+added to the module would fail the test loudly. Every measurement asserts a
+non-zero counter first, and the bounds are stated as ratios — one line against
+eight, and a bound against four times that bound — so a faster machine cannot
+weaken the regression.
+
 ### Byte-exact capture mode
 
 The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
