@@ -3,7 +3,7 @@ Feature: Core builder library
   Scenario: Git checkout builder constructs argv
     Given the core git builders
     When I build a git checkout command for ref "main"
-    Then the git command argv is "git" "checkout" "main"
+    Then the git command argv is "git" "checkout" "main" "--"
 
   Scenario: Invalid git ref is rejected
     Given the core git builders

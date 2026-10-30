@@ -42,12 +42,17 @@ def git_checkout(
     detach: bool = False,
     force: bool = False,
 ) -> SafeCmd:
-    """Build a `git checkout` command with validated refs.
+    """Build a `git checkout` command with a revision-only switch operand.
+
+    Switch modes require ``ref`` to resolve as a branch, tag, remote-tracking
+    ref, or commit. An operand that resolves only as a tracked path is refused
+    by Git and leaves the worktree untouched, so this builder never restores
+    paths. Creation mode names a new branch that starts at ``HEAD``.
 
     Parameters
     ----------
     ref : str
-        Reference to check out.
+        Revision to check out.
     create_branch : bool
         When True, create a new branch at the reference.
     detach : bool
@@ -82,6 +87,13 @@ def git_checkout(
             args.append("--force")
 
     args.append(str(git_ref(ref)))
+    if not create_branch:
+        # Git reads a bare `checkout <name>` as a path restore when <name>
+        # matches a tracked file but no branch. A trailing separator forces
+        # <name> to resolve as a revision, and with no pathspec after it Git
+        # refuses a path-only match instead of rewriting the worktree. A
+        # leading separator, by contrast, is the explicit path-restore form.
+        args.append("--")
     return sh.make(GIT)(*args)
 
 

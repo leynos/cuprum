@@ -1458,6 +1458,13 @@ the core builder set and need a custom builder.
 `git_ref()` rejects whitespace, a leading `-`, `..`, `@{`, and other constructs
 that Git would interpret as options or revision syntax.
 
+`git_checkout()` selects revisions only. In its switch modes — the default,
+`force=True`, and `detach=True` — it emits a trailing `--`, so Git must resolve
+the operand as a branch, tag, remote-tracking ref, or commit. A value that
+matches only a tracked path is refused and leaves the worktree unchanged; the
+builder never restores paths. `create_branch=True` names a new branch that
+starts at `HEAD` and emits no separator.
+
 The tar and rsync builders emit `--` before their positional path operands.
 `tar_create()` places it after the archive value, so a source named
 `--checkpoint=1` is archived as a file rather than parsed as an option, and
