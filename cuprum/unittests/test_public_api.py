@@ -11,6 +11,7 @@ import cuprum as c
 from cuprum import (
     context,
     echo_events,
+    exit_status_guard,
     pump_events,
     pump_observation,
     pump_span_events,
@@ -282,6 +283,24 @@ def test_broken_pipe_policy_is_exported_from_its_definition_site() -> None:
     )
     assert "BrokenPipePolicy" in c.__all__, (
         "the policy is public surface; __all__ must name it"
+    )
+
+
+def test_exit_status_guard_is_exported_from_its_definition_site() -> None:
+    """The package-root helper is the exit_status_guard definition."""
+    assert c.install_exit_status_guard is exit_status_guard.install_exit_status_guard, (
+        "install_exit_status_guard must be exported from cuprum.exit_status_guard"
+    )
+    assert "install_exit_status_guard" in c.__all__, (
+        "the helper is public surface; __all__ must name it"
+    )
+
+
+def test_exit_status_guard_takes_no_parameters() -> None:
+    """The guard is process-level, so it configures nothing per call."""
+    signature = inspect.signature(c.install_exit_status_guard)
+    assert not signature.parameters, (
+        "the helper must not take parameters; the process is the whole scope"
     )
 
 
