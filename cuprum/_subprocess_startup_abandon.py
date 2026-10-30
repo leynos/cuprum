@@ -171,7 +171,9 @@ async def _release_captures(
     """Remove any spill file the started consumers had opened.
 
     Runs after the tasks are settled: a consumer still draining into its
-    accumulator could otherwise recreate the file this is removing.
+    accumulator could otherwise recreate the file this is removing. The
+    shared cleanup gives every accumulator its own turn, so one that cannot
+    remove its file does not leave the other stream's file behind.
     """
     with contextlib.suppress(Exception):
         await _cleanup_capture_sinks(captures)
