@@ -54,7 +54,7 @@ when(
 )(_steps.when_build_rsync_command_with_remote_operand)
 then(
     parsers.parse(
-        'the git command argv is "{program}" "{verb}" "{ref}" "{separator}"',
+        'the git command argv is "git" "{verb}" "{ref}" "{separator}"',
     ),
 )(_steps.then_git_argv_matches)
 then("a git ref validation error is raised")(_steps.then_git_ref_error_raised)

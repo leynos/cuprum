@@ -35,6 +35,23 @@ def git_status(*, short: bool = False, branch: bool = False) -> SafeCmd:
     return sh.make(GIT)(*args)
 
 
+def _checkout_options(
+    *,
+    create_branch: bool,
+    detach: bool,
+    force: bool,
+) -> list[str]:
+    """Return the mode flags for one checkout invocation."""
+    if create_branch:
+        return ["-B" if force else "-b"]
+    options: list[str] = []
+    if detach:
+        options.append("--detach")
+    if force:
+        options.append("--force")
+    return options
+
+
 def git_checkout(
     ref: str,
     *,
@@ -77,15 +94,14 @@ def git_checkout(
         msg = "create_branch and detach cannot both be True"
         raise ValueError(msg)
 
-    args: list[str] = ["checkout"]
-    if create_branch:
-        args.append("-B" if force else "-b")
-    else:
-        if detach:
-            args.append("--detach")
-        if force:
-            args.append("--force")
-
+    args = [
+        "checkout",
+        *_checkout_options(
+            create_branch=create_branch,
+            detach=detach,
+            force=force,
+        ),
+    ]
     args.append(str(git_ref(ref)))
     if not create_branch:
         # Git reads a bare `checkout <name>` as a path restore when <name>
