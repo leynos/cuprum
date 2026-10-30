@@ -100,8 +100,9 @@ both equal its PID and a caller can stop it with `os.killpg`.
 
 Ownership transfers when the receipt is returned, and the implementation treats
 that as one indivisible step. The synchronous launch has no suspension point at
-all. The asynchronous launch awaits `_launch_detached` first — a coroutine that
-returns without yielding — and then yields once with `await asyncio.sleep(0)`
+all. The asynchronous launch calls `_launch_detached` first — a plain
+synchronous function that never suspends — and then yields once with
+`await asyncio.sleep(0)`
 before returning the receipt. A cancellation requested while the launch was
 running becomes deliverable at that yield; if it lands there, the caller never
 sees the receipt, so cuprum still owns the worker and kills its group with
