@@ -1533,8 +1533,8 @@ route-specific sequence. The import direction follows: this module imports the
 lifecycle primitives, the stream drain's EOF grace, and `_TeardownPolicy`, and
 the lifecycle module knows nothing about it.
 
-Two guard sites call it. `_start_owned_process` wraps the `start` emission, and
-`_subprocess_stream_run` and `_subprocess_direct_run` wrap their post-spawn
+Three guard sites call it. `_start_owned_process` wraps the `start` emission,
+and `_subprocess_stream_run` and `_subprocess_direct_run` wrap their post-spawn
 setup. The setup guards pass a list, because a tuple returned later never
 exists when a later step fails: `_record_started` appends each task the moment
 it is created, so a consumer that fails to start leaves the consumer already
