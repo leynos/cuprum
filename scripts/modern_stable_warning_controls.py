@@ -171,16 +171,21 @@ def _is_cached_warning_replay(package_state: str, output: str) -> bool:
     return WARNING_DENIAL in output
 
 
+def _child_environment() -> dict[str, str]:
+    """Return the bounded subprocess environment, clearing inherited Make flags."""
+    environment = os.environ.copy()
+    # OVERLAY re-reads os.environ, so a deleted MAKEFLAGS would be re-inherited.
+    environment.update(
+        MAKEFLAGS="", CARGO_BUILD_JOBS="2", CARGO_TERM_COLOR="never", TEST_JOBS="2"
+    )
+    return environment
+
+
 def _run(
     program: SafeCmdBuilder, arguments: tuple[str, ...], cwd: Path
 ) -> tuple[int, str]:
     """Run one allowlisted command with bounded Cargo and test concurrency."""
-    environment = os.environ.copy()
-    environment.pop("MAKEFLAGS", None)
-    environment["CARGO_BUILD_JOBS"] = "2"
-    environment["CARGO_TERM_COLOR"] = "never"
-    environment["TEST_JOBS"] = "2"
-    context = ExecutionContext(cwd=cwd.as_posix(), env=environment)
+    context = ExecutionContext(cwd=cwd.as_posix(), env=_child_environment())
     with scoped(catalogue=CATALOGUE):
         result: CommandResult = program(*arguments).run_sync(context=context)
     output = (result.stdout or "") + (result.stderr or "")

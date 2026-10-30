@@ -48,12 +48,14 @@ inputs:
     default: e381a9675f971082a522907b8381c1054777ea60511043e4c67de5dfddff3029
   cache-size:
     description: >-
-      Ceiling for the cache directory. The archive is restored and re-saved
-      whole, so this bounds the transfer as well as the disk. The default
-      4 GiB ceiling is shared by the debug and Cranelift objects from lint and
-      test, the explicitly pinned modern-stable objects, and the instrumented
-      objects from coverage. These shapes share the cap rather than reserving
-      separate space.
+      Ceiling for the local cache directory used when `backend` is `local`.
+      The calling job restores and re-saves one family's archive whole, so
+      this bounds the transfer as well as the disk. Each build shape,
+      including the explicitly pinned modern-stable shape, has its own cache
+      family and archive, so shapes do not share this cap. Coverage runs on
+      the `gha` backend, which uses no local directory, and a fork arm that
+      falls back to `local` archives nothing. See
+      `docs/ci-cache-ownership.md`.
     required: false
     default: 4G
 outputs:

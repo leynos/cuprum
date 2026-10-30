@@ -1249,7 +1249,7 @@ toolchain-pin contract. Also update each hard-coded pin in:
 
 - `tests/helpers/ci_runners.py`, which lists the expected cache family.
 - `tests/test_ci_modern_stable_contract.py`.
-- `cuprum/unittests/test_cargo_build_warnings_contract.py`.
+- `tests/helpers/cargo_warning_fixture.py`, which owns the fixture pin.
 - `cuprum/unittests/test_modern_stable_make_contract.py`.
 - `docs/ci-cache-ownership.md`, which records the writer table.
 - `docs/modern-stable-validation.md`, which records the pin and its evidence.
