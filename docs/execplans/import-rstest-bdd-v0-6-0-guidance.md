@@ -456,8 +456,8 @@ decision, and the reason is a hard MSRV floor rather than effort or priority.
   minimum for every consumer of all three crates and is recorded in
   `rust/Cargo.toml`, `rust/rust-toolchain.toml`, the `MSRV_TOOLCHAIN` variable
   in the `Makefile`, and the prose in `AGENTS.md`,
-  `docs/adr-011-audited-rust-boundaries.md`, and `docs/developers-guide.md`
-  that states 1.85.0 is the published floor.
+  `docs/adrs/adr-0011-audited-rust-boundaries.md`, and
+  `docs/developers-guide.md` that states 1.85.0 is the published floor.
 
 The code-level migration is small: the single consumer uses no API touched by
 the 0.6.0 breaking changes, so the likely edit is the two version literals plus

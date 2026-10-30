@@ -9,7 +9,7 @@ Integration status: ``rust_pump_stream`` is wired into production through
 production code routes a consume through it; every consume currently uses the
 pure-Python ``_consume_stream``. Consume-side dispatch is deliberately
 deferred, evidence-gated work tracked as Phase 2 of ADR-002
-(``docs/adr-002-additional-rust-components.md``).
+(``docs/adrs/adr-0002-additional-rust-components.md``).
 
 Example
 -------

@@ -65,10 +65,10 @@ and the content boundary.
 
 - [Cuprum design](cuprum-design.md) - system architecture, command model,
   pipeline design, Rust extension strategy, and benchmark policy.
-- [ADR-001: Rust extension](adr-001-rust-extension.md) - accepted decision to
-  add Rust acceleration through PyO3 and maturin.
-- [ADR-002: Additional Rust components](adr-002-additional-rust-components.md) -
-  accepted decision for extending Rust coverage beyond the initial stream
+- [ADR-001: Rust extension](adrs/adr-0001-rust-extension.md) - accepted
+  decision to add Rust acceleration through PyO3 and maturin.
+- [ADR-002: Additional Rust components](adrs/adr-0002-additional-rust-components.md)
+  - accepted decision for extending Rust coverage beyond the initial stream
   backend.
 - [ADR-003: Seven-stage Python lint architecture][adr-003] -
   accepted decision for Ruff and PyPy-backed Pylint, with addenda covering the
@@ -179,31 +179,31 @@ and the content boundary.
   - unsafe inventory, crate contracts, verifier evidence, and trusted
   assumptions for the native stream boundaries.
 
-[adr-003]: adr-003-two-tier-python-linting.md
-[adr-004]: adr-004-interrogate-docstring-gate.md
-[adr-005]: adr-005-unified-rust-availability-probe.md
-[adr-006]: adr-006-context-package-split.md
-[adr-007]: adr-007-subprocess-execution-module-boundaries.md
-[adr-008]: adr-008-rust-pump-observation-channel.md
-[adr-009]: adr-009-enforce-oxford-spelling-in-source.md
-[adr-010]: adr-010-rust-pump-hop-span.md
-[adr-011]: adr-011-audited-rust-boundaries.md
-[adr-012]: adr-012-linux-dev-fast-routing.md
-[adr-013]: adr-013-opt-in-github-actions-presentation-sink.md
-[adr-014]: adr-014-benchmark-gate-telemetry-sink.md
-[adr-015]: adr-015-actions-runner-integration-harness.md
-[adr-016]: adr-016-stable-abi-native-wheels.md
-[adr-017]: adr-017-release-pipeline.md
-[adr-018]: adr-018-typed-environment-policies.md
-[adr-019]: adr-019-control-observation-channel.md
-[adr-020]: adr-020-typed-argument-contract-for-sh-make.md
-[adr-021]: adr-021-process-group-ownership.md
-[adr-022]: adr-022-adopt-nose-duplication-gate.md
-[adr-023]: adr-023-opt-in-telemetry-redaction.md
-[adr-024]: adr-024-captured-command-output-types.md
-[adr-025]: adr-025-bounded-output-delivery.md
-[adr-026]: adr-026-narrowed-results-only-for-complete-text-capture.md
-[adr-027]: adr-027-compile-contracts-in-the-build-graph.md
+[adr-003]: adrs/adr-0003-two-tier-python-linting.md
+[adr-004]: adrs/adr-0004-interrogate-docstring-gate.md
+[adr-005]: adrs/adr-0005-unified-rust-availability-probe.md
+[adr-006]: adrs/adr-0006-context-package-split.md
+[adr-007]: adrs/adr-0007-subprocess-execution-module-boundaries.md
+[adr-008]: adrs/adr-0008-rust-pump-observation-channel.md
+[adr-009]: adrs/adr-0009-enforce-oxford-spelling-in-source.md
+[adr-010]: adrs/adr-0010-rust-pump-hop-span.md
+[adr-011]: adrs/adr-0011-audited-rust-boundaries.md
+[adr-012]: adrs/adr-0012-linux-dev-fast-routing.md
+[adr-013]: adrs/adr-0013-opt-in-github-actions-presentation-sink.md
+[adr-014]: adrs/adr-0014-benchmark-gate-telemetry-sink.md
+[adr-015]: adrs/adr-0015-actions-runner-integration-harness.md
+[adr-016]: adrs/adr-0016-stable-abi-native-wheels.md
+[adr-017]: adrs/adr-0017-release-pipeline.md
+[adr-018]: adrs/adr-0018-typed-environment-policies.md
+[adr-019]: adrs/adr-0019-control-observation-channel.md
+[adr-020]: adrs/adr-0020-typed-argument-contract-for-sh-make.md
+[adr-021]: adrs/adr-0021-process-group-ownership.md
+[adr-022]: adrs/adr-0022-adopt-nose-duplication-gate.md
+[adr-023]: adrs/adr-0023-opt-in-telemetry-redaction.md
+[adr-024]: adrs/adr-0024-captured-command-output-types.md
+[adr-025]: adrs/adr-0025-bounded-output-delivery.md
+[adr-026]: adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md
+[adr-027]: adrs/adr-0027-compile-contracts-in-the-build-graph.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rstest-bdd-guide]: rstest-bdd-users-guide.md
@@ -214,5 +214,5 @@ and the content boundary.
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
-[rfc-0001]: rfcs/0001-execution-interception.md
-[rfc-0002]: rfcs/0002-command-composition-helpers.md
+[rfc-0001]: rfcs/rfc-0001-execution-interception.md
+[rfc-0002]: rfcs/rfc-0002-command-composition-helpers.md

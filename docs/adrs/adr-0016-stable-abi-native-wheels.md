@@ -50,11 +50,11 @@ both.
 - The extension is restricted to the limited API. A future PyO3 feature that
   needs the full API would have to be weighed against per-interpreter builds.
 - Free-threaded CPython builds cannot load `abi3` extensions and continue to
-  use the pure Python wheel. Phase 10 of the [roadmap](roadmap.md) plans a
+  use the pure Python wheel. Phase 10 of the [roadmap](../roadmap.md) plans a
   `cp315-abi3.abi3t` wheel under PEP 803 after 0.2.0.
 - The per-interpreter compiler-cache families in CI remain. Switching the
   build interpreter still recompiles `pyo3-ffi`, `pyo3`, and the extension,
   because the pyo3 build script records the interpreter's configuration, so
   archives are not shown to be shareable. Collapsing the families needs a CI
-  measurement first; see [CI cache ownership](ci-cache-ownership.md).
+  measurement first; see [CI cache ownership](../ci-cache-ownership.md).
 - Windows arm64 wheels remain out of scope and are planned for a later beta.

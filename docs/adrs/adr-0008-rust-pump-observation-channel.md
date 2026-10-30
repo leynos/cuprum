@@ -185,7 +185,7 @@ ruled Option A out.
   remember. It is documented on both emitters and in the developers' guide.
 
 This supersedes the position recorded in Proposal 3 of
-[ADR-002](adr-002-additional-rust-components.md) for these two events only:
+[ADR-002](adr-0002-additional-rust-components.md) for these two events only:
 their stability and cardinality are now established by a closed enum and a
 fixed label set. Rust-side buffer and throughput counters remain out of the
 public runtime API.

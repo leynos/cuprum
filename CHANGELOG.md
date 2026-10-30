@@ -110,8 +110,9 @@ _Applications upgrading from 0.1 should follow the
   own module, `safe_cmd.py` had 257 lines, so the 84 that `start` then
   contributed left it at 341 rather than carrying it past the repository's
   400-line module ceiling. See the
-  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-10-12 for the deferred-import direction the two classes now take.
+  [ADR-007](docs/adrs/adr-0007-subprocess-execution-module-boundaries.md)
+  addendum of 2026-10-12 for the deferred-import direction the two classes now
+  take.
 - **The spawn seam moves to `cuprum._subprocess_spawn`:**
   `_SubprocessExecution`, `_spawn_subprocess`, and `_start_owned_process` left
   `cuprum/_subprocess_execution.py`, which had grown past the 400-line module
@@ -123,8 +124,8 @@ _Applications upgrading from 0.1 should follow the
   for the path it is intercepting: `cuprum._subprocess_spawn` for `run()` and
   `cuprum._line_stream.coordinator` for `lines()`, while `SafeCmd.start()`
   resolves it through `cuprum._process_handle.tasks`. See the
-  [ADR-007](docs/adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-10-11.
+  [ADR-007](docs/adrs/adr-0007-subprocess-execution-module-boundaries.md)
+  addendum of 2026-10-11.
 - **Line-callback event emission stops rebuilding invariant metadata:** The
   observe-hook path resolved `program`, `argv` (including the full
   program-prefixed tuple), `cwd`, `env`, `pid`, tags, and the execution
@@ -256,7 +257,7 @@ _Applications upgrading from 0.1 should follow the
   adapter projects that event to `cuprum_group_teardowns_total{outcome}` and,
   on the settlement timeout alone, a `cuprum_group_settle_seconds` histogram,
   so a teardown that left a process alive is a countable series. See
-  [ADR-021](docs/adr-021-process-group-ownership.md)
+  [ADR-021](docs/adrs/adr-0021-process-group-ownership.md)
   ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state
@@ -752,9 +753,9 @@ _Applications upgrading from 0.1 should follow the
   `ValueError`; direct adapter toggle values retain `TypeError`. Both flags
   default to `False`, so unflagged runs are unchanged. The flags are a spelling
   of the adapter decision in
-  [ADR-013](docs/adr-013-opt-in-github-actions-presentation-sink.md), which
-  records why they construct the sink rather than teach the execution layer
-  workflow commands ([#375](https://github.com/leynos/cuprum/issues/375)).
+  [ADR-013](docs/adrs/adr-0013-opt-in-github-actions-presentation-sink.md),
+  which records why they construct the sink rather than teach the execution
+  layer workflow commands ([#375](https://github.com/leynos/cuprum/issues/375)).
 - **`GitHubActionsSink` framing toggles:** The adapter's constructor takes
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above
