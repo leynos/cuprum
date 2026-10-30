@@ -222,33 +222,27 @@ def _assert_bounded_delivery(
     )
 
 
-def test_fast_hook_retention_stays_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A flood of lines observed by a fast hook is delivered and bounded."""
-    asyncio.run(_fast_hook_case(monkeypatch))
+@pytest.mark.parametrize(
+    ("hook_type", "line_count"),
+    [(_FastHook, _LINE_COUNT), (_SlowHook, 2_000)],
+    ids=["fast", "slow"],
+)
+def test_hook_speed_does_not_change_retention_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    hook_type: type[_FastHook] | type[_SlowHook],
+    line_count: int,
+) -> None:
+    """A flood observed by a fast or slow hook is delivered and bounded."""
+    asyncio.run(_hook_speed_case(monkeypatch, hook_type(), line_count))
 
 
-async def _fast_hook_case(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the flood under a fast observer and check the bound."""
-    cmd, catalogue = _chatty_command()
-    hook = _FastHook()
-    probe = _RetentionProbe()
-    probe.install(monkeypatch)
-
-    await _run_observed(catalogue, hook, cmd.run)
-
-    _assert_bounded_delivery(hook.seen, probe, line_count=_LINE_COUNT)
-
-
-def test_slow_hook_retention_stays_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hook speed must not change the retention bound."""
-    asyncio.run(_slow_hook_case(monkeypatch))
-
-
-async def _slow_hook_case(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the flood under a slow observer and check the bound."""
-    line_count = 2_000
+async def _hook_speed_case(
+    monkeypatch: pytest.MonkeyPatch,
+    hook: _FastHook | _SlowHook,
+    line_count: int,
+) -> None:
+    """Run the flood under ``hook`` and check the retention bound."""
     cmd, catalogue = _chatty_command(line_count)
-    hook = _SlowHook()
     probe = _RetentionProbe()
     probe.install(monkeypatch)
 
