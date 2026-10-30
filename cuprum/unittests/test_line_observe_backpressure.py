@@ -21,7 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum import sh
-from cuprum._observability import _OBSERVE_TASK_CEILING
+from cuprum._observe_task_retention import _OBSERVE_TASK_CEILING
 from cuprum._pipeline_types import _StageObservation
 from cuprum.context import ScopeConfig, scoped
 from tests.helpers.catalogue import python_catalogue

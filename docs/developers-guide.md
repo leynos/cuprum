@@ -1641,11 +1641,12 @@ append, so no explicit lock is required. Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
 
 That list is bounded. `_OBSERVE_TASK_CEILING` (256, in
-`cuprum/_observability.py`) caps the unfinished tasks one execution retains. It
-matches `_LINE_QUEUE_CAPACITY` in `cuprum/_line_stream.py`: the two describe
-the same quantity — how much asynchronous work one observed run may have in
-flight. Because a line event is emitted per decoded line even with capture off,
-an unbounded list lets a chatty child exhaust parent memory. The rules:
+`cuprum/_observe_task_retention.py`) caps the unfinished tasks one execution
+retains. It matches `_LINE_QUEUE_CAPACITY` in `cuprum/_line_stream.py`: the two
+describe the same quantity — how much asynchronous work one observed run may
+have in flight. Because a line event is emitted per decoded line even with
+capture off, an unbounded list lets a chatty child exhaust parent memory. The
+rules:
 
 - `_prune_finished_hook_tasks(pending_tasks)` mutates the list **in place**.
   Never rebind it: every pipeline stage retains into the same object, and a new
@@ -7501,6 +7502,7 @@ Table 1: Line-observation implementation boundaries
 | `cuprum/_line_stream/result_assembly.py`                                                                                                                        | Owns `_assemble_line_stream_result`; the coordinator imports it directly and supplies `_wait_for_line_stream_exit`; it is not re-exported.                                                                         |
 | `cuprum/_line_iteration.py`                                                                                                                                     | Exposes `LineStream`, owns the deferred re-authorization in `_iter_line_events`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
 | `cuprum/_line_callbacks.py`                                                                                                                                     | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                                                                           |
+| `cuprum/_line_hook_chaining.py`                                                                                                                                 | Chains several per-line hooks into one fan-out, so every hook sees each line and the drain loop awaits all of their outcomes.                                                                                      |
 | `cuprum/_subprocess_streams.py`                                                                                                                                 | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                                                                                 |
 | `cuprum/_execution_tracking.py`                                                                                                                                 | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                                                                                    |
 | `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`, `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                                                                            |

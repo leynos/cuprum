@@ -21,9 +21,11 @@ import types
 import typing as typ
 
 from cuprum._observability import (
-    _OBSERVE_TASK_CEILING,
     _emit_exec_event,
     _ExecEventEmissionError,
+)
+from cuprum._observe_task_retention import (
+    _OBSERVE_TASK_CEILING,
     _prune_finished_hook_tasks,
 )
 from cuprum.events import (

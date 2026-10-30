@@ -13,7 +13,7 @@ import typing as typ
 import pytest
 from pytest_bdd import scenario, then
 
-from cuprum._observability import _OBSERVE_TASK_CEILING
+from cuprum._observe_task_retention import _OBSERVE_TASK_CEILING
 from tests.behaviour._structured_events_support import expected_line_events
 
 # pytest-bdd resolves a step by looking for the fixture it created in the

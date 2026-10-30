@@ -22,11 +22,11 @@ from cuprum._line_callbacks import (
     _compose_line_callbacks,
     _LineEmissionContext,
 )
-from cuprum._observability import (
+from cuprum._observability import _wait_for_exec_hook_tasks
+from cuprum._observe_task_retention import (
     _await_hook_capacity,
     _has_hook_capacity,
     _prune_finished_hook_tasks,
-    _wait_for_exec_hook_tasks,
 )
 from cuprum.unittests.test_line_event_emission_support import _make_observation
 
