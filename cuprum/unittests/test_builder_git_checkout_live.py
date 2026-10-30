@@ -200,7 +200,9 @@ def test_path_only_operand_cannot_restore_a_tracked_file(
     tracked = repo.root / path
     tracked.write_text(edited, encoding="utf-8")
     before = _snapshot(repo)
-    assert tracked.read_text(encoding="utf-8") == edited
+    assert tracked.read_text(encoding="utf-8") == edited, (
+        "the tracked file must start with the uncommitted edit"
+    )
     assert path in before.status, "the edit must start out modified"
 
     result = _run_checkout(repo, path, **kwargs)
@@ -293,7 +295,9 @@ def test_clean_repository_checkout_resolves_tag_and_commit(
     after = _snapshot(repo)
     assert after.head == expected_head, "HEAD must point at the selected commit"
     assert not after.branch, "a tag or commit checkout must detach HEAD"
-    assert (repo.root / "notes.txt").read_text(encoding="utf-8") == expected_text
+    assert (repo.root / "notes.txt").read_text(encoding="utf-8") == expected_text, (
+        "the selected revision's file contents must be checked out"
+    )
 
 
 @pytest.mark.timeout(_PYTEST_TIMEOUT)
