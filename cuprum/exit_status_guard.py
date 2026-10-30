@@ -77,10 +77,12 @@ def install_exit_status_guard() -> None:
     Notes
     -----
     Call this once at a command-line entry point, before writing any output.
-    Handlers registered afterwards run before the guard, and because the guard
-    redirects the descriptor, those handlers are protected too when they write
-    through the descriptor or ``sys.stdout``. A handler holding a reference to
-    a descriptorless stream object cannot be protected.
+    ``atexit`` runs handlers in reverse registration order, so a handler
+    registered afterwards runs before the guard and receives no protection for
+    a write it flushes itself; such a handler must handle ``BrokenPipeError``.
+    The guard protects only output still buffered when its callback runs, and
+    a handler holding a reference to a descriptorless stream object cannot be
+    protected at all.
 
     This is not part of :class:`cuprum.echo_events.BrokenPipePolicy`. That
     policy is per run and covers cuprum's echo path; this concern is per

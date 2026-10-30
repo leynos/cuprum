@@ -1323,3 +1323,26 @@ implemented, and whether a caller can find out what it promises.
   - Success: every documented example is executable and is executed by the
     behavioural suite, and the guides state the unchanged default, the
     bounded-memory guarantee's byte-mode exception, and the file lifetime.
+
+## 15. Opt-in exit-status guard for a closed output pipe (issue `#671`)
+
+Idea: a command-line tool that relays a child's output still chooses its own
+exit status. CPython flushes the standard streams after every `atexit`
+callback, so a reader that closes before shutdown makes `Py_FinalizeEx` report
+failure and replaces the requested status with 120. The guard is the
+per-process complement to `BrokenPipePolicy`, which governs cuprum's echo
+writes during a run.
+
+- [x] 15.1. Install a process-level guard that preserves the requested status.
+  - Completion evidence (2026-10-30): `cuprum/exit_status_guard.py` exports
+    `install_exit_status_guard()`, one idempotent `atexit` registration with no
+    import-time side effect. The hook flushes `sys.stdout` and `sys.stderr`
+    and, only for `BrokenPipeError`, points an existing descriptor at the null
+    device or replaces a descriptorless stream with a discarding sink; `None`,
+    healthy, and deliberately closed streams are left alone, and the hook never
+    raises. Unit tests cover each branch, including a concurrent install and a
+    fresh-interpreter import check, and
+    `tests/behaviour/test_exit_status_guard_pipe.py` proves statuses 0 and 3
+    survive a real closed pipe while an unguarded control reproduces 120. The
+    users' guide, design document §7.4, and developers' guide record the
+    ordering rules and limits.

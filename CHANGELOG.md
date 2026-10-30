@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`cuprum.install_exit_status_guard()` preserves the exit status through a
+  closed output pipe:** CPython flushes `sys.stdout` and `sys.stderr` after
+  every `atexit` callback, so a reader that has gone away replaces the
+  application's requested status with 120. The opt-in, per-process helper
+  registers one shutdown callback that flushes each standard stream and
+  redirects only a stream whose flush raises `BrokenPipeError`, leaving
+  healthy, deliberately closed, and `None` streams alone. It is the per-process
+  complement to `BrokenPipePolicy`, which covers echoes during a run
+  ([#671](https://github.com/leynos/cuprum/issues/671)).
+
 ### Fixed
 
 - **`rsync_sync()` refuses remote operands (breaking):** both operands are now
@@ -143,6 +155,7 @@ _Applications upgrading from 0.1 should follow the
   captures under
   [`docs/profiling/5-2-1-line-event-emission/`](docs/profiling/5-2-1-line-event-emission/README.md).
 
+<!-- markdownlint-disable-next-line MD024 -->
 ### Added
 
 - **Streaming stdin:** `stdin=StdinStream(chunks=...)` feeds a child from an
