@@ -27,15 +27,15 @@ _READY_LINE = "ready"
 _MARKER_DEADLINE_SECONDS = 10.0
 
 _CHILD_TEMPLATE = """\
-import os
 import sys
 import time
+from pathlib import Path
 
 sys.stdout.write({ready!r} + chr(10))
 sys.stdout.flush()
-marker = sys.argv[1]
+marker = Path(sys.argv[1])
 deadline = time.monotonic() + {deadline}
-while not os.path.exists(marker):
+while not marker.exists():
     if time.monotonic() > deadline:
         raise SystemExit(97)
     time.sleep(0.01)

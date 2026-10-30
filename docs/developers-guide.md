@@ -7631,11 +7631,12 @@ closes before shutdown turns the requested exit status into 120.
 `cuprum/exit_status_guard.py` owns the opt-in `install_exit_status_guard()`
 entry point: one idempotent `atexit` registration, a flush per standard stream,
 and a redirect — `dup2` onto the null device, or a discarding sink when the
-stream has no descriptor — only for `BrokenPipeError`. Keep the hook
-independent of the echo path and of `BrokenPipePolicy`, which cover writes
-during a run; the guard covers the interpreter's final flush after it. Its unit
-tests use stream doubles, and `tests/behaviour/test_exit_status_guard_pipe.py`
-proves the real-pipe contract, including a control that reproduces status 120.
+stream has no descriptor or the redirect fails — only for `BrokenPipeError`.
+Keep the hook independent of the echo path and of `BrokenPipePolicy`, which
+cover writes during a run; the guard covers the interpreter's final flush after
+it. Its unit tests use stream doubles, and
+`tests/behaviour/test_exit_status_guard_pipe.py` proves the real-pipe contract,
+including a control that reproduces status 120.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
