@@ -13,7 +13,11 @@ returns ``None`` so the zero-callback drain path keeps its current cost.
 
 The composed callback returns whatever ``on_line`` returned, so a hook that
 answers with an awaitable holds the read loop: that is what lets the
-``lines()`` driver's bounded queue push back on a chatty child.
+``lines()`` driver's bounded queue push back on a chatty child. Observe-hook
+work is bounded the same way: once the run retains
+:data:`cuprum._observability._OBSERVE_TASK_CEILING` unfinished observer tasks,
+the next line's observation waits for one of them to finish, which holds the
+read loop and, through it, the child's pipe.
 """
 
 from __future__ import annotations
@@ -23,6 +27,11 @@ import functools
 import inspect
 import typing as typ
 
+from cuprum._observability import (
+    _OBSERVE_TASK_CEILING,
+    _await_hook_capacity,
+    _has_hook_capacity,
+)
 from cuprum.events import ExecEvent
 from cuprum.lines import (
     LineEvent,
@@ -33,6 +42,7 @@ from cuprum.lines import (
 )
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import collections.abc as cabc
     from pathlib import Path
 
@@ -157,6 +167,10 @@ class _LineEventEmitter:
     emit_event:
         The observation's own dispatcher, bound rather than called, so the
         emission still runs through ``_emit_event``.
+    pending_tasks:
+        The run-wide list the observation retains its async hook tasks on.
+        It is shared by every stage of a pipeline, so capacity measured here
+        is capacity for the whole run rather than for this stream alone.
 
     """
 
@@ -174,6 +188,15 @@ class _LineEventEmitter:
     exec_id: ExecId
     wall_clock: cabc.Callable[[], float]
     emit_event: cabc.Callable[[ExecEvent], None]
+    pending_tasks: list[asyncio.Task[None]]
+
+    def has_capacity(self) -> bool:
+        """Return whether another observer task may be scheduled now."""
+        return _has_hook_capacity(self.pending_tasks, _OBSERVE_TASK_CEILING)
+
+    async def await_capacity(self) -> None:
+        """Wait until another observer task may be scheduled."""
+        await _await_hook_capacity(self.pending_tasks, _OBSERVE_TASK_CEILING)
 
     def emit_line(self, line: str) -> None:
         """Emit one line event from the values bound at preparation time."""
@@ -238,6 +261,7 @@ def _line_event_emitter(
         exec_id=observation.exec_id,
         wall_clock=observation.wall_clock,
         emit_event=observation._emit_event,
+        pending_tasks=observation.pending_tasks,
     )
 
 
@@ -246,6 +270,18 @@ def _compose_line_callbacks(
     context: _LineEmissionContext,
 ) -> cabc.Callable[[str], _LineHookOutcome] | None:
     """Compose the observe-hook emission and the user ``on_line`` per line.
+
+    Three shapes are possible. With nothing observing the stream the result is
+    ``None``. With observation capacity available the callback emits and calls
+    ``on_line`` inline, returning the hook's outcome unchanged so the caller
+    still owns the backpressure decision. At the retention ceiling it returns
+    a coroutine instead: that coroutine waits for a slot, emits, and then
+    calls ``on_line``, preserving the observation-before-callback order while
+    holding the read loop for as long as the wait lasts.
+
+    Only the last shape suspends. Keeping the other two synchronous means a
+    line whose observation fits costs exactly what it cost before, and the
+    caller's hook is never delayed behind an unrelated scheduling turn.
 
     Returns
     -------
@@ -256,21 +292,52 @@ def _compose_line_callbacks(
         ``on_line`` returned, so a hook that applies backpressure is passed
         through to the caller's ``await``.
     """
-    has_observe_hooks = bool(observation.hooks.observe_hooks)
-    if not has_observe_hooks and context.on_line is None:
+    emitter = _line_event_emitter(observation, context)
+    if emitter is None and context.on_line is None:
         return None
 
-    emitter = _line_event_emitter(observation, context)
-
     def emit_line(line: str) -> _LineHookOutcome:
-        """Fan one line out, returning the hook's awaitable when it has one."""
-        if emitter is not None:
+        """Fan one line out, deferring observation when the bound is reached."""
+        if emitter is None:
+            return _invoke_on_line(line, context=context)
+        if emitter.has_capacity():
             emitter.emit_line(line)
-        if context.on_line is None:
-            return None
-        return context.on_line(_stamp_line(line, context=context))
+            return _invoke_on_line(line, context=context)
+        return _emit_line_when_capacity(emitter, line, context=context)
 
     return emit_line
+
+
+def _invoke_on_line(
+    line: str,
+    *,
+    context: _LineEmissionContext,
+) -> _LineHookOutcome:
+    """Stamp ``line`` and hand it to the caller's hook, when one is registered."""
+    if context.on_line is None:
+        return None
+    return context.on_line(_stamp_line(line, context=context))
+
+
+async def _emit_line_when_capacity(
+    emitter: _LineEventEmitter,
+    line: str,
+    *,
+    context: _LineEmissionContext,
+) -> None:
+    """Wait for observer capacity, then emit ``line`` and call ``on_line``.
+
+    Emitting inside the coroutine means a synchronous observation failure
+    reaches the awaiting drain loop as a raised exception before ``on_line``
+    runs, so a callback never observes a line whose event was not dispatched.
+    The wait itself is cancelled without disturbing the observer tasks it was
+    waiting on; they belong to the run and are settled by its final drain.
+    """
+    await emitter.await_capacity()
+    emitter.emit_line(line)
+    outcome = _invoke_on_line(line, context=context)
+    if outcome is not None:
+        await outcome
 
 
 def _compose_observation_line_callback(
