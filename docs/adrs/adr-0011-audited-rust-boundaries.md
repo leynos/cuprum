@@ -159,12 +159,12 @@ completeness correction; the optional pure-wheel backend is unchanged.
 - Verus, Kani, and Miri have different scopes. Tool limitations, trusted
   syscall and interpreter assumptions, bounds, and excluded targets must stay
   visible in
-  [Rust boundary verification and unsafe inventory](rust-boundary-verification.md).
+  [Rust boundary verification and unsafe inventory](../rust-boundary-verification.md).
 
 ## Supersession and related decisions
 
-This decision refines [ADR-001](adr-001-rust-extension.md) and
-[ADR-002](adr-002-additional-rust-components.md) by preserving the optional
+This decision refines [ADR-001](adr-0001-rust-extension.md) and
+[ADR-002](adr-0002-additional-rust-components.md) by preserving the optional
 PyO3 extension while separating its safe policy and native resource boundaries.
 The historical `fd_ownership_model.rs` remains useful provenance for the
 earlier bounded model, but it is not the current ownership implementation and
@@ -234,7 +234,7 @@ Tests needing real descriptors or pipes are compiled out under Miri, and
 generated property cases are bounded to 16; both settings bound runtime without
 weakening interpretation. The per-path inventory and the excluded tests remain
 in
-[Rust boundary verification and unsafe inventory](rust-boundary-verification.md).
+[Rust boundary verification and unsafe inventory](../rust-boundary-verification.md).
 
 ## Addendum (2026-09-27): Windows synchronous native I/O capability
 

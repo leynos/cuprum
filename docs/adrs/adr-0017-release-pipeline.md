@@ -163,7 +163,7 @@ its index.
 Each phase writes one bounded JSONL record through
 `.github/actions/release-telemetry`, following the benchmark-gate telemetry
 precedent
-([ADR-014](adr-014-benchmark-gate-telemetry-sink.md), [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md)).
+([ADR-014](adr-0014-benchmark-gate-telemetry-sink.md), [CI benchmark-gate telemetry](../ci-benchmark-gate-telemetry.md)).
 `release_phase_outcomes_total` was first written as schema version 1, with
 labels `operation` (`check_version`, `attest`, `draft_release`, `publish_pypi`,
 `github_upload`, `publish_release`), `outcome` (`success`, `failure`,
@@ -197,7 +197,7 @@ a consumer.
 four modules use only the Python standard library, not Cyclopts or Cuprum, and
 the entry points run under the runner's preinstalled `python3` rather than
 through `uv run`. This is a deliberate, documented exception to
-[scripting standards](scripting-standards.md): `publish-pypi` holds the PyPI
+[scripting standards](../scripting-standards.md): `publish-pypi` holds the PyPI
 OIDC credential and must not resolve any third-party package, from PyPI or
 otherwise, while that credential is live. Every network call these scripts
 might otherwise make instead stays in the workflow's own `curl` and `gh` steps,
@@ -217,7 +217,7 @@ which the scripts only plan for.
   `publish-release` can write to the release.
 - Publication history is durably observable through the `release-telemetry-*`
   artefacts without adding an external telemetry service, secret, or dashboard,
-  mirroring [ADR-014](adr-014-benchmark-gate-telemetry-sink.md).
+  mirroring [ADR-014](adr-0014-benchmark-gate-telemetry-sink.md).
 - The release library and its three entry points intentionally diverge from
   the repository's Cyclopts-and-Cuprum scripting baseline; that divergence is
   confined to modules that run only inside `release.yml`, immediately before or
@@ -241,7 +241,7 @@ which the scripts only plan for.
   the phase rather than guessing, which is deliberate but means a PyPI-side
   incident can block a release until it resolves.
 - Windows arm64 wheels are out of scope for this pipeline; see
-  [ADR-016](adr-016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
+  [ADR-016](adr-0016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
 
 ## Addendum (2026-10-26): verify provenance before carrying assets
 

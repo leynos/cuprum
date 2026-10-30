@@ -10,7 +10,7 @@ Accepted on 2026-10-19.
 
 ## Context and problem statement
 
-[ADR-024](adr-024-captured-command-output-types.md) decided that "every
+[ADR-024](adr-0024-captured-command-output-types.md) decided that "every
 single-command text run that captures output constructs `CapturedResult`". It
 was written when capture was one boolean: either both streams were retained as
 text, or neither was. Two later changes break that equivalence.

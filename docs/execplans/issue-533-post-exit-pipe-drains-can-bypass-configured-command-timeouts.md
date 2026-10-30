@@ -109,7 +109,7 @@ time of writing:
   command timeouts". Filed against revision `ebd6a41e4435`; severity medium,
   confidence high. `ebd6a41e4435` is an ancestor of the current `main`
   (`c38459100`), with 51 commits between.
-- `docs/adr-021-process-group-ownership.md` — process group ownership and
+- `docs/adrs/adr-0021-process-group-ownership.md` — process group ownership and
   descendant cleanup. This plan is the deadline half of the same story and
   reuses the reconciliation points ADR 021 established.
 - `docs/cuprum-design.md` — the streamed-run and pipeline designs. Sections
@@ -3259,9 +3259,10 @@ Requirement: `ISS533`, repository documentation policy. Deliverables:
    delivered stay delivered.
 2. `docs/cuprum-design.md`: the post-exit boundary (1770–1782), the timeout
    translation (1937–1973) and pipeline collection (3043–3053).
-3. `docs/adr-021-process-group-ownership.md`: append (never rewrite) a note
-   that the deadline is what makes the group settlement reachable when a leader
-   exits early, or record in the `Decision log` why no amendment is needed.
+3. `docs/adrs/adr-0021-process-group-ownership.md`: append (never rewrite) a
+   note that the deadline is what makes the group settlement reachable when a
+   leader exits early, or record in the `Decision log` why no amendment is
+   needed.
 4. Full validation: every new module, plus
    `test_timeout_capture_contract.py`,
    `test_capture_eof_grace_observability.py`,

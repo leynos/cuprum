@@ -903,7 +903,7 @@ escalation, not a workaround.
   produced a real conflict.** After the push of `068cc43a`, `origin/main`
   advanced from `c65d843c` to `a592b50c` ("RFC 0001: Execution interception for
   test doubles and passthrough (#517)", one commit, touching `docs/contents.md`,
-  `docs/rfcs/0001-execution-interception.md`, and `docs/roadmap.md`).
+  `docs/rfcs/rfc-0001-execution-interception.md`, and `docs/roadmap.md`).
   `git merge-tree --write-tree --messages HEAD origin/main` returned rc=1 with
   exactly one conflicted path, `docs/roadmap.md`. The branch was rebased onto
   `a592b50c` as `86449239`, 45 commits, no merge commits.
@@ -3084,13 +3084,13 @@ No upstream Terms of Reference or technical design revision covers this change.
 The governing artefacts are the issue itself, `AGENTS.md`, and the existing
 accepted decisions it must not contradict:
 
-- `docs/adr-006-context-package-split.md` — the `cuprum/context/` package
+- `docs/adrs/adr-0006-context-package-split.md` — the `cuprum/context/` package
   layout this change extends.
-- `docs/adr-007-subprocess-execution-module-boundaries.md` — the private
+- `docs/adrs/adr-0007-subprocess-execution-module-boundaries.md` — the private
   subprocess module boundaries the spawn edits live inside.
-- `docs/adr-018-typed-environment-policies.md` — the nearest precedent for a
-  typed, scoped policy carried on `CuprumContext` and projected into telemetry.
-  This change deliberately mirrors its shape.
+- `docs/adrs/adr-0018-typed-environment-policies.md` — the nearest precedent
+  for a typed, scoped policy carried on `CuprumContext` and projected into
+  telemetry. This change deliberately mirrors its shape.
 
 Trace. The rightmost column is a test *concern*, not a module path: this
 repository has no `tests::` namespace, so each name below groups the artefacts

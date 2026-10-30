@@ -390,7 +390,7 @@ target `cuprum._pipeline_spawn`, the module that now resolves it.
 ## Addendum (2026-09-14): stream-wiring split for the module-size ceiling
 
 Routing mirrored output through an opt-in presentation-sink session (see
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)) added sink
+[ADR-013](adr-0013-opt-in-github-actions-presentation-sink.md)) added sink
 resolution to `_subprocess_execution`, which pushed that module back over the
 400-line `max-module-lines` ceiling whose suppression Option B removed. The
 wiring half moves to a new cohesive module rather than reintroducing an
@@ -584,7 +584,7 @@ and the rest of that addendum still stands.
 Publishing the alias is what lets callers annotate their own wrappers with the
 same domain the builders enforce, without repeating the union or reaching for
 `object`. The contract itself, including which values are rejected at run time,
-is recorded in [ADR-020](adr-020-typed-argument-contract-for-sh-make.md).
+is recorded in [ADR-020](adr-0020-typed-argument-contract-for-sh-make.md).
 
 ## Addendum (2026-10-11): the pipeline wait state split from its orchestration
 

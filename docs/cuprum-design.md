@@ -589,7 +589,7 @@ result is returned unchanged, two present text streams produce a captured copy,
 and an unavailable stream raises `ValueError`. This also prevents an uncaptured
 diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
-[ADR-024](adr-024-captured-command-output-types.md).
+[ADR-024](adrs/adr-0024-captured-command-output-types.md).
 
 `CapturedResult` is constructed only when both settled payloads are decoded
 text. A run that captures one stream and not the other, or whose
@@ -599,7 +599,7 @@ the record's `path` rather than in the payload, and the narrowed class cannot
 say so without inventing an empty string. A default `RunOutputOptions()` run
 captures both streams in full, so it is unaffected; the restriction and its
 consequences are recorded in
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md).
 
 The `RunOutputOptions | None` overload accepts variables that may hold either
 explicit options or `None` and returns `CommandResult`. Its broader return type
@@ -761,7 +761,7 @@ capture. The invariants that follow from that:
 
 `ExecEvent.capture_mode` names which of the two a run used, so telemetry can
 distinguish them; see [execution events](#71-execution-events) below and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -1199,12 +1199,12 @@ ______________________________________________________________________
 
 ## 7. Observability and Logging
 
-[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines an opt-in redaction
-policy at export boundaries. Raw execution observations remain available to
-trusted consumers; configured logging, tracing, argv-derived presentation
-titles, and explicitly wrapped observers receive sanitized projections.
-Execution inputs and captured results remain unchanged, and metric labels
-retain their bounded vocabulary.
+[ADR-023](adrs/adr-0023-opt-in-telemetry-redaction.md) defines an opt-in
+redaction policy at export boundaries. Raw execution observations remain
+available to trusted consumers; configured logging, tracing, argv-derived
+presentation titles, and explicitly wrapped observers receive sanitized
+projections. Execution inputs and captured results remain unchanged, and metric
+labels retain their bounded vocabulary.
 
 Cuprum provides primitives to make command execution observable in a structured
 way.
@@ -1460,7 +1460,7 @@ completed native cleanup and one observation of
 metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
 bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
 counters without extending the closed `ExecPhase` contract. See
-[ADR-008](adr-008-rust-pump-observation-channel.md).
+[ADR-008](adrs/adr-0008-rust-pump-observation-channel.md).
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
 observation channel, not an extension of `ExecEvent`. A caller registers the
@@ -1545,8 +1545,8 @@ worker with a byte-bounded queue shared by stdout and stderr. Saturated chunks
 are dropped from presentation and reported; capture remains complete. The
 worker has a bounded shutdown drain and reports output left queued or in flight
 as undelivered if it must be abandoned. See
-[ADR-025](adr-025-bounded-output-delivery.md) for the delivery, ownership, and
-failure contract.
+[ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the delivery,
+ownership, and failure contract.
 
 Command and pipeline configuration keep their destination resolution and
 partial-setup cleanup local to their execution modules because each path owns
@@ -1669,7 +1669,7 @@ that stream's payload is `None`, and the file is the only place its text is
 kept. A single-command text run whose payloads are not both decoded text is
 therefore reported as a `CommandResult` rather than the narrowed
 `CapturedResult`, which promises two strings; see
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md).
 
 The sink seam is asynchronous, `absorb` and `finalize` included, because
 retention is the child's output and a file-backed capture cannot retain a chunk
@@ -1686,7 +1686,7 @@ write before teardown closes and unlinks the file underneath it. The two
 in-memory policies answer without suspending, which costs a coroutine step per
 chunk and keeps one protocol for the drain rather than a policy test between
 two. The leaf module and the protocol change it serves are recorded in the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-10-18.
 
 A storage failure is absorbed rather than raised: a failure to retain output is
@@ -2057,7 +2057,7 @@ implemented with the following decisions:
   child details, but its `settled(error)` event still records the terminal and
   failure counters with the effective mode. The typed policy and its
   composition rules are specified in
-  [ADR-018](adr-018-typed-environment-policies.md).
+  [ADR-018](adrs/adr-0018-typed-environment-policies.md).
 - **Capture mode:** every event carries `ExecEvent.capture_mode`, naming how the
   execution reports its captures: `CaptureMode.TEXT` for a decoded run and
   `CaptureMode.BYTES` for one started with `run_bytes()` or `run_bytes_sync()`.
@@ -2077,7 +2077,7 @@ implemented with the following decisions:
   identical in every counter and span attribute, leaving a timeout or teardown
   failure unattributable to the mode that hit it. The byte-preserving capture
   path the mode names is the addendum of 2026-10-01 in
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
@@ -2295,8 +2295,8 @@ preserving the `SafeCmd.run()` execution contract:
   that module stays within the Pylint module ceiling, and
   `_subprocess_execution` re-exports `_spawn_subprocess`, so callers and
   monkeypatch targets resolve the same name as before. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured payloads and settled
@@ -2323,8 +2323,8 @@ preserving the `SafeCmd.run()` execution contract:
   monkeypatch targets resolve the same names as before. This boundary exists to
   keep `_subprocess_execution` within the Pylint module ceiling once the
   idle-heartbeat wiring joined the stream configs; see the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-16.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
   validation and normalization, the `_IdleSchedule` state machine that decides
   when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
@@ -2363,8 +2363,8 @@ preserving the `SafeCmd.run()` execution contract:
   termination that lets it reach EOF. It was split out of `_subprocess_wait`,
   which re-exports its names, so the single-command run, the line-stream
   coordinator, and the timeout test modules keep one import path. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
   failure rather than on the child's exit: `_await_exit_or_writer_failure`
   waits on the exit wait and the stdin writer together and returns the exit
@@ -2375,8 +2375,8 @@ preserving the `SafeCmd.run()` execution contract:
   module namespace. It was split out of `_subprocess_wait`, which re-exports
   the name, so the single-command run, the line-stream coordinator, and the
   timeout test modules keep one import path. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside
@@ -2551,7 +2551,7 @@ public command APIs or creates subprocesses. This separation keeps the timeout
 and stdin lifecycles independently testable without altering observable
 execution, cancellation, timeout, or event semantics. The accepted rationale
 and alternatives are recorded in
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
 
 ### 8.2 Pipelines and Structured Concurrency
 
@@ -2624,7 +2624,7 @@ ended the run, so closing afterwards would record the aggregate — an `error`
 annotation standing in for a timeout — and a drain that raised would skip the
 close entirely. The module was split out of `cuprum/sh.py` to resolve a
 file-level CodeScene `Low Cohesion` finding; see the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-19.
 
 Error propagation policy (to be finalized, but roughly):
@@ -3335,11 +3335,12 @@ should treat it as a set of behavioural contracts and design constraints rather
 than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
-[ADR-009](adr-009-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
-spelling for identifiers and source prose; the repository spelling gate
-enforces that policy. [ADR-011](adr-011-audited-rust-boundaries.md) governs the
-separation between safe stream policy and the audited native resource boundary.
-The inventory and verification status are maintained in
+[ADR-009](adrs/adr-0009-enforce-oxford-spelling-in-source.md) governs
+en-GB-oxendict spelling for identifiers and source prose; the repository
+spelling gate enforces that policy.
+[ADR-011](adrs/adr-0011-audited-rust-boundaries.md) governs the separation
+between safe stream policy and the audited native resource boundary. The
+inventory and verification status are maintained in
 [Rust boundary verification](rust-boundary-verification.md).
 
 ______________________________________________________________________
@@ -3930,9 +3931,9 @@ back to PyO3's `ErrorKind` mapping rather than fabricating one.
 
 `Stream` wraps `PumpError` rather than copying its variants into the boundary
 enum. That keeps `cuprum-streams` the single owner of the safe stream policy, as
-[ADR-011](adr-011-audited-rust-boundaries.md) requires, and avoids a parallel
-taxonomy that could drift from the engine's. Module-initialization and PyO3
-argument-extraction failures stay outside the conversion: they are not
+[ADR-011](adrs/adr-0011-audited-rust-boundaries.md) requires, and avoids a
+parallel taxonomy that could drift from the engine's. Module-initialization and
+PyO3 argument-extraction failures stay outside the conversion: they are not
 stream-domain failures, and PyO3 already maps them to the right classes.
 
 ### 13.4 Fallback Strategy
@@ -4392,7 +4393,7 @@ compile-fail doctest for each, on the `mod pump_machine` declaration in
 widened, even to `pub(crate)`. Compile-time contracts are doctests and ordinary
 test code rather than `trybuild` cases, so that none is compiled by a nested
 build inside a timed test
-([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
+([ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md)).
 
 `io_utils::classify_write` is the adapter between the two halves. It collapses
 `WriteOutcome` and the non-fatal error partition into the machine's two-variant
@@ -4419,7 +4420,7 @@ wheels, alongside a source distribution (sdist):
 - Windows: x86_64.
 
 Windows arm64 is deferred to a later 0.2.0 beta; see
-[ADR-016](adr-016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
 
 A pure Python wheel is always published alongside native wheels to ensure
 fallback availability on platforms without native wheel support. Cuprum does
@@ -4446,7 +4447,7 @@ then receives only the names it lacks, and a re-run of the same tag is safe to
 repeat because nothing is ever overwritten. A name the two destinations already
 hold with different bytes fails publication and leaves the release a draft
 until an administrator removes the offending asset. See
-[ADR-017](adr-017-release-pipeline.md) for the full job graph, the
+[ADR-017](adrs/adr-0017-release-pipeline.md) for the full job graph, the
 reconciliation algorithm, and its telemetry.
 
 Contributors building from source require a Rust toolchain (rustc 1.85+, cargo)
@@ -4685,8 +4686,8 @@ the benchmark pytest module by default, while dedicated commands run benchmarks:
 The throughput runner also supports `--dry-run` for deterministic plan JSON
 generation without invoking `hyperfine`, used by behavioural smoke tests.
 
-See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
-and alternatives considered.
+See ADR-001 (`docs/adrs/adr-0001-rust-extension.md`) for detailed design
+decisions and alternatives considered.
 
 ### 13.10 Owned running-command handle
 
@@ -5088,12 +5089,12 @@ never-awaited warning. Neither can interrupt the cleanup the operation is
 performing.
 
 The same reasoning that closed `ExecPhase` to pump routing
-([ADR-008](adr-008-rust-pump-observation-channel.md)) closes it here. The
-channel is separate because `ExecEvent` consumers match their phases
+([ADR-008](adrs/adr-0008-rust-pump-observation-channel.md)) closes it here.
+The channel is separate because `ExecEvent` consumers match their phases
 exhaustively and their hook exceptions propagate, so a new phase would start
 raising inside code that was correct when it was written. A caller who does not
 register a control hook sees no behavioural change at all. The decision itself
-is recorded in [ADR-019](adr-019-control-observation-channel.md).
+is recorded in [ADR-019](adrs/adr-0019-control-observation-channel.md).
 
 The span needs no new channel, and must not get one. A control operation is
 part of its run's story rather than a run of its own, so it is recorded as a
@@ -5105,8 +5106,8 @@ had already exited, or a stop whose reaping outlives the run's own span — so a
 self-owned control span would either outlive the execution it describes and
 report a duration the run never had, or have to be parented across two channels
 to be placed correctly. Those are the same two objections
-[ADR-010](adr-010-rust-pump-hop-span.md) raised for executor-hop spans, and
-they resolve the same way.
+[ADR-010](adrs/adr-0010-rust-pump-hop-span.md) raised for executor-hop spans,
+and they resolve the same way.
 `TracingHook.record_event_on(exec_id, name, attributes)` is the seam;
 `record_control_events(hook)` is the join. Two registrations are needed and
 both are explicit. The projection itself — the bounded attribute set, and the

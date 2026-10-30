@@ -12,7 +12,7 @@ or `ExecEvent`.
 
 ## Context and problem statement
 
-[ADR-008](adr-008-rust-pump-observation-channel.md) deliberately records
+[ADR-008](adr-0008-rust-pump-observation-channel.md) deliberately records
 Rust-pump routing and cancellation-cleanup facts on a narrow event channel.
 Those events can decorate an existing execution span, but cannot model the
 executor hop itself: the work begins before `run_in_executor` schedules its

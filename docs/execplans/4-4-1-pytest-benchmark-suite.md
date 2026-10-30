@@ -207,7 +207,7 @@ Relevant repository areas:
 - Benchmark requirements source:
   - `docs/roadmap.md` section `4.4.1`
   - `docs/cuprum-design.md` section `13.9`
-  - `docs/adr-001-rust-extension.md` benchmarking section.
+  - `docs/adrs/adr-0001-rust-extension.md` benchmarking section.
 
 Gap summary:
 

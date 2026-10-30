@@ -311,11 +311,12 @@ processes.
 
 - Observation: the ticket's proposal section cites **ADR-010**, but ADR-010 is
   "Rust pump hop span". The presentation sink is **ADR-013**
-  (`docs/adr-013-opt-in-github-actions-presentation-sink.md`). Evidence:
-  `ls docs/adr-010*` resolves to `docs/adr-010-rust-pump-hop-span.md`; the sink
-  decision is titled "ADR 013: Opt-in GitHub Actions presentation sink".
-  Impact: all new prose must cite ADR-013, and the ADR to amend is 013. The
-  ticket's own coding plan already carries this correction.
+  (`docs/adrs/adr-0013-opt-in-github-actions-presentation-sink.md`). Evidence:
+  `ls docs/adrs/adr-0010*` resolves to
+  `docs/adrs/adr-0010-rust-pump-hop-span.md`; the sink decision is titled "ADR
+  013: Opt-in GitHub Actions presentation sink". Impact: all new prose must
+  cite ADR-013, and the ADR to amend is 013. The ticket's own coding plan
+  already carries this correction.
 
 - Observation: **pipelines open exactly one session for the whole pipeline**,
   not one per stage. `_prepare_pipeline_config` calls `_SinkBracket.open` once
@@ -506,7 +507,7 @@ processes.
 
 Upstream artefacts, named exactly:
 
-- `docs/adr-013-opt-in-github-actions-presentation-sink.md` (accepted
+- `docs/adrs/adr-0013-opt-in-github-actions-presentation-sink.md` (accepted
   2026-09-07) — the governing decision. Its Option B ("add `group`/`annotate`
   flags to `RunOutputOptions`") was rejected for spreading Actions syntax into
   the execution layer; its Option C (the sink protocol) was accepted. This plan
@@ -819,9 +820,9 @@ Documentation:
   feature lead-in, naming `RunOutputOptions.group` and
   `RunOutputOptions.annotate_failure`, stating the shim relationship, and
   ending with `([#375](https://github.com/leynos/cuprum/issues/375))`.
-- `docs/adr-013-opt-in-github-actions-presentation-sink.md`: an **appended**
-  amendment section (following the house style of
-  `docs/adr-004-interrogate-docstring-gate.md`'s
+- `docs/adrs/adr-0013-opt-in-github-actions-presentation-sink.md`: an
+  **appended** amendment section (following the house style of
+  `docs/adrs/adr-0004-interrogate-docstring-gate.md`'s
   `### Amendment (YYYY-MM-DD): …` heading) recording that the convenience flags
   delegate to the adapter, so no workflow-command knowledge reaches the
   execution layer, reconciling the flags with the earlier rejection of Option

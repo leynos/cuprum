@@ -415,7 +415,7 @@ remains the behavioural reference, and users keep the same public API.
 
 ## References
 
-- ADR-001: `docs/adr-001-rust-extension.md`
+- ADR-001: `docs/adrs/adr-0001-rust-extension.md`
 - Design specification: `docs/cuprum-design.md` Section 13
 - Roadmap: `docs/roadmap.md` Phase 4
 - Profiling guide: `benchmarks/README.md`
@@ -467,5 +467,5 @@ race native I/O is the worker's duplicated descriptors; the release closes only
 the asyncio-owned original, once the worker — reading its own duplicate — can
 no longer need the loop's reader. Descriptor-mode restoration and the
 completion-callback contract are unchanged. See
-[ADR-008](adr-008-rust-pump-observation-channel.md)'s `2026-09-19` addendum for
-the emitted phases and counters.
+[ADR-008](adr-0008-rust-pump-observation-channel.md)'s `2026-09-19` addendum
+for the emitted phases and counters.

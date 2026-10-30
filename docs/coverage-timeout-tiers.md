@@ -50,17 +50,17 @@ test as slow. Every Rust test sits on this tier, and each is bounded by its own
 work rather than by a build.
 
 That was not always so. Until
-[ADR-027](adr-027-compile-contracts-in-the-build-graph.md), the `trybuild` UI
-tests ran in the `compile_tests` binaries under a `binary(compile_tests)`
-override. `trybuild` compiled a scratch crate with flags no workspace artefact
-matched, so each checkout rebuilt the whole dependency graph inside one test's
-allowance while every compiler invocation queued for the host-wide compiler
-admission pool. That override was raised from 300 s to 600 s, 900 s, 1200 s and
-1800 s, and still expired mid-build on 2026-10-20, with between 66 and 382
-admission requests queued ahead. The queue belongs to the host rather than the
-test, so no allowance could bound it. Those contracts are now ordinary and
-`compile_fail` doctests compiled against the workspace's existing artefacts,
-and the override is gone.
+[ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md), the
+`trybuild` UI tests ran in the `compile_tests` binaries under a
+`binary(compile_tests)` override. `trybuild` compiled a scratch crate with
+flags no workspace artefact matched, so each checkout rebuilt the whole
+dependency graph inside one test's allowance while every compiler invocation
+queued for the host-wide compiler admission pool. That override was raised from
+300 s to 600 s, 900 s, 1200 s and 1800 s, and still expired mid-build on
+2026-10-20, with between 66 and 382 admission requests queued ahead. The queue
+belongs to the host rather than the test, so no allowance could bound it. Those
+contracts are now ordinary and `compile_fail` doctests compiled against the
+workspace's existing artefacts, and the override is gone.
 
 `largest_per_test_allowance_seconds()` reads the maximum across the default
 profile and every override, not the profile alone. An override exists precisely

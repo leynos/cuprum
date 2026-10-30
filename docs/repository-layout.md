@@ -61,15 +61,15 @@ keeps PyO3 integration in `rust/cuprum-rust/`, safe stream policy in
 `rust/cuprum-native-io/`. Cross-language behaviour should be documented in
 [Cuprum design](cuprum-design.md) and surfaced in the
 [users' guide](users-guide.md) when it affects public behaviour. See
-[ADR-011](adr-011-audited-rust-boundaries.md) and
+[ADR-011](adrs/adr-0011-audited-rust-boundaries.md) and
 [Rust boundary verification](rust-boundary-verification.md) for the safety and
 verification contracts.
 
 Long-lived documentation belongs under `docs/`. New architectural decisions
-should be recorded as ADRs in `docs/` and linked from
-[documentation contents](contents.md). New roadmap or planning work should use
-the `docs/execplans/` directory only when an execution plan is explicitly
-requested.
+should be recorded as ADRs in `docs/adrs/` and new proposals as RFCs in
+`docs/rfcs/`, both linked from [documentation contents](contents.md). New
+roadmap or planning work should use the `docs/execplans/` directory only when
+an execution plan is explicitly requested.
 
 Repository-wide quality gates should be run through `Makefile` targets rather
 than invoking underlying tools directly. Documentation-only changes should pass

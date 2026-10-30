@@ -19,7 +19,7 @@ on those toolchains the control is what stops a broken include or import from
 making the negative case pass for the wrong reason. The doc-comment scanner is
 in ``_rust_doctest_support``.
 
-See ``docs/adr-027-compile-contracts-in-the-build-graph.md``.
+See ``docs/adrs/adr-0027-compile-contracts-in-the-build-graph.md``.
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ without an error code or a control, or one that imports a name no control
 imports, because a rename of that name would then fail only the negative case,
 and fail it the wrong way.
 
-See ``docs/adr-027-compile-contracts-in-the-build-graph.md``.
+See ``docs/adrs/adr-0027-compile-contracts-in-the-build-graph.md``.
 """
 
 from __future__ import annotations

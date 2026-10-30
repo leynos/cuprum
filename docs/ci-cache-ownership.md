@@ -80,8 +80,8 @@ compiler output is only interchangeable between jobs that compile the same way.
 
 The interpreter. `rust/cuprum-rust/Cargo.toml` declares `pyo3` with the
 `abi3-py312` feature, so the built extension loads on every supported CPython
-([ADR-016](adr-016-stable-abi-native-wheels.md)). Compiler output is still
-per-interpreter: the pyo3 build script records the building interpreter's
+([ADR-016](adrs/adr-0016-stable-abi-native-wheels.md)). Compiler output is
+still per-interpreter: the pyo3 build script records the building interpreter's
 configuration and reruns when it changes, so switching `maturin build -i` from
 3.13 to 3.12 recompiles `pyo3-ffi`, `pyo3`, and the extension. Objects built
 under 3.12 are therefore not shown to serve a 3.14 build.

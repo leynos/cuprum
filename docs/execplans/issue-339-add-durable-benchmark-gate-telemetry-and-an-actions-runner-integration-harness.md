@@ -563,8 +563,9 @@ onto `f48cf8d4`, the advanced `origin/main` head. Main had gained two commits:
 the audited Rust safety boundaries in `33bff5db` and the const-lint repair in
 `f48cf8d4`. A `git merge-tree --write-tree` preview taken before any mutation
 showed exactly two conflicted paths, both documentation indexes: main's
-`adr-011-audited-rust-boundaries.md` and the branch's own ADR-011 collided on
-the same number, and both index documents order ADR entries by that number.
+`adrs/adr-0011-audited-rust-boundaries.md` and the branch's own ADR-011
+collided on the same number, and both index documents order ADR entries by that
+number.
 
 The collision is a genuine content conflict, not a formatting one. Main's ADR
 was accepted on 2026-09-08 and landed in `33bff5db`; the branch's telemetry ADR
@@ -599,13 +600,13 @@ lockfile rebuild was required and both match the target byte-for-byte.
 onto `cb59f204`, the advanced `origin/main` head. Main had gained two commits,
 which moved the ADR collision rather than removing it: `3885c5ac` exposed
 per-command echo fallback diagnostics, and `cb59f204` added
-`adr-012-linux-dev-fast-routing.md`. Main therefore owns both 011 and 012 and
-the branch's two ADRs renumber to 013 and 014. `git merge-tree` predicted two
-conflicted paths, `Makefile` and `docs/contents.md`, and the replay produced
-exactly those. The `Makefile` conflict was adjacency rather than disagreement:
-main retargeted `test-rust`'s prerequisite while the branch inserts a new
-`test-act` target immediately above that line, so the resolution keeps main's
-prerequisite and the branch's target.
+`adrs/adr-0012-linux-dev-fast-routing.md`. Main therefore owns both 011 and 012
+and the branch's two ADRs renumber to 013 and 014. `git merge-tree` predicted
+two conflicted paths, `Makefile` and `docs/contents.md`, and the replay
+produced exactly those. The `Makefile` conflict was adjacency rather than
+disagreement: main retargeted `test-rust`'s prerequisite while the branch
+inserts a new `test-act` target immediately above that line, so the resolution
+keeps main's prerequisite and the branch's target.
 
 The renumber commit is replayed unchanged, so its own hunks collide with the
 new collision and are resolved once more in the same way the previous
@@ -700,13 +701,13 @@ third-class defect this time, and it is worth naming because the first two
 generations found different ones. Renumbering `012` to `014` in
 `docs/developers-guide.md` bumped the visible label and the link target for the
 telemetry reference, but for the harness reference it bumped only the label,
-leaving `[ADR-013](adr-014-actions-runner-integration-harness.md)` — a link
-whose text promises ADR-013 and whose target is ADR-014. A sweep of every
-`[ADR-NNN](adr-MMM-*.md)` label/target pair and every reference-style
-`[adr-NNN]` definition across `docs/` and `README.md` now reports no mismatch
-and no link to a missing file. The lesson is that a renumber is a two-field
-edit — number and target — and reviewing it as one field is how this survives
-three generations of replay.
+leaving `[ADR-015](../adrs/adr-0015-actions-runner-integration-harness.md)` — a
+link whose text promises ADR-013 and whose target is ADR-014. A sweep of every
+``[ADR-NNN](adrs/adr-NNNN-title-slug.md)`` label/target pair and every
+reference-style `[adr-NNNN]` definition across `docs/` and `README.md` now
+reports no mismatch and no link to a missing file. The lesson is that a
+renumber is a two-field edit — number and target — and reviewing it as one
+field is how this survives three generations of replay.
 
 2026-09-19: Diagnosed the branch's CodeRabbit pre-merge table as a stale
 artefact, not a merely outdated one. The live walkthrough comment on PR #418
@@ -750,8 +751,8 @@ request's target. Main had gained three commits — the line-level output
 iteration, the native formatter fixture, and the presentation-sink session
 lifecycle. Two paths conflicted, `docs/contents.md` and
 `docs/developers-guide.md`, both at the same root cause: main's new
-`adr-013-opt-in-github-actions-presentation-sink.md` claimed the number the
-branch's telemetry ADR already held. The two ADRs are genuinely different
+`adrs/adr-0013-opt-in-github-actions-presentation-sink.md` claimed the number
+the branch's telemetry ADR already held. The two ADRs are genuinely different
 decisions — main's is a library presentation sink, the branch's is a CI
 artefact writer — so neither could absorb the other, and main's is landed and
 accepted, which makes its number the one that cannot move.
@@ -774,11 +775,12 @@ the tip commit resolves. All 89 paths main touched and the branch did not are
 byte-identical to `50ecdf2a`, and no path the branch deletes is present.
 
 The renumber is a two-field edit and was verified as one: every
-`[ADR-NNN](adr-MMM-*.md)` pair and every reference-style `[adr-NNN]` definition
-agrees, `contents.md` has no duplicate keys, and every target resolves. The one
-remaining `[ADR-013](adr-014-...)` is inside backticks in the revision note
-above, quoting the historical defect `ab977364` repaired; it is narration
-rather than a link, and is preserved deliberately.
+``[ADR-NNN](adrs/adr-NNNN-title-slug.md)`` pair and every reference-style
+`[adr-NNNN]` definition agrees, `contents.md` has no duplicate keys, and every
+target resolves. The one remaining
+`[ADR-015](../adrs/adr-0015-actions-runner-integration-harness.md)` is inside
+backticks in the revision note above, quoting the historical defect `ab977364`
+repaired; it is narration rather than a link, and is preserved deliberately.
 
 The replay also surfaced a divergence the merge could not see. Main bumped
 `actions/upload-artifact` to v7.0.1, `actions/checkout` to v7.0.1, and
