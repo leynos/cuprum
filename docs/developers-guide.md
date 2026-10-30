@@ -5498,8 +5498,10 @@ the borrowed handle and converts the byte count once for both read and write;
 Unix adapters retain their direct syscall and buffer contracts.
 
 `make boundary-faults` archives controls and deliberate fault failures for the
-scheduled `extended` job. The final run passed its controls and detected all
-four mutations; see `/tmp/issue379-round27-faults.log`.
+scheduled `extended` job. Each run writes per-command output under
+`.cache/boundary-faults/runs/run-<id>/logs/`, and the workflow archives the
+whole run directory. The final run passed its controls and detected all four
+mutations; see `/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 

@@ -273,6 +273,24 @@ def test_make_keeps_both_suites_available_locally() -> None:
     )
 
 
+def test_test_rust_cleans_its_run_home_after_interrupt_or_termination() -> None:
+    """Remove the private Cargo home when a Rust test run is interrupted."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    rust_target = makefile.split("\ntest-rust:", 1)[1].split("\n\n", 1)[0]
+
+    signal_cleanup_contract = (
+        r"(?s)"
+        r"(?=.*trap cleanup EXIT)"
+        r"(?=.*trap 'handle_signal 130' INT)"
+        r"(?=.*trap 'handle_signal 143' TERM)"
+        r'(?=.*trap - EXIT INT TERM; cleanup; exit "\$\$1")'
+    )
+    assert re.search(signal_cleanup_contract, rust_target), (
+        "normal exit, interrupt, and termination must remove the run-local "
+        "Cargo home and preserve the signal exit status"
+    )
+
+
 def test_notparallel_target_reader_joins_continued_declarations() -> None:
     """Keep targets on continued `.NOTPARALLEL` lines in the result."""
     assert _serialized_targets(".NOTPARALLEL: lint \\\n  test rust-lint\n") == (

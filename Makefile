@@ -732,7 +732,10 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	mkdir -p "$$target_root"; \
 	run_root=$$(mktemp -d "$$target_root/.cuprum-test-run.XXXXXX"); \
 	cleanup() { rm -rf "$$run_root"; }; \
+	handle_signal() { trap - EXIT INT TERM; cleanup; exit "$$1"; }; \
 	trap cleanup EXIT; \
+	trap 'handle_signal 130' INT; \
+	trap 'handle_signal 143' TERM; \
 	$(UV_RUN_ENV) $(UV) run --frozen python -m scripts.prepare_cargo_state "$$run_root" > "$$run_root/preparation.json"; \
 	export CARGO_HOME="$$run_root/cargo-home"; \
 	target_route="$(if $(DEV_FAST_HOST_IS_LINUX),dev-fast-$(DEV_FAST_TOOLCHAIN),stable-$(MSRV_TOOLCHAIN))"; \
