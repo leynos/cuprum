@@ -272,9 +272,11 @@ def test_pipeline_bounds_each_repeated_echo_line(
         "-c",
         f"import sys; sys.stdout.buffer.write({payload.encode('utf-8')!r})",
     )
+    # Binary passthrough keeps the producer's LF bytes intact on Windows,
+    # where text-mode stdout would translate every LF to CRLF.
     pipeline = producer | python(
         "-c",
-        "import sys; sys.stdout.write(sys.stdin.read())",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
     )
     sink = io.StringIO()
 
