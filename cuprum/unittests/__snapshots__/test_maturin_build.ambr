@@ -191,6 +191,7 @@
       'cuprum/events.py',
       'cuprum/executable_binding.py',
       'cuprum/executable_paths.py',
+      'cuprum/exit_status_guard.py',
       'cuprum/line_stream_events.py',
       'cuprum/line_stream_observation.py',
       'cuprum/lines.py',
