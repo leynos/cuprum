@@ -18,12 +18,10 @@ import functools
 import inspect
 import typing as typ
 
-from cuprum.lines import _LineHookFn, _LineHookOutcome
-
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.lines import LineEvent
+    from cuprum.lines import LineEvent, _LineHookFn, _LineHookOutcome
 
 
 def _chain_line_hooks(
