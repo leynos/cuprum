@@ -51,9 +51,10 @@ __all__ = [
     "wait_for_file",
 ]
 
-#: A PID outside the range a test host will have assigned. Only ever returned by
-#: a recorder standing in for the spawn; a case that records a spawn also stubs
-#: the abandonment path, so the value never reaches the kernel.
+#: A PID no test has started. It is plausible enough that the kernel could have
+#: assigned it (the default ``pid_max`` exceeds it), so ``record_spawns`` also
+#: replaces the abandonment path with a guard: a launch that reaches it fails
+#: the case instead of signalling a stranger's process group.
 FAKE_PID = 2_000_000
 
 
@@ -102,7 +103,21 @@ def record_spawns(
         calls.append(SpawnCall(tuple(argv), env, cwd, start_new_session))
         return FakeProcess(pid=pid)
 
+    def refuse_abandonment(pid: int) -> None:
+        """Fail the case rather than signal a fake PID."""
+        message = f"unexpected abandonment of fake PID {pid}"
+        raise AssertionError(message)
+
     monkeypatch.setattr(_detached_launch, "_spawn_detached", recording_spawn)
+    # ``FAKE_PID`` can name a live process on a host whose ``pid_max`` exceeds
+    # it, so the default abandonment path must never run against a recorded
+    # spawn. A case that expects abandonment replaces this guard with
+    # ``record_abandonment``.
+    monkeypatch.setattr(
+        _detached_launch,
+        "_abandon_detached",
+        refuse_abandonment,
+    )
     return calls
 
 

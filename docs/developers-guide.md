@@ -2140,10 +2140,11 @@ Survival of the launcher cannot be observed from inside the launcher, so
 wrote. The worker reports through a JSON file because a detached launch gives
 it no stream to report on, and every case stops the worker's group in a
 `finally`. The recorder that stands in for the spawn in the unit modules
-rewrites `cuprum._detached_launch._spawn_detached`, so a case that records a
-spawn must also stub `_abandon_detached`; `record_spawns` and
-`record_abandonment` in the shared helper are deliberately used together for
-that reason.
+rewrites `cuprum._detached_launch._spawn_detached`, so a recorded launch that
+reached `_abandon_detached` would signal the fake PID it reports. `record_spawns`
+therefore installs a guard there that fails the case instead; a case that
+expects abandonment replaces it with `record_abandonment`, which patches the
+same attribute afterwards.
 
 ## Timeout and fail-fast reducer verification
 
