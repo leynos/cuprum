@@ -624,9 +624,9 @@ likelihood, and mitigation.
 - [x] (2026-10-02) Fourth rebase onto `origin/main`. `main` had advanced by
   exactly one commit, `a592b50c` (RFC 0001: execution interception for test
   doubles, PR #517), which touches `docs/contents.md`, `docs/roadmap.md`, and a
-  new `docs/rfcs/0001-execution-interception.md`. The exclusive boundary was
-  `c65d843c`, main's tip as of this branch's previous rebase and the merge base
-  with the new target — the boundary was corroborated rather than assumed:
+  new `docs/rfcs/rfc-0001-execution-interception.md`. The exclusive boundary was
+  `c65d843c`, main's tip as of this branch's previous rebase and the merge
+  base with the new target — the boundary was corroborated rather than assumed:
   `c65d843c` is an ancestor of both the branch head and `a592b50c`, and it *is*
   `a592b50c`'s parent, so the target range was exactly one commit. The 62
   replayed commits were verified to contain no merges.
@@ -636,12 +636,12 @@ likelihood, and mitigation.
   merely equivalent), the commit count is preserved at 62, and
   `git diff 453c4ae0..1d2e9ca0` and `git show a592b50c` name the same three
   files in the same statuses (`docs/contents.md` modified,
-  `docs/rfcs/0001-execution-interception.md` added, `docs/roadmap.md` modified)
-  and **471 identical added content lines with no removals**. The two diffs are
-  not byte-identical, and saying they were would have been wrong: their hunk
-  headers differ by a uniform offset of 14, and the `index` lines differ
-  because their pre-images do. Both differences have the same cause and it is
-  the expected one — the `roadmap.md` pre-image for
+  `docs/rfcs/rfc-0001-execution-interception.md` added, `docs/roadmap.md`
+  modified) and **471 identical added content lines with no removals**. The two
+  diffs are not byte-identical, and saying they were would have been wrong:
+  their hunk headers differ by a uniform offset of 14, and the `index` lines
+  differ because their pre-images do. Both differences have the same cause and
+  it is the expected one — the `roadmap.md` pre-image for
   `git diff 453c4ae0..1d2e9ca0` is the branch's own file, 14 lines longer than
   the `c65d843c` blob that `a592b50c` diffs against, and 14 is exactly the
   branch's §0 change to that file (17 added, 3 removed). So the metadata
@@ -1555,7 +1555,7 @@ likelihood, and mitigation.
       relocation, and since both destinations were already imported, the
       re-export narrowed to `from cuprum.sh.safe_cmd import SafeCmd` alone and
       the module docstring was rewritten to name both moves. (3) In
-      `docs/adr-007-subprocess-execution-module-boundaries.md` at `ea96082c`:
+      `docs/adrs/adr-0007-subprocess-execution-module-boundaries.md` at `ea96082c`:
       both sides appended a dated addendum, so both were kept with main's first
       and byte-for-byte unchanged. Because ADR text is append-only, the
       observable that matters is that the diff against main is a pure append,

@@ -95,4 +95,4 @@ from GitHub-hosted Actions remains a post-push operational check.
 - The finite label vocabulary keeps analysis bounded. Run metadata is useful
   for deduplication but is never a label and must not be promoted into one.
 - The same fail-open, bounded-label JSONL pattern is reused for release
-  publication in [ADR-017](adr-017-release-pipeline.md).
+  publication in [ADR-017](adr-0017-release-pipeline.md).

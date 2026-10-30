@@ -273,7 +273,7 @@ Relevant current files and behaviour:
   - currently contains at least one stale statement about Rust consume-path
     benefits that conflicts with the shipped implementation.
 
-- `docs/adr-001-rust-extension.md`
+- `docs/adrs/adr-0001-rust-extension.md`
   - records the architectural rationale for optional Rust acceleration;
   - provides useful context for why pure Python must remain first-class.
 

@@ -16,7 +16,7 @@ from tests.helpers import extract_markdown_subsection, read_doc, read_users_guid
 from tests.helpers.docs import assert_documents
 
 _DEV_GUIDE = "docs/developers-guide.md"
-_ADR_007 = "docs/adr-007-subprocess-execution-module-boundaries.md"
+_ADR_007 = "docs/adrs/adr-0007-subprocess-execution-module-boundaries.md"
 
 _ASYNC_POLICY_HEADING = "Ruff `ASYNC` (flake8-async) policy"
 _TIMEOUT_OBSERVABILITY_HEADING = "Subprocess timeout observability"

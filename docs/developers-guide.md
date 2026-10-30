@@ -6,23 +6,23 @@ of truth for day-to-day contributor expectations. For the system design, see the
 [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md). Accepted architectural decisions are:
 
-- [ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
-- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
-- [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
-- [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
-- [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
-- [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
-- [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
-- [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
-- [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
-- [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
-- [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
-- [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
-- [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
-- [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
-- [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
-- [ADR-024: Type captured command output](adr-024-captured-command-output-types.md)
-- [ADR-026: Narrow captured results only for complete text](adr-026-narrowed-results-only-for-complete-text-capture.md)
+- [ADR-002: Additional Rust components](adrs/adr-0002-additional-rust-components.md)
+- [ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md)
+- [ADR-004: Interrogate docstring-coverage gate](adrs/adr-0004-interrogate-docstring-gate.md)
+- [ADR-005: Unify Rust availability probe](adrs/adr-0005-unified-rust-availability-probe.md)
+- [ADR-006: Split cuprum/context.py into a context package](adrs/adr-0006-context-package-split.md)
+- [ADR-007: Subprocess execution module boundaries](adrs/adr-0007-subprocess-execution-module-boundaries.md)
+- [ADR-009: Enforce Oxford spelling in source](adrs/adr-0009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Rust-pump executor-hop spans](adrs/adr-0010-rust-pump-hop-span.md)
+- [ADR-011: Audited Rust safety boundaries](adrs/adr-0011-audited-rust-boundaries.md)
+- [ADR-013: Opt-in GitHub Actions presentation sink](adrs/adr-0013-opt-in-github-actions-presentation-sink.md)
+- [ADR-014: Durable benchmark-gate telemetry](adrs/adr-0014-benchmark-gate-telemetry-sink.md)
+- [ADR-015: Actions-runner integration harness](adrs/adr-0015-actions-runner-integration-harness.md)
+- [ADR-016: Stable-ABI native wheels](adrs/adr-0016-stable-abi-native-wheels.md)
+- [ADR-022: Adopt a nose code-duplication gate](adrs/adr-0022-adopt-nose-duplication-gate.md)
+- [ADR-023: Opt-in telemetry redaction](adrs/adr-0023-opt-in-telemetry-redaction.md)
+- [ADR-024: Type captured command output](adrs/adr-0024-captured-command-output-types.md)
+- [ADR-026: Narrow captured results only for complete text](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -43,8 +43,8 @@ streams are both `str`. The capture records are passed to both constructions.
 is constructed. A missing stream on this path logs the operation, text mode,
 stream, program, and execution ID without rendering command output, then raises
 the existing execution-invariant error.
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md) records
-why the narrowed class is restricted this way.
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md)
+records why the narrowed class is restricted this way.
 
 `SafeCmd.run` and `run_sync` mirror that runtime boundary in their overloads:
 omitted `output` and `output=None` return `CapturedResult`; an explicit
@@ -915,7 +915,7 @@ The coverage lanes also carry four nested timeout tiers, and the whole suite
 runs under the outermost of them.
 [Coverage timeout tiers](coverage-timeout-tiers.md) records each tier, the
 value it holds, and why no Rust test is bounded by a nested build
-([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
+([ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md)).
 
 ### Concurrency
 
@@ -1083,8 +1083,8 @@ needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
 
 ## Linux debug-build acceleration
 
-[ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and
-its compatibility rationale.
+[ADR-012](adrs/adr-0012-linux-dev-fast-routing.md) records the routing boundary
+and its compatibility rationale.
 
 Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
 verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
@@ -1655,7 +1655,7 @@ and capture, argv titles can disclose secrets to job-log readers.
 When `RunOutputOptions.sink` is set, both runners owe the sink's session a
 close on every terminal path. The shared mechanics live in
 `cuprum/_sink_lifecycle.py`; the contract (see
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)):
+[ADR-013](adrs/adr-0013-opt-in-github-actions-presentation-sink.md)):
 
 - `_SinkBracket.open` opens the session *before* any subprocess starts — from
   `_command_session_start` for a single command and from
@@ -2312,7 +2312,7 @@ increments once for each such outcome, including a successful submission.
 Windows handle values, errno values, exception types, exception messages, and
 tracebacks are never metric labels. Observer failures are logged and do not
 alter the successful fallback or the caller's cancellation.
-[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
+[ADR-008](adrs/adr-0008-rust-pump-observation-channel.md) records the decision.
 
 #### Pump hook failure policy
 
@@ -2663,8 +2663,8 @@ must keep the buffer raw so byte mode stays available to it. A new mode value
 must be added to `CaptureMode` rather than spelled as a literal, since the
 value is a metric label and a log field that operators filter on. The `on_line`
 rejection is policy, not capability — the drain itself honours the combination;
-see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
-boundaries it belongs to, and the
+see [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) for the
+module boundaries it belongs to, and the
 [binary output section](users-guide.md#binary-output) of the users' guide.
 
 A stream that was never attached is the one payload the drain does not render:
@@ -2721,8 +2721,8 @@ runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
 loop, while text runs keep `config.errors`, so a strict text run still raises
 from echo exactly as it did before byte mode existed. See
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md). Capture receives
-each raw chunk independently of the echo decoder, and
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md). Capture
+receives each raw chunk independently of the echo decoder, and
 `cuprum._capture_decode._render` renders the accumulator's retained bytes as
 text or bytes at finalization.
 
@@ -2864,12 +2864,12 @@ derive from `_LockedStore` and implement `_clear()` while its lock is held.
 `cuprum/unittests/test_adapter_projection.py` pins this contract with
 Hypothesis properties and redacted per-phase syrupy snapshots.
 
-[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines the scope and trust
-boundary for opt-in redaction. `cuprum/redaction.py` owns `RedactionPolicy`,
-which normalizes caller-supplied literal and compiled pattern rules. It gathers
-matches from the original text, merges overlapping or adjacent spans, and
-inserts the configured mask without rescanning it. The inert default adds no
-rules and changes no output; it does not infer secrets.
+[ADR-023](adrs/adr-0023-opt-in-telemetry-redaction.md) defines the scope and
+trust boundary for opt-in redaction. `cuprum/redaction.py` owns
+`RedactionPolicy`, which normalizes caller-supplied literal and compiled
+pattern rules. It gathers matches from the original text, merges overlapping or
+adjacent spans, and inserts the configured mask without rescanning it. The
+inert default adds no rules and changes no output; it does not infer secrets.
 
 The policy returns an immutable `ExecEvent` copy with selected text fields
 redacted. It does not change the raw event, executed argv, child environment,
@@ -3002,10 +3002,10 @@ affects hand-built event streams.
 
 ## Rust-pump executor-hop span boundary
 
-[ADR-010](adr-010-rust-pump-hop-span.md) defines the separate, opt-in tracing
-surface for Rust-pump executor hops. Keep it separate from the `PumpEvent`
-channel: pump events describe routing and cleanup observations, while hop spans
-cover the lifetime of one scheduled native transfer.
+[ADR-010](adrs/adr-0010-rust-pump-hop-span.md) defines the separate, opt-in
+tracing surface for Rust-pump executor hops. Keep it separate from the
+`PumpEvent` channel: pump events describe routing and cleanup observations,
+while hop spans cover the lifetime of one scheduled native transfer.
 
 The implementation is split by responsibility:
 
@@ -3236,7 +3236,7 @@ subprocess module boundaries (among them `cuprum/_subprocess_execution.py`,
 `cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
 `cuprum/_subprocess_wait.py`) and concurrent execution are covered in
 [Cuprum design](cuprum-design.md) §8.1.5 (with
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md)) and §8.3.1
 respectively, and are not repeated here.
 
 Runtime (`cuprum/`):
@@ -3316,7 +3316,7 @@ Test helpers:
 `rust_consume_stream` is implemented, tested, and exported, but production
 consumes currently go through the pure-Python `_consume_stream` function until
 Phase 2 is complete. Integration is deferred to
-[ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+[ADR-002: Additional Rust components](adrs/adr-0002-additional-rust-components.md)
 (Phase 2). The rationale is to defer consume-side dispatch until the ADR-002
 Phase 2 stack is complete, including dispatcher wiring, the Python fallback
 path, and parity/property coverage.
@@ -3517,9 +3517,9 @@ maturin build --release --manylinux 2_28 \
 maturin action and builds one `cp312-abi3` wheel each for Linux x86_64 and
 aarch64, macOS x86_64 and arm64, and Windows x86_64. The `abi3-py312` feature on
 `pyo3` makes each wheel load on CPython 3.12 and every later version; see
-[ADR-016](adr-016-stable-abi-native-wheels.md). `verify-wheel-install` checks
-the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor equal to
-`requires-python` in `pyproject.toml`.
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md). `verify-wheel-install`
+checks the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor
+equal to `requires-python` in `pyproject.toml`.
 
 ### Verifying a wheel pair
 
@@ -3553,7 +3553,7 @@ concurrency group with `cancel-in-progress: false`: a re-pushed tag queues
 behind the running release rather than cancelling it part-way through the
 upload, so the queued run starts from a complete state that reconciliation can
 safely repeat. See
-[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+[ADR-017: Attested, reconciled release pipeline](adrs/adr-0017-release-pipeline.md)
 for the decision record behind the job graph below.
 
 The workflow grants nothing at the top level (`permissions: {}`), and each job
@@ -3723,16 +3723,16 @@ CodeScene token check in `coverage-main.yml`, which renders only `true` or
 Each job/phase writes one bounded JSONL record through
 `.github/actions/release-telemetry`, following the same fail-open pattern as
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md)
-([ADR-014](adr-014-benchmark-gate-telemetry-sink.md)). The metric is
+([ADR-014](adrs/adr-0014-benchmark-gate-telemetry-sink.md)). The metric is
 `release_phase_outcomes_total`, schema version 2, labelled with `operation`
 (`check_version`, `attest`, `draft_release`, `publish_pypi`, `github_upload`,
 `publish_release`), `outcome` (`success`, `failure`, `skipped`),
 `failure_category`, `retry_bucket`, `verification_failure_bucket` (`0`, `1`,
 `2-5`, `6+`), `elapsed_bucket`, and `http_status_class`; `run_id`,
 `run_attempt`, `tag`, and `recorded_at` are metadata outside `labels`. See
-[ADR-017](adr-017-release-pipeline.md#telemetry) for the original label
+[ADR-017](adrs/adr-0017-release-pipeline.md#telemetry) for the original label
 vocabulary and
-[its addendum](adr-017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
+[its addendum](adrs/adr-0017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
 for schema version 2 and `verification_failure_bucket`. The draft phase counts
 failed per-asset verifier outcomes in that bucket, even when PyPI already holds
 those names and the release can continue without recovery.
@@ -5794,7 +5794,7 @@ The workspace cannot forbid unsafe code globally: `cuprum-native-io` and
 `cuprum-rust` are the audited syscall and FFI boundaries. `cuprum-streams`
 keeps its explicit crate-level prohibition, which the boundary contract checks.
 The
-[ADR-011 addendum](adr-011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
+[ADR-011 addendum](adrs/adr-0011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records why that source-level contract complements the shared lint tables. The
 The Rust 1.85.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
 `RUSTFMT_TOOLCHAIN=nightly-2026-05-28` provides `rustfmt`. Linux debug Rustdoc,
@@ -5878,8 +5878,8 @@ same interpreter, Skylos runs the strict production dead-code scan sixth, and
 the blocking nose code-duplication gate runs seventh.
 
 The decisions are recorded in
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
-[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
+[ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md) and
+[ADR-004: Interrogate docstring-coverage gate](adrs/adr-0004-interrogate-docstring-gate.md).
 The short version is:
 
 - Ruff owns fast feedback and the primary rule set, including docstring style.
@@ -6021,8 +6021,8 @@ duplication families remain. Findings name every member as a
 each location it named, followed by the witness kind and refactoring value, so
 a finding can be pasted directly into a refactoring task or coding-agent
 prompt. The tool choice, settings, and exception policy follow
-[ADR-022](adr-022-adopt-nose-duplication-gate.md), which adopts the decision
-already recorded as ADR-021 in `leynos/episodic` at revision
+[ADR-022](adrs/adr-0022-adopt-nose-duplication-gate.md), which adopts the
+decision already recorded as ADR-021 in `leynos/episodic` at revision
 `d9e5ac0d254f375e2986f52d91a3b88c117c833b` rather than rerunning a detector
 comparison here.
 
@@ -6303,8 +6303,8 @@ Documentation is a liveness signal, and it has a silent size ceiling. A
 `SKY-U001` that appears after a docs-only change may mean the documentation
 crossed that ceiling rather than that the symbol died; check whether the symbol
 still has a runtime caller before silencing it.
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) records
-the ceilings and what to do about them.
+[ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md)
+records the ceilings and what to do about them.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
@@ -6548,7 +6548,7 @@ The canonical lint configuration lives in `pyproject.toml`:
 
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
-[ADR-003](adr-003-two-tier-python-linting.md) as well.
+[ADR-003](adrs/adr-0003-two-tier-python-linting.md) as well.
 
 ### Ruff `ASYNC` (flake8-async) policy
 
@@ -6576,7 +6576,7 @@ family:
   carries no suppression. The deadline itself stays caller-owned: the wait
   helpers apply it with `asyncio.timeout()` rather than taking a `timeout`
   parameter of their own (see
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md)).
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md)).
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
   two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
@@ -6975,7 +6975,7 @@ verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
 Each non-cancelled run also persists a durable observation, per
-[ADR-014](adr-014-benchmark-gate-telemetry-sink.md); the
+[ADR-014](adrs/adr-0014-benchmark-gate-telemetry-sink.md); the
 [telemetry contract](ci-benchmark-gate-telemetry.md) owns its schema.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
@@ -7032,7 +7032,8 @@ need `act` 0.2.89 and a Docker or rootless Podman runtime. The target refuses
 to skip when CI demands them, and
 `.github/workflows/benchmark-gate-harness.yml` runs it weekly on GitHub-hosted
 `ubuntu-latest`, never the paid one.
-[ADR-015](adr-015-actions-runner-integration-harness.md) owns the design; the
+[ADR-015](adrs/adr-0015-actions-runner-integration-harness.md) owns the design;
+the
 [local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
 owns the contract and pins.
 
@@ -7173,7 +7174,7 @@ Some Rust contracts hold only at compile time, so no runtime test can observe
 them. They are compiled inside the ordinary build graph rather than by a nested
 Cargo build, because a nested build inside a timed test queues behind the
 host-wide compiler admission pool, and no per-test timeout can bound that queue.
-[ADR-027](adr-027-compile-contracts-in-the-build-graph.md) records the
+[ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md) records the
 decision and the `trybuild` timeouts that prompted it.
 
 - **Compile-pass cases** are ordinary doctests. The `PyO3` macro shapes,
@@ -7612,8 +7613,8 @@ decisions teardown makes about a single process — what a signal is delivered
 to, and what a completed teardown waits for. The two idle-heartbeat modules,
 `cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
 the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
-rationale and compatibility constraints.
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) for the
+accepted rationale and compatibility constraints.
 
 Bounded output has a parallel ownership seam: `_bounded_delivery.py` owns the
 shared byte-bounded FIFO and its daemon worker; `_command_execution_config.py`
@@ -7622,8 +7623,8 @@ and `_pipeline_config.py` resolve destinations and retain setup ownership;
 and `_sink_lifecycle.py` serializes presentation-session close after active
 writes. `_daemon_thread.py` bridges only these bounded teardown operations
 without depending on the event loop's shared default executor. See
-[ADR-025](adr-025-bounded-output-delivery.md) for the queue, loss, and shutdown
-contract.
+[ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the queue, loss, and
+shutdown contract.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
@@ -7739,7 +7740,7 @@ change to how one `_StreamConfig` is assembled or how its consumer task is
 created belongs in `_subprocess_streams`. The split is what keeps the execution
 module under the Pylint module ceiling now that the idle-heartbeat wiring
 reaches into the stream configs; see the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
 
@@ -7872,8 +7873,9 @@ still waited on rather than leaving observer tasks stranded. The two entry
 points `_execute_with_hooks` and `_finalize_prepared_command_failure` are
 re-exported from `cuprum/_command_internals.py` with unchanged object identity,
 so `cuprum.sh`, `cuprum.sh.safe_cmd`, and the tests that import them are
-unchanged. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
-addendum of 2026-10-11.
+unchanged. See the
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
+2026-10-11.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
@@ -8502,8 +8504,8 @@ with no before-spawn snapshot, which selects the child's own figure and leaves
 the aggregate fallback unreachable rather than measuring it late.
 
 See [Cuprum design](cuprum-design.md) §13.10 for the accepted rationale, and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) — including its
-addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) — including
+its addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
 private-import compatibility rules the handle's split preserves.
 
 ## Subprocess timeout observability

@@ -603,7 +603,7 @@ wraps. None follow this baseline: they use only the Python standard library and
 credential and must resolve no third-party package, from PyPI or elsewhere,
 while that credential is live; every network call these scripts might otherwise
 make instead stays in the workflow's own `curl` and `gh` steps. See
-[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+[ADR-017: Attested, reconciled release pipeline](adrs/adr-0017-release-pipeline.md)
 for the full rationale. This exception is confined to those four modules; no
 other script in the repository is exempt from the Cyclopts, Cuprum, and Python
 3.13 defaults above.

@@ -3,8 +3,8 @@
 This document records the first full run of the tee hot-path profiling harness
 (`benchmarks/`) and the hotspot verdicts it produced. It is the Phase 1
 baseline evidence called for by Architectural Decision Record (ADR) 002
-([ADR-002](adr-002-additional-rust-components.md)), and it gates the Phase 2
-decision on issue [#127](https://github.com/leynos/cuprum/issues/127)
+([ADR-002](adrs/adr-0002-additional-rust-components.md)), and it gates the
+Phase 2 decision on issue [#127](https://github.com/leynos/cuprum/issues/127)
 (capture-only consume dispatch through `rust_consume_stream`).
 
 The follow-up read-size sweep in

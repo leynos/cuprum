@@ -4515,8 +4515,8 @@ instead of escaping as a traceback and exiting 1.
 
 [roadmap]: ../roadmap.md#52-make-per-line-event-emission-cheap-for-line-callback-workloads
 [design-events]: ../cuprum-design.md#813-structured-execution-events-observe-hooks
-[adr-002]: ../adr-002-additional-rust-components.md
-[adr-008]: ../adr-008-rust-pump-observation-channel.md
+[adr-002]: ../adrs/adr-0002-additional-rust-components.md
+[adr-008]: ../adrs/adr-0008-rust-pump-observation-channel.md
 [baseline]: ../tee-hotpath-profiling-baseline-2026-06-12.md
 [contents]: ../contents.md
 [layout]: ../repository-layout.md

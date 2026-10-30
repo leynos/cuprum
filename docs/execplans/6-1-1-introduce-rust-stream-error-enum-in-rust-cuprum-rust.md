@@ -3366,11 +3366,11 @@ that revision are:
   conversion.
 - [Cuprum design](../cuprum-design.md), section 13: native error propagation,
   backend selection, and descriptor lifecycle.
-- [ADR-002](../adr-002-additional-rust-components.md): behavioural reference,
-  decoding and descriptor risks; its overall status remains Proposed.
-- [ADR-008](../adr-008-rust-pump-observation-channel.md): separate observation
-  channel, bounded labels, and cancellation cleanup contracts.
-- [ADR-011](../adr-011-audited-rust-boundaries.md) and
+- [ADR-002](../adrs/adr-0002-additional-rust-components.md): behavioural
+  reference, decoding and descriptor risks; its overall status remains Proposed.
+- [ADR-008](../adrs/adr-0008-rust-pump-observation-channel.md): separate
+  observation channel, bounded labels, and cancellation cleanup contracts.
+- [ADR-011](../adrs/adr-0011-audited-rust-boundaries.md) and
   [boundary verification](../rust-boundary-verification.md): the current safe
   policy, native resource, and PyO3 integration boundaries.
 - [Profiling baseline](../tee-hotpath-profiling-baseline-2026-06-12.md),

@@ -139,8 +139,8 @@ merely redundant:
    nothing to do with `rstest-bdd`. A relative link would silently resolve to
    the wrong document; the absolute link cannot.
 2. Upstream and local ADR numbers occupy independent numbering spaces. This
-   repository already has `docs/adr-006-context-package-split.md` and
-   `docs/adr-007-subprocess-execution-module-boundaries.md`, which are
+   repository already has `docs/adrs/adr-0006-context-package-split.md` and
+   `docs/adrs/adr-0007-subprocess-execution-module-boundaries.md`, which are
    unrelated decisions. Importing the upstream ADRs under their own names would
    place two different "ADR-006" and "ADR-007" documents side by side.
 

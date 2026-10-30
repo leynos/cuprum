@@ -2354,12 +2354,12 @@ means "identical to target", not "dropped". Five further paths the old patch
 recorded as deletions (`test_captured_result_layout.py`,
 `test_command_result_narrowing.py`, `test_pipeline_capture_contract.py`,
 `typing_fixtures/captured_result_valid.py`, and
-`adr-024-captured-command-output-types.md`) are files the *old base* lacked and
-the target already carried: they are inherited parent work, correctly not
-re-delivered by the child. The child's net patch onto the target deletes no file
-(`git diff --diff-filter=D --name-only f359f2ec4 HEAD` is empty), and
-`docs/adr-024-captured-command-output-types.md` is byte-identical to the
-target, so ADR-024 is neither rewritten nor resurrected.
+`adrs/adr-0024-captured-command-output-types.md`) are files the *old base*
+lacked and the target already carried: they are inherited parent work,
+correctly not re-delivered by the child. The child's net patch onto the target
+deletes no file (`git diff --diff-filter=D --name-only f359f2ec4 HEAD` is
+empty), and `docs/adrs/adr-0024-captured-command-output-types.md` is
+byte-identical to the target, so ADR-024 is neither rewritten nor resurrected.
 
 A second file-set check asked whether upstream added tests asserting the *old*
 narrowing rule, which ADR-025 would break. `test_captured_result_layout.py`,
@@ -2397,9 +2397,9 @@ Recovery material, retained until publication is accepted:
 - Every replay ref listed above remains in place.
 
 **ADR numbering.** Both sides introduced an ADR 025. Main's is
-`adr-025-bounded-output-delivery.md` and it landed first, so it keeps the
+`adrs/adr-0025-bounded-output-delivery.md` and it landed first, so it keeps the
 number; the branch-authored ADR was `git mv`d to
-`adr-026-narrowed-results-only-for-complete-text-capture.md` and every
+`adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md` and every
 reference in `docs/` was repointed. Rewriting main's accepted ADR text was not
 an option: accepted ADRs in this repository are append-only.
 
