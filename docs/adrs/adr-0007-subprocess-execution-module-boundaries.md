@@ -1508,8 +1508,10 @@ nobody will read.
 share. `_abandon_started_process` runs a fixed sequence behind a single
 `_shielded_cleanup`: terminate and reap the child, signalling its process group
 when the run owns one; cancel and gather the tasks the failed setup had already
-started; then release the pipes by closing stdin and discarding stdout and
-stderr to end-of-file. Each step is wrapped in its own
+started; release the pipes by closing stdin and discarding stdout and stderr to
+end-of-file; and finally release the capture accumulators the setup had
+resolved, which it receives as a separate `captures` argument so a route that
+never reached its stream wiring can omit them. Each step is wrapped in its own
 `contextlib.suppress(Exception)`, so an ordinary cleanup failure neither aborts
 a later step nor replaces the error the caller is already unwinding. A
 cancellation is not suppressed; it propagates only once the whole sequence has
@@ -1523,6 +1525,13 @@ writer or consumer outlives the attempt that failed. Pipe release itself is
 bounded by `_CAPTURE_EOF_GRACE_S`: a descendant that escaped the owned group
 can keep a pipe end open, and ADR-021 records why waiting longer cannot settle
 that case.
+
+The capture accumulators are released last, for two reasons. A cancelled drain
+never builds the result that would have carried its spill handle, so the
+accumulator is the last reference to a temporary file cuprum created and
+therefore must remove; and a consumer that is still draining into its
+accumulator could recreate the file the release has just removed, so the
+release has to follow the tasks being settled rather than precede it.
 
 The module is separate from `_subprocess_spawn` because the spawn module sits
 at the 400-line ceiling and its responsibility is creating and announcing a
@@ -1541,6 +1550,12 @@ it is created, so a consumer that fails to start leaves the consumer already
 running in the reclaim's hands. Recording one at a time rather than building a
 pair in one expression is what makes the failure of the second consumer safe
 for the first.
+
+The owned handle's `_attach_run_tasks` has the same problem in a different
+shape and takes the same answer. Its reclaim is `_detach_run_tasks` rather than
+this helper, but it too starts one consumer per stream and can fail while the
+pair is being built, so it hands its own `started` list to
+`_spawn_stream_consumers` instead of recording the returned pair.
 
 The same guarantee already existed for `SafeCmd.lines()` and `SafeCmd.start()`,
 whose post-spawn windows end in their own unwind helpers with their own records
