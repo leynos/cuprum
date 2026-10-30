@@ -455,6 +455,7 @@ jobs:
             github_api=${{ steps.assets.outcome }}
             index_http=${{ steps.stage.outcome }}
             digest_mismatch=${{ steps.fetched.outcome }}
+            attestation=${{ steps.pypi-provenance.outcome }}
             upload=${{ steps.upload.outcome }}
       - name: Check both destinations hold the same bytes
         id: verify

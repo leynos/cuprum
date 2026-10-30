@@ -3705,9 +3705,10 @@ same URL. Every failing file is named in one error, and nothing is uploaded.
 Because the verifier pins `--source-digest` to the triggering commit, bytes can
 carry over between attempts only while the tag still names that commit. Moving
 a tag to a different commit changes the identity, so bytes attested by the
-earlier commit no longer qualify; a rerun for the moved tag rebuilds and
-re-attests the artefacts rather than carrying PyPI's bytes forward. If the
-check fails because the tag was moved, restore it to the commit that built
+earlier commit no longer qualify. PyPI stays canonical for a filename it holds,
+so a rerun does not replace those bytes: it keeps them and discards its own
+rebuild, and the gate fails until the tag names the attesting commit again. If
+the check fails because the tag was moved, restore it to the commit that built
 PyPI's files and rerun. If PyPI holds bytes that no run attested, no rerun can
 approve them unless the rebuild is byte-identical, so publish a new version.
 PyPI files cannot be deleted or replaced, and they are never a reason to relax

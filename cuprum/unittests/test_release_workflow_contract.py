@@ -305,6 +305,14 @@ def test_pypi_bytes_are_verified_before_the_release_upload() -> None:
     assert "done < pypi-fetch.tsv" in script, (
         "only the files actually fetched from PyPI need verification"
     )
+    telemetry = next(
+        item
+        for item in _job("publish-release")["steps"]
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    recorded = telemetry["with"]["steps"]
+    attestation = "attestation=${{ steps.pypi-provenance.outcome }}"
+    assert attestation in recorded, "provenance failures must not count as setup"
 
 
 def test_nothing_is_ever_overwritten_and_pypi_holds_no_github_token() -> None:

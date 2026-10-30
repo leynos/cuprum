@@ -191,11 +191,13 @@ a consumer.
 ### Stdlib-only release scripts
 
 `scripts/release_assets_cli.py`, `scripts/release_telemetry.py`, and
-`scripts/release_version.py` are the release workflow's `argparse` entry points;
-`scripts/release_assets_cli.py` wraps the importable reconciliation library
-`scripts/release_assets.py`, which declares no command line of its own. All
-four modules use only the Python standard library, not Cyclopts or Cuprum, and
-the entry points run under the runner's preinstalled `python3` rather than
+`scripts/release_version.py` are the release workflow's `argparse` entry
+points, and `scripts/release_gh_version.py` is a standard-input filter with no
+options. `scripts/release_assets_cli.py` wraps the importable reconciliation
+libraries `scripts/release_assets.py`, `scripts/release_github_upload.py`, and
+`scripts/release_provenance.py`, which declare no command line of their own.
+All seven modules use only the Python standard library, not Cyclopts or Cuprum,
+and the entry points run under the runner's preinstalled `python3` rather than
 through `uv run`. This is a deliberate, documented exception to
 [scripting standards](scripting-standards.md): `publish-pypi` holds the PyPI
 OIDC credential and must not resolve any third-party package, from PyPI or
@@ -354,7 +356,9 @@ becomes a release asset. The step has no `if:` condition: an empty fetch list
 still succeeds, but a fetch list the step cannot read stops the job rather than
 silently skipping verification. `check-provenance` refuses to run without
 `--index`, because without the index the plan holds no PyPI names and the gate
-would approve nothing while appearing to run.
+would approve nothing while appearing to run. The `publish-release` telemetry
+record maps the step to the existing `attestation` failure category, so a
+failure here is counted as an attestation failure rather than as `setup`.
 
 ### Attestation identity and a moved tag
 
@@ -369,8 +373,9 @@ one. `draft-release` deliberately omits `--source-digest` so an interrupted
 attempt for the same tag remains eligible. `publish-release` must not inherit
 that latitude: bytes it publishes claim to be this release's build, so it pins
 the commit the tag names now. A moved tag cannot carry PyPI's bytes over from a
-different commit; a rerun for the moved tag rebuilds and re-attests them
-instead.
+different commit: PyPI stays canonical for a filename it holds, so a rerun
+keeps those bytes and discards its own rebuild, and the gate fails until the
+tag names the attesting commit again.
 
 ### Token scopes for the new gate
 
