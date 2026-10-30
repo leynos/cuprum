@@ -35,6 +35,23 @@ def git_status(*, short: bool = False, branch: bool = False) -> SafeCmd:
     return sh.make(GIT)(*args)
 
 
+def _checkout_options(
+    *,
+    create_branch: bool,
+    detach: bool,
+    force: bool,
+) -> list[str]:
+    """Return the mode flags for one checkout invocation."""
+    if create_branch:
+        return ["-B" if force else "-b"]
+    options: list[str] = []
+    if detach:
+        options.append("--detach")
+    if force:
+        options.append("--force")
+    return options
+
+
 def git_checkout(
     ref: str,
     *,
@@ -42,12 +59,17 @@ def git_checkout(
     detach: bool = False,
     force: bool = False,
 ) -> SafeCmd:
-    """Build a `git checkout` command with validated refs.
+    """Build a `git checkout` command with a revision-only switch operand.
+
+    Switch modes require ``ref`` to resolve as a branch, tag, remote-tracking
+    ref, or commit. An operand that resolves only as a tracked path is refused
+    by Git and leaves the worktree untouched, so this builder never restores
+    paths. Creation mode names a new branch that starts at ``HEAD``.
 
     Parameters
     ----------
     ref : str
-        Reference to check out.
+        Revision to check out.
     create_branch : bool
         When True, create a new branch at the reference.
     detach : bool
@@ -72,16 +94,22 @@ def git_checkout(
         msg = "create_branch and detach cannot both be True"
         raise ValueError(msg)
 
-    args: list[str] = ["checkout"]
-    if create_branch:
-        args.append("-B" if force else "-b")
-    else:
-        if detach:
-            args.append("--detach")
-        if force:
-            args.append("--force")
-
+    args = [
+        "checkout",
+        *_checkout_options(
+            create_branch=create_branch,
+            detach=detach,
+            force=force,
+        ),
+    ]
     args.append(str(git_ref(ref)))
+    if not create_branch:
+        # Git reads a bare `checkout <name>` as a path restore when <name>
+        # matches a tracked file but no branch. A trailing separator forces
+        # <name> to resolve as a revision, and with no pathspec after it Git
+        # refuses a path-only match instead of rewriting the worktree. A
+        # leading separator, by contrast, is the explicit path-restore form.
+        args.append("--")
     return sh.make(GIT)(*args)
 
 

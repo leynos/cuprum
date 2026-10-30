@@ -3300,6 +3300,10 @@ extend. The following decisions guide the core builder set:
   `allow_relative=True` opt-in for relative paths.
 - `GitRef` validation accepts only `[A-Za-z0-9._/-]` and rejects whitespace,
   leading `-`, `..`, `//`, `@{`, trailing `.lock`, and trailing `.`.
+- `git_checkout()` is revision-only. Its switch modes emit a trailing `--`, so
+  an operand that matches only a tracked path is refused instead of being
+  restored, and the builder never restores paths. `create_branch=True` names a
+  new branch at `HEAD` and emits no separator.
 - Builders validate inputs internally and expose `allow_relative` parameters
   on option dataclasses where relative paths are expected to be legitimate.
 - The rsync builders accept local operands only. `rsync_sync()` runs its

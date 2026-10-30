@@ -200,13 +200,20 @@ def when_build_relative_rsync_command(
 
 def then_git_argv_matches(
     git_result: _CommandResult,
-    program: str,
+    *,
     verb: str,
     ref: str,
+    separator: str,
 ) -> None:
-    """Verify the git command argv matches expectation."""
-    assert git_result.argv_with_program == (program, verb, ref), (  # ruff: ignore[assert] - step assertions replace return values
-        "Expected git_result.argv_with_program == (program, verb, ref)"
+    """Verify the git command argv matches expectation.
+
+    The program is fixed by the step text rather than parsed, so the four
+    Gherkin tokens arrive as three parameters and stay within the code-health
+    arity ceiling.
+    """
+    expected = ("git", verb, ref, separator)
+    assert git_result.argv_with_program == expected, (  # ruff: ignore[assert] - step assertions replace return values
+        f"Expected git_result.argv_with_program == {expected}"
     )
 
 

@@ -148,14 +148,40 @@ def test_git_status_builder_outputs_flags() -> None:
     assert cmd.argv == ("status", "--short", "--branch"), "git_status argv mismatch"
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, ("checkout", "main", "--")),
+        ({"force": True}, ("checkout", "--force", "main", "--")),
+        ({"detach": True}, ("checkout", "--detach", "main", "--")),
+        (
+            {"detach": True, "force": True},
+            ("checkout", "--detach", "--force", "main", "--"),
+        ),
+    ],
+    ids=["default", "force", "detach", "detach-and-force"],
+)
+def test_git_checkout_switch_modes_end_with_separator(
+    kwargs: dict[str, bool],
+    expected: tuple[str, ...],
+) -> None:
+    """Switch modes force a revision operand and emit no pathspec."""
+    cmd = git_checkout("main", **kwargs)
+    assert cmd.argv == expected, "git_checkout argv mismatch"
+
+
 def test_git_checkout_builder_outputs_args() -> None:
-    """git_checkout builds checkout argv with branch creation."""
+    """git_checkout builds checkout argv with branch creation.
+
+    Creation modes name a new branch, which is never a pathspec, so they emit
+    no end-of-options separator.
+    """
     cmd = git_checkout("feature/test", create_branch=True)
     assert cmd.argv == ("checkout", "-b", "feature/test"), "git_checkout argv mismatch"
 
 
 def test_git_checkout_builder_force_branch_creation() -> None:
-    """git_checkout uses -B when forcing branch creation."""
+    """git_checkout uses -B when forcing branch creation and emits no separator."""
     cmd = git_checkout("feature/test", create_branch=True, force=True)
     assert cmd.argv == ("checkout", "-B", "feature/test"), "git_checkout argv mismatch"
 
