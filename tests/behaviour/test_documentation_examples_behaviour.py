@@ -16,11 +16,18 @@ DOCUMENTS = (
     "README.md",
     "docs/users-guide.md",
     "docs/v0-2-0-migration-guide.md",
+    "docs/scripting-standards.md",
 )
-MARKER = re.compile(r"<!-- (tested|shell)-example: ([a-z0-9-]+) -->")
+MARKER = re.compile(
+    r"^\s*<!-- (tested|illustrative|shell)-example: ([a-z0-9-]+) -->\s*$"
+)
 # Python fences must execute; shell fences (installation commands, for
 # example) are published for copying and are never run by this suite.
 LANGUAGES = {"tested": "python", "shell": "shell"}
+# An illustrative fence is a published example whose dependencies or side
+# effects make execution unsuitable for a documentation gate. The document
+# must state why each one is excluded.
+ILLUSTRATIVE = "illustrative"
 # Both CommonMark fence characters open a block, so neither can hide an
 # example from marker validation.
 FENCE_DELIMITERS = ("```", "~~~")
@@ -43,14 +50,21 @@ def _consume_fence(
         example the fence holds, if any.
     """
     kind, name = marker
-    opening = lines[index]
+    opening = lines[index].strip()
     delimiter = opening[:3]
-    assert opening == f"{delimiter}{LANGUAGES[kind]}", (
-        f"{path}:{index + 1}: expected {LANGUAGES[kind]} fence for {kind} example"
-    )
+    if kind == ILLUSTRATIVE:
+        assert opening[len(delimiter) :].strip(), (
+            f"{path}:{index + 1}: illustrative fence must declare a language"
+        )
+    else:
+        assert opening == f"{delimiter}{LANGUAGES[kind]}", (
+            f"{path}:{index + 1}: expected {LANGUAGES[kind]} fence for {kind} example"
+        )
     start = index + 1
     closing = (
-        number for number in range(start, len(lines)) if lines[number] == delimiter
+        number
+        for number in range(start, len(lines))
+        if lines[number].strip() == delimiter
     )
     end = next(closing, None)
     assert end is not None, f"{path}:{start}: unterminated fence"
@@ -118,6 +132,18 @@ def test_shell_examples_are_published_but_not_executed() -> None:
     """A marked shell fence is accepted without joining the executed set."""
     text = "<!-- shell-example: install -->\n\n```shell\npip install cuprum\n```\n"
     assert not _parse_examples("doc.md", text), "shell example was queued to run"
+
+
+def test_illustrative_examples_are_published_but_not_executed() -> None:
+    """An illustrative fence in any language is accepted without being run."""
+    text = "<!-- illustrative-example: workflow -->\n```yaml\n- name: Build\n```\n"
+    assert not _parse_examples("doc.md", text), "illustrative example was queued to run"
+
+
+def test_indented_markers_and_fences_are_recognized() -> None:
+    """A marker and fence nested in a list item are still matched."""
+    text = "  <!-- illustrative-example: nested -->\n  ```python\n  value = 1\n  ```\n"
+    assert not _parse_examples("doc.md", text), "an indented marker went unnoticed"
 
 
 def test_tested_examples_are_returned_in_document_order() -> None:
