@@ -2842,9 +2842,9 @@ hook blocked indefinitely eventually pauses the child once the operating
 system's pipe buffers fill. Final completion also waits for pending hook tasks,
 so a blocked hook holds the run open even after the child has exited: a
 `timeout` bounds the child's run, not that final wait. Pass a `timeout` when
-observing output you do not control, and make awaitable hooks finish promptly
-rather than waiting indefinitely; a hook that must block should observe
-cancellation or apply its own deadline.
+observing output from an untrusted child, and make awaitable hooks finish
+promptly rather than waiting indefinitely; a hook that must block should
+observe cancellation or apply its own deadline.
 
 Capacity is checked once per event, so an event that schedules several
 awaitable hooks can briefly take the list to the ceiling plus one fewer than

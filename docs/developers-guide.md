@@ -1642,11 +1642,11 @@ from a worker thread; marshal back to the execution loop first.
 
 That list is bounded. `_OBSERVE_TASK_CEILING` (256, in
 `cuprum/_observe_task_retention.py`) caps the unfinished tasks one execution
-retains. It matches `_LINE_QUEUE_CAPACITY` in `cuprum/_line_stream.py`: the two
-describe the same quantity — how much asynchronous work one observed run may
-have in flight. Because a line event is emitted per decoded line even with
-capture off, an unbounded list lets a chatty child exhaust parent memory. The
-rules:
+retains. It matches `_LINE_QUEUE_CAPACITY` in
+`cuprum/_line_stream/line_queue.py`: the two describe the same quantity — how
+much asynchronous work one observed run may have in flight. Because a line
+event is emitted per decoded line even with capture off, an unbounded list lets
+a chatty child exhaust parent memory. The rules:
 
 - `_prune_finished_hook_tasks(pending_tasks)` mutates the list **in place**.
   Never rebind it: every pipeline stage retains into the same object, and a new

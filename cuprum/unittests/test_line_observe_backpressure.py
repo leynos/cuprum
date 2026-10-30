@@ -370,7 +370,10 @@ async def _blocked_timeout_case(monkeypatch: pytest.MonkeyPatch) -> None:
         await cmd.run(timeout=0.2)
 
     assert settled == ["settled"], "a timed-out run must settle exactly once"
-    assert probe.high_water <= _OBSERVE_TASK_CEILING
+    assert probe.high_water <= _OBSERVE_TASK_CEILING, (
+        f"retained tasks reached {probe.high_water}, above the ceiling "
+        f"{_OBSERVE_TASK_CEILING}"
+    )
     assert len(hook.seen) < line_count, (
         "the blocked child must not have delivered every line before the timeout"
     )
