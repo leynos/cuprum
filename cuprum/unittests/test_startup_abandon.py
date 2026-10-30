@@ -34,6 +34,31 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     import pathlib
 
+    from cuprum._capture_types import CaptureFinal
+
+
+class _UnremovableSpillError(OSError):
+    """Raised by the failing sink, standing in for an unremovable spill file."""
+
+
+class _SinkMisuseError(AssertionError):
+    """Raised when a case drives the failing sink past what it stands for."""
+
+
+class _FailingSink:
+    """A capture sink whose file cannot be removed, as a stuck spill would be."""
+
+    async def absorb(self, chunk: bytes) -> None:
+        """Take one raw chunk, which this sink has no use for."""
+
+    async def finalize(self) -> CaptureFinal:
+        """Fail: a case that finalizes this sink is testing the wrong object."""
+        raise _SinkMisuseError
+
+    async def cleanup(self) -> None:
+        """Fail, standing in for a spill file that cannot be removed."""
+        raise _UnremovableSpillError
+
 
 def _execution(policy: FileBackedCapture) -> _SubprocessExecution:
     """Build the run bundle the reclaim reads its teardown decisions from.
@@ -140,6 +165,43 @@ def test_abandon_reaps_the_child_and_removes_its_spill(tmp_path: pathlib.Path) -
         assert not _spill_files(tmp_path), (
             "the spill file must be removed, because no drain result will "
             "carry the handle that would otherwise clean it up"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_a_failing_capture_does_not_strand_the_other_stream(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One stream's failed cleanup must not leave the other stream's file behind.
+
+    The reclaim releases both streams' accumulators, and a sink that cannot
+    remove its file reports that by raising. Releasing the pair as one sequence
+    would stop at the failure and leave the second stream's spill file to a run
+    that never builds the result which would close it. The failing sink is
+    given the first turn, so the removal of the real file behind it is what
+    shows each accumulator is released on its own.
+    """
+
+    async def run_case() -> None:
+        """Abandon a real child with a failing sink ahead of a real one."""
+        process = await _spawn_sleeper()
+        execution = _execution(
+            FileBackedCapture(spill_threshold_bytes=None, directory=tmp_path),
+        )
+        sink = _prepare_stream_spawn(execution, process.pid).spawn_context.captures[0]
+        assert sink is not None, "a captured stdout must have an accumulator"
+        await sink.absorb(b"spilled past the threshold")
+
+        await _abandon_started_process(
+            process,
+            execution,
+            captures=(_FailingSink(), sink),
+        )
+
+        assert not _spill_files(tmp_path), (
+            "a failure removing the first stream's file must not stop the "
+            "second stream's file from being removed"
         )
 
     asyncio.run(run_case())
