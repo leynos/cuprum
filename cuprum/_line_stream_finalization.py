@@ -55,16 +55,24 @@ def _line_stream_outcome(
     Returns
     -------
     sinks.SessionOutcome
-        The terminal report for the adapter. An exit carries its code; a
-        ``GeneratorExit`` or cancellation reports ``CANCELLED`` and no code.
+        The terminal report for the adapter. A run that produced a result
+        carries its exit code; a cancellation, or a close before any result,
+        reports ``CANCELLED`` and no code.
 
     Notes
     -----
+    ``GeneratorExit`` is how closing the generator after the terminal yield
+    arrives, so it is not a failure: the run already produced its result, and
+    the close only ends the frame. Letting it win would report every completed
+    stream as cancelled, annotating successful runs and hiding a child's
+    non-zero exit behind the same detail. A genuine error around the result
+    still wins, because it says the run did not finish cleanly.
+
     Reaching both ``None`` means a close landed before the run produced either
     outcome. That is cancellation for the same reason an explicitly closed
     stream is: the caller asked to stop, and no child ever reported.
     """
-    if failure is not None:
+    if failure is not None and not isinstance(failure, GeneratorExit):
         return _outcome_for_error(failure)
     if result is not None:
         return _outcome_for_result(result)

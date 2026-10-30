@@ -20,8 +20,10 @@ import pytest
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
 from cuprum.sh import CommandResult, RunOutputOptions
+from cuprum.sinks.github_actions import _escape_property
 from cuprum.unittests.test_sinks_end_to_end import (
     _ON_CI,
+    _annotations,
     _flags_output,
     _forced_sink,
     _python_command,
@@ -47,15 +49,18 @@ _SPOOFING_CHILD = (
 )
 
 
-async def _drain(command: sh.SafeCmd, output: RunOutputOptions) -> list[str]:
-    """Consume one streamed run to completion and return the line texts."""
+async def _drain(
+    command: sh.SafeCmd,
+    output: RunOutputOptions,
+) -> tuple[list[str], CommandResult]:
+    """Consume one streamed run to completion and return its lines and result."""
     async with command.lines(output=output) as stream:
         texts = [event.text async for event in stream]
     result = stream.result
     assert isinstance(result, CommandResult), (
         f"a completed line stream must report its result; got {result!r}"
     )
-    return texts
+    return texts, result
 
 
 def _assert_lease_frames(
@@ -114,7 +119,7 @@ def test_grouped_lines_lease_wraps_live_child_output(
     command, allowlist = _python_command(_SPOOFING_CHILD)
 
     with scoped(ScopeConfig(allowlist=allowlist)):
-        texts = asyncio.run(_drain(command, _flags_output(group=True)))
+        texts, _ = asyncio.run(_drain(command, _flags_output(group=True)))
 
     assert texts == [
         "inside the group",
@@ -209,3 +214,48 @@ def test_cancelled_consumer_releases_lease_and_terminates_child() -> None:
     (pid,) = started_pids(events)
     wait_for_process_death(pid, seconds=5.0, context="a cancelled line stream")
     _assert_lease_frames(buffer.getvalue(), command, "ready")
+
+
+def test_completed_stream_closes_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A completed line stream must not annotate itself as cancelled.
+
+    ``LineStream`` closes its generator after the terminal result, which throws
+    ``GeneratorExit`` into it. That ordinary close says nothing about how the
+    child ended: the session must close with the exit outcome, or an exit-zero
+    run annotates a failure the child never reported.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("print('done')")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        _, result = asyncio.run(_drain(command, _flags_output(annotate_failure=True)))
+
+    assert result.exit_code == 0, f"the child must succeed; got {result!r}"
+    assert _annotations(capsys.readouterr().err) == [], (
+        "an exit-zero line stream must not annotate a failure"
+    )
+
+
+def test_failed_stream_annotates_exit_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed line stream annotates its exit, not a cancellation.
+
+    The annotation detail is the only place the outcome reaches a user, so a
+    completed run whose child failed has to report ``exit_nonzero``; reporting
+    ``cancelled`` would blame the caller for a failure the child chose.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("raise SystemExit(7)")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        _, result = asyncio.run(_drain(command, _flags_output(annotate_failure=True)))
+
+    assert result.exit_code == 7, f"the child must exit 7; got {result!r}"
+    assert _annotations(capsys.readouterr().err) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "a failed line stream must annotate its categorical exit outcome"
