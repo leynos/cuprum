@@ -185,7 +185,9 @@ def test_has_capacity_below_the_ceiling_does_not_prune() -> None:
         await asyncio.sleep(0)
         pending = [finished]
 
-        assert _has_hook_capacity(pending, 3) is True
+        assert _has_hook_capacity(pending, 3) is True, (
+            "a list below the ceiling must report capacity"
+        )
         assert pending == [finished], "the fast path must not mutate the list"
         gate.set()
 
@@ -203,7 +205,9 @@ def test_has_capacity_prunes_settled_tasks_at_the_ceiling() -> None:
         await asyncio.sleep(0)
         pending = [finished, unfinished]
 
-        assert _has_hook_capacity(pending, 2) is True
+        assert _has_hook_capacity(pending, 2) is True, (
+            "pruning at the ceiling must free the settled slot"
+        )
         assert pending == [unfinished], "the settled task must have been pruned"
         gate.set()
         await _wait_for_exec_hook_tasks(pending)
@@ -220,7 +224,9 @@ def test_has_capacity_reports_saturation_of_unfinished_tasks() -> None:
         pending = [asyncio.create_task(_hold(gate)) for _ in range(2)]
         await asyncio.sleep(0)
 
-        assert _has_hook_capacity(pending, 2) is False
+        assert _has_hook_capacity(pending, 2) is False, (
+            "two unfinished tasks must saturate a ceiling of two"
+        )
         assert len(pending) == 2, "saturation must retain every unfinished task"
         gate.set()
         await _wait_for_exec_hook_tasks(pending)
@@ -368,9 +374,13 @@ def test_composed_callback_defers_observation_at_the_ceiling(
         assert emit is not None
 
         assert emit("line-0") is None, "an available slot must not suspend"
-        assert len(observation.pending_tasks) == 1
+        assert len(observation.pending_tasks) == 1, (
+            "the first line must schedule exactly one observer task"
+        )
         assert emit("line-1") is None, "the last slot must still dispatch inline"
-        assert len(observation.pending_tasks) == 2
+        assert len(observation.pending_tasks) == 2, (
+            "the second line must schedule a second observer task"
+        )
 
         deferred = emit("line-2")
         assert inspect.isawaitable(deferred), "saturation must return an awaitable"
@@ -406,12 +416,14 @@ def test_two_hooks_overshoot_the_ceiling_by_at_most_hooks_minus_one(
         emit = _compose_line_callbacks(observation, _line_context())
         assert emit is not None
 
-        assert emit("a") is None
-        assert emit("b") is None
+        assert emit("a") is None, "the first line must dispatch inline"
+        assert emit("b") is None, "the second line must dispatch inline"
         assert len(observation.pending_tasks) == 4, (
             "two events of two hooks may overshoot a ceiling of three by one"
         )
-        assert len(observation.pending_tasks) <= 3 + 2 - 1
+        assert len(observation.pending_tasks) <= 3 + 2 - 1, (
+            "overshoot must stay within ceiling plus hooks minus one"
+        )
 
         deferred = emit("c")
         assert inspect.isawaitable(deferred), "the next event must wait for a slot"
@@ -419,8 +431,12 @@ def test_two_hooks_overshoot_the_ceiling_by_at_most_hooks_minus_one(
 
         gate.set()
         await deferred
-        assert first.seen == ["a", "b", "c"]
-        assert second.seen == ["a", "b", "c"]
+        assert first.seen == ["a", "b", "c"], (
+            "the first hook must see every line exactly once, in order"
+        )
+        assert second.seen == ["a", "b", "c"], (
+            "the second hook must see every line exactly once, in order"
+        )
         await _wait_for_exec_hook_tasks(observation.pending_tasks)
 
     asyncio.run(case())
