@@ -5059,13 +5059,19 @@ Copies contain ordinary files, not links to the snapshot or caller cache.
 Snapshot preparation and copying are recorded as dependency-preparation time;
 current packaging and doctest timeout marks remain finite end-to-end bounds and
 include any compiler-admission wait inside Cargo. The packaging frontend
-timeout defaults to 180 seconds and can be raised with
-`CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. The
-packaging consumer mark is derived from that value with a 60-second margin.
-This timeout remains an end-to-end watchdog, not an execution-only budget. The
-snapshot key follows the Cargo lockfile, toolchain, Cargo version, and runner
-scope. Do not hand the snapshot itself to Cargo: Cargo coordinates cache access
-only within one home, and offline mode does not remove those locks.
+watchdog defaults to 180 seconds for uv and 3600 seconds for Maturin, whose
+cold target compiles the native extension; either can be raised with
+`CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. A
+cold Maturin wheel build measured 163 seconds on a loaded developer host on
+2026-10-30, but a gate run then waited behind 67 compiler-admission requests
+and overran a 600-second bound. Because the coordinator exposes no workload
+lease, the native watchdog stays at the finite end-to-end bound inherited from
+the pre-factory contract rather than at the measured workload. The packaging
+consumer mark is derived from the largest frontend bound with a 60-second
+margin. This timeout remains an end-to-end watchdog, not an execution-only
+budget. The snapshot key follows the Cargo lockfile, toolchain, Cargo version,
+and runner scope. Do not hand the snapshot itself to Cargo: Cargo coordinates
+cache access only within one home, and offline mode does not remove those locks.
 `CARGO_BUILD_JOBS` remains caller-owned. CPU, memory, and the host-wide
 compiler-admission limit remain separate resource constraints.
 

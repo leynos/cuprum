@@ -138,26 +138,31 @@ target was cold for the first build and warm for the second.
 
 _Table 2: Local packaging route timing observations._
 
-| Phase                      | Duration    | Conditions                                      |
-| -------------------------- | ----------: | ----------------------------------------------- |
-| Dependency preparation     | 21.2 s      | Snapshot reused; run-local home copied          |
-| uv source archive          | 0.10 s      | Grouped session; prepared snapshot              |
-| uv wheel                   | 0.05 s      | Grouped session; prepared snapshot              |
-| Maturin source archive     | 7.15 s      | Grouped session; prepared snapshot              |
-| Maturin wheel, cold target | 38.6–49.1 s | Empty targets; `CARGO_BUILD_JOBS` unset         |
-| Maturin wheel, warm target | 23.8 s      | Separate home; same target; `sccache` available |
+| Phase                       | Duration    | Conditions                                      |
+| --------------------------- | ----------: | ----------------------------------------------- |
+| Dependency preparation      | 21.2 s      | Snapshot reused; run-local home copied          |
+| uv source archive           | 0.10 s      | Grouped session; prepared snapshot              |
+| uv wheel                    | 0.05 s      | Grouped session; prepared snapshot              |
+| Maturin source archive      | 7.15 s      | Grouped session; prepared snapshot              |
+| Maturin wheel, empty target | 38.6–49.1 s | Compiler objects already cached                 |
+| Maturin wheel, warm target  | 23.8 s      | Separate home; same target; `sccache` available |
+| Maturin wheel, rebuilt      | 163 s       | Fresh target and home; 2026-10-30; loaded host  |
 
-The command's 180 s timeout contains these measured cold invocations by default;
-`CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise that end-to-end cap for a runner
-with more queueing. The pytest mark stays 60 s above the configured command
-cap. The 49.1 s Maturin wheel was measured in the grouped session; the 38.6 s
-sample used a separate empty target. This was a developer-host observation, not
-a CI-runner or concurrent-run measurement. The host-wide compiler pool was full
-while other work queued, and its `sccache` state was healthy. The measured wall
-time therefore includes any per-compiler admission waits. It does not establish
-the workload-only budget under a top-level resource lease. Repeat the
-measurement on the target CI runner and under the coordinator's documented
-workload lease before revising timeout contracts.
+The packaging command watchdogs are 180 s for the uv frontend and 3600 s for
+Maturin. `CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise both end-to-end caps for a
+runner with more queueing, and the pytest mark stays 60 s above the largest
+configured cap. The 49.1 s Maturin wheel was measured in the grouped session;
+the 38.6 s sample used a separate empty target; in both, compiled objects were
+already available to the compiler cache. The 163 s sample rebuilt the native
+extension from an empty target, but a later gate run waited behind up to 123
+compiler-admission requests and overran a 600 s Maturin bound. The native
+watchdog therefore remains the finite end-to-end bound inherited from the
+pre-factory contract, not the measured workload, because the coordinator
+exposes no workload lease that could exclude that queue. This was a
+developer-host observation, not a CI-runner or concurrent-run measurement. It
+does not establish the workload-only budget under a top-level resource lease.
+Repeat the measurement on the target CI runner and under the coordinator's
+documented workload lease before revising timeout contracts.
 
 The current compiler coordinator exposes bounded compiler scopes only, not a
 bounded outer Cargo-workload lease; its queue wait has no finite limit. Until

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -19,20 +20,29 @@ from tests.helpers.grouped_recipe_flow import require_grouped_selector_drives_py
 from tests.helpers.makefile import recipe_of, variable_expansion
 
 _FRONTEND_TIMEOUT_MESSAGE = "frontend exceeded its limit"
+#: Cold Maturin wheel build measured on a loaded developer host on 2026-10-30.
+_MEASURED_COLD_MATURIN_SECONDS = 163
 
 
 @pytest.mark.parametrize(
-    ("configured_value", "expected_seconds"),
-    [(None, 180), ("300", 300)],
+    ("configured_value", "backend", "expected_seconds"),
+    [
+        (None, "uv", 180),
+        (None, "maturin", 3600),
+        ("300", "uv", 300),
+        ("300", "maturin", 300),
+    ],
 )
 def test_packaging_timeout_uses_positive_override_or_default(
     configured_value: str | None,
+    backend: typ.Literal["uv", "maturin"],
     expected_seconds: int,
 ) -> None:
-    """A configured frontend limit is positive and defaults to 180 seconds."""
-    assert _configured_build_timeout_seconds(configured_value) == expected_seconds, (
-        "the packaging command must use configured seconds or its default"
-    )
+    """A configured frontend limit is positive and defaults per backend."""
+    assert (
+        _configured_build_timeout_seconds(configured_value, backend=backend)
+        == expected_seconds
+    ), "the packaging command must use configured seconds or its backend default"
 
 
 @pytest.mark.parametrize("configured_value", ["0", "-1", "invalid"])
@@ -41,14 +51,27 @@ def test_packaging_timeout_rejects_invalid_override(
 ) -> None:
     """Invalid frontend limits fail clearly instead of disabling the watchdog."""
     with pytest.raises(ValueError, match="CUPRUM_PACKAGING_BUILD_TIMEOUT"):
-        _configured_build_timeout_seconds(configured_value)
+        _configured_build_timeout_seconds(configured_value, backend="uv")
 
 
 def test_packaging_test_timeout_covers_frontend_limit_with_margin() -> None:
-    """Consumer tests leave 60 seconds beyond the configured frontend limit."""
-    assert (
-        DISTRIBUTION_TEST_TIMEOUT_SECONDS - DISTRIBUTION_BUILD_TIMEOUT_SECONDS == 60
-    ), "the consumer timeout must stay 60 seconds above the build cap"
+    """Consumer tests leave 60 seconds beyond the largest frontend limit."""
+    largest_frontend_limit = max(DISTRIBUTION_BUILD_TIMEOUT_SECONDS.values())
+    assert DISTRIBUTION_TEST_TIMEOUT_SECONDS - largest_frontend_limit == 60, (
+        "the consumer timeout must stay 60 seconds above the largest build cap"
+    )
+
+
+def test_maturin_budget_keeps_headroom_over_its_measured_cold_build() -> None:
+    """The native watchdog leaves room for a cold build and admission waits."""
+    maturin_limit = DISTRIBUTION_BUILD_TIMEOUT_SECONDS["maturin"]
+    assert maturin_limit > DISTRIBUTION_BUILD_TIMEOUT_SECONDS["uv"], (
+        "the native build must keep a larger bound than the Python-only backend"
+    )
+    assert maturin_limit >= 3 * _MEASURED_COLD_MATURIN_SECONDS, (
+        "the Maturin watchdog must retain headroom for a cold target and the "
+        "compiler-admission waits no workload lease can exclude"
+    )
 
 
 def _new_factory(tmp_path: Path) -> DistributionArtefactFactory:

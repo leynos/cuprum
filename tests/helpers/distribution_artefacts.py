@@ -40,14 +40,23 @@ _MATURIN_SUBCOMMANDS: dict[_Format, str] = {
     "sdist": "sdist",
 }
 _BUILD_TIMEOUT_ENVIRONMENT_VARIABLE = "CUPRUM_PACKAGING_BUILD_TIMEOUT"
-_DEFAULT_BUILD_TIMEOUT_SECONDS = 180
+# Maturin compiles the native extension from a cold target. A fresh wheel build
+# measured 163 s on a loaded developer host on 2026-10-30, but that is workload
+# time, not a safe budget: one gate run waited behind 67 compiler-admission
+# requests and overran 600 s. No workload lease exists to exclude that queue, so
+# the native frontend keeps the 3600 s end-to-end watchdog inherited from its
+# pre-factory contract. The uv frontend only packages Python and stays at 180 s.
+_DEFAULT_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
+    "uv": 180,
+    "maturin": 3600,
+}
 _BUILD_TIMEOUT_MARGIN_SECONDS = 60
 
 
-def _configured_build_timeout_seconds(value: str | None) -> int:
-    """Parse a positive packaging command timeout, defaulting to 180 seconds."""
+def _configured_build_timeout_seconds(value: str | None, *, backend: _Backend) -> int:
+    """Parse one frontend's positive timeout, defaulting per backend."""
     if value is None:
-        return _DEFAULT_BUILD_TIMEOUT_SECONDS
+        return _DEFAULT_BUILD_TIMEOUT_SECONDS[backend]
     try:
         timeout_seconds = int(value)
     except ValueError as error:
@@ -59,11 +68,14 @@ def _configured_build_timeout_seconds(value: str | None) -> int:
     return timeout_seconds
 
 
-DISTRIBUTION_BUILD_TIMEOUT_SECONDS = _configured_build_timeout_seconds(
-    os.environ.get(_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE)
-)
+DISTRIBUTION_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
+    backend: _configured_build_timeout_seconds(
+        os.environ.get(_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE), backend=backend
+    )
+    for backend in ("uv", "maturin")
+}
 DISTRIBUTION_TEST_TIMEOUT_SECONDS = (
-    DISTRIBUTION_BUILD_TIMEOUT_SECONDS + _BUILD_TIMEOUT_MARGIN_SECONDS
+    max(DISTRIBUTION_BUILD_TIMEOUT_SECONDS.values()) + _BUILD_TIMEOUT_MARGIN_SECONDS
 )
 
 
@@ -180,7 +192,7 @@ def _build_distribution(request: _BuildRequest) -> _BuildOutcome:
             context=sh.ExecutionContext(
                 cwd=request.repository_root,
                 env=dict(request.environment),
-                timeout=DISTRIBUTION_BUILD_TIMEOUT_SECONDS,
+                timeout=DISTRIBUTION_BUILD_TIMEOUT_SECONDS[request.backend],
                 process_group=ProcessGroupPolicy.OWN_GROUP,
             )
         )
