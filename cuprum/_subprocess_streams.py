@@ -186,6 +186,35 @@ def _build_run_task_ownership(
         spawn.spawn_context,
         recorded=recorded,
     )
+    return _build_task_ownership(
+        stdin_task=stdin_task,
+        consumers=consumers,
+        spawn=spawn,
+        execution=execution,
+    )
+
+
+def _build_task_ownership(
+    *,
+    stdin_task: asyncio.Task[None] | None,
+    consumers: _ConsumerPair,
+    spawn: _StreamSpawnInputs,
+    execution: _SubprocessExecution,
+) -> _RunTaskOwnership:
+    """Assemble the tasks one run retains for its reconciliation point.
+
+    Both callers start the same writer and the same consumers — the direct run
+    and the line iterator through :func:`_build_run_task_ownership`, the owned
+    handle through its all-or-nothing attach — so the record they hand back is
+    built here rather than twice. The latch, diagnostics, and captures come
+    from *spawn* because the consumers were wired from it; only the idle
+    monitor is read off the execution.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The started tasks, plus the latch and collectors the run retains.
+    """
     return _RunTaskOwnership(
         stdin_task=stdin_task,
         consumers=consumers,
@@ -358,6 +387,7 @@ __all__ = [
     "_StreamSpawnInputs",
     "_build_run_task_ownership",
     "_build_stream_config",
+    "_build_task_ownership",
     "_create_stream_callback",
     "_prepare_stream_spawn",
     "_resolve_stream_configs",
