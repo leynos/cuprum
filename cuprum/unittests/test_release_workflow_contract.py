@@ -37,9 +37,11 @@ _EXPECTED_PERMISSIONS: typ.Final = {
     "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
     "publish-pypi": {"contents": "read", "id-token": "write"},
     "draft-release": {"contents": "write", "attestations": "read"},
-    "publish-release": {"contents": "write"},
+    "publish-release": {"contents": "write", "attestations": "read"},
 }
 _FETCH_INDEX = "Fetch the PyPI index"
+_PROVENANCE_STEP = "Verify provenance of PyPI bytes"
+_PROVENANCE_DIR = "pypi-provenance"
 
 #: The `id` of the publisher step that reports whether the CodeScene token
 #: exists, and that step's whole command.
@@ -252,13 +254,56 @@ def test_the_release_is_published_only_after_pypi() -> None:
         "draft-release", "Create or reuse the draft release"
     )
     names = [item.get("name") for item in _job("publish-release")["steps"]]
+    fetched = names.index("Check the fetched PyPI bytes")
+    provenance = names.index(_PROVENANCE_STEP)
     upload = names.index("Upload the assets the release lacks")
     check = names.index("Check both destinations hold the same bytes")
-    assert upload < check < names.index("Publish the GitHub Release"), (
-        "the digests must be compared after the upload and before the release"
+    assert (
+        fetched
+        < provenance
+        < upload
+        < check
+        < names.index("Publish the GitHub Release")
+    ), (
+        "provenance must precede the upload, and the digests must be compared "
+        "after the upload and before the release"
     )
     assert "--draft=false" in step_script(
         "publish-release", "Publish the GitHub Release"
+    )
+
+
+def test_pypi_bytes_are_verified_before_the_release_upload() -> None:
+    """Fetched PyPI bytes need approved provenance, not just the index digest."""
+    found = step("publish-release", _PROVENANCE_STEP)
+    assert "if" not in found, (
+        "the gate must run unconditionally, even with an empty fetch list"
+    )
+    script = step_script("publish-release", _PROVENANCE_STEP)
+    for fragment in (
+        "gh --version | python3 scripts/release_gh_version.py",
+        f"mkdir -p {_PROVENANCE_DIR}",
+        '--repo "${GITHUB_REPOSITORY}"',
+        '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"',
+        '--source-ref "${GITHUB_REF}"',
+        '--source-digest "${GITHUB_SHA}"',
+        "--predicate-type https://slsa.dev/provenance/v1",
+        "--deny-self-hosted-runners",
+        "--format json",
+        f'record="{_PROVENANCE_DIR}/${{name}}.json"',
+        'rm -f "${record}"',
+        "::error title=pypi-provenance::",
+        "check-provenance --publish dist/publish",
+        "--index pypi-index.json",
+        "--output github-upload",
+        f"--provenance {_PROVENANCE_DIR}",
+    ):
+        assert fragment in script, f"the provenance gate must include {fragment!r}"
+    assert "${{" not in script, (
+        "the provenance script must not interpolate workflow expressions"
+    )
+    assert "done < pypi-fetch.tsv" in script, (
+        "only the files actually fetched from PyPI need verification"
     )
 
 

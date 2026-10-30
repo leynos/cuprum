@@ -324,3 +324,67 @@ digest and provenance, then delete the named asset and rerun if downloaded
 bytes still disagree with GitHub's reported digest or provenance remains
 untrusted. The release phases still have no tracing spans: GitHub Actions has
 no tracing collector or backend to receive them.
+
+## Addendum (2026-10-30): verify provenance before publishing PyPI bytes
+
+The 2026-10-26 addendum closed the GitHub-to-PyPI direction: a carried GitHub
+asset needs approved provenance before PyPI may receive it. The reverse
+direction remained open. When PyPI already held a filename the GitHub Release
+lacked, `publish-release` downloaded the URL named by PyPI's index, checked it
+against the digest in that same index, and uploaded it. The index digest
+establishes only that the download arrived intact; it says nothing about who
+built the bytes, and an index record that agrees with malicious bytes would
+agree just as readily. A PyPI file could therefore become a GitHub Release
+asset without any approved build provenance.
+
+### Verification before upload
+
+`publish-release` now runs an unconditional step between `check-fetched` and
+`gh release upload`. It first requires GitHub CLI `2.102.0` or newer through
+`scripts/release_gh_version.py`, then verifies every name in `pypi-fetch.tsv`
+into `pypi-provenance/<name>.json`, and finally runs
+`release_assets_cli check-provenance`. That command hashes the staged bytes
+rather than trusting the index digest, and requires a verifier record binding
+that exact filename and digest in one statement subject. Missing, malformed,
+split-subject, or mismatched evidence fails the step, names every failing file,
+and leaves the release a draft.
+
+The evidence directory sits outside `github-upload/`, so verifier output never
+becomes a release asset. The step has no `if:` condition: an empty fetch list
+still succeeds, but a fetch list the step cannot read stops the job rather than
+silently skipping verification. `check-provenance` refuses to run without
+`--index`, because without the index the plan holds no PyPI names and the gate
+would approve nothing while appearing to run.
+
+### Attestation identity and a moved tag
+
+The verifier binds the repository, the signer workflow
+`.github/workflows/release.yml`, the full tag ref from `GITHUB_REF`, the
+triggering commit from `GITHUB_SHA`, the SLSA v1 predicate type, and denial of
+self-hosted runners. It also requires the asset's exact filename and SHA-256 in
+the statement subject.
+
+Pinning the source digest is what separates this gate from the carried-asset
+one. `draft-release` deliberately omits `--source-digest` so an interrupted
+attempt for the same tag remains eligible. `publish-release` must not inherit
+that latitude: bytes it publishes claim to be this release's build, so it pins
+the commit the tag names now. A moved tag cannot carry PyPI's bytes over from a
+different commit; a rerun for the moved tag rebuilds and re-attests them
+instead.
+
+### Token scopes for the new gate
+
+`publish-release` adds `attestations: read`; it already holds `contents: write`
+for the upload and the un-drafting edit. It reads `GITHUB_REPOSITORY`,
+`GITHUB_REF`, and `GITHUB_SHA` from the runner environment rather than
+interpolating them into the script, keeping the workflow-wide rule that no
+`run` body expands a `${{ }}` expression.
+
+### Manual remediation
+
+Bytes already on PyPI cannot be deleted or replaced. When the check fails,
+first confirm the tag names the intended commit; if it was moved, restore it to
+the commit that built PyPI's files and rerun. If PyPI holds bytes no run
+attested, no rerun can approve them unless the rebuild is byte-identical, so
+publish a new version. Deleting the GitHub asset is not a remedy here: the
+blocking bytes are on PyPI, and the release simply stays a draft.

@@ -3568,7 +3568,7 @@ Table 1: Release jobs and their token scopes
 | `attest`          | `contents: read`, `id-token: write`, `attestations: write`     | `check-version`, `build-wheels`                  |
 | `draft-release`   | `contents: write`, `attestations: read`                        | `check-version`, `attest`                        |
 | `publish-pypi`    | `contents: read`, `id-token: write`, in the `pypi` environment | `attest`, `draft-release`                        |
-| `publish-release` | `contents: write`                                              | `check-version`, `draft-release`, `publish-pypi` |
+| `publish-release` | `contents: write`, `attestations: read`                        | `check-version`, `draft-release`, `publish-pypi` |
 
 The jobs do the following:
 
@@ -3609,6 +3609,27 @@ The jobs do the following:
    version check. The verifier checks the tag ref through `GITHUB_REF`, not the
    run's commit SHA, so a previous attempt for the same release tag can be
    carried over.
+
+   `publish-release` verifies the bytes it fetched from PyPI under a stricter
+   identity: those bytes must belong to the commit the tag names now, so the
+   verifier also passes `--source-digest` and a pinned predicate type. Check
+   one file by hand with:
+
+   ```bash
+   gh attestation verify <file> --repo leynos/cuprum \
+     --signer-workflow leynos/cuprum/.github/workflows/release.yml \
+     --source-ref refs/tags/v1.2.3 --source-digest <commit> \
+     --predicate-type https://slsa.dev/provenance/v1 \
+     --deny-self-hosted-runners --format json
+   ```
+
+   Supply the tag's current commit as `<commit>`. Both verifier call sites
+   require GitHub CLI `2.102.0` or newer, which fixes
+   [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g)
+   and
+   [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8);
+   `publish-release` checks the version on every run, not only when a carryover
+   list is non-empty.
 3. `draft-release` reuses the tag's GitHub Release if one exists, draft or
    published, and otherwise creates a draft with generated notes, marked as a
    pre-release when `check-version` says so. It snapshots the release's current
@@ -3646,12 +3667,16 @@ The jobs do the following:
    list, then uploads to the GitHub Release exactly the names it still lacks —
    fetching PyPI's bytes when PyPI already has the name, checked against PyPI's
    recorded SHA-256, or this run's bytes otherwise — plus this run's Sigstore
-   bundle. There is no `--clobber`: an asset the release already holds is left
-   untouched. It then verifies that every artefact name carries an identical
-   SHA-256 on PyPI and on the GitHub Release, and that the run's bundle is
-   attached, before un-drafting the release and setting its pre-release status.
-   A digest mismatch, a missing bundle, or any upload failure leaves the
-   release a draft.
+   bundle. Every file fetched from PyPI is then verified against an approved
+   attestation bound to this repository's release workflow, the tag ref, the
+   triggering commit, and the file's own staged bytes; the index digest alone
+   never authorizes an upload. The job holds `attestations: read` to query
+   GitHub's attestation store. There is no `--clobber`: an asset the release
+   already holds is left untouched. It then verifies that every artefact name
+   carries an identical SHA-256 on PyPI and on the GitHub Release, and that the
+   run's bundle is attached, before un-drafting the release and setting its
+   pre-release status. A digest mismatch, a missing bundle, or any upload
+   failure leaves the release a draft.
 
 #### Reconciliation, verification, and manual recovery
 
@@ -3666,6 +3691,27 @@ bytes differ and provenance is missing or mismatched, staging fails before
 publication. Names held by neither destination use this run's freshly built and
 attested file. Each destination receives only the names it lacks, and nothing
 already published is ever overwritten.
+
+The PyPI-to-GitHub direction has its own gate.
+`scripts/release_github_upload.py` holds `stage_github()`, `check_fetched()`,
+and `check_provenance()`; the last hashes each file fetched from PyPI and
+requires a verifier record binding that exact filename and digest. The
+`check-provenance` subcommand refuses to run without `--index`, because without
+the index the plan holds no PyPI names and the gate would verify nothing. The
+index digest cannot stand in for provenance: an index record that agrees with
+the downloaded bytes would equally agree with malicious bytes served under the
+same URL. Every failing file is named in one error, and nothing is uploaded.
+
+Because the verifier pins `--source-digest` to the triggering commit, bytes can
+carry over between attempts only while the tag still names that commit. Moving
+a tag to a different commit changes the identity, so bytes attested by the
+earlier commit no longer qualify; a rerun for the moved tag rebuilds and
+re-attests the artefacts rather than carrying PyPI's bytes forward. If the
+check fails because the tag was moved, restore it to the commit that built
+PyPI's files and rerun. If PyPI holds bytes that no run attested, no rerun can
+approve them unless the rebuild is byte-identical, so publish a new version.
+PyPI files cannot be deleted or replaced, and they are never a reason to relax
+this gate.
 
 `publish-release`'s final check compares PyPI's and the GitHub Release's
 SHA-256 digest for every artefact name and confirms the run's Sigstore bundle
@@ -3697,8 +3743,10 @@ checking or copying the GitHub asset; `draft-release` has already attempted
 provenance verification for each carryover asset. The standard-library-only
 `scripts/release_provenance.py` module implements `has_matching_subject` to
 check the verifier JSON subject shape; it must not import third-party packages
-while `publish-pypi` holds its OIDC credential. When carried assets need
-verification, the GitHub CLI minimum of 2.102.0 fixes
+while `publish-pypi` holds its OIDC credential. `stage_pypi()` and
+`check_provenance()` share it, so both directions demand the exact filename and
+its digest in the same subject. When carried assets need verification, the
+GitHub CLI minimum of 2.102.0 fixes
 [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
 which prevents affected versions from accepting a different signer workflow
 whose path merely shares the configured prefix, and
