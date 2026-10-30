@@ -36,6 +36,7 @@ from cuprum._command_internals import (
 from cuprum._command_internals import _run_prepared_command as _run_prepared_command
 from cuprum._command_prepare import _prepare_owned_command as _prepare_owned_command
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES as DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._detached_launch import DetachedLaunch
 from cuprum._execution_tracking import _ExecutionTracking as _ExecutionTracking
 from cuprum._idle_heartbeat import _validate_idle_options as _validate_idle_options
 from cuprum._line_iteration import LineStream
@@ -133,6 +134,7 @@ __all__ = [
     "CapturedResult",
     "CapturedStream",
     "CommandResult",
+    "DetachedLaunch",
     "ExecutionContext",
     "FileBackedCapture",
     "FullCapture",
