@@ -2297,6 +2297,58 @@ preserving the `SafeCmd.run()` execution contract:
   monkeypatch targets resolve the same name as before. See the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-27.
+- `cuprum/_subprocess_startup_abandon.py` owns the reclaim of a child whose
+  startup failed after the spawn but before any route that would wait for,
+  drain, and reap it was entered. `_abandon_started_process` runs one fixed
+  sequence behind a single `_shielded_cleanup`: terminate and reap the child
+  under the run's own process-group policy, cancel and gather every task the
+  failed setup had already started, close stdin and discard stdout and stderr
+  to end-of-file, then release the capture accumulators. Ordinary cleanup
+  failures are suppressed per step, so the error the caller is already
+  unwinding reaches it unchanged; a cancellation propagates only after the
+  sequence completes. `_record_started` is the companion the setup calls as it
+  creates each task, so a consumer that fails to start cannot hide one that is
+  already running. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-10-30.
+
+For screen readers: The following sequence diagram shows how a child spawned by
+`_start_owned_process` is reclaimed when the setup that follows the spawn
+fails. The helper emits the `start` event; if that or any later setup step
+raises, it calls `_abandon_started_process`, which terminates and reaps the
+child, cancels and gathers the started tasks, closes stdin, and discards stdout
+and stderr to end-of-file before the original error reaches the caller. When
+the setup succeeds, the started run is returned instead.
+
+Figure 10: Startup abandonment after a post-spawn failure, from
+`_start_owned_process` to `_abandon_started_process`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Spawn as _start_owned_process
+    participant Process as ChildProcess
+    participant Abandon as _abandon_started_process
+    participant Tasks as StartedTasks
+    participant Pipes as ProcessPipes
+
+    Caller->>Spawn: _spawn_subprocess()
+    Spawn->>Process: spawn child
+    Spawn->>Spawn: observation.emit()
+    alt post-spawn setup fails
+        Spawn->>Abandon: _abandon_started_process(process, execution, tasks)
+        Abandon->>Process: _terminate_all_shielded()
+        Abandon->>Process: reap child
+        Abandon->>Tasks: cancel and gather started tasks
+        Abandon->>Pipes: _close_stdin()
+        Abandon->>Pipes: _discard_to_eof(stdout, stderr)
+        Abandon-->>Spawn: cleanup complete
+        Spawn-->>Caller: re-raise original setup error
+    else setup succeeds
+        Spawn-->>Caller: return started run
+    end
+```
+
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured payloads and settled
@@ -2647,7 +2699,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 10: Fail-fast termination selection via the `_stages_to_terminate`
+Figure 11: Fail-fast termination selection via the `_stages_to_terminate`
 reducer
 
 ```mermaid
@@ -2846,7 +2898,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 11: Concurrent execution flow with allowlist validation and semaphore
+Figure 12: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -2892,7 +2944,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 12: Fail-fast mode cancellation behaviour
+Figure 13: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -3072,7 +3124,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 13: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 14: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -3610,7 +3662,7 @@ and re-resolves the timeout in the task that pulls it, so a scope entered after
 `lines()` returns can still refuse the spawn (transitioning straight to
 `Refused`) or shorten its deadline.
 
-Figure 14: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 15: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -3646,7 +3698,7 @@ actually ran under. Only then does `_start_line_stream_run()` spawn the
 subprocess and its consumers. Once streaming, the run ends either by publishing
 the `CommandResult` or by closing through `aclose()` or cancellation.
 
-Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+Figure 16: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
 through deferred authorization and spawning to completion or close
 
 ```mermaid
@@ -3668,7 +3720,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 16: Line observation fan-out from decoded output to lifecycle events,
+Figure 17: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3697,7 +3749,7 @@ the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 17: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 18: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -4999,7 +5051,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 18: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 19: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -5029,7 +5081,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 19: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 20: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid
