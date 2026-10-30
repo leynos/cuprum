@@ -78,6 +78,7 @@ from cuprum._subprocess_wait import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -260,6 +261,10 @@ async def _run_subprocess_with_streams(
     # than after the set is built, because the step that fails is the one that
     # would have returned the set.
     recorded: list[asyncio.Task[typ.Any]] = []
+    # Resolved by the step that builds the stream inputs, so the reclaim can
+    # remove a spill file a started consumer opened. Empty until then: a
+    # failure before the stream configs exist has no accumulator to release.
+    captures: tuple[CaptureSink | None, CaptureSink | None] = (None, None)
     try:
         if execution.idle is not None:
             # Armed here, once the child is running: the catalogue checks and
@@ -272,6 +277,7 @@ async def _run_subprocess_with_streams(
         # resolves both stream configs, which is what makes each stream's
         # capture accumulator reachable from that same point.
         spawn = _prepare_stream_spawn(execution, pid)
+        captures = spawn.spawn_context.captures
         tasks = _build_run_task_ownership(
             process,
             execution,
@@ -279,7 +285,12 @@ async def _run_subprocess_with_streams(
             recorded=recorded,
         )
     except BaseException:
-        await _abandon_started_process(process, execution, recorded)
+        await _abandon_started_process(
+            process,
+            execution,
+            recorded,
+            captures=captures,
+        )
         raise
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,

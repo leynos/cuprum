@@ -21,6 +21,10 @@ aborting the rest:
    parent-side transport disconnect, and the wait is bounded because a
    descendant that inherited a pipe can outlive the group teardown — the limit
    ADR 021 records.
+4. release the capture accumulators, now that no consumer can still be writing
+   into them. A drain cancelled rather than settled never builds the result
+   that would have carried its spill handle, so the accumulator is the last
+   reference to a temporary file the library owns.
 
 Ordinary cleanup failures are suppressed per step, so a later step still runs
 and the failure owed to the caller — the hook or setup step that raised —
@@ -35,6 +39,7 @@ import asyncio
 import contextlib
 import typing as typ
 
+from cuprum._capture_cleanup import _cleanup_capture_sinks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
 from cuprum._teardown_policy import _TeardownPolicy
@@ -42,6 +47,7 @@ from cuprum._teardown_policy import _TeardownPolicy
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._capture_types import CaptureSink
     from cuprum._subprocess_execution import _SubprocessExecution
 
 # Chunk size for the discard read. Reading to EOF in bounded pieces rather than
@@ -63,6 +69,8 @@ async def _abandon_started_process(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     tasks: cabc.Sequence[asyncio.Task[typ.Any]] = (),
+    *,
+    captures: cabc.Iterable[CaptureSink | None] = (),
 ) -> None:
     """Stop, reap, and release a child whose startup failed after the spawn.
 
@@ -79,6 +87,12 @@ async def _abandon_started_process(
     tasks : collections.abc.Sequence[asyncio.Task[typing.Any]]
         Tasks the failed setup had already started, in creation order. Empty
         when the failure happened before any task existed.
+    captures : collections.abc.Iterable[CaptureSink | None]
+        The capture accumulators the failed setup had resolved, if it got far
+        enough to resolve them. Their spill files are removed after the tasks
+        are settled, because a cancelled drain never builds the result that
+        would otherwise have carried the handle. Empty when the run captures
+        nothing or never reached the point of resolving its streams.
 
     Notes
     -----
@@ -88,12 +102,14 @@ async def _abandon_started_process(
     propagates, but only after every step has run.
     """
     recorded = tuple(tasks)
+    sinks = tuple(captures)
 
     async def abandon() -> None:
         """Run the whole reclaim as one sequence behind a single shield."""
         await _stop_child(process, execution)
         await _settle_recorded_tasks(recorded)
         await _release_pipes(process, execution)
+        await _release_captures(sinks)
 
     await _shielded_cleanup(abandon())
 
@@ -147,6 +163,18 @@ async def _release_pipes(
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
                     await _discard_to_eof(stream)
+
+
+async def _release_captures(
+    captures: cabc.Iterable[CaptureSink | None],
+) -> None:
+    """Remove any spill file the started consumers had opened.
+
+    Runs after the tasks are settled: a consumer still draining into its
+    accumulator could otherwise recreate the file this is removing.
+    """
+    with contextlib.suppress(Exception):
+        await _cleanup_capture_sinks(captures)
 
 
 async def _discard_to_eof(stream: asyncio.StreamReader) -> None:

@@ -38,6 +38,7 @@ from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
+from cuprum._subprocess_startup_abandon import _record_started
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
@@ -239,10 +240,11 @@ async def _attach_run_tasks(
 
     Attaching is all-or-nothing. The configuration is built before anything is
     started, because it can fail and a task started ahead of that failure would
-    have nobody holding it. Anything started once the tasks begin is reclaimed
-    by :func:`_detach_run_tasks` before the failure propagates, so a caller
-    that is told attaching failed is not also handed a writer still draining
-    into a pipe.
+    have nobody holding it. Each task is recorded the moment it exists rather
+    than after the set is built, so the second consumer's failure cannot hide
+    the first. Anything recorded is reclaimed by :func:`_detach_run_tasks`
+    before the failure propagates, so a caller that is told attaching failed is
+    not also handed a writer still draining into a pipe.
 
     Returns
     -------
@@ -269,12 +271,17 @@ async def _attach_run_tasks(
             _stdin_codec(execution.ctx),
             execution.observation,
         )
-        if stdin_task is not None:
-            started.append(stdin_task)
-        consumers = _spawn_stream_consumers(process, execution, spawn.spawn_context)
-        # A redirected stream gets no consumer and holds ``None`` in its slot,
-        # so only the tasks actually started are handed to the reclaim path.
-        started.extend(consumer for consumer in consumers if consumer is not None)
+        _record_started(started, stdin_task)
+        # The spawn records each consumer as it creates it. A pair built in one
+        # expression would lose the stdout consumer entirely if starting
+        # stderr failed, leaving a reader nobody holds and `_detach_run_tasks`
+        # nothing to cancel.
+        consumers = _spawn_stream_consumers(
+            process,
+            execution,
+            spawn.spawn_context,
+            recorded=started,
+        )
     except BaseException:
         await _detach_run_tasks(started)
         raise
