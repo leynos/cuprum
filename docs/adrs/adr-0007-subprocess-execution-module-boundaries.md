@@ -1551,11 +1551,13 @@ running in the reclaim's hands. Recording one at a time rather than building a
 pair in one expression is what makes the failure of the second consumer safe
 for the first.
 
-The owned handle's `_attach_run_tasks` has the same problem in a different
-shape and takes the same answer. Its reclaim is `_detach_run_tasks` rather than
-this helper, but it too starts one consumer per stream and can fail while the
-pair is being built, so it hands its own `started` list to
-`_spawn_stream_consumers` instead of recording the returned pair.
+The owned handle's `_attach_run_tasks` had the same problem in a different
+shape, and closing it also removed the last reason for it to keep a copy of the
+task construction. Its reclaim is `_detach_run_tasks` rather than this helper,
+but it too starts one consumer per stream and can fail while the pair is being
+built, so it passes its own `started` list to `_build_run_task_ownership`
+exactly as the direct run does; that shared helper records each task as it is
+created and is now the only place the writer and the consumers are started.
 
 The same guarantee already existed for `SafeCmd.lines()` and `SafeCmd.start()`,
 whose post-spawn windows end in their own unwind helpers with their own records

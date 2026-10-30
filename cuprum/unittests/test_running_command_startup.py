@@ -22,6 +22,7 @@ import typing as typ
 import pytest
 
 from cuprum import RunOutputOptions, ScopeConfig, StdioTarget, scoped, sh
+from cuprum import _subprocess_streams as streams
 from cuprum._process_handle import tasks as handle_tasks
 from cuprum.events import ExecEvent, TerminalOutcome
 from tests.helpers.catalogue import python_catalogue
@@ -248,7 +249,7 @@ def test_a_consumer_started_before_the_failure_is_reclaimed() -> None:
         builder = sh.make(python_program, catalogue=catalogue)
         command = builder("-c", "import time; time.sleep(30)")
         _, observe = _observations()
-        real_consumers = handle_tasks._spawn_stream_consumers
+        real_consumers = streams._spawn_stream_consumers
         recorded_by_handle: list[asyncio.Task[typ.Any]] | None = None
 
         def failing_consumers(
@@ -276,7 +277,7 @@ def test_a_consumer_started_before_the_failure_is_reclaimed() -> None:
             sh.observe(observe),
             pytest.MonkeyPatch.context() as patch,
         ):
-            patch.setattr(handle_tasks, "_spawn_stream_consumers", failing_consumers)
+            patch.setattr(streams, "_spawn_stream_consumers", failing_consumers)
             with pytest.raises(RuntimeError, match=_START_FAILURE):
                 await command.start()
 

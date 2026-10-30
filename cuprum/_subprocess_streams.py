@@ -161,12 +161,16 @@ def _build_run_task_ownership(
 ) -> _RunTaskOwnership:
     """Start a run's stdin writer and stream consumers as one owned set.
 
-    The owned-handle path builds its equivalent inline, because attaching
-    there is all-or-nothing and it must record each task as it starts. The
-    direct run and the line iterator both come through here; the direct run
-    passes *recorded*, which receives each task the moment it exists rather
-    than after the whole set is built — a failure while starting a later task
-    must not lose an earlier one, since the tuple this returns is never built.
+    Every path that owns both comes through here: the direct run, the line
+    iterator, and the owned handle. Each starts the same writer and the same
+    consumers, so the record they retain is assembled in one place rather than
+    three, and the paths cannot drift on capture, echo, or sink selection.
+
+    *recorded* receives each task the moment it exists rather than after the
+    whole set is built — a failure while starting a later task must not lose an
+    earlier one, since the tuple this returns is never built. The direct run
+    and the handle pass one, for their own reclaim routes; the line iterator's
+    post-spawn window settles a larger record, so it passes none.
 
     Returns
     -------
@@ -203,12 +207,11 @@ def _build_task_ownership(
 ) -> _RunTaskOwnership:
     """Assemble the tasks one run retains for its reconciliation point.
 
-    Both callers start the same writer and the same consumers — the direct run
-    and the line iterator through :func:`_build_run_task_ownership`, the owned
-    handle through its all-or-nothing attach — so the record they hand back is
-    built here rather than twice. The latch, diagnostics, and captures come
-    from *spawn* because the consumers were wired from it; only the idle
-    monitor is read off the execution.
+    Every caller of :func:`_build_run_task_ownership` starts the same writer
+    and the same consumers, so the record they hand back is assembled here
+    rather than once per path. The latch, diagnostics, and captures come from
+    *spawn* because the consumers were wired from it; only the idle monitor is
+    read off the execution.
 
     Returns
     -------

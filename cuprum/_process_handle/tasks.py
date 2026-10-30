@@ -38,13 +38,9 @@ from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
-from cuprum._subprocess_startup_abandon import _record_started
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
-    _build_task_ownership,
+    _build_run_task_ownership,
     _prepare_stream_spawn,
-    _spawn_stream_consumers,
 )
 
 if typ.TYPE_CHECKING:
@@ -240,11 +236,12 @@ async def _attach_run_tasks(
 
     Attaching is all-or-nothing. The configuration is built before anything is
     started, because it can fail and a task started ahead of that failure would
-    have nobody holding it. Each task is recorded the moment it exists rather
-    than after the set is built, so the second consumer's failure cannot hide
-    the first. Anything recorded is reclaimed by :func:`_detach_run_tasks`
-    before the failure propagates, so a caller that is told attaching failed is
-    not also handed a writer still draining into a pipe.
+    have nobody holding it. What follows is the record the streamed ``run()``
+    path builds too, through the same helper: the tasks are recorded one at a
+    time as each is created, so the second consumer's failure cannot hide the
+    first, and anything recorded is reclaimed by :func:`_detach_run_tasks`
+    before the failure propagates. A caller that is told attaching failed is
+    therefore not also handed a writer still draining into a pipe.
 
     Returns
     -------
@@ -265,32 +262,16 @@ async def _attach_run_tasks(
     spawn = _prepare_stream_spawn(execution, process.pid)
     started: list[asyncio.Task[typ.Any]] = []
     try:
-        stdin_task = _spawn_stdin_writer(
-            process,
-            execution.stdio.stdin,
-            _stdin_codec(execution.ctx),
-            execution.observation,
-        )
-        _record_started(started, stdin_task)
-        # The spawn records each consumer as it creates it. A pair built in one
-        # expression would lose the stdout consumer entirely if starting
-        # stderr failed, leaving a reader nobody holds and `_detach_run_tasks`
-        # nothing to cancel.
-        consumers = _spawn_stream_consumers(
+        ownership = _build_run_task_ownership(
             process,
             execution,
-            spawn.spawn_context,
+            spawn,
             recorded=started,
         )
     except BaseException:
         await _detach_run_tasks(started)
         raise
-    return _build_task_ownership(
-        stdin_task=stdin_task,
-        consumers=consumers,
-        spawn=spawn,
-        execution=execution,
-    )
+    return ownership
 
 
 async def _detach_run_tasks(tasks: cabc.Sequence[asyncio.Task[typ.Any]]) -> None:
