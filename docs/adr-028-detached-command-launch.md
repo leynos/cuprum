@@ -102,14 +102,13 @@ Ownership transfers when the receipt is returned, and the implementation treats
 that as one indivisible step. The synchronous launch has no suspension point at
 all. The asynchronous launch calls `_launch_detached` first — a plain
 synchronous function that never suspends — and then yields once with
-`await asyncio.sleep(0)`
-before returning the receipt. A cancellation requested while the launch was
-running becomes deliverable at that yield; if it lands there, the caller never
-sees the receipt, so cuprum still owns the worker and kills its group with
-`_abandon_detached` before re-raising. The same abandonment covers a failure
-while the receipt is being constructed. The caller therefore either holds a
-receipt or has no child, and can never hold a receipt for a worker cuprum has
-already stopped.
+`await asyncio.sleep(0)` before returning the receipt. A cancellation requested
+while the launch was running becomes deliverable at that yield; if it lands
+there, the caller never sees the receipt, so cuprum still owns the worker and
+kills its group with `_abandon_detached` before re-raising. The same
+abandonment covers a failure while the receipt is being constructed. The caller
+therefore either holds a receipt or has no child, and can never hold a receipt
+for a worker cuprum has already stopped.
 
 After the transfer Cuprum keeps nothing: no process object, no transport, no
 stream consumer, no task, and no registration. The process object is dropped
