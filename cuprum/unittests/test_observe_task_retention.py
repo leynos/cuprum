@@ -441,5 +441,5 @@ def test_on_line_does_not_run_when_observation_dispatch_fails() -> None:
     with pytest.raises(_HookFailureError):
         _ = emit("line")
 
-    assert called == [], "on_line must not run after a failed observation"
-    assert observation.pending_tasks == [], "a sync failure schedules no task"
+    assert not called, "on_line must not run after a failed observation"
+    assert not observation.pending_tasks, "a sync failure schedules no task"
