@@ -153,8 +153,9 @@ compiled, checked, or fresh.
 ### Observed gate results
 
 The results below come from Linux runs on the implementation candidate at commit
-`b047b5644` on 30 October 2026. They record statuses and Cargo freshness; they
-do not claim a measured speedup.
+`b047b5644` on 30 October 2026, except the contract row, which was re-measured
+after that route gained a regression test. They record statuses and Cargo
+freshness; they do not claim a measured speedup.
 
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
@@ -162,12 +163,16 @@ do not claim a measured speedup.
 | Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
 | Native extension suite                              | 142 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
-| Cargo warning fixture and warm-cache controls       | Passed, 23 tests                        | `make test-modern-stable-contract`                                    |
+| Cargo warning fixture and warm-cache controls       | 25 passed; wrapper variant included     | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
 | Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
 | `rust/Cargo.lock` unchanged                         | Passed; SHA-256 recorded below          | CI lockfile check and local checksum                                  |
 
 _Table 3: Implementation validation evidence._
+
+The contract route reported 25 passed with `sccache` on `PATH` and
+`RUSTC_WRAPPER` set, so its configured-wrapper variant ran rather than being
+skipped.
 
 The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the

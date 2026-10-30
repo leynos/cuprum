@@ -11,6 +11,7 @@ from scripts.modern_stable_warning_controls import (
     WARNING_REPLAY_STATE,
     GateRun,
     _append_warning,
+    _child_environment,
     _has_warning_failure,
     _observe_output,
     _verify_prewarm,
@@ -30,6 +31,22 @@ def test_warning_injection_appends_one_private_unused_function() -> None:
     )
     with pytest.raises(ValueError, match="already exists"):
         _append_warning(changed)
+
+
+def test_child_environment_clears_inherited_make_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the outer Make's jobserver and recursion flags out of subprocesses."""
+    monkeypatch.setenv("MAKEFLAGS", "--jobserver-auth=3,4 -j8")
+
+    environment = _child_environment()
+
+    assert not environment["MAKEFLAGS"], (
+        "an inherited MAKEFLAGS must be cleared in the child environment"
+    )
+    assert environment["CARGO_BUILD_JOBS"] == "2", "Cargo builds must stay bounded"
+    assert environment["CARGO_TERM_COLOR"] == "never", "logs must be plain text"
+    assert environment["TEST_JOBS"] == "2", "test threads must stay bounded"
 
 
 def test_controls_cover_each_migrated_gate_and_the_maturin_boundary() -> None:
