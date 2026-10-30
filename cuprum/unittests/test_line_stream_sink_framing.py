@@ -13,14 +13,17 @@ bytes the child wrote and control lines the adapter wrote around them.
 from __future__ import annotations
 
 import asyncio
+import threading
 import typing as typ
 
 import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._sink_lifecycle import _run_label
-from cuprum.sh import CommandResult, RunOutputOptions
+from cuprum.context import ForbiddenProgramError
+from cuprum.sh import BoundedDelivery, CommandResult, RunOutputOptions
 from cuprum.sinks.github_actions import _escape_property
+from cuprum.unittests._sink_test_support import RecordingSession, RecordingSink
 from cuprum.unittests.test_sinks_end_to_end import (
     _ON_CI,
     _annotations,
@@ -33,6 +36,7 @@ from tests.helpers.timeouts import started_pids, wait_for_process_death
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent
+    from cuprum.sinks import SessionOutcome
 
 _LEASE_PREFIX = "::stop-commands::"
 
@@ -101,6 +105,28 @@ def _assert_lease_frames(
     assert value.rindex("::endgroup::\n") > value.index(release), (
         f"the session's own endgroup must follow the lease release; got {value!r}"
     )
+
+
+class _BlockingCloseSession(RecordingSession):
+    """A recording session whose close waits until the test releases it."""
+
+    def __init__(self, release: threading.Event) -> None:
+        """Record where the close runs, and hold it open until released."""
+        super().__init__()
+        self.release = release
+        self.close_started = threading.Event()
+        self.close_finished = threading.Event()
+        self.close_thread: str | None = None
+
+    def close(self, outcome: SessionOutcome) -> None:
+        """Record the closing thread, then wait for the release."""
+        self.close_thread = threading.current_thread().name
+        self.close_started.set()
+        try:
+            self.release.wait(timeout=5.0)
+        finally:
+            self.close_finished.set()
+        super().close(outcome)
 
 
 def test_grouped_lines_lease_wraps_live_child_output(
@@ -259,3 +285,111 @@ def test_failed_stream_annotates_exit_nonzero(
     assert _annotations(capsys.readouterr().err) == [
         f"title={_escape_property(_run_label(command))}::exit_nonzero",
     ], "a failed line stream must annotate its categorical exit outcome"
+
+
+def test_denied_first_pull_opens_no_sink_session() -> None:
+    """The opener enforces the allowlist before it frames anything.
+
+    ``run()`` refuses a forbidden program before writing its group line, and a
+    pull does the same: opening first would let a denied run publish framing
+    the caller never authorized, so a regression that reordered the check would
+    otherwise pass every framing test.
+    """
+    command, allowlist = _python_command("print('never runs')")
+    sink = RecordingSink()
+
+    async def pull(stream: sh.LineStream) -> None:
+        """Request the first event under the restricted scope."""
+        with pytest.raises(ForbiddenProgramError):
+            await anext(stream)
+        await stream.aclose()
+
+    # Build permissively, then deny: authorization is deferred to the pull,
+    # and the opener must refuse before it frames anything.
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        stream = command.lines(output=RunOutputOptions(echo=True, sink=sink))
+    with scoped(ScopeConfig(allowlist=frozenset())):
+        asyncio.run(pull(stream))
+
+    assert sink.opened == 0, (
+        "a denied first pull must not open the presentation sink, so no group "
+        f"or lease is written; the adapter was consulted {sink.opened} time(s)"
+    )
+
+
+def test_timed_out_stream_annotates_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A line-stream timeout annotates its categorical detail.
+
+    The ``run()`` timeout annotation is covered elsewhere; the line path maps
+    the failure through the same session close, so it must report ``timeout``
+    rather than the run's error category.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("import time; time.sleep(5)")
+
+    async def consume() -> None:
+        """Consume a child that outlives its deadline."""
+        async with command.lines(
+            output=_flags_output(annotate_failure=True),
+            timeout=0.2,
+        ) as stream:
+            with pytest.raises(sh.TimeoutExpired):
+                async for _event in stream:
+                    pass
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        asyncio.run(consume())
+
+    assert _annotations(capsys.readouterr().err) == [
+        f"title={_escape_property(_run_label(command))}::timeout",
+    ], "a timed-out line stream must annotate its categorical timeout"
+
+
+def test_bounded_delivery_closes_the_session_off_loop() -> None:
+    """A bounded line stream finalizes its session on the delivery closer.
+
+    The unbounded close runs inline on the event loop. Bounded delivery
+    instead starts a daemon closer and waits only for the drain grace, so a
+    held close proves both branches: the stream finishes while the close is
+    still blocked, and the close runs on the closer thread rather than the
+    loop's.
+    """
+    command, allowlist = _python_command("print('done')")
+    release = threading.Event()
+    session = _BlockingCloseSession(release)
+    sink = RecordingSink(session_factory=lambda: session)
+    output = RunOutputOptions(
+        echo=True,
+        sink=sink,
+        delivery=BoundedDelivery(max_queued_bytes=128, drain_grace_s=0.05),
+    )
+
+    async def consume() -> CommandResult:
+        """Complete the stream, then inspect the still-held close."""
+        result: CommandResult | None = None
+        try:
+            _, result = await asyncio.wait_for(_drain(command, output), timeout=2.0)
+            started = await asyncio.to_thread(session.close_started.wait, 2.0)
+            assert started, "the bounded closer must enter the session close"
+            assert session.close_thread == "cuprum-output-session-close", (
+                "a bounded run must close its session on the closer thread, not "
+                f"the event loop; got {session.close_thread!r}"
+            )
+            assert session.closed == 0, (
+                "the stream must return before the held close finishes"
+            )
+        finally:
+            release.set()
+        finished = await asyncio.to_thread(session.close_finished.wait, 2.0)
+        assert finished, "the released close must finish"
+        assert result is not None, "the completed stream must report its result"
+        return result
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = asyncio.run(consume())
+
+    assert result.exit_code == 0, f"the child must succeed; got {result!r}"
+    assert session.closed == 1, "the session must close exactly once"
