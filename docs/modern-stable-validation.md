@@ -149,15 +149,16 @@ compiled, checked, or fresh.
 
 ### Observed gate results
 
-The results below come from Linux runs on the implementation candidate. They
-record statuses and Cargo freshness; they do not claim a measured speedup.
+The results below come from Linux runs on the implementation candidate at commit
+`b047b5644` on 30 October 2026. They record statuses and Cargo freshness; they
+do not claim a measured speedup.
 
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
 | Modern toolchain guard                              | Passed                                  | Exact `rustc -vV` and `cargo -V` output above                         |
 | Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
-| Native extension suite                              | 103 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
+| Native extension suite                              | 142 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
 | Cargo warning fixture and warm-cache controls       | Passed, 23 tests                        | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
 | Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
@@ -169,8 +170,9 @@ The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the
 versions printed above. Its Rust test run reported 165 passed and no skipped
 tests; the separate doctest run reported 8 passed and 3 ignored. The extension
-skips are Windows-only tests and are not Linux runtime evidence. The lockfile
-SHA-256 was `f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591`.
+suite reported 142 passed and 4 skipped; those skips are Windows-only tests and
+are not Linux runtime evidence. The lockfile SHA-256 was
+`f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591`.
 
 The full-gate harness reported these exit statuses and Cargo freshness counts.
 Exit 2 is the expected denied-warning result; exit 0 is the expected
@@ -180,8 +182,8 @@ and records the positive number of fresh dependency lines.
 
 | Gate    | Package          | Phase               | Exit | Package state         | Compile/check lines | Fresh lines |
 | ------- | ---------------- | ------------------- | ---: | --------------------- | ------------------: | ----------: |
-| check   | `cuprum-streams` | warning-cold        | 2    | Checking              | 159                 | 0           |
-| check   | `cuprum-streams` | warning-prewarm     | 0    | Checking              | 16                  | 153         |
+| check   | `cuprum-streams` | warning-cold        | 2    | Checking              | 160                 | 0           |
+| check   | `cuprum-streams` | warning-prewarm     | 0    | Checking              | 15                  | 154         |
 | check   | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 152         |
 | check   | `cuprum-streams` | warning-warm-repeat | 2    | Cached warning replay | 0                   | 152         |
 | check   | `cuprum-streams` | clean               | 0    | Checking              | 2                   | 167         |
@@ -192,7 +194,7 @@ and records the positive number of fresh dependency lines.
 | clippy  | `cuprum-streams` | clean               | 0    | Checking              | 2                   | 167         |
 | test    | `cuprum-streams` | warning-cold        | 2    | Compiling             | 67                  | 92          |
 | test    | `cuprum-streams` | warning-prewarm     | 0    | Compiling             | 9                   | 160         |
-| test    | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 155         |
+| test    | `cuprum-streams` | warning-warm        | 2    | Cached warning replay | 0                   | 156         |
 | test    | `cuprum-streams` | warning-warm-repeat | 2    | Cached warning replay | 0                   | 155         |
 | test    | `cuprum-streams` | clean               | 0    | Compiling             | 2                   | 167         |
 | Maturin | `cuprum-rust`    | warning-cold        | 2    | Compiling             | 12                  | 10          |
