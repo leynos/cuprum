@@ -873,10 +873,10 @@ reason = "Two pipeline record modules repeating one optional-field guard. Each r
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_line_iteration.py",
+    "cuprum/_line_stream_finalization.py",
     "cuprum/_timeout_reporting.py",
 ]
-reason = "The same `if <field> is None: return None` guard over two unrelated optional boundaries: a line iterator and a timeout report. Recorded as an idiom, matching the None-tolerance entries above."
+reason = "The same `if <field> is None: return` guard over two unrelated optional boundaries: a line stream's failure report and a timeout report. Recorded as an idiom, matching the None-tolerance entries above. The line-stream half moved here when `_emit_line_stream_error` was split out of `_line_iteration.py`; the duplication is unchanged, so this entry moved with it rather than being deleted."
 
 [[tool.duplication_gate.allow]]
 members = [

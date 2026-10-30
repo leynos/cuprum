@@ -33,7 +33,7 @@ from cuprum._command_internals import (
 )
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
-from cuprum._sink_lifecycle import _SinkBracket
+from cuprum._sink_lifecycle import _command_session_start, _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.context import current_context
 from cuprum.sh.execution import _resolve_stdin_source
@@ -113,10 +113,26 @@ class _LineIterationRequest:
     timeout: float | None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _PreparedLineIteration:
+    """What one lazy line iteration carries from preparation to first pull.
+
+    The three parts travel together because the pull needs all of them at one
+    moment and each answers a different question: whether the run may start,
+    what to build once it may, and where its framed output goes. Splitting them
+    into a tuple would invite a caller to reorder the opener past the build, and
+    the build resolves its log destinations from the session the opener creates.
+    """
+
+    tracking: _ExecutionTracking
+    execution_factory: cabc.Callable[[], _SubprocessExecution]
+    open_sink: cabc.Callable[[], None]
+
+
 def _prepare_line_iteration(
     cmd: SafeCmd,
     request: _LineIterationRequest,
-) -> tuple[_ExecutionTracking, cabc.Callable[[], _SubprocessExecution]]:
+) -> _PreparedLineIteration:
     """Check one command's options and freeze the run it would start.
 
     This is the whole of ``SafeCmd.lines()`` between resolving its arguments
@@ -141,9 +157,10 @@ def _prepare_line_iteration(
 
     Returns
     -------
-    tuple[_ExecutionTracking, collections.abc.Callable[[], _SubprocessExecution]]
-        The hook bookkeeping the iteration travels with, and the factory that
-        builds the execution bundle on demand.
+    _PreparedLineIteration
+        The hook bookkeeping the iteration travels with, the factory that
+        builds the execution bundle on demand, and the deferred opener that
+        frames the run's presentation sink once iteration begins.
 
     Raises
     ------
@@ -168,33 +185,76 @@ def _prepare_line_iteration(
     )
     tracking = _line_iteration_tracking()
     observation = _prepare_execution_observation(cmd, state, tracking)
-    return tracking, functools.partial(
-        _build_subprocess_execution,
-        cmd,
-        state,
-        observation=observation,
-        sink_bracket=tracking.sink_bracket,
+    return _PreparedLineIteration(
+        tracking=tracking,
+        execution_factory=functools.partial(
+            _build_subprocess_execution,
+            cmd,
+            state,
+            observation=observation,
+            sink_bracket=tracking.sink_bracket,
+        ),
+        open_sink=_line_iteration_sink_opener(cmd, tracking, out),
     )
 
 
 def _line_iteration_tracking() -> _ExecutionTracking:
     """Build the hook bookkeeping one line iteration travels with.
 
-    Line iteration never opens a presentation session: the line events are the
-    caller's own consumption of the streams, so there is no adapter framing to
-    bracket. The empty bracket keeps the required field satisfied.
+    The bracket starts empty and is opened by
+    :func:`_line_iteration_sink_opener` when iteration begins. Construction
+    must not open it: an async generator whose body never runs would leak the
+    adapter's group and its stop-commands lease, which is exactly the
+    runner-wide silencing this path has to avoid.
 
     Returns
     -------
     _ExecutionTracking
-        Tracking whose sink bracket owns nothing and whose pending-task list
-        starts empty.
+        Tracking whose sink bracket owns nothing yet and whose pending-task
+        list starts empty.
     """
     return _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
         sink_bracket=_SinkBracket(None),
     )
+
+
+def _line_iteration_sink_opener(
+    cmd: SafeCmd,
+    tracking: _ExecutionTracking,
+    output: RunOutputOptions,
+) -> cabc.Callable[[], None]:
+    """Return the deferred open of a line iteration's presentation session.
+
+    The opener is called once, from the generator body, in the context of the
+    task that pulls the first event. It enforces the allowlist itself before
+    opening anything: the pull re-checks that allowlist immediately afterwards,
+    but that check happens too late to keep a forbidden program from writing a
+    group line, and ``run()`` refuses before it frames for the same reason.
+
+    Bounded delivery is configured here rather than in
+    :func:`_line_iteration_tracking`, because whether the run uses it is a
+    property of the options the opener already reads.
+
+    Returns
+    -------
+    collections.abc.Callable[[], None]
+        The one-shot opener for this iteration's bracket.
+    """
+    delivery = output.delivery
+
+    def open_sink() -> None:
+        """Frame the run's configured sink, if any, exactly once."""
+        _enforce_allowlist(cmd)
+        tracking.sink_bracket.open_session(
+            output.sink,
+            _command_session_start(cmd),
+            bounded_delivery=delivery is not None,
+            delivery_grace_s=None if delivery is None else delivery.drain_grace_s,
+        )
+
+    return open_sink
 
 
 def _reject_redirected_lines_stdout(output: RunOutputOptions) -> None:
