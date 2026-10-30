@@ -99,7 +99,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     class _InjectedStdinError(Exception):
         """Sentinel error injected by the fake stdin writer."""
 
-    recorded: list[ConsumerTask] = []
+    spawned_consumers: list[ConsumerTask] = []
 
     async def _raise_stdin(
         process: asyncio.subprocess.Process,
@@ -117,8 +117,16 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
         process: object,
         execution: object,
         spawn_context: object,
+        *,
+        recorded: list[ConsumerTask] | None = None,
     ) -> tuple[ConsumerTask, ConsumerTask]:
-        """Return two never-completing consumer tasks and record them."""
+        """Return two never-completing consumer tasks and record them.
+
+        The real spawn offers its callers a list that receives each task as it
+        is created, so the double accepts one too; the test's own list must
+        still receive both, because its assertions are what witness the
+        cleanup.
+        """
         _ = (process, execution, spawn_context)
 
         async def _block() -> _CapturedDrain:
@@ -127,7 +135,9 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
             return _CapturedDrain()
 
         tasks = (asyncio.create_task(_block()), asyncio.create_task(_block()))
-        recorded.extend(tasks)
+        spawned_consumers.extend(tasks)
+        if recorded is not None:
+            recorded.extend(tasks)
         return tasks
 
     monkeypatch.setattr("cuprum._subprocess_stdin._write_stdin", _raise_stdin)
@@ -148,8 +158,10 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
         # Assert inside the still-running loop, before asyncio.run tears it
         # down: loop teardown would itself cancel any orphaned tasks and mask
         # the bug, so only the reconcile path can have finished these here.
-        assert len(recorded) == 2, "streamed path must spawn two stream consumers"
-        assert all(task.cancelled() for task in recorded), (
+        assert len(spawned_consumers) == 2, (
+            "streamed path must spawn two stream consumers"
+        )
+        assert all(task.cancelled() for task in spawned_consumers), (
             "stdout/stderr consumers must be cancelled and drained when the "
             "stdin writer fails, not left orphaned as pending tasks"
         )

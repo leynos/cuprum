@@ -119,6 +119,7 @@
       'cuprum/_subprocess_outcome.py',
       'cuprum/_subprocess_rendezvous.py',
       'cuprum/_subprocess_spawn.py',
+      'cuprum/_subprocess_startup_abandon.py',
       'cuprum/_subprocess_stdin.py',
       'cuprum/_subprocess_stdin_errors.py',
       'cuprum/_subprocess_stdin_finalize.py',
