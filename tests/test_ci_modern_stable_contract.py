@@ -81,6 +81,8 @@ def test_modern_stable_pull_requests_use_a_dedicated_changes_filter() -> None:
         "uv.lock",
         "scripts/modern_stable_warning_controls.py",
         "scripts/tests/test_modern_stable_warning_controls.py",
+        "tests/helpers/cargo_warning_fixture.py",
+        "tests/helpers/modern_stable_make.py",
         ".github/workflows/ci.yml",
         ".github/actions/cache-keys/action.yml",
         ".github/actions/setup-sccache/**",
