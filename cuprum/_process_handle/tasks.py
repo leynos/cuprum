@@ -41,15 +41,16 @@ from cuprum._subprocess_spawn import (
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
+    _build_task_ownership,
     _prepare_stream_spawn,
     _spawn_stream_consumers,
 )
-from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._execution_tracking import _ExecutionTracking
+    from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 __all__ = [
     "_HandleRun",
@@ -277,13 +278,11 @@ async def _attach_run_tasks(
     except BaseException:
         await _detach_run_tasks(started)
         raise
-    return _RunTaskOwnership(
+    return _build_task_ownership(
         stdin_task=stdin_task,
         consumers=consumers,
-        discard_on_cancel=spawn.discard_on_cancel,
-        relay_diagnostics=spawn.relay_diagnostics,
-        idle=execution.idle,
-        captures=spawn.spawn_context.captures,
+        spawn=spawn,
+        execution=execution,
     )
 
 
