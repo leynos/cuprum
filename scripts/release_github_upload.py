@@ -3,7 +3,7 @@
 ``publish-release`` stages every artefact the release lacks, checks that each
 file fetched from PyPI matches PyPI's index digest, and then requires approved
 build provenance for those exact bytes. Only then does the workflow upload
-them, so PyPI's index cannot by itself authorise bytes the release publishes.
+them, so PyPI's index cannot by itself authorize bytes the release publishes.
 
 The CLI imports this module in the release job, so it stays
 standard-library-only; workflow ``curl``/``gh`` steps own network access.
@@ -98,7 +98,7 @@ def check_provenance(state: State, output: Path, evidence: Path) -> None:
     repository's release workflow, so each one must also match an approved
     attestation. The digest is computed from the staged bytes rather than
     taken from the index, so an index record that agrees with malicious bytes
-    cannot authorise them.
+    cannot authorize them.
 
     Parameters
     ----------

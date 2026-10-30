@@ -101,7 +101,7 @@ def test_approved_provenance_for_the_staged_bytes_passes(
     _checked(tmp_path, (_ASSET, _SDIST), {})
 
 
-def test_uppercase_digests_are_normalised_before_comparison(
+def test_uppercase_digests_are_normalized_before_comparison(
     tmp_path: Path,
 ) -> None:
     """The verifier's digest spelling must not decide the outcome."""
@@ -155,7 +155,7 @@ def test_a_split_subject_binding_is_rejected(tmp_path: Path) -> None:
         _checked(tmp_path, (_ASSET,), {_ASSET: split})
 
 
-def test_the_index_digest_cannot_authorise_other_bytes(tmp_path: Path) -> None:
+def test_the_index_digest_cannot_authorize_other_bytes(tmp_path: Path) -> None:
     """An index record agreeing with malicious bytes is not provenance."""
     genuine = json.dumps(provenance_record(_ASSET, sha256_hex(b"genuine build")))
     state, output, evidence = _stage(tmp_path, (_ASSET,), {_ASSET: genuine})
@@ -202,7 +202,7 @@ def test_a_name_pypi_lacks_needs_no_evidence(tmp_path: Path) -> None:
 
 
 @given(payload=st.binary(max_size=64), suffix=st.text(min_size=1))
-def test_a_split_subject_never_authorises_the_bytes(
+def test_a_split_subject_never_authorizes_the_bytes(
     payload: bytes, suffix: str
 ) -> None:
     """No arrangement of split subjects binds a filename to its digest."""

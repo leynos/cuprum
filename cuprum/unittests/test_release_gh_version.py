@@ -47,11 +47,11 @@ def test_only_a_recent_enough_cli_passes(
     [[], [""], ["gh version development build"], ["command not found: gh"]],
     ids=["no-output", "blank-line", "no-release-number", "foreign-error"],
 )
-def test_unparseable_output_fails_closed(
+def test_unparsable_output_fails_closed(
     lines: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Output that names no release cannot authorize verification."""
-    assert main(lines) == 1, "unparseable output must fail the step"
+    assert main(lines) == 1, "unparsable output must fail the step"
     assert f"GitHub CLI {_MINIMUM} or newer is required" in capsys.readouterr().err
 
 

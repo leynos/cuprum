@@ -52,7 +52,7 @@ def parse_version(line: str) -> tuple[int, int, int] | None:
     -------
     tuple[int, int, int] | None
         The major, minor, and patch numbers, or ``None`` when the line names
-        no recognisable release.
+        no recognizable release.
 
     Examples
     --------
