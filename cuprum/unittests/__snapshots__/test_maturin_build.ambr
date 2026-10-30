@@ -50,6 +50,7 @@
       'cuprum/_line_stream/result_assembly.py',
       'cuprum/_line_stream/spawn.py',
       'cuprum/_line_stream/telemetry.py',
+      'cuprum/_line_stream_finalization.py',
       'cuprum/_observability.py',
       'cuprum/_pipeline_collect.py',
       'cuprum/_pipeline_config.py',

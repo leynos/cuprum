@@ -254,7 +254,7 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
             stdout through a parent-side pipe. Use :meth:`run` when stdout goes
             to a file or descriptor.
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, stdin encode, and the option checks
-        tracking, execution_factory = _prepare_line_iteration(
+        prepared = _prepare_line_iteration(
             self,
             _LineIterationRequest(
                 output=output or RunOutputOptions(),
@@ -269,9 +269,10 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
         # stay ``None`` so the consuming scope's default can apply.
         return LineStream(
             _iter_line_events(
-                execution_factory,
-                tracking,
+                prepared.execution_factory,
+                prepared.tracking,
                 requested_timeout=timeout,
+                open_sink=prepared.open_sink,
             )
         )
 

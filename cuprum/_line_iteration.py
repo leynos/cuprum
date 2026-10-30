@@ -13,19 +13,17 @@ custom iterator on ``break``.
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 from cuprum._delivery_lifecycle import _close_delivery_worker
-from cuprum._observability import (
-    _drain_tasks_during_cleanup,
-    _wait_for_exec_hook_tasks,
+from cuprum._line_stream_finalization import (
+    _line_stream_outcome,
+    _LineStreamFinalization,
+    _reconcile_line_stream,
 )
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._sink_lifecycle import _outcome_for_error, _outcome_for_result
-from cuprum._timeout_reporting import _safe_emit_terminal
-from cuprum.events import TerminalOutcome
+from cuprum._sink_lifecycle import _outcome_for_result
 from cuprum.lines import LineEvent
 
 if typ.TYPE_CHECKING:
@@ -36,17 +34,6 @@ if typ.TYPE_CHECKING:
     from cuprum._line_stream import _LineQueueItem
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import CommandResult
-
-_LINES_FINALIZATION_ERROR = "line stream finalization failed"
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _LineStreamFinalization:
-    """Facts needed to settle a line stream after its coordinator exits."""
-
-    execution: _SubprocessExecution
-    result: CommandResult | None
-    failure: BaseException | None
 
 
 class LineStream:
@@ -118,6 +105,7 @@ async def _iter_line_events(
     tracking: _ExecutionTracking,
     *,
     requested_timeout: float | None,
+    open_sink: cabc.Callable[[], None],
 ) -> cabc.AsyncGenerator[LineEvent | CommandResult, None]:
     """Yield each ``LineEvent``, then the run's ``CommandResult``.
 
@@ -127,8 +115,28 @@ async def _iter_line_events(
     ``SIGTERM``, the cancel grace wait, then ``SIGKILL``. A bare ``break``
     ends nothing; ``async with`` or ``aclose()`` guarantees teardown.
 
+    The presentation sink is framed for exactly as long as this generator is
+    alive. Opening happens on the first pull, not when the stream is built, so
+    a stream that is never iterated frames nothing; closing runs in the same
+    shielded finalizer as every other teardown, so an early close or a
+    cancellation releases the adapter's lease and its group rather than
+    stranding them. The delivery worker is closed first: mirrored lines it
+    still holds have to land inside the framing.
+
     A generator body runs in the context of the task that pulls it, so this
     function owns the authoritative checks, not ``SafeCmd.lines()``.
+
+    Parameters
+    ----------
+    execution_factory : collections.abc.Callable[[], _SubprocessExecution]
+        Builds the execution bundle once the pull is authorized.
+    tracking : _ExecutionTracking
+        The hook bookkeeping and sink bracket this iteration owns.
+    requested_timeout : float | None
+        The raw timeout, re-resolved in the consuming scope.
+    open_sink : collections.abc.Callable[[], None]
+        Frames the configured presentation sink, if any, exactly once. Called
+        before the bundle is built so its log destinations are the session's.
 
     Yields
     ------
@@ -136,26 +144,31 @@ async def _iter_line_events(
         One ``LineEvent`` per decoded output line, then the run's
         ``CommandResult`` once the subprocess has exited.
     """
-    execution = execution_factory()
+    execution: _SubprocessExecution | None = None
+    queue: asyncio.Queue[_LineQueueItem] | None = None
+    result_future: asyncio.Future[CommandResult] | None = None
+    coordinator: asyncio.Task[None] | None = None
+    failure: BaseException | None = None
+    result: CommandResult | None = None
 
     from cuprum._line_stream import (
         _line_event_queue,
         _refresh_line_stream_execution,
     )
 
-    execution = _refresh_line_stream_execution(execution, requested_timeout)
-    queue = _line_event_queue()
-    result_future: asyncio.Future[CommandResult] = (
-        asyncio.get_running_loop().create_future()
-    )
-    coordinator: asyncio.Task[None] | None = None
-    failure: BaseException | None = None
-    result: CommandResult | None = None
     # The plan event and the before hooks run inside the try, not ahead of it:
     # both emit, and a synchronous observe hook that raises on either would
     # otherwise strand the async-hook tasks already queued behind it, which only
     # this generator's reconcile drains.
     try:
+        # The opener runs first: the bundle resolves its destinations from the
+        # session, and a refresh refusal after it still owes the bracket close
+        # handled below.
+        open_sink()
+        execution = execution_factory()
+        execution = _refresh_line_stream_execution(execution, requested_timeout)
+        queue = _line_event_queue()
+        result_future = asyncio.get_running_loop().create_future()
         execution.observation.emit("plan", _EventDetails(pid=None))
         for hook in execution.observation.hooks.before_hooks:
             hook(execution.cmd)
@@ -180,17 +193,32 @@ async def _iter_line_events(
         raise
     finally:
         try:
-            await _reconcile_line_stream(
-                coordinator,
-                result_future,
-                tracking,
-                _LineStreamFinalization(execution, result, failure),
-            )
+            if execution is not None:
+                try:
+                    # A refusal before the queue existed has nothing to
+                    # reconcile; the bundle's own builder or refresh has
+                    # already stopped its delivery worker.
+                    if result_future is not None:
+                        await _reconcile_line_stream(
+                            coordinator,
+                            result_future,
+                            tracking,
+                            _LineStreamFinalization(execution, result, failure),
+                        )
+                finally:
+                    await _shielded_cleanup(
+                        _close_delivery_worker(
+                            execution.delivery_worker,
+                            drain_grace_s=execution.delivery_grace_s,
+                        ),
+                    )
         finally:
+            # Outside the guard: even a refused or half-built run must release
+            # the session its opener created. This is the last writer, so the
+            # release and the group close land after every mirrored line.
             await _shielded_cleanup(
-                _close_delivery_worker(
-                    execution.delivery_worker,
-                    drain_grace_s=execution.delivery_grace_s,
+                tracking.sink_bracket.aclose(
+                    outcome=_line_stream_outcome(result, failure),
                 ),
             )
 
@@ -209,33 +237,6 @@ def _publish_line_completion(
             pid=result.pid,
             exit_code=result.exit_code,
             duration_s=result.duration,
-        ),
-    )
-
-
-def _emit_line_stream_error(
-    execution: _SubprocessExecution,
-    result: CommandResult | None,
-    failure: BaseException | None,
-) -> None:
-    """Settle a line stream after its coordinator has reconciled the child."""
-    if failure is None:
-        return
-    outcome = _outcome_for_error(failure)
-    is_cancelled = outcome.outcome is TerminalOutcome.CANCELLED
-    _safe_emit_terminal(
-        execution.observation,
-        outcome.outcome,
-        _EventDetails(
-            pid=(
-                None
-                if is_cancelled
-                else result.pid
-                if result is not None
-                else execution.observation.started_pid
-            ),
-            exit_code=(None if is_cancelled or result is None else result.exit_code),
-            duration_s=None if result is None else result.duration,
         ),
     )
 
@@ -277,44 +278,6 @@ async def _drive_line_stream(
             result_future.set_exception(error)
 
 
-async def _reconcile_line_stream(
-    coordinator: asyncio.Task[None] | None,
-    result_future: asyncio.Future[CommandResult],
-    tracking: _ExecutionTracking,
-    finalization: _LineStreamFinalization,
-) -> None:
-    """Cancel the coordinator if running, then drain its observe-hook tasks.
-
-    Completion, cancellation, or ``aclose()`` runs this and reconciles the
-    hooks exactly once; a bare ``break`` closes nothing, so nothing here
-    runs. A failure before the task was created leaves ``coordinator``
-    ``None``, and the drain still covers hooks a plan emit had queued.
-    """
-    if coordinator is not None and not result_future.done():
-        coordinator.cancel()
-    try:
-        if coordinator is not None:
-            await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
-    except BaseException as error:
-        # A published coordinator failure must not skip observe-hook cleanup:
-        # the active error groups a failing hook with the outcome, not over it.
-        _emit_line_stream_error(
-            finalization.execution,
-            finalization.result,
-            finalization.failure,
-        )
-        await _shielded_cleanup(_drain_line_stream_tasks(tracking.pending_tasks, error))
-        raise
-    _emit_line_stream_error(
-        finalization.execution,
-        finalization.result,
-        finalization.failure,
-    )
-    await _shielded_cleanup(
-        _drain_line_stream_tasks(tracking.pending_tasks, finalization.failure)
-    )
-
-
 async def _next_queue_item(
     queue: asyncio.Queue[_LineQueueItem],
     result_future: asyncio.Future[CommandResult],
@@ -352,48 +315,6 @@ async def _next_queue_item(
         if not getter.done():
             getter.cancel()
             await asyncio.gather(getter, return_exceptions=True)
-
-
-async def _absorb_coordinator(
-    coordinator: asyncio.Task[None],
-    result_future: asyncio.Future[CommandResult],
-) -> None:
-    """Wait the coordinator out, re-raising a published failure.
-
-    A cancelled coordinator is the ordinary shape of teardown — the iterator
-    cancels it once it has stopped consuming — so its cancellation is absorbed
-    rather than re-raised, and ``aclose()`` tears the child down without
-    surfacing a ``CancelledError`` the caller never issued.
-    """
-    await asyncio.gather(coordinator, return_exceptions=True)
-    if result_future.done() and not result_future.cancelled():
-        error = result_future.exception()
-        if error is not None:
-            raise error
-
-
-async def _drain_line_stream_tasks(
-    pending: list[asyncio.Task[None]],
-    failure: BaseException | None,
-) -> None:
-    """Reconcile observe-hook tasks on every way iteration can end.
-
-    ``lines()`` has more exits than ``run()`` — a caller ``break`` and a
-    generator close join completion, timeout, and cancellation — so the drain
-    sits in one place instead of on the success path only. Iteration ending on
-    a failure aggregates a drain failure with it, so a background hook cannot
-    stand in for the error that ended the run. A ``GeneratorExit`` is not a
-    failure in that sense, and closing a stream must not raise a group pairing
-    it with an unrelated hook error.
-    """
-    if failure is None or isinstance(failure, GeneratorExit):
-        await _wait_for_exec_hook_tasks(pending)
-        return
-    await _drain_tasks_during_cleanup(
-        pending,
-        failure,
-        message=_LINES_FINALIZATION_ERROR,
-    )
 
 
 __all__ = ["LineStream"]

@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **`lines()` shields echoed output behind a GitHub Actions lease:** a
+  configured presentation sink now opens when iteration begins and closes on
+  every teardown path — exhaustion, early close, and cancellation — so
+  `RunOutputOptions(group=True)` releases its stop-commands lease after the
+  child's output and a failed stream is annotated. Previously the line path
+  never opened the sink, so child output reached the job log as live workflow
+  commands and could close the group or forge an annotation
+  ([#547](https://github.com/leynos/cuprum/issues/547)).
 - **`rsync_sync()` refuses remote operands (breaking):** both operands are now
   checked against rsync's own grammar as well as the generic safe-path policy.
   A colon before the first `/` (`host:path`, `user@host:path`,
