@@ -30,6 +30,10 @@ _FAKE_TOOLS = pth.Path(__file__).with_name("release_fake_tools.py")
 _DEFAULT_TAG = "v1.2.3"
 _DEFAULT_REPOSITORY = "leynos/cuprum"
 _DEFAULT_SIGNER_WORKFLOW = f"{_DEFAULT_REPOSITORY}/.github/workflows/release.yml"
+#: The commit the fake tag names. ``publish-release`` pins this value with
+#: ``--source-digest``, so only bytes attested for this commit qualify.
+_DEFAULT_SHA = "a" * 40
+_DEFAULT_PREDICATE = "https://slsa.dev/provenance/v1"
 
 
 def _require(*, condition: bool, message: str) -> None:
@@ -130,6 +134,8 @@ class AttestationOverrides:
     repository: str = _DEFAULT_REPOSITORY
     signer_workflow: str = _DEFAULT_SIGNER_WORKFLOW
     source_ref: str = f"refs/tags/{_DEFAULT_TAG}"
+    source_digest: str = _DEFAULT_SHA
+    predicate_type: str = _DEFAULT_PREDICATE
     self_hosted: bool = False
 
 
@@ -176,9 +182,25 @@ class FakeRelease:
             "repository": overrides.repository,
             "signer_workflow": overrides.signer_workflow,
             "source_ref": overrides.source_ref,
+            "source_digest": overrides.source_digest,
+            "predicate_type": overrides.predicate_type,
             "self_hosted": overrides.self_hosted,
         })
         self.attestations.write_text(json.dumps(records), encoding="utf-8")
+
+    def attest_approved(self, asset: pth.Path) -> None:
+        """Record the approved build attestation for ``asset``'s current bytes.
+
+        This is the evidence an earlier run of the same tag stored: the
+        repository, ``release.yml``, the tag ref, the triggering commit, and
+        the SLSA v1 predicate.
+        """
+        self.add_attestation(asset, AttestationOverrides())
+
+    def attest_pypi_holdings(self) -> None:
+        """Approve every file PyPI holds as this tag's attested build."""
+        for path in sorted(self.pypi.iterdir()):
+            self.attest_approved(path)
 
     def env(self, **extra: str) -> dict[str, str]:
         """Return the environment that routes ``gh`` and ``curl`` to the fakes."""
@@ -198,6 +220,8 @@ class FakeRelease:
             "FAKE_CALLS": str(self.root / "calls.jsonl"),
             "GITHUB_OUTPUT": str(self.root / "github-output"),
             "GITHUB_REF": f"refs/tags/{_DEFAULT_TAG}",
+            "GITHUB_SHA": _DEFAULT_SHA,
+            "GITHUB_REPOSITORY": _DEFAULT_REPOSITORY,
             "GH_REPO": _DEFAULT_REPOSITORY,
             **extra,
         }
