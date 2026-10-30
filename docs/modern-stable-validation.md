@@ -47,19 +47,19 @@ aggregates sequentially. Cargo invocations use `--locked`, a dedicated
 `RUSTFLAGS="-C codegen-units=1"`. Neither the target directory nor the
 compiler-cache shape is shared with the existing routes.
 
-| Route                     | Compiler selection                   | Warning mechanism                                        | Migration                          |
-| ------------------------- | ------------------------------------ | -------------------------------------------------------- | ---------------------------------- |
-| Modern check              | Rust/Cargo `1.99.1`                  | `CARGO_BUILD_WARNINGS=deny`                              | Migrated for local packages        |
-| Modern Clippy             | Rust/Cargo `1.99.1`                  | Cargo policy plus existing manifest Clippy levels        | Migrated for local packages        |
-| Modern tests              | Rust/Cargo `1.99.1`                  | `CARGO_BUILD_WARNINGS=deny`                              | Migrated for local packages        |
-| Modern Maturin develop    | Rust/Cargo `1.99.1`                  | Environment passed through Maturin                       | Migrated after propagation control |
-| Modern documentation      | Rust/Cargo `1.99.1`                  | `RUSTDOC_FLAGS` with `-D warnings`; Cargo policy omitted | Retained                           |
-| Modern doctests           | Rust/Cargo `1.99.1`                  | Stable-compatible `RUSTDOC_FLAGS`; Cargo policy omitted  | Retained                           |
-| Linux debug and lint      | Pinned dev-fast nightly and fragment | Existing `-D warnings`, codegen, and linker flags        | Unchanged                          |
-| Published MSRV check      | Rust/Cargo `1.85.0`                  | Existing check command and manifest levels               | Unchanged                          |
-| Whitaker                  | Independently pinned verifier        | `WHITAKER_RUSTFLAGS` includes `-D warnings`              | Unchanged                          |
-| Release and wheel builds  | Existing release selection           | Existing route and manifest policy                       | Unchanged                          |
-| Coverage and verification | Existing independent toolchains      | Existing route and manifest policy                       | Unchanged                          |
+| Route                     | Compiler selection                   | Warning mechanism                                                            | Migration                          |
+| ------------------------- | ------------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------- |
+| Modern check              | Rust/Cargo `1.99.1`                  | `CARGO_BUILD_WARNINGS=deny`                                                  | Migrated for local packages        |
+| Modern Clippy             | Rust/Cargo `1.99.1`                  | Cargo policy plus existing manifest Clippy levels                            | Migrated for local packages        |
+| Modern tests              | Rust/Cargo `1.99.1`                  | `CARGO_BUILD_WARNINGS=deny`                                                  | Migrated for local packages        |
+| Modern Maturin develop    | Rust/Cargo `1.99.1`                  | Environment passed through Maturin                                           | Migrated after propagation control |
+| Modern documentation      | Rust/Cargo `1.99.1`                  | `RUSTDOC_FLAGS` with `-D warnings`; Cargo policy omitted                     | Retained                           |
+| Modern doctests           | Rust/Cargo `1.99.1`                  | Stable-compatible `RUSTDOC_FLAGS` (rustdoc lints only); Cargo policy omitted | Retained                           |
+| Linux debug and lint      | Pinned dev-fast nightly and fragment | Existing `-D warnings`, codegen, and linker flags                            | Unchanged                          |
+| Published MSRV check      | Rust/Cargo `1.85.0`                  | Existing check command and manifest levels                                   | Unchanged                          |
+| Whitaker                  | Independently pinned verifier        | `WHITAKER_RUSTFLAGS` includes `-D warnings`                                  | Unchanged                          |
+| Release and wheel builds  | Existing release selection           | Existing route and manifest policy                                           | Unchanged                          |
+| Coverage and verification | Existing independent toolchains      | Existing route and manifest policy                                           | Unchanged                          |
 
 _Table 2: Routes, toolchains, and the policy boundary exercised by this change._
 
@@ -81,8 +81,11 @@ baseline, workspace lint level, or source compatibility declaration is relaxed.
 Rustdoc and doctests keep their own warning controls. The modern route uses
 `RUSTDOC_FLAGS` for both; it does not send the nightly-only
 `DOCTEST_RUSTDOC_FLAGS` to stable Rust. The existing nightly doctest route
-retains those flags. The probe's Rustdoc result is recorded as an observation,
-not a Rustdoc migration claim.
+retains those flags. On stable, `RUSTDOC_FLAGS` denies rustdoc lints only: it
+does not make a compiler warning raised while compiling a doctest fatal, because
+`--doctest-build-arg` is unstable and this route omits `-Zunstable-options`.
+The probe's Rustdoc result is recorded as an observation, not a Rustdoc
+migration claim.
 
 The wheel action's existing `toolchain: stable` selection is outside this route
 and remains unchanged. The separate Maturin `build-backend` packaging

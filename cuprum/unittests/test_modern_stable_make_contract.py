@@ -208,14 +208,14 @@ def test_modern_clippy_moves_only_warning_fatality_to_cargo() -> None:
 
 
 def test_modern_documentation_keeps_stable_rustdoc_warning_flags() -> None:
-    """Keep rustdoc and doctest warning enforcement outside the migration."""
+    """Keep stable-compatible rustdoc warning flags on both documentation runs."""
     documentation = dry_run("modern-stable-doc")
     doctests = dry_run("modern-stable-doctest")
     assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in documentation, (
         "modern rustdoc must retain its warning-fatality flags"
     )
     assert 'RUSTDOCFLAGS="--cfg docsrs -D warnings"' in doctests, (
-        "modern doctests must retain their stable-compatible warning flags"
+        "modern doctests must retain their stable-compatible rustdoc warning flags"
     )
     for output in (documentation, doctests):
         assert "CARGO_BUILD_WARNINGS=deny" not in output, (

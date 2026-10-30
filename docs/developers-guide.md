@@ -1236,10 +1236,11 @@ Cargo 1.97 or later. Cargo applies that setting to warnings from local
 packages; the rustdoc probe also found that it makes a warn-level Rustdoc lint
 on a local package fatal. This observation does not broaden the migration:
 modern documentation and doctest commands keep `RUSTDOC_FLAGS`, including
-`-D warnings`, and omit Cargo's warning variable. The nightly doctest route
-retains its separate nightly-only flags. Existing dev-fast, MSRV, Whitaker,
-release, coverage, verification, and wheel routes keep their current toolchain
-and warning policy. The Linux dev-fast warning policy is unchanged.
+`-D warnings`, which denies rustdoc lints on both runs, and omit Cargo's
+warning variable. The nightly doctest route retains its separate nightly-only
+flags. Existing dev-fast, MSRV, Whitaker, release, coverage, verification, and
+wheel routes keep their current toolchain and warning policy. The Linux
+dev-fast warning policy is unchanged.
 
 The observed negative controls and the route inventory live in
 [`modern-stable-validation.md`](modern-stable-validation.md). A toolchain bump
