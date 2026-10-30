@@ -39,6 +39,8 @@ Or jump straight to a task:
   [stream input from a producer](#stream-input-from-a-producer).
 - **Run several commands:** [connect a pipeline](#connect-a-pipeline) or
   [run commands concurrently](#run-commands-concurrently).
+- **Start a process that outlives the launcher:**
+  [launch a detached command](#launch-a-detached-command).
 - **Limit what may run:** [apply a policy](#apply-a-policy).
 - **Supervise a long-running child:**
   [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
@@ -1098,6 +1100,85 @@ With `fail_fast=True`, remaining commands are cancelled after the first
 non-zero exit. A command that already finished can still appear in results. Use
 `submission_indices` rather than assuming a compacted result position equals
 its original submission index.
+
+## Launch a detached command
+
+`launch_detached()` is async; `launch_detached_sync()` is for synchronous
+callers. Either starts a command whose lifetime leaves Cuprum's ownership. The
+allowlist, executable binding, argument vector, environment, and working
+directory are resolved exactly as for a managed run; then the child is placed
+in its own POSIX session and process group, all three standard streams are
+connected to `/dev/null`, and the call returns a `DetachedLaunch` receipt.
+
+<!-- tested-example: detached-launch -->
+
+```python
+import os
+import signal
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, scoped, sh
+
+python = Program(sys.executable)
+catalogue = ProgramCatalogue.from_programs(python, name="detached")
+build = sh.make(python, catalogue=catalogue)
+
+with scoped(ScopeConfig(allowlist=frozenset({python}))):
+    command = build("-c", "import time; time.sleep(60)")
+    if os.name != "posix":
+        try:
+            command.launch_detached_sync()
+        except ValueError as error:
+            assert "POSIX process groups" in str(error)
+    else:
+        receipt = command.launch_detached_sync()
+        assert receipt.program == python
+        assert receipt.executable == str(python)
+        assert os.getsid(receipt.pid) == receipt.pid
+        os.killpg(receipt.pid, signal.SIGKILL)
+        os.waitpid(receipt.pid, 0)  # The caller reaps the worker it detached.
+```
+
+The receipt has three fields: `pid`, the worker's process identifier;
+`program`, the catalogued program the command named; and `executable`, the file
+that ran. On POSIX the worker leads a new session and process group, so
+`os.getsid` and `os.getpgid` both report the receipt's PID.
+
+A receipt means the worker's `exec` succeeded. It does not mean the worker is
+ready, or even still running: a command that exits immediately after starting
+still produces one. Readiness is the caller's contract with the worker.
+
+From the receipt onward, stopping and reaping the worker belong to the caller.
+Signal `receipt.pid`, or its group with `os.killpg`, which also reaches
+anything the worker started. A PID is meaningful only while the process it
+names is alive and unreaped; once the worker has been reaped the number may be
+reused, so confirm that a stored receipt still names the original worker before
+signalling it. While the launcher lives, a worker that exits stays a zombie
+until the launcher exits, because reaping it would be the ownership the launch
+gave away. A long-lived process that detaches workers should reap them itself.
+
+Detachment is POSIX-only. A platform without POSIX process groups receives
+`ValueError` before any child is created. A program outside the allowlist raises
+`ForbiddenProgramError`, and an executable that cannot be started raises the
+error `Popen` reports, such as `FileNotFoundError`; neither leaves a child
+behind.
+
+Cancellation follows the same boundary. A cancellation requested while the
+launch is running is not silently swallowed: if it arrives after the worker
+started but before the caller holds the receipt, Cuprum stops the worker and
+re-raises the cancellation. The caller therefore ends up with either a receipt
+or no child.
+
+Dropping a `RunningCommand` or leaving its `async with` block never detaches
+anything, and no option on `run()` or `start()` turns a managed run into a
+detached one. Only these entry points transfer lifetime. Capture, echo,
+timeouts, and `process_group` have no effect on a detached launch: it never
+captures, never streams, and never supervises the child. Pass an
+`ExecutionContext` for its `env`, `env_mode`, and `cwd` when the worker needs
+an environment overlay or a different working directory.
+
+Survival of the launcher is not survival of the host. Job cleanup, container
+shutdown, and external termination still end the worker.
 
 ## Apply a policy
 
@@ -3501,6 +3582,10 @@ to read the full benchmark output.
   outside any catalogue scope still names its application catalogue.
 - **Descriptor:** an operating-system handle for an open pipe or file. The Rust
   pump borrows the descriptors of the pipes it connects.
+- **Detached launch:** `launch_detached()` or `launch_detached_sync()`, which
+  starts a command in its own POSIX session with all three standard streams on
+  `/dev/null`, returns a `DetachedLaunch` receipt, and stops owning the child.
+  Detachment is never inferred from dropping a handle.
 - **Echo:** mirroring a child's output to the parent's streams, or to the
   sinks an `ExecutionContext` names, as it arrives. Off by default.
 - **End of file (EOF):** the signal that a pipe's writer has closed and no more
@@ -3532,7 +3617,7 @@ to read the full benchmark output.
   returns, which owns a started child until it is waited for or stopped.
 - **SafeCmd:** a built command — a program plus its argument vector — ready to
   run. Builders produce them; `run()`, `run_sync()`, `lines()`, and `start()`
-  execute them.
+  execute them, and `launch_detached()` hands one to the caller.
 - **Scope:** a `with scoped(...)` block that narrows the allowlist and can add
   hooks, a timeout, or environment overlays for the code inside it. A
   `scoped(catalogue=...)` scope also activates that catalogue for `sh.make()`

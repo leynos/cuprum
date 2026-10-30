@@ -2553,6 +2553,57 @@ execution, cancellation, timeout, or event semantics. The accepted rationale
 and alternatives are recorded in
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 
+### 8.1.6 Detached command launch
+
+Every entry point described above owns its child: `run()` and `lines()` wait
+for exit and reconcile the streams, a timeout terminates the child, and an
+`OWN_GROUP` run tears down the group it created. That ownership is the reason
+the managed surface is safe to offer, and it is also why none of it can express
+"start this program and let it outlive me". A caller who drops a
+`RunningCommand` handle does not detach anything — the child was never handed
+over, so it keeps running as an untracked child of the launcher and no receipt
+names it.
+
+`SafeCmd.launch_detached()` and `SafeCmd.launch_detached_sync()` are therefore
+a separate entry point rather than a flag on the existing ones. A detach flag
+would have to answer the capture, echo, timeout, and process-group questions
+differently inside the runner, and every answer would be a managed execution
+default that some other caller depends on. The separate entry point leaves the
+managed surface untouched and makes the ownership change legible at the call
+site, which is the property a reviewer of a consuming codebase most needs.
+
+The launch keeps everything that selects *what* runs: the allowlist check
+against the current scope, the executable binding, the argument vector, the
+environment overlay and its mode, and the working directory are resolved by the
+same helpers a managed run uses. What changes is the lifecycle. The child is
+spawned with `start_new_session=True`, so it leads its own POSIX session and
+process group; its three standard streams are the kernel's null device, so it
+holds no launcher-owned pipe and reads end-of-file on stdin; and the process
+object is a private `Popen` subclass whose finalizer does nothing, so garbage
+collection neither warns nor reaps.
+
+On success the caller receives a `DetachedLaunch` receipt carrying the worker's
+actual PID, program, and resolved executable path. The receipt is a name, not a
+handle: it retains no transports, descriptors, tasks, or event-loop
+registrations, so the launcher can exit, or drop its event loop, without
+affecting the worker. Termination and reaping pass to the caller at that point,
+which is why the launch reports no readiness signal — a worker that fails after
+its first instruction is still a successful launch, and only the worker can say
+otherwise.
+
+The transfer boundary is the one place where cancellation has to be defined.
+The awaitable entry point yields once before returning the receipt, and a
+cancellation landing on that yield abandons the launch: cuprum kills the
+worker's process group and reaps it before re-raising `CancelledError`, so a
+cancelled caller is never left with an untracked child. Before the spawn there
+is nothing to abandon; after the receipt is returned, the worker is the
+caller's. A platform without POSIX process groups is refused before a child
+exists, and a start-up failure surfaces as the underlying error rather than as
+a receipt. The accepted rationale, the rejected alternatives, and the residual
+limits — PID reuse, the zombie window while the launcher lives, and host-level
+cleanup after a launcher crash — are recorded in
+[ADR-028](adr-028-detached-command-launch.md).
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:

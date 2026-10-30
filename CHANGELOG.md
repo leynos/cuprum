@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Detached command launch with explicit ownership transfer:** `SafeCmd` gains
+  `launch_detached()` and `launch_detached_sync()`, which start a command in
+  its own POSIX session and process group with all three standard streams on
+  `/dev/null`, return a `DetachedLaunch` receipt naming the worker's PID, and
+  transfer the worker's termination and reaping to the caller. The allowlist,
+  executable binding, argument vector, environment, and working directory are
+  resolved exactly as for a managed run; dropping a `RunningCommand` still
+  never detaches anything, and no managed default changes. A platform without
+  POSIX process groups is refused before a child exists
+  ([#647](https://github.com/leynos/cuprum/issues/647)).
+
 ### Fixed
 
 - **`rsync_sync()` refuses remote operands (breaking):** both operands are now
@@ -143,6 +156,7 @@ _Applications upgrading from 0.1 should follow the
   captures under
   [`docs/profiling/5-2-1-line-event-emission/`](docs/profiling/5-2-1-line-event-emission/README.md).
 
+<!-- markdownlint-disable-next-line MD024 -->
 ### Added
 
 - **Streaming stdin:** `stdin=StdinStream(chunks=...)` feeds a child from an
