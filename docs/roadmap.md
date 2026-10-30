@@ -1042,10 +1042,12 @@ Idea: issues #434 through #445 define the acceptance list for
 [leynos/lading](https://github.com/leynos/lading) phase 5. Assessment §6.7 maps
 each issue to the workaround Lading would otherwise carry. This step gives
 adopters one place to see release intent and current GitHub status. GitHub has
-deleted #439, so its original title and release cannot be verified; its row
-tracks recovery of that acceptance record. Related downstream work includes the
-capture issue [leynos/lading#251](https://github.com/leynos/lading/issues/251)
-and the stream-relay note
+deleted #439, so its original title and release cannot be verified; its row now
+dates that acceptance record from
+[#483](https://github.com/leynos/cuprum/issues/483) rather than recovering it
+from the deleted issue. Related downstream work includes the capture issue
+[leynos/lading#251](https://github.com/leynos/lading/issues/251) and the
+stream-relay note
 [leynos/lading#253](https://github.com/leynos/lading/issues/253).
 
 ### 12.1. Adopter parity
@@ -1088,6 +1090,19 @@ capability.
   ([#439](https://github.com/leynos/cuprum/issues/439)).
   - Release: unavailable; GitHub returns HTTP 410 for the deleted issue.
   - Status: deleted; no title, milestone, or linked pull request is available.
+  - The record was recovered from
+    [#483](https://github.com/leynos/cuprum/issues/483), the same gap and
+    substantive twin: "Replace `SafeCmdBuilder` ellipsis with a typed callable
+    contract", opened 2026-09-24 with the same lading-phase-5 provenance
+    sentence and closed 2026-10-11 by merged PR
+    [#502](https://github.com/leynos/cuprum/pull/502), which delivered the
+    typed `ArgValue` contract,
+    [ADR-020](adr-020-typed-argument-contract-for-sh-make.md), and the
+    [changelog](../CHANGELOG.md) entry.
+  - Success: the row dates the acceptance record from
+    [#483](https://github.com/leynos/cuprum/issues/483) rather than recovering
+    it from the deleted issue, so a reader following the #439 link reaches the
+    surviving record and its delivered evidence.
 - [x] 12.1.7. Bind catalogue identity to a validated executable path
   ([#440](https://github.com/leynos/cuprum/issues/440)).
   - Release: not yet scheduled.
