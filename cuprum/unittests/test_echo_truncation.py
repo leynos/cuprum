@@ -197,7 +197,9 @@ def test_strict_utf8_text_prefix_keeps_the_longest_valid_boundary() -> None:
     assert finished.dropped_bytes == 38, (
         f"expected 38 dropped bytes, got={finished.dropped_bytes}"
     )
-    assert finished.source_bytes == len(line) + 1
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -229,7 +231,9 @@ def test_shift_jis_text_prefix_keeps_two_byte_ellipsis_marker(
     assert finished.dropped_bytes == dropped, (
         f"expected {dropped} dropped bytes, got={finished.dropped_bytes}"
     )
-    assert finished.source_bytes == len(line) + 1
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -261,7 +265,9 @@ def test_invalid_bytes_under_a_lenient_text_policy(
     assert finished.dropped_bytes == dropped, (
         f"expected {dropped} dropped bytes, got={finished.dropped_bytes}"
     )
-    assert finished.source_bytes == len(line) + 1
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
 
 
 def test_strict_decode_error_after_a_prefix_keeps_that_prefix() -> None:
@@ -287,7 +293,9 @@ def test_retained_buffer_cut_inside_a_multibyte_character_stays_valid() -> None:
     assert finished.payload == (b"x" * 7 + "… [truncated 66 bytes]".encode() + b"\n"), (
         f"the cut character must be omitted, got={finished.payload!r}"
     )
-    assert finished.dropped_bytes == 66
+    assert finished.dropped_bytes == 66, (
+        f"expected 66 dropped bytes, got={finished.dropped_bytes}"
+    )
 
 
 def test_encode_prefix_omits_a_pending_multibyte_tail() -> None:
@@ -298,8 +306,8 @@ def test_encode_prefix_omits_a_pending_multibyte_tail() -> None:
         settings=_EchoEncoding("utf-8", "strict", is_text_sink=True),
     )
 
-    assert retained == b"ab"
-    assert encoded == b"ab"
+    assert retained == b"ab", f"a pending tail must be omitted, got={retained!r}"
+    assert encoded == b"ab", f"the encoding must match the prefix, got={encoded!r}"
 
 
 def test_final_unterminated_line_includes_its_marker_in_the_bound() -> None:

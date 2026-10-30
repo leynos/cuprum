@@ -96,8 +96,9 @@ class _CountingBytesFactory:
     def __call__(self, source: object = b"") -> bytes:
         """Convert *source*, counting a copied bytearray or memoryview."""
         result = _BUILTIN_BYTES(typ.cast("typ.Any", source))
-        if isinstance(source, (bytearray, memoryview)):
-            self._volume.conversions.append(len(result))
+        match source:
+            case bytearray() | memoryview():
+                self._volume.conversions.append(len(result))
         return result
 
 

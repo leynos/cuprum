@@ -268,7 +268,10 @@ def test_pipeline_bounds_each_repeated_echo_line(
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     payload = _REPEATED_LINE * _REPEATED_LINE_COUNT
-    producer = python("-c", f"import sys; sys.stdout.write({payload!r})")
+    producer = python(
+        "-c",
+        f"import sys; sys.stdout.buffer.write({payload.encode('utf-8')!r})",
+    )
     pipeline = producer | python(
         "-c",
         "import sys; sys.stdout.write(sys.stdin.read())",
