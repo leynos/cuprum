@@ -1086,10 +1086,11 @@ capability.
   - Status: delivered by merged PR
     [#583](https://github.com/leynos/cuprum/pull/583); see phase 13 for the
     detailed process-group work.
-- [ ] 12.1.6. Recover the deleted issue #439 acceptance record for adopters
+- [x] 12.1.6. Recover the deleted issue #439 acceptance record for adopters
   ([#439](https://github.com/leynos/cuprum/issues/439)).
   - Release: unavailable; GitHub returns HTTP 410 for the deleted issue.
-  - Status: deleted; no title, milestone, or linked pull request is available.
+  - Status: delivered from the surviving record. #439 itself is deleted, so
+    its title, milestone, and linked pull request cannot be read back.
   - The record was recovered from
     [#483](https://github.com/leynos/cuprum/issues/483), the same gap and
     substantive twin: "Replace `SafeCmdBuilder` ellipsis with a typed callable
@@ -1099,10 +1100,6 @@ capability.
     typed `ArgValue` contract,
     [ADR-020](adr-020-typed-argument-contract-for-sh-make.md), and the
     [changelog](../CHANGELOG.md) entry.
-  - Success: the row dates the acceptance record from
-    [#483](https://github.com/leynos/cuprum/issues/483) rather than recovering
-    it from the deleted issue, so a reader following the #439 link reaches the
-    surviving record and its delivered evidence.
 - [x] 12.1.7. Bind catalogue identity to a validated executable path
   ([#440](https://github.com/leynos/cuprum/issues/440)).
   - Release: not yet scheduled.
