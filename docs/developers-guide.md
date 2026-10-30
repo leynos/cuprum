@@ -1676,7 +1676,10 @@ a chatty child exhaust parent memory. The rules:
   unchanged, with no suspension point between the check and the task append.
   Without capacity it returns a coroutine that awaits capacity, dispatches the
   observation, then calls `on_line`. Observation stays ahead of `on_line`, and
-  a failing synchronous observation prevents `on_line` from running at all.
+  a failing synchronous observation prevents `on_line` from running at all. The
+  deferred line's `LineEvent` is stamped before the wait, so `LineEvent.at`
+  reports when the line was decoded and never includes observer backpressure;
+  `ExecEvent.timestamp` stays the wall-clock moment the event is emitted.
 
 Tests for the bound are split by level.
 `cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity,

@@ -34,6 +34,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent
+    from cuprum.lines import LineEvent
 
 
 class _HookFailureError(Exception):
@@ -395,6 +396,59 @@ def test_composed_callback_defers_observation_at_the_ceiling(
         )
         assert len(observation.pending_tasks) == 1, (
             "settled tasks must be pruned when the deferred line dispatches"
+        )
+        await _wait_for_exec_hook_tasks(observation.pending_tasks)
+
+    asyncio.run(case())
+
+
+class _StepClock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        """Start the clock at zero."""
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        """Return the current reading."""
+        return self.now
+
+
+def test_deferred_line_keeps_its_decode_time_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Waiting for capacity must not shift a line's ``at`` stamp."""
+    monkeypatch.setattr("cuprum._line_callbacks._OBSERVE_TASK_CEILING", 1)
+
+    async def case() -> None:
+        """Exercise the scenario inside a running event loop."""
+        gate = asyncio.Event()
+        observation = _make_observation((_RecordingHook(gate),))
+        clock = _StepClock()
+        stamped: list[LineEvent] = []
+        context = _LineEmissionContext(
+            stream="stdout",
+            pid=1,
+            on_line=stamped.append,
+            started_at=0.0,
+            monotonic_clock=clock,
+        )
+        emit = _compose_line_callbacks(observation, context)
+        assert emit is not None
+
+        clock.now = 2.0
+        assert emit("line-0") is None, "the first line must dispatch inline"
+        clock.now = 5.0
+        deferred = emit("line-1")
+        assert inspect.isawaitable(deferred), "saturation must return an awaitable"
+
+        clock.now = 90.0
+        gate.set()
+        await deferred
+
+        assert [event.at for event in stamped] == [2.0, 5.0], (
+            "a deferred line must report when it was decoded, not when its "
+            "callback finally ran"
         )
         await _wait_for_exec_hook_tasks(observation.pending_tasks)
 

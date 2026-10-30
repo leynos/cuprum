@@ -301,7 +301,20 @@ def _compose_line_callbacks(
         if emitter.has_capacity():
             emitter.emit_line(line)
             return _invoke_on_line(line, context=context)
-        return _emit_line_when_capacity(emitter, line, context=context)
+        # Stamp the line now, while it is still the line just decoded. The wait
+        # inside the coroutine can last as long as a slow observer takes, and
+        # ``LineEvent.at`` promises the decode moment, not the delivery one.
+        # The wall-clock ``ExecEvent.timestamp`` is deliberately not captured
+        # here: it records when the event is emitted.
+        stamped = (
+            None if context.on_line is None else _stamp_line(line, context=context)
+        )
+        return _emit_line_when_capacity(
+            emitter,
+            line,
+            context=context,
+            event=stamped,
+        )
 
     return emit_line
 
@@ -310,11 +323,14 @@ def _invoke_on_line(
     line: str,
     *,
     context: _LineEmissionContext,
+    event: LineEvent | None = None,
 ) -> _LineHookOutcome:
-    """Stamp ``line`` and hand it to the caller's hook, when one is registered."""
+    """Stamp ``line`` — or reuse a deferred stamp — for the caller's hook."""
     if context.on_line is None:
         return None
-    return context.on_line(_stamp_line(line, context=context))
+    return context.on_line(
+        _stamp_line(line, context=context) if event is None else event
+    )
 
 
 async def _emit_line_when_capacity(
@@ -322,6 +338,7 @@ async def _emit_line_when_capacity(
     line: str,
     *,
     context: _LineEmissionContext,
+    event: LineEvent | None = None,
 ) -> None:
     """Wait for observer capacity, then emit ``line`` and call ``on_line``.
 
@@ -330,10 +347,13 @@ async def _emit_line_when_capacity(
     runs, so a callback never observes a line whose event was not dispatched.
     The wait itself is cancelled without disturbing the observer tasks it was
     waiting on; they belong to the run and are settled by its final drain.
+
+    ``event`` carries the ``LineEvent`` stamped before the wait, so a deferred
+    line reports the moment it was decoded rather than the moment a slot freed.
     """
     await emitter.await_capacity()
     emitter.emit_line(line)
-    outcome = _invoke_on_line(line, context=context)
+    outcome = _invoke_on_line(line, context=context, event=event)
     if outcome is not None:
         await outcome
 
