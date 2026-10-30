@@ -37,6 +37,11 @@ handwritten at the call site:
   build_argv("--", x=1) == ("--", "--x=1")
   ```
 
+The design below addresses this by making `separated_operands` the sanctioned
+way to emit a separator and by rejecting a keyword flag that follows the
+separator it emits. A handwritten `"--"` stays accepted, so the guard changes
+no existing call shape.
+
 The four shapes are not exotic; they are the common grammar of command-line
 tools. Their absence is visible in cuprum's own source, where each typed
 builder assembles argv differently:
@@ -105,8 +110,9 @@ no shared vocabulary exists to perform it with.
     options, and separated positional operands.
   - Reuse the published `ArgValue` domain and the builder's own conversion and
     error messages, so a rejected value reads the same wherever it is caught.
-  - Make the end-of-options discipline the easy path, and make the existing
-    kwargs-after-`--` trap impossible to express silently.
+  - Make the end-of-options discipline the easy path, and make a
+    helper-composed separator followed by keyword flags impossible to express
+    silently.
   - Keep tool-specific schemas optional. A caller composes an argv for a tool
     cuprum has never catalogued without writing a builder library.
 - Non-goals:
@@ -160,16 +166,16 @@ def repeated_option(
 def separated_operands(*values: ArgValue) -> tuple[str, ...]: ...
 ```
 
-| Call                                                           | Result                                 |
-| -------------------------------------------------------------- | -------------------------------------- |
-| `flags(("--archive", True), ("--delete", False))`              | `("--archive",)`                       |
-| `flags()`                                                      | `()`                                   |
-| `option("--output", "dist")`                                   | `("--output", "dist")`                 |
-| `option("--output", "dist", spelling=JOINED)`                  | `("--output=dist",)`                   |
-| `repeated_option("--include", ["a", "b"])`                     | `("--include", "a", "--include", "b")` |
-| `repeated_option("--define", ["a=1", "b=2"], spelling=JOINED)` | `("--define=a=1", "--define=b=2")`     |
-| `separated_operands("a", "-b")`                                | `("--", "a", "-b")`                    |
-| `separated_operands()`                                         | `()`                                   |
+| Call                                                                          | Result                                 |
+| ----------------------------------------------------------------------------- | -------------------------------------- |
+| `flags(("--archive", True), ("--delete", False))`                             | `("--archive",)`                       |
+| `flags()`                                                                     | `()`                                   |
+| `option("--output", "dist")`                                                  | `("--output", "dist")`                 |
+| `option("--output", "dist", spelling=OptionSpelling.JOINED)`                  | `("--output=dist",)`                   |
+| `repeated_option("--include", ["a", "b"])`                                    | `("--include", "a", "--include", "b")` |
+| `repeated_option("--define", ["a=1", "b=2"], spelling=OptionSpelling.JOINED)` | `("--define=a=1", "--define=b=2")`     |
+| `separated_operands("a", "-b")`                                               | `("--", "a", "-b")`                    |
+| `separated_operands()`                                                        | `()`                                   |
 
 A builder becomes a single expression:
 
@@ -224,30 +230,58 @@ empty sequence rather than emitting a dangling name or separator.
 
 ### The separator guard
 
-`build_argv` gains one check:
+`separated_operands` marks the `--` it emits, and `build_argv` rejects a call
+in which keyword flags would follow a marked separator. The marker lives in
+`cuprum/sh/argv.py`, which owns the argv domain, so `compose.py` can import it
+without a cycle:
 
 ```python
-positional = tuple(_stringify_arg(arg) for arg in args)
-flags = _serialize_kwargs(kwargs)
-if flags and "--" in positional:
-    msg = (
-        "cannot append keyword flags after a '--' separator; "
-        "pass them positionally before the separator"
-    )
-    raise TypeError(msg)
-return positional + flags
+# cuprum/sh/argv.py
+class _Separator(str):
+    """An end-of-options ``--`` emitted by ``compose.separated_operands``."""
+
+    __slots__ = ()
+
+
+_SEPARATOR = _Separator("--")
+
+
+def build_argv(*args: ArgValue, **kwargs: ArgValue) -> tuple[str, ...]:
+    positional = tuple(_stringify_arg(arg) for arg in args)
+    flags = _serialize_kwargs(kwargs)
+    if flags and any(isinstance(arg, _Separator) for arg in args):
+        msg = (
+            "cannot append keyword flags after a '--' separator; "
+            "pass them positionally before the separator"
+        )
+        raise TypeError(msg)
+    return positional + flags
 ```
+
+The guard tests the type of the supplied argument, not the text it renders. A
+`str` subclass is copied to a genuine `str` by `str()`, which is how
+`_stringify_arg` renders it, so the marker survives only as far as the guard:
+`positional` and therefore `SafeCmd.argv` hold ordinary `"--"`. The marker
+never reaches the child, an argv comparison in a test, or any consumer that
+inspects `SafeCmd`.
 
 Without the guard the composition contract has an unenforced precondition:
 `separated_operands` is safe only in a call that passes no keyword. With it, a
 call that would silently turn a flag into an operand fails at construction, and
 the message names the fix.
 
-The check cannot distinguish a separator from an option value that happens to
-be the text `--`, so `build_argv("-f", "--", check=True)` is rejected even
-though the tool would consume `--` as `-f`'s value. That combination is rare,
-and the caller can pass the value joined (`("-f=--",)`) or keep every later
-token positional. A precise alternative is discussed under open questions.
+An ordinary `"--"` is never treated as a separator. That keeps an option value
+distinct from a separator, so `build_argv("-f", "--", check=True)` returns
+`("-f", "--", "--check=True")` — the shape a tool consuming `--` as the value of
+`-f` expects. It also keeps the helpers composable, because
+`option("-f", "--")` uses the default separate spelling and must stay usable
+alongside keyword flags.
+
+The corollary is that the guard protects the helper, not a handwritten
+separator: `build_argv("--", x=1)` still returns `("--", "--x=1")`. That is
+today's behaviour, so nothing regresses, and the documented way to emit a
+separator is `separated_operands`, which the guard does cover. A caller who
+wants the protection uses the helper.
 
 ### What the helpers deliberately do not do
 
@@ -276,9 +310,10 @@ order is preserved.
   whitespace, `=`, or a NUL character.
 - `separated_operands` emits `--` exactly once, immediately before the first
   operand, and emits `()` for no operands.
-- `build_argv` raises `TypeError` when keyword flags would follow a positional
-  `--`. Calls without a separator, and calls with a separator and no keyword,
-  are unchanged.
+- `build_argv` raises `TypeError` when keyword flags would follow the separator
+  `separated_operands` emits. Calls without that separator, and calls with it
+  and no keyword, are unchanged. A literal `"--"` is an ordinary value and
+  never triggers the guard.
 
 ### Technical requirements
 
@@ -302,21 +337,29 @@ no existing signature, return type, or error message changes. Existing typed
 builders keep their current argv, and their unit, property, and real-tool
 suites remain the evidence.
 
-The only behaviour change is the `build_argv` guard. A call that passes keyword
-flags together with a positional `--` previously produced a tuple in which
-those flags were operands; it now raises `TypeError`. In-tree callers do not
-use that combination, and an adopter relying on it was already sending flags to
-the child as positional arguments. Migration is to spell those tokens
-positionally before the separator, or to pass the option value joined.
+The only behaviour change is the `build_argv` guard, and it is narrower than a
+value test: only the separator `separated_operands` emits is rejected. A caller
+who passed keyword flags together with a helper-composed separator previously
+produced a tuple in which those flags were operands; it now raises `TypeError`.
+Migration is to spell the flag positionally before the separator, which is what
+the caller meant in the first place.
 
-ADR-020 is accepted and append-only. Its Assumptions clause that prescribes a
-positional `"--check"` stays as written; an addendum records that RFC 0002
-supersedes the workaround by making the flag a first-class helper, in the same
-way the 2026-10-11 addendum widened `ArgValue`. No earlier text is edited.
+No existing call shape changes. A literal `"--"` is left alone, so
+`build_argv("-f", "--", check=True)` is unaffected, and the existing
+`test_build_argv_orders_and_normalizes` property keeps its current expectation:
+its strategies generate the text `"--"` as an ordinary positional value, which
+is not a marker, so the generated flags are still appended in order. The test
+plan adds separate cases for the marker instead of weakening that property.
 
-The users' guide gains a subsection under "Build arguments deliberately", the
-scripting standards point builder authors at the helpers, and a changelog entry
-records the guard.
+ADR-020 is accepted and append-only. Its Assumptions clause prescribes the
+positional `"--check"`, and that text stays as written. Roadmap task 3.5.5 will
+append an addendum recording that RFC 0002 supersedes the workaround by making
+the flag a first-class helper, in the same way the 2026-10-11 addendum widened
+`ArgValue`. No earlier text is edited.
+
+The same task will add a users' guide subsection under "Build arguments
+deliberately", point builder authors at the helpers from the scripting
+standards, and record the guard in the changelog.
 
 ## Alternatives considered
 
@@ -357,8 +400,10 @@ share the conversion rules; the helpers can. Rejected as insufficient.
    `repeated_option`, and `separated_operands`; re-export them from `cuprum.sh`.
 2. Add unit and property tests for the four shapes, the empty inputs, the
    malformed-name rejections, and the shared `ArgValue` conversion.
-3. Add the `build_argv` guard and its tests, including the unchanged call
-   shapes and the error message.
+3. Add the separator marker to `cuprum/sh/argv.py`, have
+   `separated_operands` emit it, and add the `build_argv` guard. Its tests
+   cover the guarded shape, the error message, the unchanged call shapes, and
+   the accepted `build_argv("-f", "--", check=True)` case.
 4. Migrate `git_status` and `git_checkout` to `flags`/`option`, and
    `tar_create` to `separated_operands`, leaving every emitted argv identical.
    Leave `rsync_sync`'s `_FLAG_ORDER` table in place unless the helper reads at
@@ -366,8 +411,8 @@ share the conversion rules; the helpers can. Rejected as insufficient.
 5. Document the vocabulary in the users' guide, the scripting standards, and
    the changelog; append the ADR-020 addendum.
 6. Add an end-to-end suite that composes a command for each of git, rsync, and
-   tar, compares the composed argv with the handwritten builder's, and runs
-   the real tool to confirm a leading-dash operand stays an operand.
+   tar, compares the composed argv with the handwritten builder's, and runs the
+   real tool to confirm a leading-dash operand stays an operand.
 
 ## Open questions
 
@@ -377,10 +422,8 @@ share the conversion rules; the helpers can. Rejected as insufficient.
   discover.
 - Should `flags` also accept a single iterable of specs, so an ordered table
   such as rsync's `_FLAG_ORDER` can be passed without a generator splat?
-- Should the separator guard use a `str` subclass sentinel emitted only by
-  `separated_operands`, so a literal `--` passed as an option value is not
-  rejected? The sentinel would appear inside `SafeCmd.argv`, which is a leak of
-  implementation detail into the returned tuple.
+- Should `separated_operands` also accept a single iterable of operands, so a
+  caller holding a list need not splat it?
 - Should the helpers be re-exported from `cuprum.builders` for in-tree builder
   authors, or is `cuprum.sh` the single home?
 
@@ -390,5 +433,5 @@ Adopt the four pure helpers and the `OptionSpelling` enum in
 `cuprum/sh/compose.py`, add the `build_argv` separator guard, migrate only the
 builders where the vocabulary removes hand-rolled assembly, and keep
 tool-specific schemas out of scope. The change is additive, reuses the
-published argument domain and error contract, and turns the separator rule from
-documentation into an enforced invariant.
+published argument domain and error contract, and turns the separator rule into
+an invariant `separated_operands` enforces.
