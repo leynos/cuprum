@@ -276,6 +276,7 @@ def _launch_and_cancel(launch_scenario: LaunchScenario, command: SafeCmd) -> Non
     """Perform the launch in a task cancelled from inside the spawn."""
 
     async def run() -> None:
+        """Run the launch and keep its receipt on the scenario."""
         launch_scenario.receipt = await command.launch_detached()
 
     try:

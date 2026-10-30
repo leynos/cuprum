@@ -112,6 +112,7 @@ def test_a_task_cancelled_before_it_runs_creates_no_child(
     command = builder("-c", "pass")
 
     async def run() -> None:
+        """Cancel the launch before its coroutine ever runs."""
         task = asyncio.create_task(command.launch_detached())
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -149,6 +150,7 @@ def test_a_cancellation_requested_during_the_launch_stops_the_worker(
     command = builder("-c", "pass")
 
     async def run() -> None:
+        """Await a launch that is cancelled from inside the spawn."""
         with pytest.raises(asyncio.CancelledError):
             await command.launch_detached()
 
@@ -266,6 +268,7 @@ def test_the_launch_schedules_no_background_work(
     command = builder("-c", "pass")
 
     async def run() -> int:
+        """Return how many tasks remain once the launch has completed."""
         await command.launch_detached()
         return len(asyncio.all_tasks())
 
