@@ -7,7 +7,7 @@ mod buffer_size_tests;
 #[cfg(all(test, unix, not(miri)))]
 mod consume_snapshot_tests;
 #[cfg(test)]
-mod consume_tests;
+pub(crate) mod consume_tests;
 mod errors;
 mod io_utils;
 #[cfg(all(test, unix))]
@@ -76,6 +76,10 @@ mod test_support;
 #[cfg(all(test, unix))]
 mod tracing_capture;
 mod utf8;
+// Timing regressions are meaningless under Miri's interpreter and Kani's
+// bounded symbolic execution, so both compile the module out.
+#[cfg(all(test, not(miri), not(kani)))]
+mod utf8_scaling_tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 

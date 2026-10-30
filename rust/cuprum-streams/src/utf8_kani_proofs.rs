@@ -1,6 +1,14 @@
 //! Bounded Kani proofs for short UTF-8 payloads and chunk boundaries.
 
-use super::{FinalChunk, ValidUpTo, append_valid_prefix, decode_chunks, decode_utf8_replace};
+use super::{
+    ErrorStep,
+    FinalChunk,
+    ValidUpTo,
+    append_valid_prefix,
+    decode_chunks,
+    decode_utf8_replace,
+    handle_utf8_error,
+};
 
 fn decode_single_chunk(input: &[u8], final_chunk: bool) -> (String, Vec<u8>) {
     let mut pending = input.to_vec();
@@ -89,48 +97,96 @@ fn pending_state_is_valid_incomplete_utf8() {
     }
 }
 
-/// Symbolic bound: for *any* four-byte payload, the drain bound
-/// `valid_up_to + error_len` that `handle_utf8_error` passes to
-/// `pending.drain(..)` never exceeds the buffer length and never
-/// overflows. This is the exact safety invariant the type system does not
-/// enforce — indexing and draining are sound only because the bound is
-/// `Utf8Error`-derived — proven here over the whole malformed-layout
-/// space without allocating.
+/// Symbolic bound: for *any* four-byte payload, a definite error advances the
+/// scan by at least one byte and never past the remaining slice, while an
+/// incomplete sequence reports a tail that starts before the end. This is the
+/// progress invariant the moving-offset decoder relies on — a non-positive or
+/// out-of-range advance would either stall the loop or index outside the
+/// buffer — proven here over the whole malformed-layout space without
+/// allocating a pending buffer.
 #[kani::proof]
 #[kani::unwind(5)]
-fn utf8_error_drain_bound_stays_in_range() {
+fn utf8_error_step_stays_in_range_and_advances() {
     let bytes: [u8; 4] = kani::any();
     if let Err(err) = core::str::from_utf8(&bytes) {
-        let valid_up_to = err.valid_up_to();
-        if let Some(error_len) = err.error_len() {
-            // Cover proves the malformed-sequence branch is reachable, so
-            // the assertion below is not vacuously satisfied.
-            kani::cover!(
-                error_len >= 1,
-                "reaches a malformed sequence with a bounded error length"
-            );
-            // The addition must not overflow, and the drain end must stay
-            // within the buffer that `handle_utf8_error` drains.
-            let drain_end = valid_up_to
-                .checked_add(error_len)
-                .expect("valid_up_to + error_len must not overflow");
-            kani::assert(
-                drain_end <= bytes.len(),
-                "the drain bound never exceeds the pending buffer",
-            );
-        } else {
-            // Cover proves the incomplete-tail branch (error_len == None)
-            // is reachable; the retained prefix bound is then in range too.
-            kani::cover!(
-                valid_up_to < bytes.len(),
-                "reaches an incomplete trailing sequence (error_len == None)"
-            );
-            kani::assert(
-                valid_up_to <= bytes.len(),
-                "the incomplete-sequence prefix bound stays in range",
-            );
+        let mut output = String::new();
+        let step = handle_utf8_error(&mut output, &err);
+        match err.error_len() {
+            Some(error_len) => {
+                // Cover proves the malformed-sequence branch is reachable, so
+                // the assertions below are not vacuously satisfied.
+                kani::cover!(
+                    error_len >= 1,
+                    "reaches a malformed sequence with a bounded error length"
+                );
+                kani::assert(
+                    matches!(step, ErrorStep::Advance(_)),
+                    "a definite error must advance",
+                );
+                if let ErrorStep::Advance(advance) = step {
+                    kani::assert(advance >= 1, "advance is strictly positive");
+                    kani::assert(
+                        advance <= bytes.len(),
+                        "advance never leaves the remaining slice",
+                    );
+                }
+                kani::assert(
+                    output == "\u{FFFD}",
+                    "a definite error emits exactly one replacement",
+                );
+            }
+            None => {
+                // Cover proves the incomplete-tail branch is reachable.
+                kani::cover!(
+                    err.valid_up_to() < bytes.len(),
+                    "reaches an incomplete trailing sequence (error_len == None)"
+                );
+                kani::assert(
+                    matches!(step, ErrorStep::Incomplete(_)),
+                    "an incomplete sequence must not advance the scan",
+                );
+                if let ErrorStep::Incomplete(tail_start) = step {
+                    kani::assert(
+                        tail_start == err.valid_up_to(),
+                        "the incomplete tail starts after the valid prefix",
+                    );
+                    kani::assert(
+                        tail_start < bytes.len(),
+                        "the incomplete tail starts before the end",
+                    );
+                }
+                kani::assert(
+                    output.is_empty(),
+                    "an incomplete sequence emits nothing yet",
+                );
+            }
         }
     }
+}
+
+/// For every four-byte payload, a non-final decode retains at most one
+/// incomplete UTF-8 sequence and a final decode retains nothing. Compacting
+/// only that tail is what bounds the decoder's retained state.
+#[kani::proof]
+#[kani::unwind(8)]
+fn pending_tail_stays_bounded_for_symbolic_input() {
+    let bytes: [u8; 4] = kani::any();
+    let (_output, pending) = decode_single_chunk(&bytes, false);
+    kani::assert(
+        pending.len() <= 3,
+        "non-final pending is at most three bytes",
+    );
+    if !pending.is_empty() {
+        kani::assert(
+            is_valid_incomplete_utf8_sequence(&pending),
+            "pending bytes form an incomplete UTF-8 prefix",
+        );
+    }
+    let (_output, final_pending) = decode_single_chunk(&bytes, true);
+    kani::assert(
+        final_pending.is_empty(),
+        "a final chunk retains no pending bytes",
+    );
 }
 
 /// For every three-byte payload, append exactly its valid UTF-8 prefix.
