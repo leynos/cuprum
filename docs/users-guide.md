@@ -2822,11 +2822,13 @@ or consumer task behind. Any capture spill file that setup had already opened
 is removed too, so a failed start never leaves a temporary file behind. The
 same reclaim covers a failure in the setup that follows the spawn, such as
 creating the stdin writer or starting a stream consumer, so the guarantee holds
-for `run()`, `run_sync()`, `start()`, `lines()`, and every stage of a pipeline.
-When the run owns its process group (`OWN_GROUP`), the teardown signals that
-group rather than the child alone. Pipe release is bounded: a descendant that
-escaped the group can hold a pipe end open, so Cuprum waits no longer than its
-fixed end-of-file grace before surfacing the original error; see
+for `run()`, `run_sync()`, and every stage of a pipeline. `start()` and
+`lines()` reach the same outcome through their own unwind helpers, which reap
+the child and settle every task the failed setup had started. When the run owns
+its process group (`OWN_GROUP`), the teardown signals that group rather than
+the child alone. Pipe release is bounded: a descendant that escaped the group
+can hold a pipe end open, so Cuprum waits no longer than its fixed end-of-file
+grace before surfacing the original error; see
 [ADR-021](adr-021-process-group-ownership.md).
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
