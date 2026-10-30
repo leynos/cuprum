@@ -32,7 +32,9 @@ def test_only_a_recent_enough_cli_passes(
     status = main([f"gh version {version} (2026-01-15)", "https://example.test"])
 
     captured = capsys.readouterr()
-    assert status == (0 if is_accepted else 1)
+    assert status == (0 if is_accepted else 1), (
+        "the exit status must follow the minimum-version policy"
+    )
     if is_accepted:
         assert not captured.out, "success must print nothing"
         assert not captured.err, "success must warn about nothing"
@@ -52,7 +54,10 @@ def test_unparsable_output_fails_closed(
 ) -> None:
     """Output that names no release cannot authorize verification."""
     assert main(lines) == 1, "unparsable output must fail the step"
-    assert f"GitHub CLI {_MINIMUM} or newer is required" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert f"GitHub CLI {_MINIMUM} or newer is required" in captured.err, (
+        "the gate must explain the failure"
+    )
 
 
 def test_only_the_first_line_is_read(
@@ -62,7 +67,9 @@ def test_only_the_first_line_is_read(
     status = main(["gh version 2.97.0 (2026-07-31)", "gh version 9.9.9"])
 
     assert status == 1, "a later line must not rescue an old first line"
-    assert "found 2.97.0" in capsys.readouterr().err
+    assert "found 2.97.0" in capsys.readouterr().err, (
+        "the gate must report the first line's release"
+    )
 
 
 @pytest.mark.parametrize(
@@ -79,4 +86,4 @@ def test_parse_version_reads_only_a_complete_release(
     line: str, expected: tuple[int, int, int] | None
 ) -> None:
     """A complete numeric release is parsed; anything else reads as unknown."""
-    assert parse_version(line) == expected
+    assert parse_version(line) == expected, "the parsed release must match"

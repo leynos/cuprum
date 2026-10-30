@@ -404,7 +404,9 @@ def test_a_fetched_file_without_provenance_is_never_uploaded(
 
     completed = _assert_gate_refuses(fake, cwd, env)
 
-    assert "Could not verify build provenance" in completed.stderr
+    assert "Could not verify build provenance" in completed.stderr, (
+        "the step must report the failed verification"
+    )
 
 
 def test_the_index_digest_cannot_authorize_other_bytes(tmp_path: pth.Path) -> None:
@@ -466,7 +468,9 @@ def test_a_subject_name_mismatch_is_rejected(tmp_path: pth.Path) -> None:
 
     completed = _assert_gate_refuses(fake, cwd, env)
 
-    assert "has no approved build provenance" in completed.stderr
+    assert "has no approved build provenance" in completed.stderr, (
+        "the gate must report the missing provenance"
+    )
 
 
 def test_a_later_unattested_file_stops_the_whole_upload(tmp_path: pth.Path) -> None:
@@ -506,7 +510,7 @@ def test_an_old_github_cli_fails_before_any_verification(fake: FakeRelease) -> N
     assert completed.returncode != 0, "an old CLI must fail the gate"
     assert "GitHub CLI 2.102.0 or newer is required; found 2.101.9." in (
         completed.stderr
-    )
+    ), "the gate must name the minimum and the found release"
     assert not any(
         call[:2] == ["attestation", "verify"] for call in fake.calls("gh")[before:]
     ), "no attestation may be checked with an unpatched CLI"

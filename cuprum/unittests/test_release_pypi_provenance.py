@@ -177,8 +177,8 @@ def test_every_failing_file_is_named_in_one_error(tmp_path: Path) -> None:
     assert error.value.args[0].count("has no approved build provenance") == 2, (
         "both failing files must be reported, not only the first"
     )
-    assert _ASSET in error.value.args[0]
-    assert _SDIST in error.value.args[0]
+    assert _ASSET in error.value.args[0], "the wheel must be named in the error"
+    assert _SDIST in error.value.args[0], "the sdist must be named in the error"
 
 
 def test_a_name_the_release_already_holds_needs_no_evidence(tmp_path: Path) -> None:
