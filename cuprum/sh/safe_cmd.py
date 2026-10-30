@@ -14,9 +14,12 @@ composes into a pipeline and a pipeline is built from commands — so the cycle
 between them is broken the same way ``cuprum.sh`` breaks its own: each side
 defers the import it needs to the point of use. ``cuprum/sh/__init__.py``
 re-exports the classes unchanged, so importers of ``cuprum.sh`` see the same
-objects they always did. ``SafeCmd.start`` is contributed by ``_OwnedStart``
-in :mod:`cuprum._process_handle.owned_start`, which this class inherits; the
-handle path resolves its own run inputs, so it lives with the handle package.
+objects they always did. Two entry points are contributed by mixins this class
+inherits: ``SafeCmd.start`` by ``_OwnedStart`` in
+:mod:`cuprum._process_handle.owned_start`, because the handle path resolves its
+own run inputs, and ``SafeCmd.launch_detached`` (with its synchronous twin) by
+``_DetachedLaunchEntryPoints`` in :mod:`cuprum._detached_launch`, because a
+detached launch shares their resolution rules without sharing their ownership.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -33,6 +36,7 @@ from cuprum._command_internals import (
     _ExecutionState,
     _run_prepared_command,
 )
+from cuprum._detached_launch import _DetachedLaunchEntryPoints
 from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._process_handle.owned_start import _OwnedStart
@@ -66,7 +70,7 @@ __all__ = [
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd(_OwnedStart, _BytesEntryPoints):
+class SafeCmd(_OwnedStart, _DetachedLaunchEntryPoints, _BytesEntryPoints):
     """Typed representation of a curated command ready for execution."""
 
     program: Program
