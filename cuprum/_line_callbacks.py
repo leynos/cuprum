@@ -15,19 +15,17 @@ The composed callback returns whatever ``on_line`` returned, so a hook that
 answers with an awaitable holds the read loop: that is what lets the
 ``lines()`` driver's bounded queue push back on a chatty child. Observe-hook
 work is bounded the same way: once the run retains
-:data:`cuprum._observability._OBSERVE_TASK_CEILING` unfinished observer tasks,
-the next line's observation waits for one of them to finish, which holds the
-read loop and, through it, the child's pipe.
+:data:`cuprum._observe_task_retention._OBSERVE_TASK_CEILING` unfinished observer
+tasks, the next line's observation waits for one of them to finish, which holds
+the read loop and, through it, the child's pipe.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
-import functools
-import inspect
 import typing as typ
 
-from cuprum._observability import (
+from cuprum._observe_task_retention import (
     _OBSERVE_TASK_CEILING,
     _await_hook_capacity,
     _has_hook_capacity,
@@ -369,60 +367,3 @@ def _compose_observation_line_callback(
             monotonic_clock=observation.monotonic_clock,
         ),
     )
-
-
-def _chain_line_hooks(
-    first: _LineHookFn,
-    *remaining: _LineHookFn,
-) -> _LineHookFn:
-    """Chain several line hooks into one, in the order supplied.
-
-    ``SafeCmd.lines()`` registers the caller's ``on_line`` alongside the
-    driver's queue sink, and both must see every line: the caller's hook runs
-    first so its view of the stream never depends on how the driver delivers.
-    Requiring the first hook keeps the result callable by construction.
-
-    Returns
-    -------
-    _LineHookFn
-        The sole hook when it is the only one, or a fan-out over all hooks.
-        The fan-out collects every hook's awaitable and returns one awaitable
-        of its own, so the drain loop still waits for each before reading on.
-    """
-    chain = (first, *remaining)
-    if len(chain) == 1:
-        return first
-    return _fan_out_hooks(chain)
-
-
-def _fan_out_hooks(chain: cabc.Sequence[_LineHookFn]) -> _LineHookFn:
-    """Return one hook that delivers every event to each hook in *chain*."""
-    return typ.cast("_LineHookFn", functools.partial(_fan_out_event, tuple(chain)))
-
-
-def _fan_out_event(
-    chain: cabc.Sequence[_LineHookFn],
-    event: LineEvent,
-) -> _LineHookOutcome:
-    """Deliver one event to every hook before awaiting their outcomes."""
-    pending = [outcome for hook in chain if (outcome := hook(event)) is not None]
-    if not pending:
-        return None
-    return _await_hook_outcomes(pending)
-
-
-async def _await_hook_outcomes(pending: cabc.Sequence[cabc.Awaitable[None]]) -> None:
-    """Await every deferred hook, in registration order."""
-    for index, outcome in enumerate(pending):
-        try:
-            await outcome
-        except BaseException:
-            _close_skipped_hook_outcomes(pending[index + 1 :])
-            raise
-
-
-def _close_skipped_hook_outcomes(pending: cabc.Iterable[cabc.Awaitable[None]]) -> None:
-    """Close unawaited coroutines left after an earlier hook failure."""
-    for outcome in pending:
-        if inspect.iscoroutine(outcome):
-            outcome.close()
