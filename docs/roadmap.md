@@ -177,6 +177,49 @@ compromising explicitness.
   default (rather than disabling timeouts). Document usage and semantics in
   `docs/users-guide.md`.
 
+### 3.5. Command composition helpers
+
+This step answers whether four generic argv shapes — a presence flag, an option
+value, a repeated option, and a separated positional operand — can be composed
+from one vocabulary that in-tree and adopter-written builders share. Its
+outcome is the reusable layer the lading adoption assessment §6.4 asks for:
+typed construction without a tool-specific schema. The project-builder scaffold
+in 3.1.2 can then present this vocabulary as its assembly layer. See
+[RFC 0002](rfcs/0002-command-composition-helpers.md).
+
+- [ ] 3.5.1. Add `cuprum/sh/compose.py` with `OptionSpelling`, `flags`,
+  `option`, `repeated_option`, and `separated_operands`, re-exported from
+  `cuprum.sh`.
+  - See RFC 0002 §"The helper vocabulary".
+  - Success: each helper returns `tuple[str, ...]` that splats into
+    `SafeCmdBuilder` unchanged, an empty input returns `()`, and a value
+    outside `ArgValue` raises the same `TypeError` wording `sh.make` raises.
+- [ ] 3.5.2. Make `build_argv` reject keyword flags that would follow the
+  separator `separated_operands` emits.
+  - Requires 3.5.1.
+  - Success: a keyword flag after a helper-composed separator raises
+    `TypeError` naming the fix, `build_argv("-f", "--", check=True)` is
+    accepted because a literal `--` is an option value rather than a
+    separator, and a call without a separator, or with a separator and no
+    keyword, produces the same tuple as today.
+- [ ] 3.5.3. Migrate `git_status`, `git_checkout`, and `tar_create` to the
+  helpers, leaving every emitted argv unchanged.
+  - Requires 3.5.1.
+  - Success: the existing builder unit, property, and real-tool suites pass
+    without an assertion changing.
+- [ ] 3.5.4. Add an end-to-end suite that composes a git, an rsync, and a tar
+  command from the helpers, compares each composed argv with the handwritten
+  builder's, and runs the real tool on a leading-dash operand.
+  - Requires 3.5.1 and 3.5.3.
+  - Success: a `--checkpoint=1` source is archived as a file, not parsed as an
+    option, and the suite skips per tool exactly as
+    `test_builder_operand_separation.py` does.
+- [ ] 3.5.5. Document the vocabulary in the users' guide and the scripting
+  standards, append the ADR-020 addendum recording that RFC 0002 supersedes the
+  positional `"--check"` workaround, and add a changelog entry.
+  - Requires 3.5.1 and 3.5.2.
+  - See adr-020-typed-argument-contract-for-sh-make.md.
+
 ## 4. Performance extensions
 
 Focus: Provide optional Rust-based stream operations for high-throughput
