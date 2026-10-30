@@ -2,7 +2,7 @@
 //! replacement decoder.
 //!
 //! The named rows pin each replacement and boundary category; the split
-//! matrices cross every partition of them against
+//! matrices cross every partition of the bounded rows against
 //! `String::from_utf8_lossy`; and the property tests generalize the same
 //! oracle over arbitrary bytes and chunk boundaries.
 
@@ -38,8 +38,26 @@ fn decode_single_chunk(input: &[u8], final_chunk: bool) -> (String, Vec<u8>) {
     (output, pending)
 }
 
-/// Long run of invalid bytes: every byte is its own replacement.
-const INVALID_RUN: [u8; 512] = [0xff; 512];
+/// Run of invalid bytes: every byte is its own replacement.
+///
+/// The exhaustive split matrices decode every partition of every named row, so
+/// their cost grows quadratically in row length: a 512-byte row would make the
+/// two-split matrix alone perform 131,841 decodes, and that matrix also runs
+/// under Miri. This row therefore stays short, while [`LONG_INVALID_RUN`]
+/// supplies long-run coverage to the single-shot test only. Long-run scaling is
+/// pinned natively by `utf8_scaling_tests.rs`, which is compiled out under
+/// Miri.
+const INVALID_RUN: [u8; 8] = [0xff; 8];
+
+/// Long run of invalid bytes for the single-shot oracle comparison.
+///
+/// Decoding this once costs a single pass; putting it through the split
+/// matrices would multiply that cost by the number of partitions and make
+/// under-Miri runs impractically slow.
+const LONG_INVALID_RUN: [u8; 512] = [0xff; 512];
+
+/// Named rows that only the single-shot test decodes.
+const LONG_INPUTS: &[(&str, &[u8])] = &[("long_invalid_run", &LONG_INVALID_RUN)];
 
 /// Named byte sequences that pin each replacement and boundary path.
 ///
@@ -53,7 +71,7 @@ const NAMED_INPUTS: &[(&str, &[u8])] = &[
     ("surrogate", b"\xED\xA0\x80"),
     ("above_max_scalar", b"\xF4\x90\x80\x80"),
     ("lone_continuation_run", b"\x80\x80\x80"),
-    ("long_invalid_run", &INVALID_RUN),
+    ("invalid_run", &INVALID_RUN),
     ("truncated_two_byte_eof", b"ok\xE2"),
     ("truncated_three_byte_eof", b"ok\xE2\x82"),
     ("truncated_four_byte_eof", b"ok\xF0\x9F\x98"),
@@ -73,7 +91,7 @@ const fn is_incomplete_tail(pending: &[u8]) -> bool {
 
 #[test]
 fn named_byte_sequences_match_lossy_decoding() {
-    for (name, input) in NAMED_INPUTS {
+    for (name, input) in NAMED_INPUTS.iter().chain(LONG_INPUTS) {
         let (output, pending) = decode_single_chunk(input, true);
         assert_eq!(
             output,
