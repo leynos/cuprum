@@ -126,6 +126,11 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
         is created, so the double accepts one too; the test's own list must
         still receive both, because its assertions are what witness the
         cleanup.
+
+        Returns
+        -------
+        tuple[ConsumerTask, ConsumerTask]
+            The stdout and stderr consumer tasks, in that order.
         """
         _ = (process, execution, spawn_context)
 
