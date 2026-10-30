@@ -24,6 +24,7 @@ from tests.behaviour._structured_events_support import (
     run_captured_and_echoed,
     run_observed,
     run_twice_with_distinct_contexts,
+    run_with_async_observation,
     runnable_of,
 )
 
@@ -227,6 +228,35 @@ def given_failing_command(behaviour_state: dict[str, object]) -> dict[str, objec
     return state
 
 
+@given(
+    "an observed command that floods stdout without capture",
+    target_fixture="observed_command",
+)
+def given_flooding_command(
+    behaviour_state: dict[str, object],
+) -> dict[str, object]:
+    """Build a command that writes many distinct lines to stdout.
+
+    The line count is large enough to exceed the retention ceiling by an order
+    of magnitude, which is what makes a bound visible, yet small enough to keep
+    the behavioural run well inside the pytest timeout.
+
+    Returns
+    -------
+    dict[str, object]
+        Scenario state holding the catalogue, command, expected lines, and the
+        line count the bounded-retention assertion compares against.
+    """
+    state = command_state(
+        "-c",
+        "import sys; sys.stdout.write(''.join(f'line-{i}\\n' for i in range(5000)))",
+    )
+    behaviour_state["expected_stdout"] = [f"line-{index}" for index in range(5000)]
+    behaviour_state["expected_stderr"] = []
+    behaviour_state["line_count"] = 5000
+    return state
+
+
 @given("the observer retains events until asynchronous callbacks settle")
 def given_observer_retains(behaviour_state: dict[str, object]) -> None:
     """Note that retention is established by the synchronous run boundary.
@@ -280,6 +310,15 @@ def when_pipeline_runs_captured_and_echoed(
     run with identical settings, which is why it delegates rather than repeats.
     """
     _run_scenario(behaviour_state, observed_command, run_captured_and_echoed)
+
+
+@when("the command runs with an asynchronous observing hook")
+def when_command_runs_with_async_hook(
+    behaviour_state: dict[str, object],
+    observed_command: dict[str, object],
+) -> None:
+    """Run the command under an async observer that retains every line."""
+    _run_scenario(behaviour_state, observed_command, run_with_async_observation)
 
 
 @when("the same command runs twice under distinct execution contexts")
