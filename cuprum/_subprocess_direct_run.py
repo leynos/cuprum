@@ -58,6 +58,10 @@ import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_rendezvous import _stdin_writer_failure
+from cuprum._subprocess_startup_abandon import (
+    _abandon_started_process,
+    _record_started,
+)
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
     _await_task_to_completion,
@@ -219,17 +223,28 @@ async def _run_subprocess_without_streams(
     outlive the run it belongs to. An unexpected stdin-writer failure after the
     process exits normally still propagates unchanged.
 
+    Creating the writer is the one startup step that precedes that boundary, so
+    it is guarded separately: a failure there happens before any task exists to
+    reconcile, and the child it would have written into has to be stopped and
+    reaped by :func:`_abandon_started_process` instead.
+
     Returns
     -------
     tuple[int, float]
         The process exit code and the observation's monotonic exit timestamp.
     """
-    stdin_task = _spawn_stdin_writer(
-        process,
-        execution.stdio.stdin,
-        _stdin_codec(execution.ctx),
-        execution.observation,
-    )
+    recorded: list[asyncio.Task[typ.Any]] = []
+    try:
+        stdin_task = _spawn_stdin_writer(
+            process,
+            execution.stdio.stdin,
+            _stdin_codec(execution.ctx),
+            execution.observation,
+        )
+        _record_started(recorded, stdin_task)
+    except BaseException:
+        await _abandon_started_process(process, execution, recorded)
+        raise
     try:
         exit_code, exited_at = await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(process, execution),

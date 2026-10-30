@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import sys
 import typing as typ
 
 from cuprum._line_callbacks import (
@@ -43,16 +42,19 @@ from cuprum._line_callbacks import (
     _StageStreamCallbacks,
 )
 from cuprum._stream_config import (
-    # Re-exported under this module's names as well as imported for use: both
-    # once lived here, and ``_command_internals`` still reaches the sink
-    # resolver by this path. ``__all__`` below keeps that path open.
+    # Re-exported under this module's names as well as imported for use: all
+    # three once lived here, and callers still reach the sink resolver and the
+    # config builder by this path. ``__all__`` below keeps that path open.
+    _build_stream_config as _build_stream_config,
+)
+from cuprum._stream_config import (
     _resolve_stream_configs as _resolve_stream_configs,
 )
 from cuprum._stream_config import (
     _resolve_stream_sink as _resolve_stream_sink,
 )
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
-from cuprum._streams_pump import _current_read_size
+from cuprum._subprocess_startup_abandon import _record_started
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_wait_types import _RunTaskOwnership
@@ -154,28 +156,39 @@ def _build_run_task_ownership(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     spawn: _StreamSpawnInputs,
+    *,
+    recorded: list[asyncio.Task[typ.Any]] | None = None,
 ) -> _RunTaskOwnership:
     """Start a run's stdin writer and stream consumers as one owned set.
 
-    The owned-handle path builds its equivalent inline rather than calling
-    this, because attaching there is all-or-nothing: it has to record which
-    tasks it started so it can reclaim them when a later start fails. The two
-    paths that have nothing to reclaim — the direct run and the line iterator
-    — both come through here.
+    The owned-handle path builds its equivalent inline, because attaching
+    there is all-or-nothing and it must record each task as it starts. The
+    direct run and the line iterator both come through here; the direct run
+    passes *recorded*, which receives each task the moment it exists rather
+    than after the whole set is built — a failure while starting a later task
+    must not lose an earlier one, since the tuple this returns is never built.
 
     Returns
     -------
     _RunTaskOwnership
         The started tasks, plus the latch and collectors the run retains.
     """
+    stdin_task = _spawn_stdin_writer(
+        process,
+        execution.stdio.stdin,
+        _stdin_codec(execution.ctx),
+        execution.observation,
+    )
+    _record_started(recorded, stdin_task)
+    consumers = _spawn_stream_consumers(
+        process,
+        execution,
+        spawn.spawn_context,
+        recorded=recorded,
+    )
     return _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
-            process,
-            execution.stdio.stdin,
-            _stdin_codec(execution.ctx),
-            execution.observation,
-        ),
-        consumers=_spawn_stream_consumers(process, execution, spawn.spawn_context),
+        stdin_task=stdin_task,
+        consumers=consumers,
         discard_on_cancel=spawn.discard_on_cancel,
         relay_diagnostics=spawn.relay_diagnostics,
         idle=execution.idle,
@@ -187,6 +200,8 @@ def _spawn_stream_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     spawn_context: _StreamConsumerSpawnContext,
+    *,
+    recorded: list[asyncio.Task[typ.Any]] | None = None,
 ) -> _ConsumerPair:
     """Spawn a consumer for each stream cuprum holds a pipe for.
 
@@ -194,6 +209,12 @@ def _spawn_stream_consumers(
     index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
     pair on its ``_RunTaskOwnership`` so its single reconciliation point can
     settle and read them exactly once.
+
+    *recorded*, when supplied, receives each consumer as soon as it is created.
+    The two are recorded one at a time rather than as a finished pair, because
+    the second can fail to start: a pair built in one expression would lose the
+    first consumer entirely, and the startup reclaim would then have no handle
+    on it.
 
     The gate is whether cuprum owns a pipe, not whether anything reads it. A
     stream that is piped but unread still gets its consumer, exactly as it did
@@ -213,26 +234,27 @@ def _spawn_stream_consumers(
     relay_diagnostics = spawn_context.relay_diagnostics
     stdout_on_line = _create_stream_callback(execution, "stdout", spawn_context.pid)
     stderr_on_line = _create_stream_callback(execution, "stderr", spawn_context.pid)
-    return (
-        _spawn_consumer(
-            _ConsumerWiring(
-                stream=process.stdout,
-                is_pipe=execution.stdio.stdout.is_pipe,
-                config=spawn_context.stdout_config,
-                on_line=stdout_on_line,
-                relay_diagnostics=relay_diagnostics[0],
-            )
-        ),
-        _spawn_consumer(
-            _ConsumerWiring(
-                stream=process.stderr,
-                is_pipe=execution.stdio.stderr.is_pipe,
-                config=spawn_context.stderr_config,
-                on_line=stderr_on_line,
-                relay_diagnostics=relay_diagnostics[1],
-            )
-        ),
+    stdout_consumer = _spawn_consumer(
+        _ConsumerWiring(
+            stream=process.stdout,
+            is_pipe=execution.stdio.stdout.is_pipe,
+            config=spawn_context.stdout_config,
+            on_line=stdout_on_line,
+            relay_diagnostics=relay_diagnostics[0],
+        )
     )
+    _record_started(recorded, stdout_consumer)
+    stderr_consumer = _spawn_consumer(
+        _ConsumerWiring(
+            stream=process.stderr,
+            is_pipe=execution.stdio.stderr.is_pipe,
+            config=spawn_context.stderr_config,
+            on_line=stderr_on_line,
+            relay_diagnostics=relay_diagnostics[1],
+        )
+    )
+    _record_started(recorded, stderr_consumer)
+    return (stdout_consumer, stderr_consumer)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -283,51 +305,6 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
             on_line=wiring.on_line,
             relay_diagnostics=wiring.relay_diagnostics,
         ),
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-    settlement_started: asyncio.Event | None = None,
-) -> _StreamConfig:
-    """Build the stdout ``_StreamConfig`` for an execution context.
-
-    When a presentation-sink session is active, mirrored stdout is routed
-    through the session's log destination so it lands inside the adapter's
-    framing (for example, inside the GitHub Actions group) in the order the
-    adapter received it.
-
-    The mode and the broken-pipe policy are both set on the stdout config and
-    inherited by the stderr one, which this module derives with
-    ``dc.replace``: each is a property of the run rather than of a stream, so
-    one value governs both, exactly as the caller specified it on the options
-    object. Capture is the exception the derivation overrides: it is configured
-    per stream, so the stderr policy is applied rather than inherited.
-
-    Returns
-    -------
-    _StreamConfig
-        The stream configuration for the run's stdout drain.
-    """
-    stdout_sink = _resolve_stream_sink(
-        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
-    )
-    return _StreamConfig(
-        capture=execution.capture_stdout,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        max_line_chars=execution.max_line_chars,
-        capture_bytes=execution.capture_bytes,
-        broken_pipe_policy=execution.broken_pipe_policy,
-        sink=stdout_sink,
-        delivery=execution.delivery_worker,
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        settlement_started=settlement_started,
-        read_size=_current_read_size(),
-        activity=execution.idle.note_activity if execution.idle is not None else None,
     )
 
 

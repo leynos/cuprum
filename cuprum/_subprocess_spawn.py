@@ -19,10 +19,14 @@ own ``stdin``/``stdout``/``stderr`` as ``None`` for everything except ``PIPE``.
 ``create_subprocess_exec`` behaves the same way in this respect, yielding a
 reader only for ``PIPE``, so this is not a divergence between the backends.
 
-Nothing here waits for a child, reconciles its tasks, or reads a clock:
+Nothing here waits for a running child or reads a clock:
 :func:`_start_owned_process` takes the start reference it stamps from its
 caller, because *when* that reading is taken is what its meaning depends on and
-each caller takes it at a different point.
+each caller takes it at a different point. It does reclaim a child whose
+``start`` announcement failed, through
+:mod:`cuprum._subprocess_startup_abandon`, because that event is the first step
+after the spawn that can raise and the caller it escapes never receives a run
+to clean up.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from cuprum._stdio_ownership import (
     _stdin_stdio,
 )
 from cuprum._subprocess_context import _cwd_arg, _ownership_spawn_kwargs
+from cuprum._subprocess_startup_abandon import _abandon_started_process
 from cuprum.echo_events import BrokenPipePolicy
 from cuprum.sh.execution import ProcessGroupPolicy
 
@@ -223,7 +228,11 @@ async def _start_owned_process(
 
     Everything after the spawn is emission-free until the ``start`` event, so
     the child is never running without a stamped bundle and an announced PID to
-    match it.
+    match it. The ``start`` event is the first step *after* the spawn that can
+    fail, and it fails by re-raising a synchronous observer's error, so the
+    child it was announcing is reclaimed here before that error escapes: the
+    caller never receives a run, and no other route will ever drain or reap the
+    child.
 
     Returns
     -------
@@ -238,8 +247,13 @@ async def _start_owned_process(
     # reads no clock, so it does not disturb the caller's sampling order.
     stamped = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(stamped)
-    stamped.observation.emit("start", _EventDetails(pid=process.pid))
-    return _StartedRun(process=process, execution=stamped)
+    try:
+        stamped.observation.emit("start", _EventDetails(pid=process.pid))
+        started = _StartedRun(process=process, execution=stamped)
+    except BaseException:
+        await _abandon_started_process(process, stamped)
+        raise
+    return started
 
 
 async def _spawn_subprocess(
