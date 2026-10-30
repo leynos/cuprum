@@ -123,6 +123,66 @@ class _Cp1252TextOnlySink:
         """Model the flush call on a text stream."""
 
 
+_REPEATED_COUNT = 3
+
+
+def _chunked(payload: bytes, size: int) -> tuple[bytes, ...]:
+    """Split *payload* into fixed-size chunks, including a short final chunk."""
+    return tuple(
+        payload[start : start + size] for start in range(0, len(payload), size)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "ending", "chunk_size", "expected_line"),
+    [
+        (
+            b"a" * 200,
+            b"\r\n",
+            3,
+            "a" * 23 + "… [truncated 177 bytes]\r\n",
+        ),
+        (
+            ("☃" * 40).encode(),
+            b"\n",
+            7,
+            "☃" * 8 + "… [truncated 96 bytes]\n",
+        ),
+    ],
+    ids=["ascii-crlf-split", "utf8-multibyte-split"],
+)
+def test_repeated_oversized_lines_are_each_bounded_and_captured(
+    body: bytes,
+    ending: bytes,
+    chunk_size: int,
+    expected_line: str,
+) -> None:
+    """Each repeated over-limit line is bounded identically and captured whole."""
+    payload = (body + ending) * _REPEATED_COUNT
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(
+            _reader(_chunked(payload, chunk_size)),
+            _config(sink, capture=FullCapture()),
+        )
+    )
+
+    assert captured.payload == payload.decode("utf-8", "replace"), (
+        "capture must retain every source byte rather than the bounded mirror"
+    )
+    assert sink.getvalue() == expected_line * _REPEATED_COUNT, (
+        f"unexpected bounded echo, got={sink.getvalue()!r}"
+    )
+    echoed_lines = sink.getvalue().splitlines(keepends=True)
+    assert len(echoed_lines) == _REPEATED_COUNT, (
+        f"expected {_REPEATED_COUNT} echoed lines, got={echoed_lines!r}"
+    )
+    assert all(len(line.encode()) <= _BOUND for line in echoed_lines), (
+        "every echoed line must respect the configured byte bound"
+    )
+
+
 def test_rejected_bounded_echo_does_not_observe_truncation() -> None:
     """A sink-rejected bounded write emits only its encoding-failure event."""
     sink = _Cp1252TextOnlySink()
