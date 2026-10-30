@@ -354,11 +354,12 @@ and leaves the release a draft.
 The evidence directory sits outside `github-upload/`, so verifier output never
 becomes a release asset. The step has no `if:` condition: an empty fetch list
 still succeeds, but a fetch list the step cannot read stops the job rather than
-silently skipping verification. `check-provenance` refuses to run without
-`--index`, because without the index the plan holds no PyPI names and the gate
-would approve nothing while appearing to run. The `publish-release` telemetry
-record maps the step to the existing `attestation` failure category, so a
-failure here is counted as an attestation failure rather than as `setup`.
+silently skipping verification. Every index-dependent command refuses to run
+without `--index`, because without it the plan holds no PyPI names: staging
+would substitute the local rebuild for PyPI's bytes, and both checks would pass
+while examining nothing. The `publish-release` telemetry record maps the step
+to the existing `attestation` failure category, so a failure here is counted as
+an attestation failure rather than as `setup`.
 
 ### Attestation identity and a moved tag
 

@@ -3695,12 +3695,14 @@ already published is ever overwritten.
 The PyPI-to-GitHub direction has its own gate.
 `scripts/release_github_upload.py` holds `stage_github()`, `check_fetched()`,
 and `check_provenance()`; the last hashes each file fetched from PyPI and
-requires a verifier record binding that exact filename and digest. The
-`check-provenance` subcommand refuses to run without `--index`, because without
-the index the plan holds no PyPI names and the gate would verify nothing. The
-index digest cannot stand in for provenance: an index record that agrees with
-the downloaded bytes would equally agree with malicious bytes served under the
-same URL. Every failing file is named in one error, and nothing is uploaded.
+requires a verifier record binding that exact filename and digest.
+`stage-github`, `check-fetched`, and `check-provenance` all refuse to run
+without `--index`, because without it the plan holds no PyPI names: staging
+would substitute the local rebuild for PyPI's bytes, and both checks would pass
+while examining nothing. The index digest cannot stand in for provenance: an
+index record that agrees with the downloaded bytes would equally agree with
+malicious bytes served under the same URL. Every failing file is named in one
+error, and nothing is uploaded.
 
 Because the verifier pins `--source-digest` to the triggering commit, bytes can
 carry over between attempts only while the tag still names that commit. Moving

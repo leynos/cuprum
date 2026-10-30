@@ -89,6 +89,9 @@ def _stage_pypi(state: State, args: argparse.Namespace) -> None:
 
 def _stage_github(state: State, args: argparse.Namespace) -> None:
     """Stage GitHub's upload set and print PyPI's files as TSV rows."""
+    # Without the index PyPI looks empty, so every artefact would be staged
+    # from the local build instead of fetched from PyPI's published bytes.
+    _path(args, "index")
     output = _path(args, "output")
     fetch = stage_github(state, _path(args, "bundles"), output)
     for name, url in fetch:
@@ -98,6 +101,9 @@ def _stage_github(state: State, args: argparse.Namespace) -> None:
 
 def _check_fetched(state: State, args: argparse.Namespace) -> None:
     """Check every fetched PyPI file against PyPI's digest."""
+    # Without the index there is no digest to compare against, so the check
+    # would pass over every fetched file without examining one.
+    _path(args, "index")
     check_fetched(state, _path(args, "output"))
 
 
@@ -105,9 +111,7 @@ def _check_provenance(state: State, args: argparse.Namespace) -> None:
     """Check every fetched PyPI file against approved build provenance."""
     # Without the index the plan holds no PyPI names, so there would be
     # nothing to check; refuse rather than silently verifying nothing.
-    if args.index is None:
-        msg = f"--index is required for {args.command}"
-        raise ReleaseAssetError(msg)
+    _path(args, "index")
     check_provenance(
         state,
         _path(args, "output"),
