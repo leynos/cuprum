@@ -55,7 +55,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class LaunchScenario:
     """The state one scenario builds up across its steps."""
 
