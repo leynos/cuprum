@@ -205,9 +205,8 @@ def _recorded_exception() -> dict[str, object]:
 
 def test_the_recorded_exception_names_this_fragment_and_its_decision() -> None:
     """Keep the ``.concordat`` exception complete and pointing at real files."""
-    assert _exception_problems(_recorded_exception()) == [], (
-        "the recorded exception must be complete"
-    )
+    problems = _exception_problems(_recorded_exception())
+    assert not problems, f"the recorded exception must be complete: {problems}"
     assert (repo_root() / FRAGMENT).is_file(), "the named route must exist"
     assert (repo_root() / ADR_012).is_file(), "the named decision record must exist"
 
