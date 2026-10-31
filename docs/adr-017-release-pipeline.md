@@ -394,3 +394,15 @@ the commit that built PyPI's files and rerun. If PyPI holds bytes no run
 attested, no rerun can approve them unless the rebuild is byte-identical, so
 publish a new version. Deleting the GitHub asset is not a remedy here: the
 blocking bytes are on PyPI, and the release simply stays a draft.
+
+### Early CLI version check
+
+`check-version` now runs `gh --version | python3 scripts/release_gh_version.py`
+before any job attests, publishes to PyPI, or touches a release. Without it, a
+runner whose CLI predates `2.102.0` would build and publish to PyPI and only
+then fail in `publish-release`, leaving the GitHub Release a draft that a rerun
+or a manual repair has to finish. The later checks remain: `draft-release`
+needs the minimum only when it must verify carried assets, and
+`publish-release` checks the exact CLI that verifies PyPI bytes on every run.
+The `check-version` telemetry record maps this step to the existing
+`version_mismatch` failure category.

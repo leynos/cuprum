@@ -61,6 +61,11 @@ jobs:
         env:
           TAG_VERSION: ${{ steps.cargo-version.outputs.version }}
         run: python3 scripts/release_version.py
+      # Checked first here so a runner with an old CLI fails before the PyPI
+      # upload, rather than after it, when only a draft Release is left to fix.
+      - name: Check the GitHub CLI version
+        id: gh-version
+        run: gh --version | python3 scripts/release_gh_version.py
       - uses: ./.github/actions/release-telemetry
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -70,6 +75,7 @@ jobs:
           steps: >-
             version_mismatch=${{ steps.cargo-version.outcome }}
             version_mismatch=${{ steps.pyproject-version.outcome }}
+            version_mismatch=${{ steps.gh-version.outcome }}
 
   build-wheels:
     permissions:

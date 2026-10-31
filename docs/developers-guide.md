@@ -3623,12 +3623,14 @@ The jobs do the following:
      --deny-self-hosted-runners --format json
    ```
 
-   Supply the tag's current commit as `<commit>`. Both verifier call sites
-   require GitHub CLI `2.102.0` or newer, which fixes
+   Supply the tag's current commit as `<commit>`. GitHub CLI `2.102.0` or newer
+   is required, which fixes
    [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g)
    and
-   [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8);
-   `publish-release` checks the version on every run, not only when a carryover
+   [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8).
+   `check-version` runs the gate before anything is built or published, so an
+   old runner fails before PyPI holds files; both verifier call sites check it
+   again, and `publish-release` does so on every run, not only when a carryover
    list is non-empty.
 3. `draft-release` reuses the tag's GitHub Release if one exists, draft or
    published, and otherwise creates a draft with generated notes, marked as a

@@ -26,6 +26,8 @@ if typ.TYPE_CHECKING:
 _PINNED = re.compile(r"@[0-9a-f]{40}$")
 _CARGO_CHECK = "leynos/shared-actions/.github/actions/ensure-cargo-version"
 _PYPROJECT_CHECK = "Check the pyproject.toml version against the tag"
+_GH_VERSION_CHECK = "Check the GitHub CLI version"
+_GH_VERSION_COMMAND = "gh --version | python3 scripts/release_gh_version.py"
 
 #: Each job's exact token scopes. Only the GitHub Release jobs may write
 #: repository contents, and only the attesting and uploading jobs may mint an
@@ -153,6 +155,28 @@ def test_every_publishing_job_waits_on_the_version_check() -> None:
     assert pyproject["env"] == {
         "TAG_VERSION": "${{ steps.cargo-version.outputs.version }}"
     }, "the pyproject check must compare against the same tag-derived version"
+
+
+def test_the_cli_version_is_checked_before_anything_is_published() -> None:
+    """An old CLI must stop the release before PyPI holds any of its files."""
+    found = step("check-version", _GH_VERSION_CHECK)
+    assert "if" not in found, (
+        "the early gate must run on every release, including one with no carryover"
+    )
+    assert step_script("check-version", _GH_VERSION_CHECK) == _GH_VERSION_COMMAND, (
+        "check-version must use the same version gate as the verifier steps"
+    )
+    assert _GH_VERSION_COMMAND in step_script("publish-release", _PROVENANCE_STEP), (
+        "the verifier step must still check the CLI that verifies attestations"
+    )
+    telemetry = next(
+        item
+        for item in _job("check-version")["steps"]
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    assert (
+        "version_mismatch=${{ steps.gh-version.outcome }}" in telemetry["with"]["steps"]
+    ), "check-version telemetry must record the CLI version outcome"
 
 
 def test_the_published_artefacts_are_the_attested_ones() -> None:
