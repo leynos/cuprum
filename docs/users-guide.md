@@ -502,7 +502,7 @@ one `atexit` callback; the callback flushes each of `sys.stdout` and
 `sys.stderr`, and when — and only when — a flush raises `BrokenPipeError` it
 points that stream's descriptor at the null device, so the interpreter's own
 final flush succeeds harmlessly. A dead stream that yields no usable descriptor
-— because it has no `fileno()` method, raises from it, or returns a value the
+— because it has no callable `fileno()`, raises from it, or reports a value the
 redirection rejects — is replaced by a sink that discards writes. When the
 descriptor is redirected successfully the stream object keeps its identity, so
 later writes and `fileno()` calls still address the same stream; if the null
