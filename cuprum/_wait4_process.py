@@ -167,9 +167,9 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Release this child's parent-side output descriptors.
 
         A reader closes itself once its pipe reaches end-of-file, and every run
-        that completes drains both outputs before it reaps, so the normal
-        lifetime needs nothing from this method. A run that stops before it
-        reaches end-of-file does: a descendant can inherit an output pipe and
+        that completes drains both outputs, so the normal lifetime needs
+        nothing from this method. A run that stops before it reaches
+        end-of-file does: a descendant can inherit an output pipe and
         outlive the direct child — under ``INHERIT``, or by leaving an owned
         group — so no end-of-file follows, and the transport would hold the
         parent-side descriptor open indefinitely.
