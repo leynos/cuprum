@@ -157,7 +157,11 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
         try:
             os.dup2(null_descriptor, descriptor)
         finally:
-            os.close(null_descriptor)
+            # If the kernel handed back the stream's own number, that number
+            # was free, so opening the null device already redirected it and
+            # closing it here would undo the redirect.
+            if null_descriptor != descriptor:
+                os.close(null_descriptor)
     except _DESCRIPTOR_FAILURES:
         setattr(sys, name, _NullTextSink())
 
