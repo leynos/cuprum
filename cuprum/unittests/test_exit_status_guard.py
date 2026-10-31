@@ -8,7 +8,7 @@ process never installs the real ``atexit`` hook.
 
 The end-to-end guarantee — that a real closed pipe no longer turns the
 requested status into 120 — is proved in
-``tests/behaviour/test_exit_status_guard.py``.
+``tests/behaviour/test_exit_status_guard_pipe.py``.
 """
 
 from __future__ import annotations
@@ -18,122 +18,27 @@ import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - isolates import side effects.
 import sys
 import threading
-import typing as typ
 from pathlib import Path
 
 import pytest
 
 from cuprum import exit_status_guard
-
-if typ.TYPE_CHECKING:
-    import types
-
-
-class _FakeStream:
-    """A standard-stream double that records what the hook asks of it.
-
-    Attributes
-    ----------
-    flushes:
-        How many times ``flush`` was called.
-    """
-
-    def __init__(
-        self,
-        *,
-        flush_error: BaseException | None = None,
-        descriptor: int | None = None,
-        fileno_error: BaseException | None = None,
-    ) -> None:
-        """Configure the failure each call reports, if any."""
-        self.flushes = 0
-        self._flush_error = flush_error
-        self._descriptor = descriptor
-        self._fileno_error = fileno_error
-
-    def flush(self) -> None:
-        """Record the flush, then raise the configured failure."""
-        self.flushes += 1
-        if self._flush_error is not None:
-            raise self._flush_error
-
-    def fileno(self) -> int:
-        """Return the configured descriptor, or raise the configured failure."""
-        if self._fileno_error is not None:
-            raise self._fileno_error
-        if self._descriptor is None:
-            msg = "test double has no descriptor"
-            raise AssertionError(msg)
-        return self._descriptor
-
-
-class _DeadProxy:
-    """A standard-stream proxy whose reader has gone away."""
-
-    def flush(self) -> None:
-        """Report the reader as gone, as a broken proxy would."""
-        raise BrokenPipeError
-
-
-class _ProxyWithoutFileno(_DeadProxy):
-    """A dead proxy that never had a ``fileno`` method."""
-
-
-class _ProxyReturningNoDescriptor(_DeadProxy):
-    """A dead proxy whose ``fileno`` reports no descriptor."""
-
-    def fileno(self) -> None:
-        """Return no descriptor at all."""
-
-
-class _ProxyWithNonCallableFileno(_DeadProxy):
-    """A dead proxy whose ``fileno`` attribute is not callable."""
-
-    fileno = None
-
-
-class _RecordingAtexit:
-    """A stand-in for the ``atexit`` module that records registrations."""
-
-    def __init__(self) -> None:
-        """Start with nothing registered."""
-        self.registered: list[object] = []
-
-    def register(self, func: object, /, *args: object, **kwargs: object) -> None:
-        """Record one registration without installing it."""
-        self.registered.append(func)
-
-
-class _FailingDup2Os:
-    """An ``os`` proxy whose ``dup2`` always fails."""
-
-    def __init__(self, real: types.ModuleType) -> None:
-        """Wrap the real module so every other attribute still works."""
-        self._real = real
-        self.dup2_calls = 0
-
-    def __getattr__(self, name: str) -> object:
-        """Delegate every attribute the guard does not override."""
-        return getattr(self._real, name)
-
-    def dup2(self, source: int, target: int) -> None:
-        """Record the attempt and fail the way an unusable descriptor would."""
-        self.dup2_calls += 1
-        msg = "dup2 refused the descriptor"
-        raise OSError(msg)
+from cuprum.unittests._exit_status_guard_doubles import (
+    _FailingDup2Os,
+    _FakeStream,
+    _ProxyReturningNoDescriptor,
+    _ProxyWithNonCallableFileno,
+    _ProxyWithoutFileno,
+    _RecordingAtexit,
+    _SelfDescriptorOs,
+    assert_points_at_devnull,
+)
 
 
 @pytest.fixture(autouse=True)
 def _reset_installed_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep every test's registration state independent."""
     monkeypatch.setattr(exit_status_guard, "_is_installed", False)
-
-
-def _assert_points_at_devnull(descriptor: int) -> None:
-    """Fail unless *descriptor* now refers to the null device."""
-    assert os.path.samestat(os.fstat(descriptor), Path(os.devnull).stat()), (
-        f"descriptor {descriptor} should have been redirected to os.devnull"
-    )
 
 
 def test_dead_stream_is_redirected_and_keeps_its_identity(
@@ -152,7 +57,7 @@ def test_dead_stream_is_redirected_and_keeps_its_identity(
         exit_status_guard._guard_standard_streams()
 
         assert sys.stdout is dead, "the stream object must keep its identity"
-        _assert_points_at_devnull(write_fd)
+        assert_points_at_devnull(write_fd)
     finally:
         os.close(read_fd)
         os.close(write_fd)
@@ -293,7 +198,7 @@ def test_both_dead_streams_are_guarded_independently(
         exit_status_guard._guard_standard_streams()
 
         assert sys.stdout is stdout, "the redirectable stream keeps its identity"
-        _assert_points_at_devnull(write_fd)
+        assert_points_at_devnull(write_fd)
         assert isinstance(sys.stderr, exit_status_guard._NullTextSink), (
             "the descriptorless stream must be replaced by the null sink"
         )
@@ -343,6 +248,38 @@ def test_dup2_failure_falls_back_to_the_null_sink(
         assert failing_os.dup2_calls == 1, "the hook must have attempted the redirect"
         assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
             "a failed redirect must fall back to the null sink"
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_null_descriptor_reusing_the_stream_number_is_not_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A null device opened at the stream's own number must stay open."""
+    read_fd, write_fd = os.pipe()
+    try:
+        dead = _FakeStream(
+            flush_error=BrokenPipeError("reader left"),
+            descriptor=write_fd,
+        )
+        monkeypatch.setattr(sys, "stdout", dead)
+        monkeypatch.setattr(sys, "stderr", _FakeStream())
+        reusing = _SelfDescriptorOs(os, write_fd)
+        monkeypatch.setattr(exit_status_guard, "os", reusing)
+
+        exit_status_guard._guard_standard_streams()
+
+        assert sys.stdout is dead, "the stream must keep its identity"
+        assert reusing.opened == [(os.devnull, os.O_WRONLY)], (
+            "the guard must open the null device for the redirect"
+        )
+        assert reusing.closed == [], (
+            "the descriptor that took the stream's number must stay open"
+        )
+        assert os.fstat(write_fd) is not None, (
+            "the redirected descriptor must still be open"
         )
     finally:
         os.close(read_fd)
