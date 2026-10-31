@@ -206,6 +206,7 @@
       'cuprum/sh/_convenience_sink.py',
       'cuprum/sh/_deprecated.py',
       'cuprum/sh/_resolved_options.py',
+      'cuprum/sh/_sync_entry.py',
       'cuprum/sh/argv.py',
       'cuprum/sh/builder.py',
       'cuprum/sh/byte_results.py',

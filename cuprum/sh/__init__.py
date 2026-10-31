@@ -78,6 +78,8 @@ from cuprum.context import scoped as scoped
 from cuprum.echo_events import RelayFallback as RelayFallback
 from cuprum.program import Program as Program
 from cuprum.sh._deprecated import IOOptions
+from cuprum.sh._sync_entry import RunningEventLoopError as RunningEventLoopError
+from cuprum.sh._sync_entry import asyncio as asyncio
 from cuprum.sh.argv import ArgValue as ArgValue
 from cuprum.sh.argv import Path as Path
 from cuprum.sh.argv import _serialize_kwargs as _serialize_kwargs
@@ -119,7 +121,6 @@ from cuprum.sh.results import (
 )
 from cuprum.sh.results import dc as dc
 from cuprum.sh.safe_cmd import SafeCmd
-from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
@@ -143,6 +144,7 @@ __all__ = [
     "ProcessGroupPolicy",
     "RunOutputOptions",
     "RunningCommand",
+    "RunningEventLoopError",
     "SafeCmd",
     "SafeCmdBuilder",
     "SignalAfterExitError",

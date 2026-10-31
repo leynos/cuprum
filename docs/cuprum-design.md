@@ -181,8 +181,10 @@ Cuprum is built on top of `asyncio` (or a compatible abstraction) and treats
 asynchronous execution as the default. Every operation should have:
 
 - an **async** method (`await cmd.run()`, `await pipeline.run()`), and
-- a **sync** convenience method (`cmd.run_sync()`) that simply drives the event
-  loop under the hood.
+- a **sync** convenience method (`cmd.run_sync()`) that creates and owns a
+  fresh event loop. Because it owns that loop, it cannot run while another loop
+  is running in the same thread; a call from a coroutine raises
+  `RunningEventLoopError`, which names the async method to await instead.
 
 This ensures Cuprum integrates cleanly with async applications while remaining
 usable from simpler scripts.
