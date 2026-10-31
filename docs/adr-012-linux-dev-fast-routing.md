@@ -78,6 +78,15 @@ They complement Make dry-run tests, which prove routing text but not shell
 installer behaviour. Pin changes must update the version metadata, checksums,
 configuration digest, tests, and this decision if the routing boundary changes.
 
+## Addendum (2026-10-27): independent modern-stable route
+
+Issue #506 added an independent, fragment-free validation route that explicitly
+selects Rust/Cargo `1.99.1`. It preserves the workspace's Rust 1.85.0 source
+contract and the separate MSRV check. Its Cargo warning-policy migration is
+recorded in [modern-stable validation](modern-stable-validation.md). The
+dev-fast route keeps its existing `-D warnings` compiler flags because it uses
+an independently pinned nightly toolchain.
+
 ## Addendum, 2026-10-31: the fast path meets the build standard, and the exception is recorded
 
 The Concordat `rust-build-defaults` rule (0.3.0) expects the parallel `rustc`

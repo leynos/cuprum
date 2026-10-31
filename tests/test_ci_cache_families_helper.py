@@ -66,7 +66,71 @@ def test_a_matrix_reference_the_leg_lacks_is_a_contract_failure(name: str) -> No
 def test_a_non_matrix_expression_is_a_contract_failure() -> None:
     """Reject an expression this reader cannot evaluate rather than guess at it."""
     with pytest.raises(AssertionError, match="cannot resolve"):
-        families._resolve("${{ env.SOMETHING }}", {}, MESSAGE)
+        families._resolve("${{ github.ref }}", {}, MESSAGE)
+
+
+def test_an_environment_reference_resolves_from_the_job_environment() -> None:
+    """Render an explicitly supplied job-level pin in the compiler cache key."""
+    resolved = families._resolve(
+        "${{ env.MODERN_STABLE_TOOLCHAIN }}",
+        {},
+        MESSAGE,
+        environment={"MODERN_STABLE_TOOLCHAIN": "1.99.1"},
+    )
+    assert resolved == "1.99.1", (
+        "the job-level modern compiler pin must resolve into its cache key"
+    )
+
+
+def test_modern_stable_cache_scope_requires_a_compiler_version() -> None:
+    """Keep the modern compiler cache key tied to an explicit toolchain pin."""
+    with pytest.raises(
+        AssertionError, match="must declare its explicit compiler-version"
+    ):
+        families._compiler_version_scope(
+            {"compiler-shape": "modern-stable"},
+            {},
+            MESSAGE,
+            job_identity=("w.yml", "j"),
+        )
+
+
+def test_other_cache_shapes_reject_a_compiler_version() -> None:
+    """Keep compiler-version scoping exclusive to modern stable."""
+    with pytest.raises(
+        AssertionError, match="compiler-version only scopes modern-stable"
+    ):
+        families._compiler_version_scope(
+            {"compiler-shape": "debug", "compiler-version": "1.99.1"},
+            {},
+            MESSAGE,
+            job_identity=("w.yml", "j"),
+        )
+
+
+def test_matrix_compiler_shape_resolves_its_modern_version_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a matrix leg with a synthetic modern compiler pin."""
+
+    def synthetic_job_environment(
+        _workflow_name: str, _job_name: str
+    ) -> dict[str, str]:
+        return {"MODERN_STABLE_TOOLCHAIN": "test-toolchain"}
+
+    monkeypatch.setattr(families, "job_env", synthetic_job_environment)
+    scope = families._compiler_version_scope(
+        {
+            "compiler-shape": "${{ matrix.shape }}",
+            "compiler-version": "${{ env.MODERN_STABLE_TOOLCHAIN }}",
+        },
+        {"shape": "modern-stable"},
+        MESSAGE,
+        job_identity=("ci.yml", "modern-stable"),
+    )
+    assert scope == ("test-toolchain",), (
+        "the selected modern-stable matrix leg must include its compiler version"
+    )
 
 
 @SETTINGS

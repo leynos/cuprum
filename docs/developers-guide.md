@@ -1215,6 +1215,78 @@ single invocation rather than editing the committed profile. Pass
 `--config 'profile.dev.incremental=true'`, or set `CARGO_PROFILE_DEV_DEBUG=2`
 in the environment.
 
+## Modern-stable Rust validation
+
+Modern-stable validation is pinned to Rust/Cargo `1.99.1`. The Makefile owns
+this selection independently of `rust/rust-toolchain.toml`, which continues to
+pin Rust `1.85.0`. CI installs the modern toolchain with the minimal profile
+and Clippy without changing the default toolchain. A modern-stable pass does
+not prove the MSRV, and `--locked` does not change that.
+
+`make modern-stable-check` verifies the pin, then runs workspace check, Clippy,
+tests, documentation, and doctests in that order.
+`make modern-stable-extension` verifies the pin, rebuilds the PyO3 extension
+through Maturin, and runs the existing extension-gated suite.
+`make modern-stable` runs those two aggregates sequentially. Cargo work uses
+the dedicated `rust/target/modern-stable` directory and `--locked`; the route
+retains `-C codegen-units=1` as its only Rust compiler flag. Each command
+starts from an environment with `RUSTC`, `CARGO_ENCODED_RUSTFLAGS`,
+`CARGO_ENCODED_RUSTDOCFLAGS`, and `CARGO_BUILD_WARNINGS` removed, so ambient
+caller settings cannot replace the route's compiler, rustdoc flags, or warning
+policy. The toolchain guard selects Cargo through `RUSTUP_TOOLCHAIN` alone,
+which is the same mechanism the recipes use.
+
+The check, Clippy, test, and Maturin routes use `CARGO_BUILD_WARNINGS=deny` on
+Cargo 1.97 or later. Cargo applies that setting to warnings from local
+packages; the rustdoc probe also found that it makes a warn-level Rustdoc lint
+on a local package fatal. This observation does not broaden the migration:
+modern documentation and doctest commands keep `RUSTDOC_FLAGS`, including
+`-D warnings`, which denies rustdoc lints on both runs, and omit Cargo's
+warning variable. The nightly doctest route retains its separate nightly-only
+flags. Existing dev-fast, MSRV, Whitaker, release, coverage, verification, and
+wheel routes keep their current toolchain and warning policy. The Linux
+dev-fast warning policy is unchanged.
+
+The observed negative controls and the route inventory live in
+[`modern-stable-validation.md`](modern-stable-validation.md). A toolchain bump
+must update the Makefile pin, the `modern-stable` CI job, this guide, and the
+toolchain-pin contract. Also update each hard-coded pin in:
+
+- `tests/helpers/ci_runners.py`, which lists the expected cache family.
+- `tests/test_ci_modern_stable_contract.py`.
+- `tests/helpers/cargo_warning_fixture.py`, which owns the fixture pin.
+- `cuprum/unittests/test_modern_stable_make_contract.py`.
+- `docs/ci-cache-ownership.md`, which records the writer table.
+- `docs/modern-stable-validation.md`, which records the pin and its evidence.
+- `docs/adr-012-linux-dev-fast-routing.md`, which names the pin.
+- `AGENTS.md`, which names the pin in the `make modern-stable` guidance.
+
+The shared cache-key renderer reads `compiler-version` from the CI job; it does
+not hold the toolchain pin, so a pin-only change does not require editing the
+renderer. Change it only if the cache-key shape changes. The Cargo registry key
+remains unchanged. The evidence document must record the new compiler and Cargo
+versions and rerun the warning, cache-freshness, extension, and lockfile
+controls. This Linux route is POSIX-oriented; it does not add Windows or macOS
+runtime evidence.
+
+The warning fixture's availability query takes its toolchain, its probe, and
+its executable locator as parameters; it never reads a selection from `PATH` or
+the ambient environment itself. It probes Cargo through an injected
+`RUSTUP_TOOLCHAIN` entry rather than a `+toolchain` argument, because the `+`
+form is a rustup proxy feature that a direct Cargo binary ignores. Unit tests
+inject a probe and a locator, so they can settle a complete toolchain, a
+mismatched compiler, a missing Clippy, a non-zero probe, a timed-out probe, and
+an unstartable probe without that toolchain being installed. The query answers
+in two kinds of result: a missing executable or a failed query is an
+unavailable toolchain, while a probe fault raises `ToolchainProbeError`, or
+`ToolchainProbeTimeoutError` for one that outlived its bound, so a scheduling
+failure cannot masquerade as absence. `require_toolchain()` holds the skipping
+policy: a missing toolchain and a timed-out probe both skip locally and fail
+under `CUPRUM_REQUIRE_MODERN_STABLE=1`, because a loaded host must not fail a
+local run while CI still reports the toolchain it could not use. A probe that
+cannot be started propagates instead, because a located executable that will
+not run is a broken environment rather than a missing toolchain.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member

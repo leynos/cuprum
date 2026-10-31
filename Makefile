@@ -19,6 +19,11 @@ CARGO ?= cargo
 # Rust 1.85.0 remains Cuprum's published compatibility toolchain. This
 # separately pinned nightly is selected only for compatible Linux debug work.
 MSRV_TOOLCHAIN ?= 1.85.0
+# A separately selected stable toolchain exercises Cargo's cache-friendly
+# warning policy without changing the published source compatibility floor.
+override MODERN_STABLE_TOOLCHAIN := 1.99.1
+override MODERN_STABLE_TARGET_DIR := $(CURDIR)/$(RUST_DIR)/target/modern-stable
+override MODERN_STABLE_RUSTFLAGS := -C codegen-units=1
 DEV_FAST_TOOLCHAIN ?= nightly-2026-08-23
 DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
 # Clippy is a separate rustup component from the backend, but `rust-lint` runs
@@ -45,6 +50,23 @@ DEV_FAST_HOST_IS_LINUX := $(if $(filter Linux,$(shell uname -s)),yes)
 # that executable but cannot pass Cargo's configuration-file `--config` form.
 DEV_FAST_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) $(CARGO) --config $(DEV_FAST_RUST_CONFIG)
 MSRV_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(MSRV_TOOLCHAIN) $(CARGO)
+override MODERN_STABLE_ENV = env -u RUSTC -u CARGO_ENCODED_RUSTFLAGS \
+	-u CARGO_ENCODED_RUSTDOCFLAGS -u CARGO_BUILD_WARNINGS \
+	RUSTUP_TOOLCHAIN=$(MODERN_STABLE_TOOLCHAIN) CARGO=$(CARGO) \
+	CARGO_TARGET_DIR=$(MODERN_STABLE_TARGET_DIR) \
+	RUSTFLAGS="$(MODERN_STABLE_RUSTFLAGS)"
+override MODERN_STABLE_CARGO_ENV = $(MODERN_STABLE_ENV) CARGO_BUILD_WARNINGS=deny
+override MODERN_STABLE_CARGO = $(MODERN_STABLE_CARGO_ENV) $(CARGO)
+override MODERN_STABLE_RUSTDOC_CARGO = $(MODERN_STABLE_ENV) $(CARGO)
+override MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND = \
+	components="$$(rustup component list --installed --toolchain "$(MODERN_STABLE_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
+	printf '%s\n' "$$components" | grep -q '^clippy' || { printf 'install clippy for %s before using modern-stable\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
+	rustc_output="$$(rustup run "$(MODERN_STABLE_TOOLCHAIN)" rustc -vV)" || { printf 'cannot run rustc with %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
+	cargo_output="$$(env -u RUSTC RUSTUP_TOOLCHAIN=$(MODERN_STABLE_TOOLCHAIN) $(CARGO) -V)" || { printf 'CARGO=%s does not honour rustup toolchain selection for %s\n' "$(CARGO)" "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
+	rustc_release="$$(printf '%s\n' "$$rustc_output" | sed -n 's/^release: //p')"; \
+	case "$$rustc_release" in "$(MODERN_STABLE_TOOLCHAIN)") ;; *) printf 'expected rustc %s, got %s\n' "$(MODERN_STABLE_TOOLCHAIN)" "$$rustc_release" >&2; exit 1 ;; esac; \
+	case "$$cargo_output" in "cargo $(MODERN_STABLE_TOOLCHAIN) "*) ;; *) printf 'CARGO=%s does not honour rustup toolchain selection for %s (got: %s)\n' "$(CARGO)" "$(MODERN_STABLE_TOOLCHAIN)" "$$cargo_output" >&2; exit 1 ;; esac; \
+	printf '%s\n' "$$rustc_output"; printf '%s\n' "$$cargo_output"
 RUST_DEBUG_CARGO = $(if $(DEV_FAST_HOST_IS_LINUX),$(DEV_FAST_CARGO_COMMAND),$(CARGO))
 RUST_DEBUG_PREREQUISITE = $(if $(DEV_FAST_HOST_IS_LINUX),dev-fast-check)
 # Parse release spellings without re-parsing caller-provided flags in a shell.
@@ -123,6 +145,8 @@ override WHITAKER_CARGO_FLAGS := $(WHITAKER_PACKAGE_FLAGS) \
 # build is the *only* thing it needs differently, so it passes `--release`
 # here rather than restating the three-step build sequence inline.
 MATURIN_DEVELOP_FLAGS ?=
+# Modern-stable development calls Maturin directly through the project venv.
+MATURIN ?= $(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) maturin
 # Extra flags for the dependency sync performed by the `build` target. The
 # benchmark uses this to omit lint-only tooling from its paid runner.
 UV_SYNC_FLAGS ?=
@@ -392,6 +416,10 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         test-extension test-markdown-format develop makeutil skylos-allow \
         install-nose duplication duplication-test duplication-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
+        modern-stable-toolchain-check modern-stable-cargo-check modern-stable-clippy \
+        modern-stable-test modern-stable-doc modern-stable-doctest modern-stable-check \
+        modern-stable-develop modern-stable-extension modern-stable \
+        modern-stable-warning-controls test-modern-stable-contract \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
 # Serialize the lint hierarchy. Each aggregate target lists its leaves as plain
@@ -678,6 +706,8 @@ test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against th
 test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, requiring a container runtime
 	CUPRUM_REQUIRE_ACT=1 $(PYTEST) -v $(ACT_SCENARIO_TARGETS)
 
+# The selected nightly keeps its separate doctest warning flags. The
+# fragment-free modern-stable route uses the stable-compatible RUSTDOC_FLAGS.
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
 	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
@@ -689,7 +719,67 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV
+	rustup run "$(MSRV_TOOLCHAIN)" rustc -vV
+	RUSTUP_TOOLCHAIN="$(MSRV_TOOLCHAIN)" $(CARGO) -V
 	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features
+
+modern-stable-toolchain-check: ## Verify the pinned modern stable Rust and Cargo toolchain
+	@$(MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND)
+
+modern-stable-cargo-check: modern-stable-toolchain-check ## Check every workspace target with Cargo warning denial
+	cd $(RUST_DIR) && $(MODERN_STABLE_CARGO) check --locked --workspace --all-targets --all-features --verbose
+
+modern-stable-clippy: modern-stable-toolchain-check ## Run Clippy with Cargo warning denial
+	cd $(RUST_DIR) && $(MODERN_STABLE_CARGO) clippy --locked --workspace --all-targets --all-features --verbose
+
+# Keep test-thread parallelism separate from Cargo's independently configured
+# build jobs, and preserve the existing nextest version floor.
+override MODERN_STABLE_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
+	$(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
+	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) $(MODERN_STABLE_CARGO) nextest run --locked --workspace --all-targets --all-features --cargo-verbose --test-threads $(TEST_JOBS); \
+	else echo "cargo-nextest not found; falling back to cargo test." >&2; \
+	cd $(RUST_DIR) && $(MODERN_STABLE_CARGO) test --locked --workspace --all-targets --all-features --verbose -- --test-threads=$(TEST_JOBS); \
+	fi
+
+modern-stable-test: modern-stable-toolchain-check ## Test every workspace target with Cargo warning denial
+	@$(MODERN_STABLE_TEST_COMMAND)
+
+modern-stable-doc: modern-stable-toolchain-check ## Build workspace Rust documentation with retained rustdoc warnings
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(MODERN_STABLE_RUSTDOC_CARGO) doc --locked --workspace --all-features --no-deps --verbose
+
+# The nightly test-rust route retains its doctest warning flags; modern stable
+# uses only the stable-compatible rustdoc flags above.
+modern-stable-doctest: modern-stable-toolchain-check ## Run workspace doctests with retained rustdoc warnings
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(MODERN_STABLE_RUSTDOC_CARGO) test --locked --workspace --doc --all-features --verbose
+
+modern-stable-check: modern-stable-toolchain-check ## Run modern stable check, lint, test, documentation, and doctest gates
+	$(MAKE) modern-stable-cargo-check
+	$(MAKE) modern-stable-clippy
+	$(MAKE) modern-stable-test
+	$(MAKE) modern-stable-doc
+	$(MAKE) modern-stable-doctest
+
+modern-stable-develop: build uv $(VENV_TOOLS) modern-stable-toolchain-check ## Build the native extension with explicitly selected modern stable Rust
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python -m ensurepip --upgrade
+	$(MODERN_STABLE_CARGO_ENV) $(MATURIN) develop --verbose --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml --locked
+
+modern-stable-extension: ## Rebuild and exercise the native extension on modern stable Rust
+	$(MAKE) modern-stable-toolchain-check
+	$(MAKE) modern-stable-develop
+	$(MAKE) test-extension
+
+modern-stable: ## Run modern stable Rust validation and native extension tests
+	$(MAKE) modern-stable-check
+	$(MAKE) modern-stable-extension
+
+modern-stable-warning-controls: build uv $(VENV_TOOLS) ## Exercise cold and warm modern stable warning controls in a temporary worktree
+	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python scripts/modern_stable_warning_controls.py
+
+test-modern-stable-contract: build uv $(VENV_TOOLS) ## Validate modern stable routing and Cargo warning-policy contracts
+	$(PYTEST) -v \
+		cuprum/unittests/test_modern_stable_make_contract.py \
+		cuprum/unittests/test_cargo_build_warnings_contract.py \
+		scripts/tests/test_modern_stable_warning_controls.py
 
 dev-fast-check: ## Verify Linux dev-fast prerequisites
 	@$(DEV_FAST_CHECK_COMMAND)

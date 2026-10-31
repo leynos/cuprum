@@ -270,6 +270,16 @@ working on the Rust portions of the project:
   alternatives. All Rust packages inherit Cargo's `rust-version = "1.85.0"`
   contract, which also keeps MSRV-aware Clippy findings valid when debug
   linting uses the dev-fast nightly.
+  - `make modern-stable` is a separate, explicitly selected validation route
+    pinned to Rust/Cargo `1.99.1`; it does not change the Rust 1.85.0 source
+    contract or MSRV check. Its check, Clippy, test, and Maturin commands use
+    `CARGO_BUILD_WARNINGS=deny` on Cargo 1.97 or later with a dedicated
+    `rust/target/modern-stable` directory. Rustdoc and doctests retain
+    `RUSTDOC_FLAGS`, and the older-Cargo, dev-fast, release, Whitaker,
+    verification, and wheel routes retain their existing warning policy. In
+    particular, dev-fast continues to use `-D warnings`. Keep the Makefile,
+    CI, developer guide, toolchain contract, and compiler-cache pin in sync
+    when updating the modern toolchain.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions

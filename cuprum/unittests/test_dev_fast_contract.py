@@ -518,6 +518,13 @@ def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:
             lambda: _dry_run("boundary-kani", "boundary-miri", "boundary-test"),
             id="verification",
         ),
+        pytest.param(
+            lambda: _dry_run(
+                "modern-stable-check",
+                variables={"DEV_FAST_HOST_IS_LINUX": "yes"},
+            ),
+            id="modern-stable",
+        ),
     ],
 )
 def test_protected_routes_reject_dev_fast_contamination(

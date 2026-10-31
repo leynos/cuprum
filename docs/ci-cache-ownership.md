@@ -14,11 +14,11 @@ ownership back out of the workflows.
 
 ## The three families
 
-| Family     | Holds                                     | Scoped by                             |
-| ---------- | ----------------------------------------- | ------------------------------------- |
-| `cargo-`   | `~/.cargo/registry` and `~/.cargo/git`    | lane                                  |
-| `tool-`    | installed executables and uv environments | lane, image, interpreter              |
-| `sccache-` | compiler output                           | lane, image, interpreter, build shape |
+| Family     | Holds                                     | Scoped by                                                           |
+| ---------- | ----------------------------------------- | ------------------------------------------------------------------- |
+| `cargo-`   | `~/.cargo/registry` and `~/.cargo/git`    | lane                                                                |
+| `tool-`    | installed executables and uv environments | lane, image, interpreter                                            |
+| `sccache-` | compiler output                           | lane, image, interpreter, build shape and selected compiler version |
 
 _Table 1: The cache families, what each holds, and what scopes its key._
 
@@ -88,8 +88,10 @@ under 3.12 are therefore not shown to serve a 3.14 build.
 
 The build shape. An unoptimized `maturin develop` build, the same build with
 `--release`, the Cranelift-backed lint build, the instrumented `cargo llvm-cov`
-build, and the `--cfg loom` model build all produce different objects from
-identical source.
+build, the `--cfg loom` model build, and the fragment-free modern-stable build
+all produce different objects from identical source. The modern-stable shape
+also carries its exact Rust version: its Rust/Cargo 1.99.1 objects are kept
+separate from the project-toolchain and dev-fast objects.
 
 This was measured rather than assumed. Until 2026-09-04 the compiler key named
 neither dimension, so every Ubicloud job read one archive that the instrumented
@@ -126,6 +128,7 @@ the family without saving it.
 | Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg |
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`        |
 | Compiler, Cranelift lint              | `ci.yml` `lint-test`                |
+| Compiler, 3.13 modern stable 1.99.1   | `ci.yml` `modern-stable`            |
 | Compiler, Loom model                  | `loom.yml` `loom`                   |
 
 `lint-test` moved to the Ubicloud lane with the fork fallback, taking its
