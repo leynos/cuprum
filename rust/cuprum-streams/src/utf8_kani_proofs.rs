@@ -97,17 +97,22 @@ fn pending_state_is_valid_incomplete_utf8() {
     }
 }
 
-/// Symbolic bound: for *any* four-byte payload, a definite error advances the
+/// Symbolic bound: for *any* three-byte payload, a definite error advances the
 /// scan by at least one byte and never past the remaining slice, while an
 /// incomplete sequence reports a tail that starts before the end. This is the
 /// progress invariant the moving-offset decoder relies on — a non-positive or
 /// out-of-range advance would either stall the loop or index outside the
-/// buffer — proven here over the whole malformed-layout space without
-/// allocating a pending buffer.
+/// buffer — proven here without allocating a pending buffer.
+///
+/// The payload is three bytes rather than four because a four-byte symbolic
+/// payload makes CBMC's model of `run_utf8_validation` grow to tens of
+/// gigabytes. Three bytes still reach every incomplete-tail length up to
+/// three, which is the bound the decoder retains; the fixed four-byte
+/// decoder harnesses cover the remaining payload length.
 #[kani::proof]
 #[kani::unwind(5)]
 fn utf8_error_step_stays_in_range_and_advances() {
-    let bytes: [u8; 4] = kani::any();
+    let bytes: [u8; 3] = kani::any();
     if let Err(err) = core::str::from_utf8(&bytes) {
         let mut output = String::new();
         let step = handle_utf8_error(&mut output, &err);
@@ -164,13 +169,19 @@ fn utf8_error_step_stays_in_range_and_advances() {
     }
 }
 
-/// For every four-byte payload, a non-final decode retains at most one
+/// For every three-byte payload, a non-final decode retains at most one
 /// incomplete UTF-8 sequence and a final decode retains nothing. Compacting
 /// only that tail is what bounds the decoder's retained state.
+///
+/// Three symbolic bytes are enough to produce every retained-tail length the
+/// decoder permits, and they keep the `Vec`/`String` allocator models small
+/// enough for CBMC to solve. Four symbolic bytes previously drove the solver
+/// past 50 GiB; the unwind bound is the smallest that covers both the scan loop
+/// and `run_utf8_validation` over three bytes.
 #[kani::proof]
-#[kani::unwind(8)]
+#[kani::unwind(5)]
 fn pending_tail_stays_bounded_for_symbolic_input() {
-    let bytes: [u8; 4] = kani::any();
+    let bytes: [u8; 3] = kani::any();
     let (_output, pending) = decode_single_chunk(&bytes, false);
     kani::assert(
         pending.len() <= 3,

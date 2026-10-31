@@ -5046,23 +5046,31 @@ status, bounds, excluded targets, and trusted assumptions are recorded in
 available or compatible is a blocker rather than a passing skip.
 
 The final native Kani boundary run passed 7 harnesses with 0 failures in
-`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 11
-harnesses passed, covered by the current result in
-`/tmp/issue379-round24-kani.log`. The native ownership proofs enumerate two
-exits; the repeated-borrow harness restricts borrows to three and uses
-`#[kani::unwind(4)]`. Production progress proofs use symbolic `usize`
-count/capacity and `u64` total/remaining/written values. Safe pump proofs use
-symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
-three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
-four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
-the final prefix harness. These are bounded results, not an unbounded proof.
-The pinned `make boundary-miri` target runs separate Miri invocations for
-`cuprum-native-io` and `cuprum-streams`. The observed results were 13 native
-tests passed with zero ignored and 67 stream tests passed with zero ignored.
-Miri interprets the stream crate's pure fallback read/write progress and
-short-I/O policy, deterministic retry/error classification, UTF-8 decoder chunk
-handling, progress accounting, and the `with_owned_writer` normal/error drop
-crossing through an in-memory writer. No Miri UB check is disabled.
+`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 12
+harnesses. The native ownership proofs enumerate two exits; the repeated-borrow
+harness restricts borrows to three and uses `#[kani::unwind(4)]`. Production
+progress proofs use symbolic `usize` count/capacity and `u64`
+total/remaining/written values. Safe pump proofs use symbolic `PumpState`,
+`usize` read lengths, and `u64` write counts; the three-step proof uses
+`#[kani::unwind(4)]`. UTF-8 proofs combine fixed three- and four-byte payloads
+with symbolic three-byte payloads, with unwind bound 5 for the fixed-payload,
+error-step, and bounded-pending harnesses, and 4 for the final prefix harness.
+Three symbolic bytes keep CBMC's model of `run_utf8_validation` tractable while
+still producing every incomplete-tail length the decoder retains; a four-byte
+symbolic payload exhausted the solver's memory. The error-step harness proves
+that a definite error advances the scan by at least one byte and never past the
+remaining slice, while the bounded-pending harness proves that non-final
+decoding retains at most one incomplete sequence and final decoding retains
+none. These are bounded results, not an unbounded proof and not a complexity
+proof; the native scaling regression in
+`rust/cuprum-streams/src/utf8_scaling_tests.rs` protects the linear-time
+contract. The pinned `make boundary-miri` target runs separate Miri invocations
+for `cuprum-native-io` and `cuprum-streams`. The observed results were 13
+native tests passed with zero ignored and 79 stream tests passed with zero
+ignored. Miri interprets the stream crate's pure fallback read/write progress
+and short-I/O policy, deterministic retry/error classification, UTF-8 decoder
+chunk handling, progress accounting, and the `with_owned_writer` normal/error
+drop crossing through an in-memory writer. No Miri UB check is disabled.
 
 The stream run compiles out tests requiring real pipes or descriptors:
 `consume_snapshot_tests`'s four fixed decoder tests and two property tests; the

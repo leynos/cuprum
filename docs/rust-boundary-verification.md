@@ -358,27 +358,37 @@ is an assessment limitation, neither a proof nor a successful skip.
 Kani is pinned to `0.67.0` with compiler
 `rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and CBMC `6.8.0`. The final
 native boundary run passed 7 harnesses with 0 failures in
-`/tmp/issue379-round27-kani-native.log`; the 11 safe-policy/decoder harnesses
-remain current and passed in the complete run recorded at
-`/tmp/issue379-round24-kani.log`. The native ownership proofs enumerate
-`Normal` and `Error` exits; only `repeated_borrows_never_close_the_reader`
-loops, with `borrows <= 3` and `#[kani::unwind(4)]`. Production progress proofs
-use symbolic `usize` `count`/`capacity` and `u64` `total`/`remaining`/
-`written`, and cover EOF, short progress, invalid lengths, and overflow. Safe
-pump proofs use symbolic `PumpState`, `usize` read lengths, and `u64` write
-counts; their three-step proof has `#[kani::unwind(4)]`. UTF-8 proofs use fixed
-three- and four-byte arrays, with unwind bounds 5 for the first four harnesses
-and 4 for the final prefix harness. These are bounded results, not an unbounded
-proof. Verus is pinned to `0.2026.09.06.8dea4a2` with Rust `1.98.0` and
-prebuilt Z3 `4.16.0`; the production progress proof passed 2 functions with 0
-errors in `/tmp/issue379-round24-verus.log`. Miri is pinned to
-`nightly-2026-08-07` with `rustc 1.99.0-nightly (84b36a78a 2026-08-06)`; the
-latest `make boundary-miri` run passed 13 `cuprum-native-io` tests and 67
-`cuprum-streams` tests, all with 0 ignored. Its two commands are kept separate
-in the workflow log. PyO3/CPython, unshimmed `libc::splice`, unsupported
-syscall representations, and other excluded targets remain outside that Miri
-run. No UB check is disabled, and the Miri-only proptest case bound is a
-runtime limit only.
+`/tmp/issue379-round27-kani-native.log`; the 12 safe-policy/decoder harnesses
+remain current. The native ownership proofs enumerate `Normal` and `Error`
+exits; only `repeated_borrows_never_close_the_reader` loops, with
+`borrows <= 3` and `#[kani::unwind(4)]`. Production progress proofs use symbolic
+`usize` `count`/`capacity` and `u64` `total`, `remaining`, and `written`, and
+cover EOF, short progress, invalid lengths, and overflow. Safe pump proofs use
+symbolic `PumpState`, `usize` read lengths, and `u64` write counts; their
+three-step proof has `#[kani::unwind(4)]`. UTF-8 proofs combine fixed three-
+and four-byte payloads with symbolic three-byte payloads, with unwind bound 5
+for the fixed-payload, error-step, and bounded-pending harnesses, and 4 for the
+final prefix harness. Three symbolic bytes are the longest payload that keeps
+CBMC's model of `run_utf8_validation` tractable while still producing every
+incomplete-tail length the decoder retains; a four-byte symbolic payload
+exhausted the solver's memory. The error-step harness proves that a definite
+error advances the scan by at least one byte and never past the remaining
+slice, and that an incomplete sequence reports a tail starting after the valid
+prefix and before the end; the bounded-pending harness proves that non-final
+decoding retains at most one incomplete sequence and final decoding retains
+none. These are bounded results, not an unbounded proof, and they do not
+establish algorithmic complexity: the native scaling regression in
+`rust/cuprum-streams/src/utf8_scaling_tests.rs` protects the linear-time
+contract by comparing malformed 32 KiB and 256 KiB decode times. Verus is
+pinned to `0.2026.09.06.8dea4a2` with Rust `1.98.0` and prebuilt Z3 `4.16.0`;
+the production progress proof passed 2 functions with 0 errors in
+`/tmp/issue379-round24-verus.log`. Miri is pinned to `nightly-2026-08-07` with
+`rustc 1.99.0-nightly (84b36a78a 2026-08-06)`; the latest `make boundary-miri`
+run passed 13 `cuprum-native-io` tests and 79 `cuprum-streams` tests, all with
+0 ignored. Its two commands are kept separate in the workflow log.
+PyO3/CPython, unshimmed `libc::splice`, unsupported syscall representations,
+and other excluded targets remain outside that Miri run. No UB check is
+disabled, and the Miri-only proptest case bound is a runtime limit only.
 
 Round 28 unit and round 29 behavioural runs still report unexplained native
 payload mismatches. The isolated diagnostics pass, but no production fix is
@@ -419,8 +429,10 @@ and proof seams must identify exactly which production kernel they exercise.
 Kani's decoder `Vec`/`String` harnesses also rely on its allocator and
 intrinsic models: the logs abstract allocation failure through `assume(false)`
 in `alloc::raw_vec::handle_error`/`reserve` and `intrinsics::ToISize`, while
-the successful bounded allocations are the exercised domain. They do not cover
-out-of-memory behaviour or process abort.
+the successful bounded allocations are the exercised domain. The symbolic
+three-byte harnesses allocate only a three-byte `Vec` and `String`, so they
+stay inside that domain. They do not cover out-of-memory behaviour or process
+abort.
 
 Existing verification provenance must be retained:
 
