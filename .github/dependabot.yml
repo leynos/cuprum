@@ -45,6 +45,19 @@ updates:
     multi-ecosystem-group: "maturin-pyo3"
     patterns:
       - "maturin"
+    labels:
+      - "dependencies"
+      - "python"
+      - "uv"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+
+  # Enable version updates for the Cargo workspace
+  - package-ecosystem: "uv"
+    directory: "/"
     groups:
       # Pylint declares the Astroid range it supports (<=4.1.dev0 for 4.0.9),
       # so the exact pins in pyproject.toml are a mutually compatible pair and
@@ -60,6 +73,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "maturin"
     labels:
       - "dependencies"
       - "python"
@@ -76,6 +91,16 @@ updates:
     multi-ecosystem-group: "maturin-pyo3"
     patterns:
       - "pyo3"
+    labels:
+      - "dependencies"
+      - "cargo"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+  - package-ecosystem: "cargo"
+    directory: "/rust"
     groups:
       minor-and-patch:
         patterns:
@@ -83,6 +108,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "pyo3"
     labels:
       - "dependencies"
       - "cargo"
