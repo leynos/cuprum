@@ -74,9 +74,9 @@ separated from it by at most blank lines, declares what kind of block it is:
 - `<!-- illustrative-example: name -->` may precede a fence in any declared
   language. It is for an example whose project-specific imports, external
   executables, or side effects make execution unsuitable for the documentation
-  gate. The document must state why each illustrative example is excluded by
-  naming the example in its prose; the suite rejects an illustrative marker
-  whose name does not appear there.
+  gate. The document must state why each illustrative example is excluded in a
+  bullet that names the example and gives a reason; the suite rejects an
+  illustrative marker that no such bullet covers.
 
 A fence with no marker, or with a marker for the wrong kind of block, fails the
 suite. That way a Python example cannot be marked as a shell example to avoid
