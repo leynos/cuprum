@@ -102,10 +102,18 @@ def test_sync_entry_point_refuses_a_running_event_loop(
     assert isinstance(error, RuntimeError), (
         "the typed error should remain catchable as RuntimeError"
     )
-    assert error.entry_point == entry_point
-    assert error.async_alternative == async_alternative
-    assert entry_point in str(error)
-    assert async_alternative in str(error)
+    assert error.entry_point == entry_point, (
+        "the refusal must name the refused entry point"
+    )
+    assert error.async_alternative == async_alternative, (
+        "the refusal must name the asynchronous alternative"
+    )
+    assert entry_point in str(error), (
+        "the error message must include the refused entry point"
+    )
+    assert async_alternative in str(error), (
+        "the error message must include the asynchronous alternative"
+    )
     assert not [
         warning for warning in caught if "was never awaited" in str(warning.message)
     ], "the refused call must not construct a coroutine it never awaits"
@@ -119,4 +127,6 @@ def test_run_sync_still_executes_without_a_running_loop(
 
     result = command.run_sync()
 
-    assert result.stdout == "hi\n"
+    assert result.stdout == "hi\n", (
+        "run_sync must return the child stdout when no event loop is running"
+    )
