@@ -8,7 +8,7 @@ compiler output. These tests run the action's own step under `bash` and read
 what it appends to `GITHUB_ENV`, so the shell itself is the subject.
 
 The modern-stable family is the one that gained new scoping in this change, so
-it is exercised here, together with both error paths that keep a version scope
+it is exercised here, together with the error paths that keep a version scope
 honest.
 """
 
@@ -80,11 +80,24 @@ def test_modern_stable_renders_a_version_scoped_compiler_family(
             "modern-stable compiler shape needs an exact compiler-version",
         ),
         (
+            {"COMPILER_SHAPE": "modern-stable", "COMPILER_VERSION": "1.99"},
+            "modern-stable compiler shape needs an exact compiler-version",
+        ),
+        (
+            {"COMPILER_SHAPE": "modern-stable", "COMPILER_VERSION": "1.99.1-beta"},
+            "modern-stable compiler shape needs an exact compiler-version",
+        ),
+        (
             {"COMPILER_SHAPE": "debug", "COMPILER_VERSION": "1.99.1"},
             "compiler-version is only valid with the modern-stable shape",
         ),
     ],
-    ids=["modern-stable without a version", "a version outside modern stable"],
+    ids=[
+        "modern-stable without a version",
+        "a two-part version",
+        "a prerelease version",
+        "a version outside modern stable",
+    ],
 )
 def test_a_version_scope_outside_the_rules_fails_the_action(
     tmp_path: Path, overrides: dict[str, str], expected_error: str
