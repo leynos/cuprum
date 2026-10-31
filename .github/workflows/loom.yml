@@ -99,7 +99,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@6cec89bac47a21cf756d68d638a9a510998e57f8
+        uses: leynos/shared-actions/.github/actions/setup-rust@872f59f53717b5bebe8e24b2f4a7496b089a939a
         with:
           toolchain: '1.85.0'
           cache-provider: external
