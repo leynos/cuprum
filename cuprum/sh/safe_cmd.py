@@ -33,7 +33,7 @@ from cuprum._command_internals import (
     _ExecutionState,
     _run_prepared_command,
 )
-from cuprum._line_iteration import LineStream, _iter_line_events
+from cuprum._line_iteration import LineStream, _open_line_stream
 from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._process_handle.owned_start import _OwnedStart
 from cuprum._subprocess_context import _resolve_timeout
@@ -263,18 +263,7 @@ class SafeCmd(_OwnedStart, _BytesEntryPoints):
                 timeout=timeout,
             ),
         )
-        # The raw timeout travels with the generator, not the value
-        # ``_prepare_line_iteration`` resolved: re-resolving that value would
-        # keep a timeout from a scope the caller has since left. ``None`` must
-        # stay ``None`` so the consuming scope's default can apply.
-        return LineStream(
-            _iter_line_events(
-                prepared.execution_factory,
-                prepared.tracking,
-                requested_timeout=timeout,
-                open_sink=prepared.open_sink,
-            )
-        )
+        return _open_line_stream(prepared, requested_timeout=timeout)
 
     @typing.overload
     def run_sync(
