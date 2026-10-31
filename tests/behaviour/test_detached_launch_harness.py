@@ -24,9 +24,13 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import os
 import pathlib
+import sys
 import time
 import typing as typ
+
+import pytest
 
 from tests.helpers.detached import (
     Receipt,
@@ -49,7 +53,11 @@ from tests.helpers.detached_process import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    import pytest
+#: Every case launches a real worker, so all of them need POSIX sessions.
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="a detached launch requires POSIX session isolation",
+)
 
 #: Arguments carrying the shapes a naive argument hand-off would split, expand,
 #: or strip. The worker reports its own ``sys.argv``, so the comparison is made
@@ -203,9 +211,15 @@ def test_the_worker_holds_no_launcher_owned_stream(tmp_path: pathlib.Path) -> No
         assert report.stdin_eof, (
             "the worker must read end-of-file on stdin, not a launcher pipe"
         )
-        for fd, target in report.fd_targets.items():
-            if target is None:
-                continue
+        resolved = {
+            fd: target for fd, target in report.fd_targets.items() if target is not None
+        }
+        if sys.platform.startswith("linux"):
+            assert len(resolved) == len(report.fd_targets), (
+                "every descriptor must resolve through procfs, got "
+                f"{report.fd_targets!r}"
+            )
+        for fd, target in resolved.items():
             assert target == "/dev/null", (
                 f"fd {fd} must be /dev/null, but the worker saw {target}"
             )

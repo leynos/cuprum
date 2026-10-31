@@ -25,7 +25,7 @@ import cuprum
 from cuprum import ECHO, ScopeConfig, _detached_launch, scoped, sh
 from cuprum._detached_launch import _DetachedLaunchEntryPoints
 from cuprum._observability import _bound_executable
-from cuprum.context import UNSET, EnvMode, bind_executable
+from cuprum.context import UNSET, EnvMode, after, before, bind_executable, observe
 from cuprum.context._scope import ForbiddenProgramError
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import build_python_catalogue_env
@@ -105,6 +105,31 @@ def test_the_child_is_spawned_as_a_session_leader(
     _launch_in_scope(command, program)
 
     assert calls[0].start_new_session is True
+
+
+@_requires_posix
+def test_a_detached_launch_runs_no_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A detached launch fires no registered hook and emits no ``ExecEvent``.
+
+    Observation describes a child cuprum supervises. A detached launch gives the
+    child away, so a hook would have nothing truthful to report; the contract is
+    that none runs.
+    """
+    calls: list[str] = []
+    record_spawns(monkeypatch)
+    command, program, _ = _command("-c", "pass")
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset({program}))),
+        before(lambda _command: calls.append("before")),
+        after(lambda _command, _result: calls.append("after")),
+        observe(lambda _event: calls.append("observe")),
+    ):
+        command.launch_detached_sync()
+
+    assert not calls, f"a detached launch must run no observation, got {calls!r}"
 
 
 @_requires_posix
