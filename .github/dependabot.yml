@@ -1,4 +1,19 @@
 version: 2
+
+# maturin (uv) and PyO3 (Cargo) are versioned independently yet build one
+# extension, so an update to either alone cannot be built against the other.
+# Joining both stanzas to this group puts the available updates for the pair
+# into one pull request, so when both have one a single CI run builds them
+# together. It does not hold back a bump when only one of the two has an
+# update, and a group cannot choose compatible versions.
+multi-ecosystem-groups:
+  maturin-pyo3:
+    # Dependabot rejects `open-pull-requests-limit` on an entry that joins a
+    # multi-ecosystem group: the bound belongs to the group.
+    open-pull-requests-limit: 5
+    schedule:
+      interval: "daily"
+
 updates:
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -27,6 +42,9 @@ updates:
   # Enable version updates for Python (uv-managed pyproject.toml)
   - package-ecosystem: "uv"
     directory: "/"
+    multi-ecosystem-group: "maturin-pyo3"
+    patterns:
+      - "maturin"
     groups:
       # Pylint declares the Astroid range it supports (<=4.1.dev0 for 4.0.9),
       # so the exact pins in pyproject.toml are a mutually compatible pair and
@@ -42,7 +60,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "python"
@@ -56,6 +73,9 @@ updates:
   # Enable version updates for the Cargo workspace
   - package-ecosystem: "cargo"
     directory: "/rust"
+    multi-ecosystem-group: "maturin-pyo3"
+    patterns:
+      - "pyo3"
     groups:
       minor-and-patch:
         patterns:
@@ -63,7 +83,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "cargo"

@@ -1069,6 +1069,21 @@ The `uv` stanza lists a `pylint-astroid` group (`pylint` and `astroid`, no
 supports, and `pyproject.toml` pins the two as one compatible pair, so a bump
 of either alone would break the other; the group moves them in one pull request.
 
+The `uv` and `cargo` stanzas also join the `maturin-pyo3` multi-ecosystem
+group, defined at the top of the file with its own daily schedule. The `uv`
+stanza offers `maturin` and the `cargo` stanza offers `pyo3`. maturin and PyO3
+are versioned independently yet build one extension, so a bump of either alone
+cannot be built against the other; the group puts the available updates for the
+pair into one pull request, so when both have one a single CI run builds them
+together. It does not hold back a bump when only one of the two has an update,
+and a group cannot choose compatible versions, so it coordinates the update
+without proving it. Concordat's `dependency-family-contracts` rule (DF-002)
+accepts a shared multi-ecosystem group as one way to protect an independently
+versioned pair, beside an upper bound or an `ignore` rule
+(<https://github.com/leynos/concordat/pull/334>); it reads PyO3, which only the
+`cuprum-rust` workspace member declares, through the governed `rust/Cargo.toml`
+workspace root.
+
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
 actions there would otherwise keep stale pins.
@@ -1080,6 +1095,13 @@ its expected directories, whether under `directory` or `directories`, that the
 primary directory holds the stanza's manifest, that each stanza carries its
 labels, and that each stanza bounds its open pull requests. A new ecosystem
 needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
+`tests/test_ci_dependabot_multi_ecosystem.py` holds the multi-ecosystem
+arrangement: the `maturin-pyo3` group is defined with a daily schedule and its
+own `open-pull-requests-limit` (Dependabot rejects that key on an entry that
+joins a group, so the two stanzas carry none), the `uv` and `cargo` stanzas
+each join it with exactly their member, and no other stanza joins a
+multi-ecosystem group. The pull-request bound test for every stanza lives there
+too.
 
 ## Linux debug-build acceleration
 
