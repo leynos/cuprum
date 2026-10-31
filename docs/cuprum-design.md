@@ -2315,12 +2315,17 @@ preserving the `SafeCmd.run()` execution contract:
   of 2026-10-30.
 
 For screen readers: The following sequence diagram shows how a child spawned by
-`_start_owned_process` is reclaimed when the setup that follows the spawn
-fails. The helper emits the `start` event; if that or any later setup step
-raises, it calls `_abandon_started_process`, which terminates and reaps the
-child, cancels and gathers the started tasks, closes stdin, and discards stdout
-and stderr to end-of-file before the original error reaches the caller. When
-the setup succeeds, the started run is returned instead.
+`_start_owned_process` is reclaimed when the startup step that follows the
+spawn fails. `_start_owned_process` guards only the `start` event emission and
+the construction of the started run, so it passes no task list to
+`_abandon_started_process`: a failure there means no consumer or writer had
+been started yet. The reclaim terminates and reaps the child, closes stdin,
+discards stdout and stderr to end-of-file, and closes their parent-side
+transports, so the observer's error reaches the caller only after the child and
+its pipes have been released. When the `start` event returns, the started run
+is returned instead. The streamed run and the direct run guard their own
+post-spawn setup the same way, passing the tasks and captures each had recorded
+by the point of failure.
 
 Figure 9: Startup abandonment after a post-spawn failure, from
 `_start_owned_process` to `_abandon_started_process`
@@ -2334,21 +2339,23 @@ sequenceDiagram
     participant Tasks as StartedTasks
     participant Pipes as ProcessPipes
 
-    Caller->>Spawn: _spawn_subprocess()
+    Caller->>Spawn: _start_owned_process()
     Spawn->>Process: spawn child
-    Spawn->>Spawn: observation.emit()
-    alt post-spawn setup fails
-        Spawn->>Abandon: _abandon_started_process(process, execution, tasks)
+    Spawn->>Spawn: observation.emit("start")
+    alt the start event raises
+        Spawn->>Abandon: _abandon_started_process(process, stamped)
         Abandon->>Process: _terminate_all_shielded()
         Abandon->>Process: reap child
-        Abandon->>Tasks: cancel and gather started tasks
+        Abandon->>Tasks: no started task to cancel
         Abandon->>Pipes: _close_stdin()
         Abandon->>Pipes: _discard_to_eof(stdout, stderr)
+        Abandon->>Pipes: close output transports
         Abandon-->>Spawn: cleanup complete
-        Spawn-->>Caller: re-raise original setup error
-    else setup succeeds
-        Spawn-->>Caller: return started run
+        Spawn-->>Caller: re-raise the observer's error
+    else the start event returns
+        Spawn-->>Caller: return _StartedRun
     end
+    Note over Caller,Abandon: Streamed and direct runs guard their own setup,<br/>passing recorded tasks and captures.
 ```
 
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
