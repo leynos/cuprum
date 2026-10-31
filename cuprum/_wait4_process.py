@@ -105,7 +105,11 @@ class _Wait4Process(asyncio.subprocess.Process):
         self._returncode: int | None = None
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
-        self._pipe_transports: list[asyncio.BaseTransport] = []
+        # Only the readers. A read transport closes itself at end-of-file, so
+        # this set exists for the case that never reaches one and needs its
+        # descriptor released; the writer's close is the stdin plan's, which
+        # flushes what it can before it lets go.
+        self._output_transports: list[asyncio.BaseTransport] = []
         # Serializes the collection-and-publication against signal delivery,
         # and nothing else. It is held only from a confirmed zombie to the
         # recorded status, never across the child's lifetime, so a delivery to
@@ -150,15 +154,40 @@ class _Wait4Process(asyncio.subprocess.Process):
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
         transport, _ = await self._loop.connect_read_pipe(lambda: protocol, pipe)
-        self._pipe_transports.append(transport)
+        self._output_transports.append(transport)
         return reader
 
     async def _connect_writer(self, pipe: typ.IO[bytes]) -> asyncio.StreamWriter:
         """Connect the child input pipe to a flow-controlled stream writer."""
         protocol = _WritePipeProtocol(self._loop)
         transport, _ = await self._loop.connect_write_pipe(lambda: protocol, pipe)
-        self._pipe_transports.append(transport)
         return asyncio.StreamWriter(transport, protocol, None, self._loop)
+
+    def close_output_transports(self) -> None:
+        """Release this child's parent-side output descriptors.
+
+        A reader closes itself once its pipe reaches end-of-file, and every run
+        that completes drains both outputs before it reaps, so the normal
+        lifetime needs nothing from this method. A run that stops before it
+        reaches end-of-file does: a descendant can inherit an output pipe and
+        outlive the direct child — under ``INHERIT``, or by leaving an owned
+        group — so no end-of-file follows, and the transport would hold the
+        parent-side descriptor open indefinitely.
+
+        Reaping is not a substitute. This owner reaps through ``wait4``, which
+        collects the child and publishes its status and nothing else, so no
+        step here closes a transport the way asyncio's subprocess transport
+        closes its pipes when the transport itself is closed. Without this
+        call the descriptor would be released only once the transport was
+        collected, which is not a point the library can bound and which
+        reports the omission as a ``ResourceWarning``.
+
+        Closing is idempotent. A transport that already reached end-of-file
+        has closed itself, and one closed here releases its descriptor from the
+        callback the close schedules rather than from this call.
+        """
+        for transport in self._output_transports:
+            transport.close()
 
     @typ.override
     async def wait(self) -> int:

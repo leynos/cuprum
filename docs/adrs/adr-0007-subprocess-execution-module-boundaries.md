@@ -1508,15 +1508,16 @@ nobody will read.
 share. `_abandon_started_process` runs a fixed sequence behind a single
 `_shielded_cleanup`: terminate and reap the child, signalling its process group
 when the run owns one; cancel and gather the tasks the failed setup had already
-started; release the pipes by closing stdin and discarding stdout and stderr to
-end-of-file; and finally release the capture accumulators the setup had
-resolved, which it receives as a separate `captures` argument so a route that
-never reached its stream wiring can omit them. Each step is wrapped in its own
-`contextlib.suppress(Exception)`, so an ordinary cleanup failure neither aborts
-a later step nor replaces the error the caller is already unwinding. A
-cancellation is not suppressed; it propagates only once the whole sequence has
-completed, which is exactly what the one shield buys — three sequential shields
-would let a cancellation cut the reclaim short between steps.
+started; release the pipes by closing stdin, discarding stdout and stderr to
+end-of-file, and closing the output transports; and finally release the capture
+accumulators the setup had resolved, which it receives as a separate `captures`
+argument so a route that never reached its stream wiring can omit them. Each
+step is wrapped in its own `contextlib.suppress(Exception)`, so an ordinary
+cleanup failure neither aborts a later step nor replaces the error the caller
+is already unwinding. A cancellation is not suppressed; it propagates only once
+the whole sequence has completed, which is exactly what the one shield buys —
+three sequential shields would let a cancellation cut the reclaim short between
+steps.
 
 The order is not incidental. The child is stopped first because both drain
 policies wait for their consumers to reach end-of-file, and a live child can
@@ -1524,7 +1525,16 @@ hold its own pipe open. Tasks are settled before the pipes are released so no
 writer or consumer outlives the attempt that failed. Pipe release itself is
 bounded by `_CAPTURE_EOF_GRACE_S`: a descendant that escaped the owned group
 can keep a pipe end open, and ADR-021 records why waiting longer cannot settle
-that case.
+that case. The bound governs the read, not the descriptor. Once the discard has
+ended — at end-of-file, at the grace, or in a read error — the reclaim closes
+the output transports, so the parent-side descriptor does not outlive the run
+that abandoned it. Reaping cannot stand in for that close: `_Wait4Process`
+collects the child with `wait4` and releases nothing of the parent's, and no
+other step closes its transports, so without the close the descriptor would be
+released only once the transport was collected. Only the `wait4` owner is
+asked, because it is the backend that reaps without settling a transport; the
+fallback returns asyncio's own subprocess transport, whose pipes are that
+transport's to close.
 
 The capture accumulators are released last, for two reasons. A cancelled drain
 never builds the result that would have carried its spill handle, so the

@@ -3089,12 +3089,16 @@ process, the run's execution bundle, whatever tasks the failed setup had
 already started, and, as a keyword-only `captures`, the capture accumulators it
 had resolved, and runs one fixed sequence inside a single `_shielded_cleanup`.
 Stop and reap the child under the run's own ownership policy, cancel and gather
-the recorded tasks, close stdin and discard stdout and stderr to end-of-file,
-then release the capture accumulators. Each step is suppressed independently,
-so an ordinary cleanup failure cannot abort a later step or replace the
-exception the caller is unwinding; a cancellation propagates only after the
-sequence completes. ADR-007's 2026-10-30 addendum records why the steps are
-ordered this way, and ADR-021 records why the pipe release is bounded.
+the recorded tasks, close stdin, discard stdout and stderr to end-of-file,
+close the output transports, then release the capture accumulators. Each step
+is suppressed independently, so an ordinary cleanup failure cannot abort a
+later step or replace the exception the caller is unwinding; a cancellation
+propagates only after the sequence completes. ADR-007's 2026-10-30 addendum
+records why the steps are ordered this way, and ADR-021 records why the pipe
+release is bounded. The close is not redundant with the reaping: the `wait4`
+owner collects the child and nothing else, so a discard that ends at the grace
+rather than at end-of-file would otherwise leave the parent's descriptor to be
+released only when the transport holding it was collected.
 
 Three rules matter when adding or moving a post-spawn step:
 
@@ -3123,9 +3127,10 @@ hook in both streamed and direct shapes with and without stdin, an injected
 consumer failure after the first consumer started, an injected stdin-writer
 failure, the POSIX `OWN_GROUP` case, and a successful start that must be
 delivered unchanged. `test_startup_abandon.py` pins the reclaim's own
-obligations against a real child — the reaped process and the removal of a
-spill file the capture had already opened. `test_pipeline_process_lifecycle.py`
-pins the same guarantee for a pipeline stage.
+obligations against a real child — the reaped process, the removal of a spill
+file the capture had already opened, and the release of an output pipe that a
+surviving descendant still holds. `test_pipeline_process_lifecycle.py` pins the
+same guarantee for a pipeline stage.
 
 ### Canonical adapter projection, redaction, and locked-store base
 

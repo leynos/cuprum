@@ -2304,13 +2304,13 @@ preserving the `SafeCmd.run()` execution contract:
   drain, and reap it was entered. `_abandon_started_process` runs one fixed
   sequence behind a single `_shielded_cleanup`: terminate and reap the child
   under the run's own process-group policy, cancel and gather every task the
-  failed setup had already started, close stdin and discard stdout and stderr
-  to end-of-file, then release the capture accumulators. Ordinary cleanup
-  failures are suppressed per step, so the error the caller is already
-  unwinding reaches it unchanged; a cancellation propagates only after the
-  sequence completes. `_record_started` is the companion the setup calls as it
-  creates each task, so a consumer that fails to start cannot hide one that is
-  already running. See the
+  failed setup had already started, close stdin, discard stdout and stderr to
+  end-of-file, close their parent-side transports, then release the capture
+  accumulators. Ordinary cleanup failures are suppressed per step, so the error
+  the caller is already unwinding reaches it unchanged; a cancellation
+  propagates only after the sequence completes. `_record_started` is the
+  companion the setup calls as it creates each task, so a consumer that fails
+  to start cannot hide one that is already running. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-10-30.
 

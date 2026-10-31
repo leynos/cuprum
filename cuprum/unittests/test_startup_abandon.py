@@ -6,12 +6,16 @@ raises, no route that would normally wait for, drain, and reap the child is
 entered, so :func:`~cuprum._subprocess_startup_abandon._abandon_started_process`
 performs the reclaim itself.
 
-Two obligations are exercised here against a genuinely spawned child, because
-neither is observable from a stub: the child must be reaped, and the capture
-spill file it may already own must be removed. The spill matters because a
-drain that is cancelled rather than settled never builds the result that would
-have carried the spill handle, so the accumulator is the last reference to a
-temporary file the library created and is therefore responsible for.
+Three obligations are exercised here against a genuinely spawned child, because
+none is observable from a stub: the child must be reaped, the capture spill
+file it may already own must be removed, and the parent-side descriptors of its
+output pipes must be closed before the event loop is torn down. The spill
+matters because a drain that is cancelled rather than settled never builds the
+result that would have carried the spill handle, so the accumulator is the last
+reference to a temporary file the library created and is therefore responsible
+for. The descriptors matter because a descendant that inherited an output pipe
+can outlive the child and keep it from ever reaching end-of-file, and reaping
+the direct child closes nothing of the parent's.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import time
 import typing as typ
 
 from cuprum import ScopeConfig, scoped, sh
+from cuprum._pipeline_stream_fds import _extract_stream_fd
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_execution import _SubprocessExecution
@@ -29,12 +34,38 @@ from cuprum._subprocess_startup_abandon import _abandon_started_process
 from cuprum._subprocess_streams import _prepare_stream_spawn
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.sh import ExecutionContext, RunOutputOptions
+from cuprum.unittests._startup_abandon_support import (
+    _is_fd_open,
+    _is_running,
+    _kill_descendant,
+    _recorded_pid,
+    _spawn_output_pipe_holder,
+    _wait_for_pid_file,
+)
+from cuprum.unittests._wait4_process_support import _wait4_only
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import pathlib
 
     from cuprum._capture_types import CaptureFinal
+
+
+#: How long the descendant in the pipe-release case stays alive. Long enough
+#: that a reclaim which waited for it to exit could not finish inside the
+#: case's own bound, so passing means the bounded reclaim ended it, not that
+#: the descendant happened to finish first.
+_DESCENDANT_LIFETIME_S = 30
+
+#: How long the case waits for the child to record its descendant's pid. The
+#: child only starts an interpreter and forks, but this host is shared.
+_PID_FILE_WAIT_S = 10.0
+
+#: Upper bound on the reclaim in the pipe-release case. The discard is bounded
+#: per stream by the capture EOF grace, so a healthy reclaim settles well
+#: inside a second; anything approaching the descendant's lifetime means the
+#: reclaim waited for an exit that never comes.
+_RECLAIM_BOUND_S = 5.0
 
 
 class _UnremovableSpillError(OSError):
@@ -203,5 +234,79 @@ def test_a_failing_capture_does_not_strand_the_other_stream(
             "a failure removing the first stream's file must not stop the "
             "second stream's file from being removed"
         )
+
+    asyncio.run(run_case())
+
+
+@_wait4_only
+def test_abandon_releases_output_pipes_a_descendant_keeps_open(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An abandoned run must not leave its output pipes to the descendant.
+
+    The child spawns a descendant that inherits stdout and stderr, then waits
+    to be signalled. Terminating the child therefore leaves the write ends
+    open, so neither pipe ever reaches end-of-file and the discard's grace
+    expires with the read transports still holding the parent-side
+    descriptors. Reaping the child does not release them: the ``wait4`` owner
+    collects the status and nothing else, and no other step closes its
+    transports. The reclaim must close them itself, and it must do so before
+    this coroutine returns, because the event loop is torn down immediately
+    afterwards.
+
+    The descendant is asserted to still be running when the descriptors are
+    read, so a case that passed because the descendant had exited cannot be
+    mistaken for one that released the pipes.
+    """
+
+    async def run_case() -> None:
+        """Abandon a real child whose descendant keeps the output pipes open."""
+        pid_file = tmp_path / "descendant.pid"
+        process = await _spawn_output_pipe_holder(
+            pid_file,
+            _DESCENDANT_LIFETIME_S,
+        )
+        try:
+            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
+            descriptors = tuple(
+                _extract_stream_fd(stream)
+                for stream in (process.stdout, process.stderr)
+            )
+            assert all(fd is not None for fd in descriptors), (
+                "each captured stream must have a parent-side pipe whose "
+                "descriptor this case can watch"
+            )
+            started_at = time.monotonic()
+
+            await _abandon_started_process(
+                process,
+                _execution(
+                    FileBackedCapture(
+                        spill_threshold_bytes=None,
+                        directory=tmp_path,
+                    ),
+                ),
+            )
+
+            elapsed = time.monotonic() - started_at
+            assert process.returncode is not None, (
+                "the direct child must be reaped even though a descendant outlives it"
+            )
+            assert elapsed < _RECLAIM_BOUND_S, (
+                f"the reclaim took {elapsed:.3f}s; it must be bounded by the "
+                "end-of-file grace rather than wait for the descendant"
+            )
+            assert _is_running(descendant_pid), (
+                "the descendant must still hold the pipes when the "
+                "descriptors are read, or this case proves nothing"
+            )
+            for fd in descriptors:
+                assert fd is not None
+                assert not _is_fd_open(fd), (
+                    f"descriptor {fd} must be closed before the event loop "
+                    "is torn down, even though no end-of-file arrived"
+                )
+        finally:
+            _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())

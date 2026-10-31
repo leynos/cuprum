@@ -16,11 +16,13 @@ aborting the rest:
    child for this parent to collect.
 2. cancel every task the failed setup had already started and gather them, so
    no writer or reader outlives the attempt that failed.
-3. release the pipes: close stdin, then read stdout and stderr to end-of-file
-   under the capture drain's own EOF grace. Reading a stream is what lets its
-   parent-side transport disconnect, and the wait is bounded because a
-   descendant that inherited a pipe can outlive the group teardown — the limit
-   ADR 021 records.
+3. release the pipes: close stdin, read stdout and stderr to end-of-file under
+   the capture drain's own EOF grace, then close the output transports.
+   Reading a stream is what lets its parent-side transport disconnect, and the
+   wait is bounded because a descendant that inherited a pipe can outlive the
+   group teardown — the limit ADR 021 records. When that limit expires, or a
+   read fails, no end-of-file ever arrives, so the transport cannot close
+   itself; closing it here is what releases the parent-side descriptor.
 4. release the capture accumulators, now that no consumer can still be writing
    into them. A drain cancelled rather than settled never builds the result
    that would have carried its spill handle, so the accumulator is the last
@@ -146,7 +148,7 @@ async def _release_pipes(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
 ) -> None:
-    """Close stdin, then drain stdout and stderr so their pipes are released."""
+    """Close stdin, discard stdout and stderr, and release their transports."""
     # Imported here rather than at module scope: the stdin module reaches the
     # pipeline internals, and the spawn module that imports this one sits on a
     # shorter load path than that.
@@ -160,9 +162,43 @@ async def _release_pipes(
             await _close_stdin(process, stdin, execution.observation)
     for stream in (process.stdout, process.stderr):
         if stream is not None:
+            # Suppressed per stream, so a read that fails or a grace that
+            # expires still leaves the other stream its turn and the close
+            # below its chance to release both descriptors.
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
                     await _discard_to_eof(stream)
+    await _release_output_transports(process)
+
+
+async def _release_output_transports(
+    process: asyncio.subprocess.Process,
+) -> None:
+    """Close the output transports the child's owner still holds open.
+
+    The discard above ends either at end-of-file, which closes the transport
+    itself, or at the EOF grace, which means a descendant still holds the
+    pipe's write end and no end-of-file is coming. The second case is why this
+    exists, and it covers a read that failed for the same reason: the stream
+    is never read again, so releasing the parent's descriptor discards nothing
+    a caller could still have wanted.
+
+    Only the ``wait4`` owner is asked, and through ``getattr`` rather than a
+    type test. The fallback backend returns asyncio's own subprocess
+    transport, whose pipes are the transport's to close; this reclaim releases
+    only what the ``wait4`` owner hands it, and that owner reaps with
+    ``wait4`` alone and closes nothing of its own accord.
+
+    A transport releases its descriptor from the loop callback its close
+    schedules, so the yield is what makes "close requested" mean "descriptor
+    released" before this reclaim hands control back.
+    """
+    close = getattr(process, "close_output_transports", None)
+    if not callable(close):
+        return
+    with contextlib.suppress(Exception):
+        close()
+    await asyncio.sleep(0)
 
 
 async def _release_captures(
