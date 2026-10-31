@@ -556,7 +556,8 @@ with tempfile.TemporaryDirectory() as scratch_dir:
     assert not scratch.exists()
 
 assert md_files, "the documentation tree must contain Markdown files"
-assert all(path.suffix == ".md" for path in small_md)
+assert all(path.stat().st_size < 4096 for path in small_md)
+assert all(path.suffix == ".md" for path in md_files)
 ```
 
 ## Cyclopts + cuprum + pathlib together (reference script)
