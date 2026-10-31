@@ -134,6 +134,14 @@ assert result.stderr == ""
 
 `run_sync()` suits a synchronous script. In an async application, use
 `await command.run()` inside an async function. Both return `CommandResult`.
+
+The synchronous entry points — `run_sync()`, `run_bytes_sync()`, and their
+`Pipeline` counterparts — create and own a fresh event loop. They cannot be
+called while another loop is running in the same thread, so calling one from a
+coroutine raises `RunningEventLoopError` rather than running the command. The
+error names the asynchronous method to await instead. Await `run()` or
+`run_bytes()` from async code rather than wrapping the synchronous call.
+
 Cuprum passes an argument vector directly to the child, without a shell: shell
 quoting and pipes in a string are not interpreted.
 

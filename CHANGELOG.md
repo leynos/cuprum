@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **Synchronous entry points refuse a running event loop explicitly:**
+  calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
+  `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine
+  now raises the new `RunningEventLoopError`, a `RuntimeError` subclass whose
+  message names `run()` or `run_bytes()`. Previously the call failed with
+  `asyncio`'s own `RuntimeError` and discarded an un-awaited coroutine, which
+  also emitted a `RuntimeWarning`. The users' guide now states that the
+  synchronous entry points own the loop they create and that async callers must
+  await the asynchronous alternative
+  ([#663](https://github.com/leynos/cuprum/issues/663)).
 - **`rsync_sync()` refuses remote operands (breaking):** both operands are now
   checked against rsync's own grammar as well as the generic safe-path policy.
   A colon before the first `/` (`host:path`, `user@host:path`,

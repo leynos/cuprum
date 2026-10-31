@@ -21,7 +21,6 @@ checker needs the name, so the import sits under ``TYPE_CHECKING`` and costs
 nothing at run time — which is also what keeps the cycle out.
 """
 
-import asyncio
 import dataclasses as dc
 import typing as typ
 
@@ -33,6 +32,7 @@ from cuprum._bytes_run import (
 from cuprum._command_internals import _ExecutionState, _run_prepared_command
 from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._subprocess_context import _resolve_timeout
+from cuprum.sh._sync_entry import _run_sync
 from cuprum.sh.execution import (
     ExecutionContext,
     StdinSource,
@@ -136,7 +136,11 @@ class _BytesEntryPoints:
         context: ExecutionContext | None = None,
         stdin: StdinSource | None = None,
     ) -> BytesCommandResult:
-        """Execute the command synchronously, capturing its output as bytes.
+        """Execute the command synchronously on a loop this call owns.
+
+        The call creates and closes a fresh event loop, so it cannot run while
+        another event loop is running in the calling thread. Await
+        :meth:`run_bytes` from async code instead.
 
         Parameters
         ----------
@@ -163,6 +167,9 @@ class _BytesEntryPoints:
 
         Raises
         ------
+        RunningEventLoopError
+            If an event loop is already running in the calling thread. The
+            error names :meth:`run_bytes` as the asynchronous alternative.
         ValueError
             If ``output.on_line`` is set.
         PermissionError
@@ -175,13 +182,15 @@ class _BytesEntryPoints:
             If a ``StdinStream`` producer or its encoder fails.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        return asyncio.run(
-            self.run_bytes(
+        return _run_sync(
+            lambda: self.run_bytes(
                 output=output,
                 timeout=timeout,
                 context=context,
                 stdin=stdin,
             ),
+            entry_point="run_bytes_sync()",
+            async_alternative="run_bytes()",
         )
 
 
