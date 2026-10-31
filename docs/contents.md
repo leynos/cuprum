@@ -138,6 +138,10 @@ and the content boundary.
   decision to replace `trybuild` UI tests with doctests, pinning each
   `compile_fail` case to an error code beside a positive control, so no test is
   bounded by a nested build.
+- [ADR-028: Transfer a detached launch's lifetime explicitly][adr-028] -
+  accepted decision to add a separate launch entry point returning an immutable
+  receipt, rather than a detach flag or a dropped handle, so ownership is
+  legible at the call site.
 
 ## Requests for comments
 
@@ -204,6 +208,7 @@ and the content boundary.
 [adr-025]: adr-025-bounded-output-delivery.md
 [adr-026]: adr-026-narrowed-results-only-for-complete-text-capture.md
 [adr-027]: adr-027-compile-contracts-in-the-build-graph.md
+[adr-028]: adr-028-detached-command-launch.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rstest-bdd-guide]: rstest-bdd-users-guide.md

@@ -20,7 +20,11 @@ import time
 import types
 import typing as typ
 
-from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
+from cuprum._observability import (
+    _bound_executable,
+    _emit_exec_event,
+    _ExecEventEmissionError,
+)
 from cuprum.events import (
     CaptureMode,
     ExecEvent,
@@ -166,13 +170,10 @@ class _StageObservation:
 
         The spawn sites read this rather than ``resolved_path`` so the
         fallback rule — an unbound program runs under its catalogued name —
-        exists once. ``str`` on the program is deliberate: ``Program`` is a
-        ``NewType`` over ``str``, but the child's argument vector must be plain
-        strings.
+        exists once. It lives in ``_bound_executable`` because the detached
+        launch reaches the same rule without an observation to read it from.
         """
-        return (
-            str(self.cmd.program) if self.resolved_path is None else self.resolved_path
-        )
+        return _bound_executable(self.cmd.program, self.resolved_path)
 
     def emit(
         self,

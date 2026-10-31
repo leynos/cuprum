@@ -1323,3 +1323,69 @@ implemented, and whether a caller can find out what it promises.
   - Success: every documented example is executable and is executed by the
     behavioural suite, and the guides state the unchanged default, the
     bounded-memory guarantee's byte-mode exception, and the file lifetime.
+
+## 15. Detached command launch (issue `#647`)
+
+Idea: adopters migrating from `subprocess.Popen` need one pattern Cuprum cannot
+express — launching a helper that must outlive the process and event loop that
+started it. Every managed entry point keeps its child: `run()` waits, `start()`
+hands back a handle that settles, and dropping a handle is cancellation. The
+requirement is an explicit transfer of lifetime, with catalogue identity,
+allowlist enforcement, argv boundaries, environment policy, and working
+directory preserved, and with nothing the launcher must service left behind. See
+[ADR-028](adr-028-detached-command-launch.md).
+
+Status: implemented on the issue branch; awaiting review and merge.
+
+### 15.1. Add the entry points and the receipt
+
+This step answers whether the transfer can be a distinct entry point rather
+than a flag or an omitted context manager, and whether the launch can reuse the
+resolution rules a managed run applies without inheriting its ownership.
+
+- [x] 15.1.1. Provide `SafeCmd.launch_detached()` and
+  `launch_detached_sync()` returning a `DetachedLaunch` receipt that names the
+  worker's PID, its catalogued program, and the executed file.
+  - Success: the receipt's PID is the process `Popen` spawned, the resolution
+    rules match a managed run's, and the managed defaults are unchanged.
+- [x] 15.1.2. Disconnect all three standard streams, isolate the worker in its
+  own POSIX session and process group, and refuse a platform without POSIX
+  process groups before any child exists.
+  - Success: the worker reads end-of-file on stdin, holds no launcher pipe, and
+    a non-POSIX launch raises `ValueError` with no process created.
+- [x] 15.1.3. Define the transfer boundary for failures and cancellation.
+  - Success: a failure or cancellation before the receipt is returned stops the
+    worker it created, a refused launch creates none, and nothing Cuprum owns —
+    process object, transport, consumer, task, or registration — outlives the
+    receipt.
+
+### 15.2. Prove the contract across a process boundary
+
+This step answers whether survival is witnessed rather than inferred. A worker
+that outlives its launcher cannot be observed from inside the launcher, so the
+evidence has to come from a second process.
+
+- [x] 15.2.1. Run a launcher in its own interpreter and read back what the
+  worker reported after the launcher exited.
+  - Success: the worker is still running after the launcher exits, the receipt's
+    PID is the worker's own, and the worker leads its session and group.
+- [x] 15.2.2. Cover the stream, argument, environment, and start-up cases.
+  - Success: stdin reaches end-of-file, no stream is a launcher pipe, argument
+    boundaries and the working directory survive, replacement and unset
+    environment policies arrive, and a forbidden program or missing executable
+    fails without a receipt and without a worker.
+
+### 15.3. State the contract and its limits
+
+This step answers whether a caller can find out what the receipt promises, who
+owns the worker afterwards, and where the guarantees stop.
+
+- [x] 15.3.1. Record the decision, the alternatives, and the limitations in
+  [ADR-028](adr-028-detached-command-launch.md).
+  - Success: the ADR states the transfer boundary, the readiness distinction,
+    termination and reaping responsibility, PID reuse, and the POSIX limit.
+- [x] 15.3.2. Publish the behaviour in the users' guide and the module
+  boundaries in the developers' guide.
+  - Success: the guide's example is executed by the behavioural suite, and the
+    guide states that detachment is never inferred and that managed defaults are
+    unchanged.

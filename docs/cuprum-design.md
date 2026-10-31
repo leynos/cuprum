@@ -2553,6 +2553,124 @@ execution, cancellation, timeout, or event semantics. The accepted rationale
 and alternatives are recorded in
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
 
+### 8.1.6 Detached command launch
+
+Every entry point described above owns its child: `run()` and `lines()` wait
+for exit and reconcile the streams, a timeout terminates the child, and an
+`OWN_GROUP` run tears down the group it created. That ownership is the reason
+the managed surface is safe to offer, and it is also why none of it can express
+"start this program and let it outlive me". A caller who drops a
+`RunningCommand` handle does not detach anything — the child was never handed
+over, so it keeps running as an untracked child of the launcher and no receipt
+names it.
+
+`SafeCmd.launch_detached()` and `SafeCmd.launch_detached_sync()` are therefore
+a separate entry point rather than a flag on the existing ones. A detach flag
+would have to answer the capture, echo, timeout, and process-group questions
+differently inside the runner, and every answer would be a managed execution
+default that some other caller depends on. The separate entry point leaves the
+managed surface untouched and makes the ownership change legible at the call
+site, which is the property a reviewer of a consuming codebase most needs.
+
+The launch keeps everything that selects *what* runs: the allowlist check
+against the current scope, the executable binding, the argument vector, the
+environment overlay and its mode, and the working directory are resolved by the
+same helpers a managed run uses. What changes is the lifecycle. The child is
+spawned with `start_new_session=True`, so it leads its own POSIX session and
+process group; its three standard streams are the kernel's null device, so it
+holds no launcher-owned pipe and reads end-of-file on stdin; and the process
+object is a private `Popen` subclass whose finalizer does nothing, so dropping
+it neither warns about the worker nor reclaims it.
+
+For screen readers: The following sequence diagram follows one synchronous
+detached launch from the caller to the worker. `SafeCmd` delegates to
+`_launch_detached`, which runs the allowlist check, the platform guard, the
+executable resolution, and the executable binding in that order, then calls
+`_spawn_detached`. The spawn starts the worker with its standard streams on the
+kernel's null device and a new POSIX session, and hands back a private `Popen`
+object once `exec` succeeds and a PID exists. `_launch_detached` builds the
+`DetachedLaunch` receipt from that object. Once the receipt reaches the caller,
+the worker is the caller's to terminate and reap.
+
+Figure 10: Detached launch sequence, from `launch_detached_sync` through the
+spawn to the caller-owned receipt
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant LaunchCore as _launch_detached
+    participant Spawn as _spawn_detached
+    participant Worker
+
+    Caller->>SafeCmd: launch_detached_sync(context)
+    SafeCmd->>LaunchCore: _launch_detached(cmd, context)
+    LaunchCore->>LaunchCore: _enforce_allowlist(cmd)
+    LaunchCore->>LaunchCore: _ownership_spawn_kwargs(OWN_GROUP)
+    LaunchCore->>LaunchCore: _resolve_executable_for(cmd, cwd)
+    LaunchCore->>LaunchCore: _bound_executable(program, path)
+    LaunchCore->>Spawn: _spawn_detached(argv, env, cwd, start_new_session)
+    Spawn->>Worker: Popen with DEVNULL streams and new session
+    Worker-->>Spawn: exec succeeds, pid
+    Spawn-->>LaunchCore: _DetachedPopen
+    LaunchCore->>LaunchCore: DetachedLaunch(pid, program, executable)
+    LaunchCore-->>SafeCmd: DetachedLaunch receipt
+    SafeCmd-->>Caller: ownership transferred
+    Note over Caller,Worker: Caller terminates and reaps the worker
+```
+
+On success the caller receives a `DetachedLaunch` receipt carrying the worker's
+actual PID, program, and resolved executable path. The receipt is a name, not a
+handle: it retains no transports, descriptors, tasks, or event-loop
+registrations, so the launcher can exit, or drop its event loop, without
+affecting the worker. Termination and reaping pass to the caller at that point,
+which is why the launch reports no readiness signal — a worker that fails after
+its first instruction is still a successful launch, and only the worker can say
+otherwise.
+
+The transfer boundary is the one place where cancellation has to be defined.
+The awaitable entry point yields once before returning the receipt, and a
+cancellation landing on that yield abandons the launch: cuprum kills the
+worker's process group and reaps it before re-raising `CancelledError`, so a
+cancelled caller is never left with an untracked child. Before the spawn there
+is nothing to abandon; after the receipt is returned, the worker is the
+caller's. A `Popen` constructor that raises after the fork is the same case
+seen from the child's side: the spawn holds the partially constructed object,
+kills the child it created, and reaps it before the error propagates. A
+platform without POSIX process groups is refused before a child exists, and a
+start-up failure surfaces as the underlying error rather than as a receipt. The
+accepted rationale, the rejected alternatives, and the residual limits — PID
+reuse, the zombie window while the launcher lives, and host-level cleanup after
+a launcher crash — are recorded in
+[ADR-028](adr-028-detached-command-launch.md).
+
+For screen readers: The following state diagram shows the outcomes of a
+detached launch. Validation ends either in refusal, before any child exists, or
+in a spawn. A spawn that fails during `exec` ends in the start-up failure
+reported to the caller. A spawn that succeeds enters the transfer-pending
+state: a receipt returned to the caller makes the worker caller-owned, while a
+failure while building the receipt or a cancellation at that boundary abandons
+the worker, which cuprum kills and reaps. Every path ends with no child, a
+reported error, or a worker the caller owns.
+
+Figure 11: Detached launch outcomes, from validation to a caller-owned worker
+or a stopped one
+
+```mermaid
+stateDiagram-v2
+    [*] --> Validating
+    Validating --> Refused: allowlist or POSIX check fails
+    Validating --> Spawning: checks pass
+    Spawning --> StartupFailed: exec or spawn fails
+    Spawning --> TransferPending: worker started
+    TransferPending --> Abandoned: receipt construction or cancellation fails
+    TransferPending --> CallerOwned: DetachedLaunch returned
+    Abandoned --> [*]: kill process group and reap
+    Refused --> [*]: no child created
+    StartupFailed --> [*]: underlying error
+    CallerOwned --> [*]: caller terminates and reaps
+```
+
 ### 8.2 Pipelines and Structured Concurrency
 
 For pipelines, Cuprum must:
@@ -2647,7 +2765,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 10: Fail-fast termination selection via the `_stages_to_terminate`
+Figure 12: Fail-fast termination selection via the `_stages_to_terminate`
 reducer
 
 ```mermaid
@@ -2846,7 +2964,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 11: Concurrent execution flow with allowlist validation and semaphore
+Figure 13: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -2892,7 +3010,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 12: Fail-fast mode cancellation behaviour
+Figure 14: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -3072,7 +3190,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 13: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 15: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -3610,7 +3728,7 @@ and re-resolves the timeout in the task that pulls it, so a scope entered after
 `lines()` returns can still refuse the spawn (transitioning straight to
 `Refused`) or shorten its deadline.
 
-Figure 14: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 16: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -3646,7 +3764,7 @@ actually ran under. Only then does `_start_line_stream_run()` spawn the
 subprocess and its consumers. Once streaming, the run ends either by publishing
 the `CommandResult` or by closing through `aclose()` or cancellation.
 
-Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+Figure 17: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
 through deferred authorization and spawning to completion or close
 
 ```mermaid
@@ -3668,7 +3786,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 16: Line observation fan-out from decoded output to lifecycle events,
+Figure 18: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3697,7 +3815,7 @@ the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 17: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 19: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -4999,7 +5117,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 18: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 20: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -5029,7 +5147,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 19: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 21: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid
