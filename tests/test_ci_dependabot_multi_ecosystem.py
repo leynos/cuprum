@@ -115,10 +115,10 @@ def test_the_plain_entry_ignores_the_pair_the_group_entry_handles(
     ecosystem: str, members: list[str]
 ) -> None:
     """Keep the pair out of the plain entry, which handles everything else."""
-    ignored = [
-        rule.get("dependency-name")
-        for rule in dependabot_stanzas()[ecosystem].get("ignore", [])
-    ]
+    rules = typ.cast(
+        "list[dict[str, typ.Any]]", dependabot_stanzas()[ecosystem].get("ignore", [])
+    )
+    ignored = [rule.get("dependency-name") for rule in rules]
     assert ignored == members, (
         f"the plain {ecosystem} entry must ignore exactly {members}, which the "
         f"group entry handles; got {ignored}"
