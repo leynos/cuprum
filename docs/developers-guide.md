@@ -1124,10 +1124,12 @@ verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
 uses the separately pinned `nightly-2026-08-23` and the
 `rustc-codegen-cranelift` component through `tools/dev-fast/config.toml`; the
 Clippy portion of `make rust-lint` additionally requires the `clippy` component
-on that nightly. The fragment is an approved byte-for-byte local extension from
+on that nightly. The fragment is an approved local extension that began as a
+byte-for-byte copy from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
-Concordat issue 157; its SHA-256 is
-`8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5`.
+Concordat issue 157, and now adds the parallel frontend (`-Zthreads=8`) beside
+the linker (see "Build standard exception" below); its SHA-256 is
+`6b9a70993b7d46c8a3730376b2debd4c442ec07a355aa267723bb024a76eac96`.
 
 Run `make dev-fast-check` before the first Linux accelerated build. It requires
 both the `rustc-codegen-cranelift` and `clippy` components on the dev-fast
@@ -1169,6 +1171,22 @@ verification, and Whitaker never select the fragment. The fragment documents
 Cuprum's ownership boundary: Makefile pins the dev-fast nightly, while
 `tools/mold/VERSION` pins the linker release. The stable support promise
 remains independently verified.
+
+### Build standard exception
+
+The Concordat `rust-build-defaults` rule expects the parallel frontend and the
+`mold` linker as defaults in Cargo's auto-discovered configuration. Cuprum has
+no such file on purpose, because wheels build in manylinux containers without
+`mold` and the stable MSRV pin cannot read a Cranelift profile. The exception
+is declared in `.concordat` under `language.rust.build_defaults.exceptions`
+(clauses BD-002, BD-004 and BD-008, the decision record ADR-012, the rationale
+and a review trigger). It holds only while the explicit route still meets the
+standard: `tools/dev-fast/config.toml` carries `-Zthreads=8` and the Linux
+`mold` flag in its Linux `rustflags`, and the dev-fast routes that assign
+`RUSTFLAGS` restate both (`DEV_FAST_TEST_RUSTFLAGS`).
+`cuprum/unittests/test_dev_fast_contract.py` holds those conditions. Changing
+the fragment changes its reviewed digest, which the same file and this guide
+pin.
 
 ## Rust dev build footprint
 

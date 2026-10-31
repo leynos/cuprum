@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - controlled test argv.
 import tomllib
 import typing as typ
 
 import pytest
+import yaml
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -19,7 +21,7 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-FRAGMENT_SHA256 = "8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5"
+FRAGMENT_SHA256 = "6b9a70993b7d46c8a3730376b2debd4c442ec07a355aa267723bb024a76eac96"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
 # The Clippy leaf's own arguments are identical on every host; only the Cargo
@@ -142,6 +144,125 @@ def test_fragment_is_the_approved_immutable_extension() -> None:
     )
 
 
+def test_the_fragment_carries_the_estate_fast_flags_on_linux() -> None:
+    """Hold the explicit route to the build standard its exception relies on.
+
+    The Concordat ``rust-build-defaults`` exception recorded in ``.concordat``
+    waives the auto-discovered-configuration clauses only while this fragment
+    still carries the parallel frontend and the Linux linker.
+    """
+    fragment = tomllib.loads((repo_root() / FRAGMENT).read_text(encoding="utf-8"))
+    linux = fragment["target"]['cfg(target_os = "linux")']["rustflags"]
+    assert "-Zthreads=8" in linux, "the Linux flags must carry the parallel frontend"
+    assert "-Clink-arg=-fuse-ld=mold" in linux, (
+        "the Linux flags must carry the linker flag"
+    )
+    assert fragment["profile"]["dev"]["codegen-backend"] == "cranelift", (
+        "the fast path selects Cranelift for the dev profile only"
+    )
+
+
+EXPECTED_WAIVED_CLAUSES = ["BD-002", "BD-004", "BD-008"]
+ADR_012 = "docs/adr-012-linux-dev-fast-routing.md"
+
+
+def _exception_problems(entry: object) -> list[str]:
+    """Return what is wrong with a ``.concordat`` build-defaults exception.
+
+    The Concordat rule waives clauses only for a substantiated exception, so the
+    repository holds the same conditions: the clauses it relies on, the route
+    and the decision record it names, and a rationale and a review trigger.
+
+    Returns
+    -------
+    list[str]
+        One message per unmet condition; empty when the exception is complete.
+    """
+    if not isinstance(entry, dict):
+        return ["the exception must be a mapping"]
+    problems = []
+    if entry.get("clauses") != EXPECTED_WAIVED_CLAUSES:
+        problems.append(f"clauses must be exactly {EXPECTED_WAIVED_CLAUSES}")
+    if entry.get("route") != FRAGMENT:
+        problems.append(f"route must be {FRAGMENT}")
+    if entry.get("adr") != ADR_012:
+        problems.append(f"adr must be {ADR_012}")
+    problems.extend(
+        f"{key} must be non-empty text"
+        for key in ("rationale", "review_trigger")
+        if not str(entry.get(key) or "").strip()
+    )
+    return problems
+
+
+def _recorded_exception() -> dict[str, object]:
+    """Return the single build-defaults exception declared in ``.concordat``."""
+    concordat = yaml.safe_load((repo_root() / ".concordat").read_text(encoding="utf-8"))
+    exceptions = concordat["language"]["rust"]["build_defaults"]["exceptions"]
+    assert len(exceptions) == 1, "exactly one build-defaults exception is recorded"
+    return exceptions[0]
+
+
+def test_the_recorded_exception_names_this_fragment_and_its_decision() -> None:
+    """Keep the ``.concordat`` exception complete and pointing at real files."""
+    problems = _exception_problems(_recorded_exception())
+    assert not problems, f"the recorded exception must be complete: {problems}"
+    assert (repo_root() / FRAGMENT).is_file(), "the named route must exist"
+    assert (repo_root() / ADR_012).is_file(), "the named decision record must exist"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        pytest.param({"clauses": ["BD-002", "BD-004"]}, "clauses", id="missing-clause"),
+        pytest.param({"clauses": []}, "clauses", id="no-clauses"),
+        pytest.param({"route": "tools/other.toml"}, "route", id="wrong-route"),
+        pytest.param({"adr": "docs/other.md"}, "adr", id="wrong-adr"),
+        pytest.param({"rationale": ""}, "rationale", id="empty-rationale"),
+        pytest.param({"review_trigger": "  "}, "review_trigger", id="blank-trigger"),
+    ],
+)
+def test_an_invalid_exception_is_reported(
+    mutation: dict[str, object], expected: str
+) -> None:
+    """Each condition the exception relies on fails when it is removed."""
+    entry = {**_recorded_exception(), **mutation}
+    problems = _exception_problems(entry)
+    assert any(expected in problem for problem in problems), (
+        f"mutating {expected} must be reported, got {problems}"
+    )
+
+
+def _rustflags_assignments(output: str) -> list[str]:
+    """Return every ``RUSTFLAGS="..."`` assignment a dry run prints."""
+    return re.findall(r'RUSTFLAGS="([^"]*)"', output)
+
+
+@pytest.mark.parametrize(
+    ("goal", "count"),
+    [
+        pytest.param("test-rust", 3, id="test-rust"),
+        pytest.param("dev-test", 2, id="dev-test"),
+    ],
+)
+def test_every_dev_fast_test_assignment_restates_both_fast_flags(
+    goal: str, count: int
+) -> None:
+    """An assigned ``RUSTFLAGS`` replaces the fragment, so each one restates both."""
+    output = _dry_run(goal, variables={"DEV_FAST_HOST_IS_LINUX": "yes"})
+    assignments = _rustflags_assignments(output)
+    assert len(assignments) == count, (
+        f"{goal} must expose {count} RUSTFLAGS assignments, found {assignments}"
+    )
+    for assignment in assignments:
+        assert "-Zthreads=8" in assignment, (
+            f"{goal}: missing the frontend: {assignment}"
+        )
+        assert "-Clink-arg=-fuse-ld=mold" in assignment, (
+            f"{goal}: missing the linker: {assignment}"
+        )
+
+
 def test_the_routed_fragment_path_cannot_be_overridden() -> None:
     """The selected fragment is Makefile-fixed, not a caller-supplied variable.
 
@@ -222,6 +343,9 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     assert "-Clink-arg=-fuse-ld=mold" in routing, (
         "explicit RUSTFLAGS must retain the Linux linker selection"
     )
+    assert "-Zthreads=8" in routing, (
+        "explicit RUSTFLAGS must retain the parallel frontend on the dev-fast nightly"
+    )
 
 
 def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
@@ -240,6 +364,7 @@ def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
             'RUSTDOCFLAGS="--cfg docsrs -D warnings -Zunstable-options',
             "--display-doctest-warnings",
             "--doctest-build-arg=-D --doctest-build-arg=warnings",
+            "-Zthreads=8",
             "-Clink-arg=-fuse-ld=mold",
         ),
         "the Linux doctest route",
