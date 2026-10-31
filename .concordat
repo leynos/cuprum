@@ -2,3 +2,16 @@ language:
   rust:
     surfaces:
       - path: rust/Cargo.toml
+    build_defaults:
+      exceptions:
+        - clauses: [BD-002, BD-004, BD-008]
+          route: tools/dev-fast/config.toml
+          adr: docs/adr-012-linux-dev-fast-routing.md
+          rationale: >-
+            The stable MSRV pin and the published wheels, built in manylinux
+            containers that carry no mold, must keep the platform linker and the
+            LLVM backend, so the linker, the parallel frontend and Cranelift live
+            in an explicit fragment that only the Linux make dev-* routes select.
+          review_trigger: >-
+            Revisit when the wheel build images carry mold, or when the dev-fast
+            nightly or the mold pin moves.

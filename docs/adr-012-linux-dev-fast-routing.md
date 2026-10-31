@@ -77,3 +77,26 @@ release flag orderings, and exercise adapter argv and environment behaviour.
 They complement Make dry-run tests, which prove routing text but not shell
 installer behaviour. Pin changes must update the version metadata, checksums,
 configuration digest, tests, and this decision if the routing boundary changes.
+
+## Addendum, 2026-10-31: the fast path meets the build standard, and the exception is recorded
+
+The Concordat `rust-build-defaults` rule (0.3.0) expects the parallel `rustc`
+frontend and the `mold` linker to be defaults in Cargo's auto-discovered
+configuration. This decision deliberately has none: published wheels build in
+manylinux containers that carry no `mold`, and the stable MSRV pin cannot read
+a Cranelift profile. The repository therefore records the exception as data in
+`.concordat` (`language.rust.build_defaults.exceptions`), waiving BD-002,
+BD-004 and BD-008, with this decision as its record and a review trigger:
+revisit when the wheel build images carry `mold`, or when the dev-fast nightly
+or the `mold` pin moves.
+
+The rule accepts the exception only while the explicit route still meets the
+standard it sidesteps, so `tools/dev-fast/config.toml` now carries
+`-Zthreads=8` in its Linux `rustflags` beside the linker (the dev-fast nightly
+accepts it), and the Makefile's `DEV_FAST_TEST_RUSTFLAGS` restates both flags
+wherever a dev-fast route assigns `RUSTFLAGS`. The fragment's reviewed digest,
+the contract tests and the developers' guide moved with it.
+`test_the_fragment_carries_the_estate_fast_flags_on_linux` and
+`test_the_recorded_exception_names_this_fragment_and_its_decision` hold the
+conditions the exception relies on.
+

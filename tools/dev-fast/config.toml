@@ -25,6 +25,9 @@ codegen-backend = "cranelift"
 # than leaving it implicit.
 #
 # Cargo picks a single rustflags source rather than merging them, so anything
-# this table must carry has to be named here in full; nothing is inherited.
+# this table must carry has to be named here in full; nothing is inherited. The
+# parallel frontend (`-Zthreads=8`) is named beside the linker: the dev-fast
+# nightly accepts it, and the Concordat build-defaults exception for this
+# explicit route holds the fast path to the estate standard (ADR-012).
 [target.'cfg(target_os = "linux")']
-rustflags = ["-Clink-arg=-fuse-ld=mold"]
+rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]

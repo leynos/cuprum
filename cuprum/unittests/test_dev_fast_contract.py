@@ -19,7 +19,7 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-FRAGMENT_SHA256 = "8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5"
+FRAGMENT_SHA256 = "6b9a70993b7d46c8a3730376b2debd4c442ec07a355aa267723bb024a76eac96"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
 # The Clippy leaf's own arguments are identical on every host; only the Cargo
@@ -142,6 +142,31 @@ def test_fragment_is_the_approved_immutable_extension() -> None:
     )
 
 
+def test_the_fragment_carries_the_estate_fast_flags_on_linux() -> None:
+    """Hold the explicit route to the build standard its exception relies on.
+
+    The Concordat ``rust-build-defaults`` exception recorded in ``.concordat``
+    waives the auto-discovered-configuration clauses only while this fragment
+    still carries the parallel frontend and the Linux linker.
+    """
+    fragment = tomllib.loads((repo_root() / FRAGMENT).read_text(encoding="utf-8"))
+    linux = fragment["target"]['cfg(target_os = "linux")']["rustflags"]
+    assert "-Zthreads=8" in linux, "the Linux flags must carry the parallel frontend"
+    assert "-Clink-arg=-fuse-ld=mold" in linux, "the Linux flags must carry mold"
+    assert fragment["profile"]["dev"]["codegen-backend"] == "cranelift", (
+        "the fast path selects Cranelift for the dev profile only"
+    )
+
+
+def test_the_recorded_exception_names_this_fragment_and_its_decision() -> None:
+    """Keep the ``.concordat`` exception pointing at files that exist."""
+    concordat = (repo_root() / ".concordat").read_text(encoding="utf-8")
+    assert f"route: {FRAGMENT}" in concordat, "the exception must name the fragment"
+    adr = "docs/adr-012-linux-dev-fast-routing.md"
+    assert f"adr: {adr}" in concordat, "the exception must name ADR-012"
+    assert (repo_root() / adr).is_file(), "the named decision record must exist"
+
+
 def test_the_routed_fragment_path_cannot_be_overridden() -> None:
     """The selected fragment is Makefile-fixed, not a caller-supplied variable.
 
@@ -222,6 +247,9 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     assert "-Clink-arg=-fuse-ld=mold" in routing, (
         "explicit RUSTFLAGS must retain the Linux linker selection"
     )
+    assert "-Zthreads=8" in routing, (
+        "explicit RUSTFLAGS must retain the parallel frontend on the dev-fast nightly"
+    )
 
 
 def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
@@ -240,6 +268,7 @@ def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
             'RUSTDOCFLAGS="--cfg docsrs -D warnings -Zunstable-options',
             "--display-doctest-warnings",
             "--doctest-build-arg=-D --doctest-build-arg=warnings",
+            "-Zthreads=8",
             "-Clink-arg=-fuse-ld=mold",
         ),
         "the Linux doctest route",
