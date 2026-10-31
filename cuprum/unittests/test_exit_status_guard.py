@@ -67,6 +67,14 @@ class _FakeStream:
         return self._descriptor
 
 
+class _ProxyWithoutFileno:
+    """A dead stream double that never had a ``fileno`` method."""
+
+    def flush(self) -> None:
+        """Report the reader as gone, as a broken proxy would."""
+        raise BrokenPipeError
+
+
 class _RecordingAtexit:
     """A stand-in for the ``atexit`` module that records registrations."""
 
@@ -182,6 +190,18 @@ def test_descriptorless_dead_stream_is_replaced(
     assert sink.writable() is True
     assert sink.write("discarded") == len("discarded")
     assert sink.flush() is None
+
+
+def test_proxy_without_fileno_method_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead proxy with no ``fileno`` at all gets the descriptorless fallback."""
+    monkeypatch.setattr(sys, "stdout", _ProxyWithoutFileno())
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+
+    exit_status_guard._guard_standard_streams()
+
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink)
 
 
 def test_both_dead_streams_are_guarded_independently(
