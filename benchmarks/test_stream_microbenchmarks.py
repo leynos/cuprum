@@ -42,13 +42,19 @@ type _StrBenchmark = cabc.Callable[[cabc.Callable[[], str]], str]
 
 
 def _write_and_close(fd: int, payload: bytes) -> None:
-    """Write `payload` to `fd` and close the writer end."""
+    """Write `payload` to `fd` and close the writer end.
+
+    The reader closes its end first when consumption fails, so a broken pipe is
+    the expected way for the write loop to stop with payload left over.
+    """
     try:
         view = memoryview(payload)
         while view:
             written = os.write(fd, view)
             assert written > 0, "expected os.write to make progress"
             view = view[written:]
+    except BrokenPipeError:
+        pass
     finally:
         _safe_close(fd)
 
@@ -170,25 +176,27 @@ def test_benchmark_consume_invalid_utf8(
     def run_once() -> str:
         """Consume the payload once and return the decoded text."""
         read_fd, write_fd = os.pipe()
+        writer = threading.Thread(
+            target=_write_and_close,
+            args=(write_fd, payload),
+            daemon=True,
+        )
+        writer.start()
         try:
-            writer = threading.Thread(
-                target=_write_and_close,
-                args=(write_fd, payload),
-                daemon=True,
+            return typ.cast(
+                "str",
+                rust_streams.rust_consume_stream(
+                    read_fd,
+                    buffer_size=payload_bytes,
+                ),
             )
-            writer.start()
-            try:
-                return typ.cast(
-                    "str",
-                    rust_streams.rust_consume_stream(
-                        read_fd,
-                        buffer_size=payload_bytes,
-                    ),
-                )
-            finally:
-                writer.join()
         finally:
+            # Close the reader before joining. If consumption failed before
+            # draining the pipe, the writer is blocked with payload left over,
+            # and only losing its reader will stop it. The extension may have
+            # closed the descriptor already, which `_safe_close` tolerates.
             _safe_close(read_fd)
+            writer.join()
 
     output = benchmark(run_once)
     assert output == expected, (

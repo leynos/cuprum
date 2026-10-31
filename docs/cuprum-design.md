@@ -3888,7 +3888,7 @@ flowchart TD
     O --> P[Clear pending]
     P --> F
 
-    N -->|No| Q{incomplete tail starts after offset}
+    N -->|No| Q{tail start is greater than zero}
     Q -->|Yes| R[Drain the consumed prefix once, keep the tail]
     R --> F
     Q -->|No| F
