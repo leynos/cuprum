@@ -3428,12 +3428,15 @@ reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
 remains line data. The limiter never sees the capture buffer: complete child
 output remains owned by `_drain()`'s capture path. Text sinks receive complete
 characters through the configured incremental decoder, while sinks exposing
-`.buffer` receive the kept raw bytes and marker bytes. The marker follows the
-configured encoding and error policy, using an ASCII-compatible fallback when
-the preferred ellipsis cannot be represented; `None` leaves the existing
-unbounded echo path unchanged. For a positive bound too small for a complete
-marker or CRLF terminator, it abbreviates the marker or omits the terminator to
-preserve the inclusive bound.
+`.buffer` receive the kept raw bytes and marker bytes. The text-sink prefix
+search is linear in the retained bytes: it records the last safe source and
+encoded lengths and copies each prefix once, and every marker-adjustment pass
+re-runs that linear search under the loop's fixed pass ceiling. The marker
+follows the configured encoding and error policy, using an ASCII-compatible
+fallback when the preferred ellipsis cannot be represented; `None` leaves the
+existing unbounded echo path unchanged. For a positive bound too small for a
+complete marker or CRLF terminator, it abbreviates the marker or omits the
+terminator to preserve the inclusive bound.
 
 At the former 4 KiB setting, a 1 GiB data stream required approximately 262,000
 parent-side read iterations. At the tuned setting, the same stream requires

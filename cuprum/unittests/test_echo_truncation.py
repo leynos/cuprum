@@ -9,7 +9,9 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum._echo_truncation import (
+    _EchoEncoding,
     _EchoLineLimiter,
+    _encode_prefix,
     _FinishedEchoLine,
     truncation_marker,
 )
@@ -171,6 +173,12 @@ def test_strict_utf8_text_prefix_never_ends_inside_a_character() -> None:
     assert finished.dropped_bytes == len(line) - 2, (
         "moving to a character boundary must count every newly omitted byte"
     )
+    assert finished.payload == (b"ab" + "… [truncated 38 bytes]".encode() + b"\n"), (
+        f"the exact truncated line changed, got={finished.payload!r}"
+    )
+    assert finished.source_bytes == len(line) + 1, (
+        "source accounting must include the retained terminator"
+    )
 
 
 def test_strict_utf8_text_prefix_keeps_the_longest_valid_boundary() -> None:
@@ -182,6 +190,160 @@ def test_strict_utf8_text_prefix_keeps_the_longest_valid_boundary() -> None:
     assert finished.payload.startswith(b"ab" + snowman), (
         "the largest valid prefix must retain the complete fitting snowman, "
         f"got={finished.payload!r}"
+    )
+    assert finished.payload == (
+        b"ab" + snowman + b"xx" + "… [truncated 38 bytes]".encode() + b"\n"
+    ), f"the exact snowman boundary changed, got={finished.payload!r}"
+    assert finished.dropped_bytes == 38, (
+        f"expected 38 dropped bytes, got={finished.dropped_bytes}"
+    )
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("bound", "prefix", "dropped"),
+    [
+        (30, "日本語".encode("shift_jis"), 54),
+        (40, "日本語のテキスト".encode("shift_jis"), 44),
+    ],
+)
+def test_shift_jis_text_prefix_keeps_two_byte_ellipsis_marker(
+    bound: int,
+    prefix: bytes,
+    dropped: int,
+) -> None:
+    """Shift_JIS keeps whole CJK characters and its two-byte ellipsis marker."""
+    line = ("日本語のテキストです" * 3).encode("shift_jis")
+    finished = _finish(
+        line,
+        bound=bound,
+        options=_FinishOptions(encoding="shift_jis", is_text_sink=True),
+    )
+
+    assert finished.payload == (
+        prefix + f"… [truncated {dropped} bytes]".encode("shift_jis") + b"\n"
+    ), f"the exact Shift_JIS truncation changed, got={finished.payload!r}"
+    assert b"\x81c" in finished.payload, (
+        "the ellipsis marker must stay the two-byte Shift_JIS sequence"
+    )
+    assert finished.dropped_bytes == dropped, (
+        f"expected {dropped} dropped bytes, got={finished.dropped_bytes}"
+    )
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("errors", "bound", "prefix", "dropped"),
+    [
+        ("replace", 32, "ab�", 43),
+        ("replace", 40, "ab��cdxxxxx", 35),
+        ("ignore", 32, "abcdxxx", 37),
+        ("ignore", 40, "abcdxxxxxxxxxxx", 29),
+    ],
+)
+def test_invalid_bytes_under_a_lenient_text_policy(
+    errors: str,
+    bound: int,
+    prefix: str,
+    dropped: int,
+) -> None:
+    """Replace and ignore policies keep the same truncation boundary rules."""
+    line = b"ab\xff\xfecd" + b"x" * 40
+    finished = _finish(
+        line,
+        bound=bound,
+        options=_FinishOptions(errors=errors, is_text_sink=True),
+    )
+
+    assert finished.payload == (
+        prefix.encode() + f"… [truncated {dropped} bytes]".encode() + b"\n"
+    ), f"the exact {errors} truncation changed, got={finished.payload!r}"
+    assert finished.dropped_bytes == dropped, (
+        f"expected {dropped} dropped bytes, got={finished.dropped_bytes}"
+    )
+    assert finished.source_bytes == len(line) + 1, (
+        f"source accounting must include the terminator, got={finished.source_bytes}"
+    )
+
+
+def test_strict_decode_error_after_a_prefix_keeps_that_prefix() -> None:
+    """A strict decoder stops at an undecodable byte but keeps earlier text."""
+    line = b"ab\xff\xfecd" + b"x" * 40
+    finished = _finish(line, bound=32, options=_FinishOptions(is_text_sink=True))
+
+    assert finished.payload == (b"ab" + "… [truncated 44 bytes]".encode() + b"\n"), (
+        "the accepted prefix must survive a strict decode error, "
+        f"got={finished.payload!r}"
+    )
+    assert finished.dropped_bytes == 44, (
+        f"expected 44 dropped bytes, got={finished.dropped_bytes}"
+    )
+
+
+def test_retained_buffer_cut_inside_a_multibyte_character_stays_valid() -> None:
+    """A limiter cut through a UTF-8 character never reaches the sink."""
+    line = b"x" * 30 + "☃".encode() + b"x" * 40
+    finished = _finish(line, bound=32, options=_FinishOptions(is_text_sink=True))
+
+    finished.payload.decode("utf-8", "strict")
+    assert finished.payload == (b"x" * 7 + "… [truncated 66 bytes]".encode() + b"\n"), (
+        f"the cut character must be omitted, got={finished.payload!r}"
+    )
+    assert finished.dropped_bytes == 66, (
+        f"expected 66 dropped bytes, got={finished.dropped_bytes}"
+    )
+
+
+def test_encode_prefix_omits_a_pending_multibyte_tail() -> None:
+    """A source prefix ending mid-character never yields a partial encoding."""
+    retained, encoded = _encode_prefix(
+        b"ab\xe2\x98",
+        budget=10,
+        settings=_EchoEncoding("utf-8", "strict", is_text_sink=True),
+    )
+
+    assert retained == b"ab", f"a pending tail must be omitted, got={retained!r}"
+    assert encoded == b"ab", f"the encoding must match the prefix, got={encoded!r}"
+
+
+_TEXT_ENCODINGS = ("utf-8", "shift_jis", "latin-1", "ascii")
+_ERROR_POLICIES = ("strict", "replace", "ignore")
+
+
+@given(
+    line=st.binary(max_size=200),
+    budget=st.integers(min_value=0, max_value=200),
+    encoding=st.sampled_from(_TEXT_ENCODINGS),
+    errors=st.sampled_from(_ERROR_POLICIES),
+)
+def test_text_sink_prefix_is_bounded_and_on_a_character_boundary(
+    line: bytes,
+    budget: int,
+    encoding: str,
+    errors: str,
+) -> None:
+    """A text-sink prefix fits its budget and encodes whole retained characters."""
+    retained, encoded = _encode_prefix(
+        line,
+        budget=budget,
+        settings=_EchoEncoding(encoding, errors, is_text_sink=True),
+    )
+
+    assert len(encoded) <= budget, (
+        f"{encoding}/{errors} emitted {len(encoded)} bytes for budget {budget}"
+    )
+    assert line.startswith(retained), (
+        f"the retained source must be a prefix of the line, got={retained!r}"
+    )
+    # Re-encoding the retained text with a whole-string codec is an independent
+    # oracle for the incremental scan, including lenient invalid-byte handling.
+    assert encoded == retained.decode(encoding, errors).encode(encoding, errors), (
+        f"{encoding}/{errors} echoed bytes must encode the retained source text, "
+        f"got={encoded!r} for retained={retained!r}"
     )
 
 

@@ -238,7 +238,28 @@ def _encode_prefix(
     budget: int,
     settings: _EchoEncoding,
 ) -> tuple[bytes, bytes]:
-    """Return the largest source prefix whose echoed bytes fit *budget*."""
+    """Return the largest source prefix whose echoed bytes fit *budget*.
+
+    Work and copying are linear in the length of *line*. The scan records the
+    last safe source and encoded lengths, then slices each prefix once, instead
+    of copying both growing prefixes on every iteration. A source prefix that
+    ends mid-character is never returned: the decoder's pending state keeps the
+    last complete character boundary safe.
+
+    Parameters
+    ----------
+    line : bytes
+        The retained source line to bound.
+    budget : int
+        Maximum number of echoed bytes the prefix may occupy.
+    settings : _EchoEncoding
+        Encoding, error policy, and whether the sink needs text.
+
+    Returns
+    -------
+    tuple[bytes, bytes]
+        The longest safe source prefix and its encoded form.
+    """
     if not settings.is_text_sink:
         prefix = line[:budget]
         return prefix, prefix
@@ -250,7 +271,8 @@ def _encode_prefix(
         errors=settings.errors,
     )
     encoded_prefix = bytearray()
-    best = (b"", b"")
+    safe_source_length = 0
+    safe_encoded_length = 0
     for length, byte in enumerate(line, start=1):
         try:
             decoded = decoder.decode(bytes((byte,)), final=False)
@@ -262,8 +284,12 @@ def _encode_prefix(
             continue
         if len(encoded_prefix) > budget:
             break
-        best = (line[:length], bytes(encoded_prefix))
-    return best
+        safe_source_length = length
+        safe_encoded_length = len(encoded_prefix)
+    return (
+        line[:safe_source_length],
+        bytes(encoded_prefix[:safe_encoded_length]),
+    )
 
 
 def _fit_marker(

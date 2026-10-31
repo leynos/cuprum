@@ -253,6 +253,53 @@ def test_run_output_options_per_stream_override_takes_precedence() -> None:
     assert options.echo_stderr is True
 
 
+_REPEATED_LINE = "x" * 80 + "\n"
+_REPEATED_LINE_COUNT = 3
+_REPEATED_BOUND = 50
+_REPEATED_ECHO = "x" * 25 + "… [truncated 55 bytes]\n"
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_bounds_each_repeated_echo_line(
+    pipeline_execution_strategy: tuple[str, PipelineExecuteFn],
+) -> None:
+    """Every repeated over-limit pipeline line carries its own marker."""
+    _, execute = pipeline_execution_strategy
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    payload = _REPEATED_LINE * _REPEATED_LINE_COUNT
+    producer = python(
+        "-c",
+        f"import sys; sys.stdout.buffer.write({payload.encode('utf-8')!r})",
+    )
+    # Binary passthrough keeps the producer's LF bytes intact on Windows,
+    # where text-mode stdout would translate every LF to CRLF.
+    pipeline = producer | python(
+        "-c",
+        "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+    )
+    sink = io.StringIO()
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = execute(
+            pipeline,
+            {
+                "output": RunOutputOptions(
+                    capture=True,
+                    echo=True,
+                    max_echo_line_bytes=_REPEATED_BOUND,
+                ),
+                "context": ExecutionContext(stdout_sink=sink),
+            },
+        )
+
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.stdout == payload, "capture must retain every repeated line"
+    assert sink.getvalue() == _REPEATED_ECHO * _REPEATED_LINE_COUNT, (
+        f"each echoed line must be bounded exactly, got={sink.getvalue()!r}"
+    )
+
+
 @pytest.mark.usefixtures("stream_backend")
 def test_pipeline_run_sync_accepts_run_output_options() -> None:
     """Pipeline.run_sync accepts ``output=RunOutputOptions`` like SafeCmd."""
