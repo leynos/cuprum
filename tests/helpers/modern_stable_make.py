@@ -1,16 +1,19 @@
 """Run the modern-stable Make route and read its expanded recipes.
 
-The modern-stable contract tests need two things from `make` that the Makefile
-text alone cannot give: the commands a target will actually run after every
-variable is expanded, and which of those variables a caller is forbidden to
-override. Both are claims about `make`, not about the route's policy, so they
-live here and leave the test modules to assert the policy.
+The modern-stable contract tests need three things from `make` that the
+Makefile text alone cannot give: the commands a target will actually run after
+every variable is expanded, which of those variables a caller is forbidden to
+override, and how the toolchain guard treats a Cargo override. All three are
+claims about `make`, not about the route's policy, so they live here and leave
+the test modules to assert the policy.
 
 `dry_run` and `makefile_text` read the repository's own Makefile from
 `repo_root()`. `assert_command_variables_are_protected` asks `make` for the
 `$(origin ...)` of the guard and test commands after a caller supplies hostile
 values; `origin` reports `override` only for an `override` directive, which is
-the property under test.
+the property under test. `run_guard_against_cargo` executes the guard against
+stub `rustup` and Cargo programs, so a candidate that needs the pinned modern
+toolchain installed can still witness both acceptance and rejection.
 
 Scope: the modern-stable route contract. Other Make-contract modules keep
 their own local dry-run helpers; consolidating those is separate work, and
@@ -22,6 +25,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Make argv.
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 from tests.helpers.docs import repo_root
 
@@ -29,6 +36,7 @@ __all__ = (
     "assert_command_variables_are_protected",
     "dry_run",
     "makefile_text",
+    "run_guard_against_cargo",
 )
 
 #: A throwaway target that reports how `make` resolved the two command
@@ -92,6 +100,66 @@ def dry_run(*goals: str, variables: dict[str, str] | None = None) -> str:
 def makefile_text() -> str:
     """Return the repository Makefile text for static route assertions."""
     return (repo_root() / "Makefile").read_text(encoding="utf-8")
+
+
+def run_guard_against_cargo(
+    tmp_path: Path, cargo_script: str, *, toolchain: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the modern toolchain guard with stub `rustup` and Cargo programs.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Empty directory that receives the two stub executables.
+    cargo_script : str
+        Shell body of the Cargo stand-in the guard must inspect.
+    toolchain : str
+        Toolchain the `rustup` stub reports as installed and selected.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str]
+        Completed guard invocation with captured text output.
+
+    Raises
+    ------
+    AssertionError
+        If GNU Make is not on `PATH`.
+    """
+    make = shutil.which("make")
+    if make is None:
+        message = "the toolchain guard requires GNU Make"
+        raise AssertionError(message)
+    rustup = tmp_path / "rustup"
+    rustup.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        "  'component list') printf 'clippy-x86_64-unknown-linux-gnu\\n' ;;\n"
+        f"  'run {toolchain}') printf "
+        f"'rustc {toolchain} (fixture)\\n"
+        "binary: rustc\\n"
+        f"release: {toolchain}\\n"
+        "LLVM version: fixture\\n' ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    rustup.chmod(0o755)
+    cargo = tmp_path / "cargo-under-test"
+    cargo.write_text(cargo_script, encoding="utf-8")
+    cargo.chmod(0o755)
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
+        [make, f"CARGO={cargo}", "modern-stable-toolchain-check"],
+        capture_output=True,
+        check=False,
+        cwd=repo_root(),
+        env={
+            **os.environ,
+            "MAKEFLAGS": "",
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        },
+        text=True,
+    )
 
 
 def assert_command_variables_are_protected() -> None:

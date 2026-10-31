@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Make argv.
 import typing as typ
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-from tests.helpers.docs import repo_root
 from tests.helpers.modern_stable_make import (
     assert_command_variables_are_protected,
     dry_run,
     makefile_text,
+    run_guard_against_cargo,
 )
 
 MODERN_STABLE_TOOLCHAIN = "1.99.1"
@@ -75,6 +73,7 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
                     "CARGO_BUILD_WARNINGS": "warn",
                     "RUSTFLAGS": "-D warnings",
                     "CARGO_ENCODED_RUSTFLAGS": "ambient",
+                    "CARGO_ENCODED_RUSTDOCFLAGS": "ambient",
                     "RUSTC": "ambient-rustc",
                     "MODERN_STABLE_CARGO_ENV": "CARGO_BUILD_WARNINGS=warn",
                     "MODERN_STABLE_CARGO": "ambient-cargo",
@@ -102,6 +101,12 @@ def test_modern_route_overrides_caller_warning_and_compiler_flags() -> None:
     assert "CARGO_ENCODED_RUSTFLAGS=ambient" not in output, (
         "the route must clear encoded caller Rust flags"
     )
+    assert "-u CARGO_ENCODED_RUSTDOCFLAGS" in output, (
+        "the route must clear encoded caller Rustdoc flags"
+    )
+    assert "CARGO_ENCODED_RUSTDOCFLAGS=ambient" not in output, (
+        "ambient encoded Rustdoc flags must not outrank the route's RUSTDOCFLAGS"
+    )
 
 
 def test_modern_route_protects_its_command_variables() -> None:
@@ -113,45 +118,43 @@ def test_toolchain_guard_rejects_a_cargo_override_that_ignores_rustup(
     tmp_path: Path,
 ) -> None:
     """Reject a Cargo override without requiring an installed modern toolchain."""
-    executable = shutil.which("make")
-    assert executable is not None, "the toolchain guard requires GNU Make"
-    rustup = tmp_path / "rustup"
-    rustup.write_text(
-        "#!/bin/sh\n"
-        'case "$1 $2" in\n'
-        "  'component list') printf 'clippy-x86_64-unknown-linux-gnu\\n' ;;\n"
-        f"  'run {MODERN_STABLE_TOOLCHAIN}') printf "
-        f"'rustc {MODERN_STABLE_TOOLCHAIN} (fixture)\\n"
-        "binary: rustc\\n"
-        f"release: {MODERN_STABLE_TOOLCHAIN}\\n"
-        "LLVM version: fixture\\n' ;;\n"
-        "  *) exit 64 ;;\n"
-        "esac\n",
-        encoding="utf-8",
-    )
-    rustup.chmod(0o755)
-    cargo = tmp_path / "cargo-without-rustup-selection"
-    cargo.write_text(
+    completed = run_guard_against_cargo(
+        tmp_path,
         "#!/bin/sh\nprintf 'cargo 1.85.0 (ignored toolchain)\\n'\n",
-        encoding="utf-8",
-    )
-    cargo.chmod(0o755)
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
-        [executable, f"CARGO={cargo}", "modern-stable-toolchain-check"],
-        capture_output=True,
-        check=False,
-        cwd=repo_root(),
-        env={
-            **os.environ,
-            "MAKEFLAGS": "",
-            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
-        },
-        text=True,
+        toolchain=MODERN_STABLE_TOOLCHAIN,
     )
     output = completed.stdout + completed.stderr
     assert completed.returncode != 0, "the guard must reject an unselected Cargo"
     assert "does not honour rustup toolchain selection" in output, (
         "the toolchain guard must explain the rejected Cargo override"
+    )
+
+
+def test_toolchain_guard_accepts_a_cargo_selected_through_rustup(
+    tmp_path: Path,
+) -> None:
+    """Accept a Cargo that selects its toolchain the way the recipes do."""
+    completed = run_guard_against_cargo(
+        tmp_path,
+        "#!/bin/sh\n"
+        'for argument in "$@"; do\n'
+        '  case "$argument" in\n'
+        "    +*) printf 'unexpected argument: %s\\n' \"$argument\" >&2; exit 64 ;;\n"
+        "  esac\n"
+        "done\n"
+        'case "${RUSTUP_TOOLCHAIN:-}" in\n'
+        f"  {MODERN_STABLE_TOOLCHAIN}) "
+        f"printf 'cargo {MODERN_STABLE_TOOLCHAIN} (fixture)\\n' ;;\n"
+        "  *) printf 'cargo 1.85.0 (unselected toolchain)\\n' ;;\n"
+        "esac\n",
+        toolchain=MODERN_STABLE_TOOLCHAIN,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, (
+        f"the guard must accept RUSTUP_TOOLCHAIN selection; output:\n{output}"
+    )
+    assert f"cargo {MODERN_STABLE_TOOLCHAIN} " in output, (
+        "the guard must report the Cargo its selection reaches"
     )
 
 
@@ -220,6 +223,9 @@ def test_modern_documentation_keeps_stable_rustdoc_warning_flags() -> None:
     for output in (documentation, doctests):
         assert "CARGO_BUILD_WARNINGS=deny" not in output, (
             "modern rustdoc and doctests must retain separate warning controls"
+        )
+        assert "-u CARGO_ENCODED_RUSTDOCFLAGS" in output, (
+            "ambient encoded Rustdoc flags must not replace RUSTDOCFLAGS"
         )
         assert "--verbose" in output, "documentation gates must expose freshness"
         assert "-Zunstable-options" not in output, (
