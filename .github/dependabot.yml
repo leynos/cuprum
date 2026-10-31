@@ -8,6 +8,9 @@ version: 2
 # update, and a group cannot choose compatible versions.
 multi-ecosystem-groups:
   maturin-pyo3:
+    # Dependabot rejects `open-pull-requests-limit` on an entry that joins a
+    # multi-ecosystem group: the bound belongs to the group.
+    open-pull-requests-limit: 5
     schedule:
       interval: "daily"
 
@@ -57,7 +60,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "python"
@@ -81,7 +83,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "cargo"

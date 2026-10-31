@@ -1096,9 +1096,12 @@ primary directory holds the stanza's manifest, that each stanza carries its
 labels, and that each stanza bounds its open pull requests. A new ecosystem
 needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
 `tests/test_ci_dependabot_multi_ecosystem.py` holds the multi-ecosystem
-arrangement: the `maturin-pyo3` group is defined with a daily schedule, the
-`uv` and `cargo` stanzas each join it with exactly their member, and no other
-stanza joins a multi-ecosystem group.
+arrangement: the `maturin-pyo3` group is defined with a daily schedule and its
+own `open-pull-requests-limit` (Dependabot rejects that key on an entry that
+joins a group, so the two stanzas carry none), the `uv` and `cargo` stanzas
+each join it with exactly their member, and no other stanza joins a
+multi-ecosystem group. The pull-request bound test for every stanza lives there
+too.
 
 ## Linux debug-build acceleration
 

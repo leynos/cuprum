@@ -348,20 +348,6 @@ def test_each_stanza_batches_minor_and_patch_updates_only(
         )
 
 
-@pytest.mark.parametrize("stanza", STANZA_CASES)
-def test_each_stanza_bounds_its_pull_request_count(stanza: ExpectedStanza) -> None:
-    """Cap concurrent pull requests so updates cannot crowd out review."""
-    declared = dependabot_stanzas()[stanza.ecosystem]
-    limit = declared.get("open-pull-requests-limit")
-    _require(
-        condition=isinstance(limit, int) and limit > 0,
-        message=(
-            f"the {stanza.ecosystem} stanza needs a positive "
-            f"`open-pull-requests-limit`; got {limit!r}"
-        ),
-    )
-
-
 def _declared_directories(ecosystem: str) -> tuple[str, ...]:
     """Return the directories a stanza lists, from either key.
 
