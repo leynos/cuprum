@@ -19,7 +19,9 @@ be delivered before the coroutine starts, in which case no child is created, or
 after it returns, in which case the caller owns the worker; it cannot land
 between the spawn and the receipt. The async entry point still yields once after
 the transfer, so a cancellation requested during the launch is delivered there
-and the worker is stopped before the cancellation is re-raised.
+and the worker is stopped before the cancellation is re-raised. A spawn that
+raises after creating its child is reclaimed inside the spawn, so no failure
+between the fork and the receipt leaves a child behind.
 """
 
 from __future__ import annotations

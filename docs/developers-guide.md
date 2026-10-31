@@ -2094,6 +2094,13 @@ calls `_abandon_detached`, which kills the worker's group and reaps it. A
 signal or injected failure at that point therefore ends a child nobody can name
 yet, rather than leaving it running.
 
+The window inside the spawn is covered by `_spawn_detached` itself. It builds
+the process object in two steps, so a `Popen` constructor that raises after the
+fork still leaves a reference to reclaim; `_reclaim_partial_spawn` confirms the
+child is this process's unreaped child, signals its group or the child itself
+depending on whether `setsid` has run, and reaps it before the exception
+propagates.
+
 The asynchronous spelling adds one suspension point after the transfer:
 `await asyncio.sleep(0)`. A cancellation requested while the launch was running
 cannot be delivered until the coroutine yields, and CPython cancels the task
@@ -2111,12 +2118,13 @@ either.
 ### Why the process object is a private `Popen`
 
 `_DetachedPopen` overrides exactly one method: `__del__`, which does nothing.
-`Popen.__del__` reports a still-running child as a `ResourceWarning` and
-appends the object to `subprocess._active`, which keeps it alive until
-interpreter shutdown and then waits for it. Both behaviours assume the launch
-still owns the child; by the time the object is dropped, it does not. Spawning,
-the error-pipe report that turns a failed `exec` into an exception, and the
-closing of parent-side descriptors remain `Popen`'s, so a missing or
+`Popen.__del__` assumes the object still owns its child: it reports a
+still-running child as a `ResourceWarning`, polls the child and reaps it if it
+has already exited, and appends the object to `subprocess._active`, where a
+later `Popen` construction polls it again. Each is a terminal act of ownership,
+and by the time the object is dropped the launch has given that ownership away.
+Spawning, the error-pipe report that turns a failed `exec` into an exception,
+and the closing of parent-side descriptors remain `Popen`'s, so a missing or
 unexecutable file fails a detached launch exactly as it fails a managed spawn.
 
 `_spawn_detached` pins all three streams to `subprocess.DEVNULL`,
@@ -2131,20 +2139,29 @@ environment, working directory, and accessor results with what a managed run
 would resolve, including the shared `_bound_executable` fallback. The ownership
 boundary is proved in `cuprum/unittests/test_detached_launch_lifecycle.py`,
 which drives the spawn double into cancelling its own task and asserts that the
-worker was abandoned, and which drops the process object and asserts that no
-`ResourceWarning` is raised and the worker keeps running.
+worker was abandoned, drives a real worker through the same boundary and
+asserts that it was killed and reaped, and interrupts the `Popen` constructor
+after the fork to assert that the child it created is reclaimed. That module
+also drops the process object and asserts that no `ResourceWarning` is raised
+and the worker keeps running.
 
 Survival of the launcher cannot be observed from inside the launcher, so
-`tests/helpers/detached.py` runs a launcher in a separate interpreter and
-`tests/behaviour/test_detached_launch_harness.py` reads back what the worker
-wrote. The worker reports through a JSON file because a detached launch gives
-it no stream to report on, and every case stops the worker's group in a
-`finally`. The recorder that stands in for the spawn in the unit modules
-rewrites `cuprum._detached_launch._spawn_detached`, so a recorded launch that
-reached `_abandon_detached` would signal the fake PID it reports.
-`record_spawns` therefore installs a guard there that fails the case instead; a
-case that expects abandonment replaces it with `record_abandonment`, which
-patches the same attribute afterwards.
+`tests/helpers/detached_process.py` runs a launcher in a separate interpreter
+and `tests/behaviour/test_detached_launch_harness.py` reads back what the
+worker wrote. The worker reports through a JSON file because a detached launch
+gives it no stream to report on, and then keeps publishing a heartbeat file so
+a case can prove that it is still making progress. Each case enters
+`_launched`, which stops the recorded worker however the case ends, including a
+failure while the launcher is still publishing its receipt or report. One case
+runs the launcher through `asyncio.run(launch_detached())` and waits for
+heartbeat updates after the loop has closed; the receipt records which entry
+point ran, so the case cannot pass by silently using the synchronous spelling.
+The recorder that stands in for the spawn in the unit modules rewrites
+`cuprum._detached_launch._spawn_detached`, so a recorded launch that reached
+`_abandon_detached` would signal the fake PID it reports. `record_spawns`
+therefore installs a guard there that fails the case instead; a case that
+expects abandonment replaces it with `record_abandonment`, which patches the
+same attribute afterwards.
 
 ## Timeout and fail-fast reducer verification
 

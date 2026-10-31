@@ -2579,8 +2579,8 @@ same helpers a managed run uses. What changes is the lifecycle. The child is
 spawned with `start_new_session=True`, so it leads its own POSIX session and
 process group; its three standard streams are the kernel's null device, so it
 holds no launcher-owned pipe and reads end-of-file on stdin; and the process
-object is a private `Popen` subclass whose finalizer does nothing, so garbage
-collection neither warns nor reaps.
+object is a private `Popen` subclass whose finalizer does nothing, so dropping
+it neither warns about the worker nor reclaims it.
 
 For screen readers: The following sequence diagram follows one synchronous
 detached launch from the caller to the worker. `SafeCmd` delegates to
@@ -2634,11 +2634,14 @@ cancellation landing on that yield abandons the launch: cuprum kills the
 worker's process group and reaps it before re-raising `CancelledError`, so a
 cancelled caller is never left with an untracked child. Before the spawn there
 is nothing to abandon; after the receipt is returned, the worker is the
-caller's. A platform without POSIX process groups is refused before a child
-exists, and a start-up failure surfaces as the underlying error rather than as
-a receipt. The accepted rationale, the rejected alternatives, and the residual
-limits — PID reuse, the zombie window while the launcher lives, and host-level
-cleanup after a launcher crash — are recorded in
+caller's. A `Popen` constructor that raises after the fork is the same case
+seen from the child's side: the spawn holds the partially constructed object,
+kills the child it created, and reaps it before the error propagates. A
+platform without POSIX process groups is refused before a child exists, and a
+start-up failure surfaces as the underlying error rather than as a receipt. The
+accepted rationale, the rejected alternatives, and the residual limits — PID
+reuse, the zombie window while the launcher lives, and host-level cleanup after
+a launcher crash — are recorded in
 [ADR-028](adr-028-detached-command-launch.md).
 
 For screen readers: The following state diagram shows the outcomes of a
