@@ -317,10 +317,9 @@ def test_existing_routes_keep_their_warning_policy() -> None:
         ),
         "TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1",
         "WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1",
-        (
-            "DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) "
-            "$(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)"
-        ),
+        # Only the warning-bearing prefix belongs here: the dev-fast route owns
+        # the exact compiler and linker flags and asserts them itself.
+        "DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS)",
         "CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)",
     ):
         assert required in makefile, f"the retained route policy omitted {required!r}"
