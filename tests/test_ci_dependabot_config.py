@@ -162,7 +162,8 @@ def dependabot_stanzas() -> dict[str, dict[str, object]]:
     Returns
     -------
     dict[str, dict[str, object]]
-        One entry per ``updates`` list item.
+        One entry per plain ``updates`` list item; an entry that joins a
+        multi-ecosystem group runs only that group, so it is held separately.
 
     Raises
     ------
@@ -188,6 +189,8 @@ def dependabot_stanzas() -> dict[str, dict[str, object]]:
     stanzas: dict[str, dict[str, object]] = {}
     for index, entry in enumerate(updates):
         stanza = _mapping(entry, f"updates[{index}] must be a mapping")
+        if "multi-ecosystem-group" in stanza:
+            continue  # held by tests/test_ci_dependabot_multi_ecosystem.py
         ecosystem = _text(
             stanza.get("package-ecosystem"),
             f"updates[{index}] must name a `package-ecosystem`",

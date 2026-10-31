@@ -1069,18 +1069,29 @@ The `uv` stanza lists a `pylint-astroid` group (`pylint` and `astroid`, no
 supports, and `pyproject.toml` pins the two as one compatible pair, so a bump
 of either alone would break the other; the group moves them in one pull request.
 
-The `uv` and `cargo` stanzas also join the `maturin-pyo3` multi-ecosystem
-group, defined at the top of the file with its own daily schedule. The `uv`
-stanza offers `maturin` and the `cargo` stanza offers `pyo3`. maturin and PyO3
-are versioned independently yet build one extension, so a bump of either alone
-cannot be built against the other; the group puts the available updates for the
-pair into one pull request, so when both have one a single CI run builds them
-together. It does not hold back a bump when only one of the two has an update,
-and a group cannot choose compatible versions, so it coordinates the update
-without proving it. Concordat's `dependency-family-contracts` rule (DF-002)
-accepts a shared multi-ecosystem group as one way to protect an independently
-versioned pair, beside an upper bound or an `ignore` rule
-(<https://github.com/leynos/concordat/pull/334>); it reads PyO3, which only the
+The `uv` and `cargo` ecosystems each have two entries, because of how
+Dependabot reads a multi-ecosystem group. maturin and PyO3 are versioned
+independently yet build one extension, so a bump of either alone cannot be
+built against the other. A group entry (`multi-ecosystem-group: maturin-pyo3`,
+with `patterns` listing `maturin` for `uv` and `pyo3` for `cargo`) puts the
+available updates for the pair into one pull request, so when both have one a
+single CI run builds them together. It does not hold back a bump when only one
+of the two has an update, and a group cannot choose compatible versions, so it
+coordinates the update without proving it. The group is defined at the top of
+the file with its own daily schedule and `open-pull-requests-limit`; Dependabot
+rejects that key on an entry that joins a group.
+
+An entry that joins a group runs only that group, over the dependencies its
+`patterns` take: its own `groups`, `ignore` rules and every other dependency
+are not processed. Cuprum's first run of the arrangement showed it (the job
+definitions carried the group alone), so the plain `uv` and `cargo` stanzas
+described above stay as they were, with one addition each: an `ignore` of the
+pair, so the group entry handles it once. Concordat's
+`dependency-family-contracts` rule (DF-002) accepts a shared multi-ecosystem
+group as one way to protect an independently versioned pair, beside an upper
+bound or an `ignore` rule (<https://github.com/leynos/concordat/pull/334>), and
+reads the first entry that processes each package
+(<https://github.com/leynos/concordat/pull/338>); it reads PyO3, which only the
 `cuprum-rust` workspace member declares, through the governed `rust/Cargo.toml`
 workspace root.
 
@@ -1097,11 +1108,11 @@ labels, and that each stanza bounds its open pull requests. A new ecosystem
 needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
 `tests/test_ci_dependabot_multi_ecosystem.py` holds the multi-ecosystem
 arrangement: the `maturin-pyo3` group is defined with a daily schedule and its
-own `open-pull-requests-limit` (Dependabot rejects that key on an entry that
-joins a group, so the two stanzas carry none), the `uv` and `cargo` stanzas
-each join it with exactly their member, and no other stanza joins a
-multi-ecosystem group. The pull-request bound test for every stanza lives there
-too.
+own bound (the group entries carry none), each of `uv` and `cargo` has exactly
+one group entry offering exactly its member and carrying no `groups`, the plain
+entries ignore the pair, and no other ecosystem joins a group. The pull-request
+bound test for every plain stanza lives there too, and
+`tests/test_ci_dependabot_config.py` leaves the group entries to it.
 
 ## Linux debug-build acceleration
 
