@@ -57,7 +57,7 @@ def _text_passes_retired_keyword(text: str) -> bool:
     )
 
 
-def _is_scoped_call(node: ast.AST) -> bool:
+def _is_scoped_call(node: ast.AST) -> typ.TypeGuard[ast.Call]:
     """Return whether ``node`` calls the module-level ``scoped`` function."""
     return (
         isinstance(node, ast.Call)
@@ -66,13 +66,17 @@ def _is_scoped_call(node: ast.AST) -> bool:
     )
 
 
+def _scoped_keywords(node: ast.AST) -> list[ast.keyword]:
+    """Return a ``scoped()`` call's keywords, or nothing for other nodes."""
+    return node.keywords if _is_scoped_call(node) else []
+
+
 def _python_passes_retired_keyword(tree: ast.AST) -> bool:
     """Return whether parsed code gives ``scoped()`` the retired keyword."""
     return any(
         keyword.arg == KEYWORD
         for node in ast.walk(tree)
-        if _is_scoped_call(node)
-        for keyword in node.keywords
+        for keyword in _scoped_keywords(node)
     )
 
 
