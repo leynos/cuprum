@@ -2842,6 +2842,53 @@ and a partial pipeline spawn all leave no task behind. The watchdog is a second
 owner of the run's lifetime, not of the child's: it observes silence and never
 terminates a process or extends a timeout.
 
+### Startup abandonment after a post-spawn failure
+
+A spawned child belongs to the run only once the setup that follows the spawn
+has returned. `cuprum/_subprocess_startup_abandon.py` is the route that
+reclaims it when that setup raises: `_abandon_started_process` takes the
+process, the run's execution bundle, whatever tasks the failed setup had
+already started, and, as a keyword-only `captures`, the capture accumulators it
+had resolved, and runs one fixed sequence inside a single `_shielded_cleanup`.
+Stop and reap the child under the run's own ownership policy, cancel and gather
+the recorded tasks, close stdin and discard stdout and stderr to end-of-file,
+then release the capture accumulators. Each step is suppressed independently,
+so an ordinary cleanup failure cannot abort a later step or replace the
+exception the caller is unwinding; a cancellation propagates only after the
+sequence completes. ADR-007's 2026-10-30 addendum records why the steps are
+ordered this way, and ADR-021 records why the pipe release is bounded.
+
+Three rules matter when adding or moving a post-spawn step:
+
+- A step that starts a task must record it immediately through
+  `_record_started`, not after the whole set is built. A later step's failure
+  means the finished tuple never exists, and a consumer started before the
+  failure would then have no owner for the reclaim to cancel. The same rule
+  applies to the owned handle, whose `_attach_run_tasks` passes its own
+  `started` list to `_build_run_task_ownership` — the shared helper the direct
+  run uses — so the writer and both consumers are recorded as each is created.
+- A new post-spawn failure point belongs inside the existing guard, passing the
+  run's `recorded` list. Do not add a second unwind route and do not release
+  the pipes before stopping the child: both drain policies wait for their
+  consumers to reach end-of-file, which a live child can prevent.
+- A failure point placed after the stream configs are resolved must also pass
+  their accumulators through `captures`: a drain cancelled before it settles
+  never builds the result that would carry its spill handle, so the reclaim is
+  the only thing left that can remove the file.
+
+The `SafeCmd.lines()` coordinator and the owned-handle start keep their own
+unwind helpers because each abandons a larger record — the line stream settles
+its queue telemetry and settlement latch, and the handle settles the task set
+it attached — rather than a bare process. The single-command routes are pinned
+by `test_direct_start_ownership.py` with real children: the failing `start`
+hook in both streamed and direct shapes with and without stdin, an injected
+consumer failure after the first consumer started, an injected stdin-writer
+failure, the POSIX `OWN_GROUP` case, and a successful start that must be
+delivered unchanged. `test_startup_abandon.py` pins the reclaim's own
+obligations against a real child — the reaped process and the removal of a
+spill file the capture had already opened. `test_pipeline_process_lifecycle.py`
+pins the same guarantee for a pipeline stage.
+
 ### Canonical adapter projection, redaction, and locked-store base
 
 `cuprum/adapters/_support.py` keeps the three telemetry adapters from repeating

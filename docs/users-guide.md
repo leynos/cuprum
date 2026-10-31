@@ -2814,6 +2814,23 @@ differ in when a failure surfaces:
   tasks before the run returns. When several awaitable hooks fail, only the
   first is raised.
 
+A synchronous hook that raises on `start` needs one extra guarantee, because
+the child already exists at that point and no caller has been handed a run for
+it. Cuprum terminates and reaps that child before the hook's exception
+propagates, releases its stdin, stdout, and stderr pipes, and leaves no writer
+or consumer task behind. Any capture spill file that setup had already opened
+is removed too, so a failed start never leaves a temporary file behind. The
+same reclaim covers a failure in the setup that follows the spawn, such as
+creating the stdin writer or starting a stream consumer, so the guarantee holds
+for `run()`, `run_sync()`, and every stage of a pipeline. `start()` and
+`lines()` reach the same outcome through their own unwind helpers, which reap
+the child and settle every task the failed setup had started. When the run owns
+its process group (`OWN_GROUP`), the teardown signals that group rather than
+the child alone. Pipe release is bounded: a descendant that escaped the group
+can hold a pipe end open, so Cuprum waits no longer than its fixed end-of-file
+grace before surfacing the original error; see
+[ADR-021](adr-021-process-group-ownership.md).
+
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
 reject unknown values. The set of phases can grow between releases, so such a
 hook raises on a new phase — and so fails the run — until it grows an arm for

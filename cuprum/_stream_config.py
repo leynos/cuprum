@@ -30,7 +30,7 @@ import typing as typ
 from cuprum._capture_accumulators import build_accumulator
 from cuprum._capture_decode import _DecodeSettings
 from cuprum._constants import DEFAULT_MAX_LINE_CHARS, OBSERVER_ERROR_POLICY
-from cuprum._streams_pump import _READ_SIZE
+from cuprum._streams_pump import _READ_SIZE, _current_read_size
 from cuprum.echo_events import BrokenPipePolicy, EchoStream
 
 if typ.TYPE_CHECKING:
@@ -75,6 +75,52 @@ def _resolve_stream_sink(
     if session is not None and getattr(session, "redirects_echo", True) is not False:
         return session.log
     return fallback if configured is None else configured
+
+
+def _build_stream_config(
+    execution: _SubprocessExecution,
+    discard_on_cancel: asyncio.Event,
+    settlement_started: asyncio.Event | None = None,
+) -> _StreamConfig:
+    """Build the stdout ``_StreamConfig`` for an execution context.
+
+    When a presentation-sink session is active, mirrored stdout is routed
+    through the session's log destination so it lands inside the adapter's
+    framing (for example, inside the GitHub Actions group) in the order the
+    adapter received it.
+
+    The mode and the broken-pipe policy are both set on the stdout config and
+    inherited by the stderr one, which :func:`_resolve_stream_configs` derives
+    with ``dc.replace``: each is a property of the run rather than of a stream,
+    so one value governs both, exactly as the caller specified it on the
+    options object. Capture is the exception that derivation overrides: it is
+    configured per stream, so the stderr policy is applied rather than
+    inherited.
+
+    Returns
+    -------
+    _StreamConfig
+        The stream configuration for the run's stdout drain.
+    """
+    stdout_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
+    )
+    return _StreamConfig(
+        capture=execution.capture_stdout,
+        echo_output=execution.echo_stdout,
+        echo_max_line_bytes=execution.max_echo_line_bytes,
+        max_line_chars=execution.max_line_chars,
+        capture_bytes=execution.capture_bytes,
+        broken_pipe_policy=execution.broken_pipe_policy,
+        sink=stdout_sink,
+        delivery=execution.delivery_worker,
+        encoding=execution.ctx.encoding,
+        errors=execution.ctx.errors,
+        discard_on_cancel=discard_on_cancel,
+        settlement_started=settlement_started,
+        read_size=_current_read_size(),
+        activity=execution.idle.note_activity if execution.idle is not None else None,
+    )
 
 
 def _resolve_stream_configs(
@@ -221,6 +267,7 @@ class _StreamConfig:
 
 __all__ = [
     "_StreamConfig",
+    "_build_stream_config",
     "_resolve_stream_configs",
     "_resolve_stream_sink",
 ]
