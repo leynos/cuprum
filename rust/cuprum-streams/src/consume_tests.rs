@@ -12,19 +12,19 @@ use rstest::rstest;
 use crate::{BufferSize, consume_with_reader, errors::PumpError};
 
 /// One scripted outcome of the read closure.
-enum Step {
+pub(crate) enum Step {
     Bytes(Vec<u8>),
     Fail(io::ErrorKind),
 }
 
 /// Scripted reader that records how often the loop called it.
-struct ScriptedReader {
+pub(crate) struct ScriptedReader {
     steps: VecDeque<Step>,
     calls: usize,
 }
 
 impl ScriptedReader {
-    fn new(steps: impl IntoIterator<Item = Step>) -> Self {
+    pub(crate) fn new(steps: impl IntoIterator<Item = Step>) -> Self {
         Self {
             steps: steps.into_iter().collect(),
             calls: 0,
@@ -32,7 +32,7 @@ impl ScriptedReader {
     }
 
     /// Serve the next scripted step, reporting EOF once the script runs out.
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, PumpError> {
+    pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<usize, PumpError> {
         self.calls += 1;
         match self.steps.pop_front() {
             None => Ok(0),

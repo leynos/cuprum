@@ -3,6 +3,12 @@
 //! This module provides incremental UTF-8 decoding that matches Python's
 //! `errors="replace"` behaviour, replacing invalid sequences with the
 //! Unicode replacement character (U+FFFD).
+//!
+//! Decoding is linear in the size of each buffered chunk. The decoder scans
+//! forward with a moving offset and never re-validates bytes it has already
+//! consumed, so a chunk of lower-trust invalid bytes cannot drive quadratic
+//! work. Only the at-most-three-byte incomplete tail is retained between
+//! calls.
 
 /// Marker for how far into the pending buffer is valid UTF-8.
 #[derive(Clone, Copy, Debug)]
@@ -28,31 +34,84 @@ impl FinalChunk {
 /// - Valid UTF-8 is appended to output and removed from pending
 /// - Invalid sequences are replaced with U+FFFD
 /// - Incomplete sequences at the end are preserved (unless `final_chunk`)
+///
+/// The scan keeps a byte offset into `pending` instead of draining the
+/// consumed prefix on every replacement. Each iteration therefore validates
+/// only bytes it has not seen, and the single compaction at the end moves at
+/// most one incomplete UTF-8 sequence. Both properties keep the work linear in
+/// `pending.len()`, which matters because the input may come from a
+/// lower-trust stream.
 pub(crate) fn decode_utf8_replace(
     pending: &mut Vec<u8>,
     output: &mut String,
     final_chunk: FinalChunk,
 ) {
+    let mut offset = 0_usize;
     loop {
-        match std::str::from_utf8(pending) {
-            Ok(valid) => {
-                output.push_str(valid);
-                pending.clear();
-                break;
+        match scan_once(pending, output, offset) {
+            ScanOutcome::Consumed => break,
+            ScanOutcome::Continue(next) => offset = next,
+            ScanOutcome::Incomplete(tail_start) => {
+                handle_incomplete_sequence(pending, output, tail_start, final_chunk);
+                return;
             }
-            Err(err) => {
-                append_valid_prefix(pending, output, ValidUpTo(err.valid_up_to()));
-                if !handle_utf8_error(
-                    pending,
-                    output,
-                    &err,
-                    FinalChunk::new(final_chunk.is_final()),
-                ) {
-                    break;
+        }
+    }
+    pending.clear();
+}
+
+/// Result of one forward scan over the unconsumed part of the buffer.
+#[derive(Clone, Copy, Debug)]
+enum ScanOutcome {
+    /// Every remaining byte was consumed.
+    Consumed,
+    /// Resume scanning at this absolute offset.
+    Continue(usize),
+    /// The buffer ends inside an incomplete sequence starting at this offset.
+    Incomplete(usize),
+}
+
+/// Scan from `offset` until a definite error, an incomplete tail, or the end.
+fn scan_once(pending: &[u8], output: &mut String, offset: usize) -> ScanOutcome {
+    // Checked slicing keeps the offset total even if a future change let it
+    // outrun the buffer.
+    let Some(remaining) = pending.get(offset..) else {
+        return ScanOutcome::Consumed;
+    };
+    match std::str::from_utf8(remaining) {
+        Ok(valid) => {
+            output.push_str(valid);
+            ScanOutcome::Consumed
+        }
+        Err(err) => {
+            append_valid_prefix(remaining, output, ValidUpTo(err.valid_up_to()));
+            match handle_utf8_error(output, &err) {
+                ErrorStep::Advance(advance) => resume_at(pending.len(), offset, advance),
+                ErrorStep::Incomplete(valid_up_to) => {
+                    ScanOutcome::Incomplete(offset.saturating_add(valid_up_to))
                 }
             }
         }
     }
+}
+
+/// Continue scanning unless the advance reaches the end of the buffer.
+const fn resume_at(pending_len: usize, offset: usize, advance: usize) -> ScanOutcome {
+    let next = offset.saturating_add(advance);
+    if next >= pending_len {
+        ScanOutcome::Consumed
+    } else {
+        ScanOutcome::Continue(next)
+    }
+}
+
+/// One step of the decoder's forward scan.
+#[derive(Clone, Copy, Debug)]
+enum ErrorStep {
+    /// Append one replacement and resume scanning this many bytes further on.
+    Advance(usize),
+    /// The remainder is an incomplete sequence whose valid prefix ends here.
+    Incomplete(usize),
 }
 
 /// Decode multiple byte chunks through the incremental replacement decoder.
@@ -68,14 +127,14 @@ pub(crate) fn decode_chunks(chunks: &[&[u8]], final_chunk: bool) -> (String, Vec
     (output, pending)
 }
 
-/// Append the valid UTF-8 prefix from pending to output.
-fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: ValidUpTo) {
+/// Append the valid UTF-8 prefix from the remaining slice to output.
+fn append_valid_prefix(remaining: &[u8], output: &mut String, valid_up_to: ValidUpTo) {
     if valid_up_to.value() == 0 {
         return;
     }
     // The prefix normally comes from Utf8Error; keep validation local so
     // an incorrect bound cannot introduce undefined behaviour.
-    let Some(prefix_bytes) = pending.get(..valid_up_to.value()) else {
+    let Some(prefix_bytes) = remaining.get(..valid_up_to.value()) else {
         return;
     };
     if let Ok(valid_prefix) = std::str::from_utf8(prefix_bytes) {
@@ -83,153 +142,51 @@ fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: ValidUp
     }
 }
 
-/// Handle a UTF-8 decoding error by replacing invalid bytes.
+/// Replace one definite UTF-8 error and report how far to advance.
 ///
-/// Returns `true` if there are more bytes to process after handling the error.
-fn handle_utf8_error(
-    pending: &mut Vec<u8>,
-    output: &mut String,
-    err: &std::str::Utf8Error,
-    final_chunk: FinalChunk,
-) -> bool {
-    let valid_up_to = err.valid_up_to();
-    let is_final_chunk = final_chunk.is_final();
-    match err.error_len() {
-        Some(error_len) => {
+/// The caller has already appended the valid prefix. `Advance` carries the
+/// already-appended prefix plus the invalid sequence, so the next scan starts
+/// at the first unconsumed byte. No pending bytes are removed here.
+fn handle_utf8_error(output: &mut String, err: &std::str::Utf8Error) -> ErrorStep {
+    err.error_len().map_or_else(
+        || ErrorStep::Incomplete(err.valid_up_to()),
+        |error_len| {
             output.push('\u{FFFD}');
-            // NOTE: `decode_utf8_replace` must call `append_valid_prefix`
-            // immediately before `handle_utf8_error`; this drain in
-            // `handle_utf8_error` skips the already-appended valid prefix plus
-            // the invalid sequence (valid_up_to + error_len) to avoid
-            // double-draining.
-            pending.drain(..valid_up_to + error_len);
-            !pending.is_empty()
-        }
-        None => handle_incomplete_sequence(
-            pending,
-            output,
-            ValidUpTo(valid_up_to),
-            FinalChunk::new(is_final_chunk),
-        ),
-    }
+            // `Utf8Error` derives both bounds from the same slice, so the sum
+            // stays in range; saturating addition keeps the step total without
+            // trusting that invariant for panic-freedom.
+            ErrorStep::Advance(err.valid_up_to().saturating_add(error_len))
+        },
+    )
 }
 
-/// Handle an incomplete UTF-8 sequence at the end of input.
+/// Finish a scan that ended inside an incomplete UTF-8 sequence.
 ///
-/// Returns `true` if there are more bytes to process.
+/// `tail_start` is the absolute position where the incomplete sequence starts.
+/// A final chunk replaces the sequence and drops the buffer; otherwise the
+/// already-consumed prefix is compacted away once, leaving only the at-most
+/// three-byte tail for the next call.
 fn handle_incomplete_sequence(
     pending: &mut Vec<u8>,
     output: &mut String,
-    valid_up_to: ValidUpTo,
+    tail_start: usize,
     final_chunk: FinalChunk,
-) -> bool {
+) {
     if final_chunk.is_final() {
         output.push('\u{FFFD}');
         pending.clear();
-        return false;
+        return;
     }
-    if valid_up_to.value() > 0 {
-        // Keep only the incomplete tail; drop already used prefix.
-        pending.drain(..valid_up_to.value());
+    let tail = tail_start.min(pending.len());
+    if tail > 0 {
+        // Keep only the incomplete tail; the prefix is already in `output`.
+        pending.drain(..tail);
     }
-    false
 }
 
 #[cfg(test)]
-mod tests {
-    //! Property tests for the incremental UTF-8 replacement decoder.
-
-    use proptest::prelude::*;
-
-    use super::{FinalChunk, decode_chunks, decode_utf8_replace};
-
-    fn split_input_at_points<'input>(
-        input: &'input [u8],
-        split_points: &[usize],
-    ) -> Vec<&'input [u8]> {
-        let mut sorted_points = split_points
-            .iter()
-            .map(|point| (*point).min(input.len()))
-            .collect::<Vec<_>>();
-        sorted_points.sort_unstable();
-        sorted_points.dedup();
-
-        let mut chunks = Vec::new();
-        let mut offset = 0_usize;
-        let mut remainder = input;
-        for split_point in sorted_points {
-            let (chunk, next_remainder) = remainder.split_at(split_point.saturating_sub(offset));
-            chunks.push(chunk);
-            remainder = next_remainder;
-            offset = split_point;
-        }
-        chunks.push(remainder);
-        chunks
-    }
-
-    fn decode_single_chunk(input: &[u8], final_chunk: bool) -> (String, Vec<u8>) {
-        let mut pending = input.to_vec();
-        let mut output = String::new();
-        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(final_chunk));
-        (output, pending)
-    }
-
-    fn incomplete_tail_strategy() -> impl Strategy<Value = Vec<u8>> {
-        prop_oneof![
-            Just(vec![0xc2]),
-            Just(vec![0xdf]),
-            Just(vec![0xe0, 0xa0]),
-            Just(vec![0xe1, 0x80]),
-            Just(vec![0xef, 0xbf]),
-            Just(vec![0xf0, 0x90, 0x80]),
-            Just(vec![0xf1, 0x80, 0x80]),
-            Just(vec![0xf4, 0x8f, 0xbf]),
-        ]
-    }
-
-    proptest! {
-        #![proptest_config(crate::miri_proptest_config())]
-
-        #[test]
-        fn single_chunk_matches_from_utf8_lossy(input in any::<Vec<u8>>()) {
-            let (output, pending) = decode_single_chunk(&input, true);
-
-            prop_assert_eq!(output, String::from_utf8_lossy(&input).into_owned());
-            prop_assert!(pending.is_empty());
-        }
-
-        #[test]
-        fn chunked_decoding_matches_from_utf8_lossy(
-            input in any::<Vec<u8>>(),
-            split_points in prop::collection::vec(0_usize..256, 0..32),
-        ) {
-            let chunks = split_input_at_points(&input, &split_points);
-            let (output, pending) = decode_chunks(&chunks, true);
-
-            prop_assert_eq!(output, String::from_utf8_lossy(&input).into_owned());
-            prop_assert!(pending.is_empty());
-        }
-
-        #[test]
-        fn incomplete_sequences_are_retained_until_final_chunk(
-            prefix in any::<String>(),
-            tail in incomplete_tail_strategy(),
-        ) {
-            let mut input = prefix.into_bytes();
-            input.extend_from_slice(&tail);
-            let prefix_len = input.len() - tail.len();
-            let (valid_prefix, _) = input.split_at(prefix_len);
-
-            let (deferred_output, deferred_pending) = decode_single_chunk(&input, false);
-            prop_assert_eq!(deferred_output, String::from_utf8_lossy(valid_prefix));
-            prop_assert_eq!(deferred_pending, tail);
-
-            let (final_output, final_pending) = decode_single_chunk(&input, true);
-            prop_assert_eq!(final_output, String::from_utf8_lossy(&input).into_owned());
-            prop_assert!(final_pending.is_empty());
-        }
-    }
-}
+#[path = "utf8_tests.rs"]
+mod tests;
 
 #[cfg(kani)]
 #[path = "utf8_kani_proofs.rs"]
