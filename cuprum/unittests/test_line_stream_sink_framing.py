@@ -242,49 +242,41 @@ def test_cancelled_consumer_releases_lease_and_terminates_child() -> None:
     _assert_lease_frames(buffer.getvalue(), command, "ready")
 
 
-def test_completed_stream_closes_as_success(
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(("print('done')", 0, ()), id="success"),
+        pytest.param(("raise SystemExit(7)", 7, ("exit_nonzero",)), id="exit-nonzero"),
+    ],
+)
+def test_stream_annotates_the_outcome_the_child_reported(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    case: tuple[str, int, tuple[str, ...]],
 ) -> None:
-    """A completed line stream must not annotate itself as cancelled.
+    """A completed stream annotates its exit outcome, not a cancellation.
 
     ``LineStream`` closes its generator after the terminal result, which throws
     ``GeneratorExit`` into it. That ordinary close says nothing about how the
-    child ended: the session must close with the exit outcome, or an exit-zero
-    run annotates a failure the child never reported.
+    child ended, so the session must close with the exit outcome: an exit-zero
+    run annotates nothing, and a failed one reports ``exit_nonzero`` rather
+    than ``cancelled``, which would blame the caller for a failure the child
+    chose.
     """
+    child_source, expected_exit, expected_details = case
     monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
-    command, allowlist = _python_command("print('done')")
+    command, allowlist = _python_command(child_source)
 
     with scoped(ScopeConfig(allowlist=allowlist)):
         _, result = asyncio.run(_drain(command, _flags_output(annotate_failure=True)))
 
-    assert result.exit_code == 0, f"the child must succeed; got {result!r}"
-    assert _annotations(capsys.readouterr().err) == [], (
-        "an exit-zero line stream must not annotate a failure"
+    assert result.exit_code == expected_exit, (
+        f"the child must exit {expected_exit}; got {result!r}"
     )
-
-
-def test_failed_stream_annotates_exit_nonzero(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A failed line stream annotates its exit, not a cancellation.
-
-    The annotation detail is the only place the outcome reaches a user, so a
-    completed run whose child failed has to report ``exit_nonzero``; reporting
-    ``cancelled`` would blame the caller for a failure the child chose.
-    """
-    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
-    command, allowlist = _python_command("raise SystemExit(7)")
-
-    with scoped(ScopeConfig(allowlist=allowlist)):
-        _, result = asyncio.run(_drain(command, _flags_output(annotate_failure=True)))
-
-    assert result.exit_code == 7, f"the child must exit 7; got {result!r}"
+    label = _escape_property(_run_label(command))
     assert _annotations(capsys.readouterr().err) == [
-        f"title={_escape_property(_run_label(command))}::exit_nonzero",
-    ], "a failed line stream must annotate its categorical exit outcome"
+        f"title={label}::{detail}" for detail in expected_details
+    ], "a completed line stream must annotate only the outcome the child reported"
 
 
 def test_denied_first_pull_opens_no_sink_session() -> None:

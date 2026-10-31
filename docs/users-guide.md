@@ -1510,10 +1510,10 @@ When the options configure a presentation sink — `group=True` or
 frames the stream for exactly as long as it is alive. The session opens on the
 first pull, not when the stream is built, so a stream that is never iterated
 writes no group and takes no stop-commands lease. It closes on exhaustion, on
-an early close, and on cancellation, releasing the lease so the runner honours
-its own workflow commands again; a failed run's annotation is written at that
-point too. Mirrored output therefore reaches the job log inside the frame,
-whether it arrives through `run()` or through `lines()`.
+an early close, and on cancellation, releasing the lease, so the runner honours
+its workflow commands again; a failed run's annotation is written at that point
+too. Mirrored output therefore reaches the job log inside the frame, whether it
+arrives through `run()` or through `lines()`.
 
 `lines()` is lazy: it validates the program and resolves the deadline when the
 stream is built, but it does not plan or spawn the child until the first event
