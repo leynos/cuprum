@@ -3628,10 +3628,12 @@ The jobs do the following:
    [GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g)
    and
    [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8).
-   `check-version` runs the gate before anything is built or published, so an
-   old runner fails before PyPI holds files; both verifier call sites check it
-   again, and `publish-release` does so on every run, not only when a carryover
-   list is non-empty.
+   `check-version` runs the gate before any job attests, publishes, or
+   releases, so an old runner fails before PyPI holds files; `build-wheels`
+   runs alongside it rather than behind it, so that job still builds if the
+   check fails. Both verifier call sites check the CLI again, and
+   `publish-release` does so on every run, not only when a carryover list is
+   non-empty.
 3. `draft-release` reuses the tag's GitHub Release if one exists, draft or
    published, and otherwise creates a draft with generated notes, marked as a
    pre-release when `check-version` says so. It snapshots the release's current
