@@ -1089,11 +1089,12 @@ every composite action under `.github/actions`, at any depth, is reached by one
 of the stanza's directory globs. It also checks that each stanza lists exactly
 its expected directories, whether under `directory` or `directories`, that the
 primary directory holds the stanza's manifest, that each stanza carries its
-labels, and that each stanza bounds its open pull requests. It also checks that
-the `maturin-pyo3` group is defined with a daily schedule, that the `uv` and
-`cargo` stanzas each join it with exactly their member, and that no other
-stanza joins a multi-ecosystem group. A new ecosystem needs a new entry in
-`EXPECTED_STANZAS` as well as a stanza.
+labels, and that each stanza bounds its open pull requests. A new ecosystem
+needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
+`tests/test_ci_dependabot_multi_ecosystem.py` holds the multi-ecosystem
+arrangement: the `maturin-pyo3` group is defined with a daily schedule, the
+`uv` and `cargo` stanzas each join it with exactly their member, and no other
+stanza joins a multi-ecosystem group.
 
 ## Linux debug-build acceleration
 
