@@ -15,6 +15,8 @@ import pytest
 
 from tests.helpers.cargo_warning_fixture import (
     ToolchainProbeError,
+    ToolchainProbeTimeoutError,
+    require_toolchain,
     toolchain_available,
 )
 
@@ -51,6 +53,22 @@ def _probe(*, rustc: str, cargo: str, clippy: bool) -> fixture.Probe:
         return _process(components if clippy else "rustfmt-x86_64\n")
 
     return probe
+
+
+def _timed_out_probe(
+    argv: list[str], _env: cabc.Mapping[str, str] | None
+) -> subprocess.CompletedProcess[str]:
+    """Raise the timeout the real probe raises, without starting a process."""
+    message = f"probe timed out: {argv}"
+    raise ToolchainProbeTimeoutError(message)
+
+
+def _unstartable_probe(
+    argv: list[str], _env: cabc.Mapping[str, str] | None
+) -> subprocess.CompletedProcess[str]:
+    """Raise the start failure the real probe raises, without a process."""
+    message = f"toolchain probe could not start: {argv}"
+    raise ToolchainProbeError(message)
 
 
 @pytest.mark.parametrize(
@@ -96,10 +114,18 @@ def test_a_missing_executable_is_unavailable_without_probing() -> None:
     assert not is_available, "an absent executable must report unavailability"
 
 
-def test_a_probe_that_gives_no_answer_is_unavailable() -> None:
-    """Count a silent probe as unavailable so a loaded host skips, not errors."""
-    is_available = toolchain_available(probe=lambda argv, env: None, locate=_locate)
-    assert not is_available, "a probe that never answered must be unavailable"
+def test_a_probe_that_fails_on_its_own_terms_is_unavailable() -> None:
+    """Read a non-zero probe answer as an absent toolchain, not a fault."""
+    is_available = toolchain_available(
+        probe=lambda argv, env: _process("", returncode=1), locate=_locate
+    )
+    assert not is_available, "a probe that failed its query must be unavailable"
+
+
+def test_a_probe_that_outlives_its_bound_is_a_host_fault() -> None:
+    """Propagate a scheduling failure instead of hiding it behind `False`."""
+    with pytest.raises(ToolchainProbeTimeoutError, match="probe timed out"):
+        toolchain_available(probe=_timed_out_probe, locate=_locate)
 
 
 def test_the_query_selects_the_toolchain_it_is_given() -> None:
@@ -142,4 +168,22 @@ def test_the_query_selects_the_toolchain_it_is_given() -> None:
 def test_a_probe_that_cannot_run_is_an_environment_fault() -> None:
     """Raise rather than misreport an unstartable probe as a missing toolchain."""
     with pytest.raises(ToolchainProbeError, match="toolchain probe could not start"):
-        toolchain_available(locate=lambda name: "/nonexistent/cuprum-probe")
+        toolchain_available(probe=_unstartable_probe, locate=_locate)
+
+
+def test_a_timed_out_probe_skips_a_local_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip a loaded local host instead of failing its contract run."""
+    monkeypatch.delenv("CUPRUM_REQUIRE_MODERN_STABLE", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="probe timed out"):
+        require_toolchain(probe=_timed_out_probe, locate=_locate)
+
+
+def test_a_timed_out_probe_fails_a_required_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail the required CI fixture run when the toolchain cannot be probed."""
+    monkeypatch.setenv("CUPRUM_REQUIRE_MODERN_STABLE", "1")
+    with pytest.raises(pytest.fail.Exception, match="probe timed out"):
+        require_toolchain(probe=_timed_out_probe, locate=_locate)

@@ -37,6 +37,7 @@ __all__ = (
     "Locator",
     "Probe",
     "ToolchainProbeError",
+    "ToolchainProbeTimeoutError",
     "diagnostics",
     "host_target",
     "make_crate",
@@ -67,11 +68,10 @@ CARGO_COMMAND_TIMEOUT_SECONDS = 1800
 PROBE_TIMEOUT_SECONDS = 60
 
 
-#: Runs one fixed toolchain probe under optional extra environment entries,
-#: returning ``None`` when it gave no answer.
+#: Runs one fixed toolchain probe with optional extra environment entries.
 type Probe = cabc.Callable[
     [list[str], cabc.Mapping[str, str] | None],
-    subprocess.CompletedProcess[str] | None,
+    subprocess.CompletedProcess[str],
 ]
 #: Resolves an executable name to its path, or to ``None`` when it is absent.
 type Locator = cabc.Callable[[str], str | None]
@@ -81,27 +81,26 @@ class ToolchainProbeError(RuntimeError):
     """Raised when a toolchain probe could not be started at all."""
 
 
+class ToolchainProbeTimeoutError(ToolchainProbeError):
+    """Raised when a toolchain probe outlived its scheduling bound."""
+
+
 def _probe(
     argv: list[str], env: cabc.Mapping[str, str] | None = None
-) -> subprocess.CompletedProcess[str] | None:
-    """Run one fixed toolchain probe, or report that it gave no answer.
-
-    A probe that outlived `PROBE_TIMEOUT_SECONDS` is reported as no answer,
-    because a loaded host can delay a working toolchain past any fixed bound;
-    counting that as absence keeps the contract skipping instead of erroring.
-    `env` adds entries to this child's environment. A probe that cannot be
-    started is a different fault: the executable was located, so the
-    environment, not the toolchain, is broken.
+) -> subprocess.CompletedProcess[str]:
+    """Run one fixed toolchain probe under optional environment entries.
 
     Returns
     -------
-    subprocess.CompletedProcess[str] | None
-        The finished probe, or ``None`` when it did not answer in time.
+    subprocess.CompletedProcess[str]
+        The finished probe.
 
     Raises
     ------
     ToolchainProbeError
         If the probe could not be started.
+    ToolchainProbeTimeoutError
+        If the probe outlived `PROBE_TIMEOUT_SECONDS`.
     """
     child_env = None if env is None else {**os.environ, **env}
     try:
@@ -113,30 +112,25 @@ def _probe(
             timeout=PROBE_TIMEOUT_SECONDS,
             text=True,
         )
-    except subprocess.TimeoutExpired:
-        return None
+    except subprocess.TimeoutExpired as error:
+        message = f"probe timed out after {PROBE_TIMEOUT_SECONDS}s: {' '.join(argv)}"
+        raise ToolchainProbeTimeoutError(message) from error
     except OSError as error:
         message = f"toolchain probe could not start: {' '.join(argv)}"
         raise ToolchainProbeError(message) from error
 
 
 def _reports_version(
-    probe: subprocess.CompletedProcess[str] | None, tool: str, toolchain: str
+    probe: subprocess.CompletedProcess[str], tool: str, toolchain: str
 ) -> bool:
-    """Return whether a probe answered and named the requested toolchain."""
-    return (
-        probe is not None
-        and probe.returncode == 0
-        and probe.stdout.startswith(f"{tool} {toolchain} ")
-    )
+    """Return whether a probe named the requested toolchain."""
+    return probe.returncode == 0 and probe.stdout.startswith(f"{tool} {toolchain} ")
 
 
-def _reports_clippy(probe: subprocess.CompletedProcess[str] | None) -> bool:
+def _reports_clippy(probe: subprocess.CompletedProcess[str]) -> bool:
     """Return whether a component-listing probe found Clippy installed."""
-    return (
-        probe is not None
-        and probe.returncode == 0
-        and any(line.startswith("clippy") for line in probe.stdout.splitlines())
+    return probe.returncode == 0 and any(
+        line.startswith("clippy") for line in probe.stdout.splitlines()
     )
 
 
@@ -155,7 +149,7 @@ def toolchain_available(
         reads a selection from the ambient environment.
     probe : Probe
         Adapter running one fixed argument vector under optional environment
-        entries; it reports no answer as ``None`` and raises only on start failure.
+        entries; it returns the answer and raises when it cannot give one.
     locate : collections.abc.Callable[[str], str | None]
         Resolver for executable names, injected so the query does not have to
         read `PATH` itself.
@@ -171,10 +165,12 @@ def toolchain_available(
     argument, because the ``+`` form is a rustup proxy feature that a direct
     Cargo binary ignores; the Make route uses the same mechanism.
 
-    A probe that gave no answer counts as unavailable, so a loaded host skips
-    the contract rather than failing it. A probe that could not be started
-    propagates :class:`ToolchainProbeError`; that fault is the environment's,
-    not the toolchain's.
+    A missing executable is a read result: an absent toolchain is reported as
+    unavailable. A probe fault is the host's failure, so it propagates instead
+    of masquerading as absence; callers that may skip a loaded host decide that
+    policy themselves. :class:`ToolchainProbeError` covers a probe that could
+    not start, and :class:`ToolchainProbeTimeoutError` one that outlived its
+    bound.
     """
     rustup = locate("rustup")
     cargo = locate("cargo")
@@ -200,6 +196,13 @@ def toolchain_available(
     )
 
 
+def _skip_or_fail(message: str) -> typ.NoReturn:
+    """Skip locally, or fail when CI requires the modern toolchain."""
+    if os.environ.get("CUPRUM_REQUIRE_MODERN_STABLE") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 def require_toolchain(
     *,
     toolchain: str = MODERN_STABLE_TOOLCHAIN,
@@ -222,30 +225,27 @@ def require_toolchain(
     str
         The Cargo executable that honours the modern toolchain selection.
 
-    Raises
-    ------
-    AssertionError
-        If the locator resolved no Cargo while the availability query still
-        reported the toolchain present.
-
     Notes
     -----
-    A probe that could not be started propagates :class:`ToolchainProbeError`,
-    because that is an environment fault and must not be reported as a skipped
-    test. A probe that gave no answer counts as unavailable, so it skips here
-    and fails under ``CUPRUM_REQUIRE_MODERN_STABLE=1``.
+    A missing toolchain, and a probe that outlived its bound, both skip here
+    and fail under ``CUPRUM_REQUIRE_MODERN_STABLE=1``. A loaded host must not
+    fail a local run, while CI still reports the toolchain it could not use. A
+    probe that could not be started is different: :class:`ToolchainProbeError`
+    propagates, because a located executable that will not run is a broken
+    environment rather than a missing toolchain.
     """
     cargo = locate("cargo")
-    if cargo is None or not toolchain_available(
-        toolchain=toolchain, probe=probe, locate=locate
-    ):
-        message = f"Rust and Cargo {toolchain} with Clippy are unavailable"
-        if os.environ.get("CUPRUM_REQUIRE_MODERN_STABLE") == "1":
-            pytest.fail(message)
-        pytest.skip(message)
     if cargo is None:
-        message = "Cargo must be locatable whenever the toolchain is available"
-        raise AssertionError(message)
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
+    is_available = False
+    try:
+        is_available = toolchain_available(
+            toolchain=toolchain, probe=probe, locate=locate
+        )
+    except ToolchainProbeTimeoutError as error:
+        _skip_or_fail(str(error))
+    if not is_available:
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
     return cargo
 
 

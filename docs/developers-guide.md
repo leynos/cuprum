@@ -1275,14 +1275,17 @@ the ambient environment itself. It probes Cargo through an injected
 `RUSTUP_TOOLCHAIN` entry rather than a `+toolchain` argument, because the `+`
 form is a rustup proxy feature that a direct Cargo binary ignores. Unit tests
 inject a probe and a locator, so they can settle a complete toolchain, a
-mismatched compiler, a missing Clippy, a silent probe, and an unstartable probe
-without that toolchain being installed. A probe that outlives its bound reports
-no answer, which counts as an unavailable toolchain: a loaded host can delay a
-working toolchain past any fixed bound, and a delayed probe must not turn the
-contract into an error. A probe that cannot be started raises
-`ToolchainProbeError` instead, because the executable was located, so that
-fault belongs to the environment. A genuinely absent toolchain still skips
-locally and fails under `CUPRUM_REQUIRE_MODERN_STABLE=1`.
+mismatched compiler, a missing Clippy, a non-zero probe, a timed-out probe, and
+an unstartable probe without that toolchain being installed. The query answers
+in two kinds of result: a missing executable or a failed query is an
+unavailable toolchain, while a probe fault raises `ToolchainProbeError`, or
+`ToolchainProbeTimeoutError` for one that outlived its bound, so a scheduling
+failure cannot masquerade as absence. `require_toolchain()` holds the skipping
+policy: a missing toolchain and a timed-out probe both skip locally and fail
+under `CUPRUM_REQUIRE_MODERN_STABLE=1`, because a loaded host must not fail a
+local run while CI still reports the toolchain it could not use. A probe that
+cannot be started propagates instead, because a located executable that will
+not run is a broken environment rather than a missing toolchain.
 
 ## Tar and rsync builder helpers
 
