@@ -2,9 +2,10 @@ version: 2
 
 # maturin (uv) and PyO3 (Cargo) are versioned independently yet build one
 # extension, so an update to either alone cannot be built against the other.
-# Joining both stanzas to this group makes the pair arrive in a single pull
-# request, where one CI run builds them together. A group cannot choose
-# compatible versions; it only keeps the pair from splitting.
+# Joining both stanzas to this group puts the available updates for the pair
+# into one pull request, so when both have one a single CI run builds them
+# together. It does not hold back a bump when only one of the two has an
+# update, and a group cannot choose compatible versions.
 multi-ecosystem-groups:
   maturin-pyo3:
     schedule:

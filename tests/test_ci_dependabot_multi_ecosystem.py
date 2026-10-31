@@ -2,9 +2,10 @@
 
 maturin (uv) and PyO3 (Cargo) are versioned independently yet build one
 extension, so an update to either alone cannot be built against the other. A
-multi-ecosystem group makes the two arrive in a single pull request, where one
-CI run builds both. A group cannot choose compatible versions: it coordinates
-the update without proving it. A mistake here is silent, because Dependabot
+multi-ecosystem group puts the available updates for the two into one pull
+request, so when both have one a single CI run builds both. It does not hold
+back a bump when only one of the two has an update, and a group cannot choose
+compatible versions: it coordinates the update without proving it. A mistake here is silent, because Dependabot
 reports nothing for a stanza that names a group the file never defines, so the
 checked-in configuration is read back and held to the arrangement.
 """
