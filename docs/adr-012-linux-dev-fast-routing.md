@@ -99,4 +99,3 @@ the contract tests and the developers' guide moved with it.
 `test_the_fragment_carries_the_estate_fast_flags_on_linux` and
 `test_the_recorded_exception_names_this_fragment_and_its_decision` hold the
 conditions the exception relies on.
-
