@@ -67,12 +67,23 @@ class _FakeStream:
         return self._descriptor
 
 
-class _ProxyWithoutFileno:
-    """A dead stream double that never had a ``fileno`` method."""
+class _DeadProxy:
+    """A standard-stream proxy whose reader has gone away."""
 
     def flush(self) -> None:
         """Report the reader as gone, as a broken proxy would."""
         raise BrokenPipeError
+
+
+class _ProxyWithoutFileno(_DeadProxy):
+    """A dead proxy that never had a ``fileno`` method."""
+
+
+class _ProxyReturningNoDescriptor(_DeadProxy):
+    """A dead proxy whose ``fileno`` reports no descriptor."""
+
+    def fileno(self) -> None:
+        """Return no descriptor at all."""
 
 
 class _RecordingAtexit:
@@ -151,7 +162,7 @@ def test_healthy_stream_is_left_untouched(monkeypatch: pytest.MonkeyPatch) -> No
 
         exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is healthy
+        assert sys.stdout is healthy, "a healthy stream must keep its identity"
         assert healthy.flushes == 1, "the hook must still probe the stream"
         assert not os.path.samestat(os.fstat(write_fd), Path(os.devnull).stat()), (
             "a healthy descriptor must not be redirected"
@@ -168,8 +179,8 @@ def test_none_stream_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
 
     exit_status_guard._guard_standard_streams()
 
-    assert sys.stdout is None
-    assert sys.stderr is None
+    assert sys.stdout is None, "a missing stream must stay missing"
+    assert sys.stderr is None, "a missing stream must stay missing"
 
 
 def test_descriptorless_dead_stream_is_replaced(
@@ -186,10 +197,14 @@ def test_descriptorless_dead_stream_is_replaced(
     exit_status_guard._guard_standard_streams()
 
     sink = sys.stdout
-    assert isinstance(sink, exit_status_guard._NullTextSink)
-    assert sink.writable() is True
-    assert sink.write("discarded") == len("discarded")
-    assert sink.flush() is None
+    assert isinstance(sink, exit_status_guard._NullTextSink), (
+        "a descriptorless dead stream must be replaced by the null sink"
+    )
+    assert sink.writable() is True, "the null sink must accept text"
+    assert sink.write("discarded") == len("discarded"), (
+        "the null sink must report discarded text as written"
+    )
+    assert sink.flush() is None, "flushing the null sink must do nothing"
 
 
 def test_proxy_without_fileno_method_is_replaced(
@@ -201,7 +216,41 @@ def test_proxy_without_fileno_method_is_replaced(
 
     exit_status_guard._guard_standard_streams()
 
-    assert isinstance(sys.stdout, exit_status_guard._NullTextSink)
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+        "a proxy without fileno must be replaced by the null sink"
+    )
+
+
+def test_dead_stream_that_reports_itself_closed_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``fileno`` that refuses with ``ValueError`` still gets the sink."""
+    dead = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        fileno_error=ValueError("proxy is closed"),
+    )
+    monkeypatch.setattr(sys, "stdout", dead)
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+
+    exit_status_guard._guard_standard_streams()
+
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+        "a closed proxy must be replaced by the null sink"
+    )
+
+
+def test_dead_stream_reporting_no_descriptor_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``fileno`` returning ``None`` is not a usable descriptor."""
+    monkeypatch.setattr(sys, "stdout", _ProxyReturningNoDescriptor())
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+
+    exit_status_guard._guard_standard_streams()
+
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+        "a proxy with no descriptor value must be replaced by the null sink"
+    )
 
 
 def test_both_dead_streams_are_guarded_independently(
@@ -223,9 +272,11 @@ def test_both_dead_streams_are_guarded_independently(
 
         exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is stdout
+        assert sys.stdout is stdout, "the redirectable stream keeps its identity"
         _assert_points_at_devnull(write_fd)
-        assert isinstance(sys.stderr, exit_status_guard._NullTextSink)
+        assert isinstance(sys.stderr, exit_status_guard._NullTextSink), (
+            "the descriptorless stream must be replaced by the null sink"
+        )
     finally:
         os.close(read_fd)
         os.close(write_fd)
@@ -269,8 +320,10 @@ def test_dup2_failure_falls_back_to_the_null_sink(
 
         exit_status_guard._guard_standard_streams()
 
-        assert failing_os.dup2_calls == 1
-        assert isinstance(sys.stdout, exit_status_guard._NullTextSink)
+        assert failing_os.dup2_calls == 1, "the hook must have attempted the redirect"
+        assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+            "a failed redirect must fall back to the null sink"
+        )
     finally:
         os.close(read_fd)
         os.close(write_fd)
@@ -293,7 +346,9 @@ def test_install_registers_exactly_one_hook(monkeypatch: pytest.MonkeyPatch) -> 
     assert recorder.registered == [exit_status_guard._guard_standard_streams], (
         "exactly one hook must be registered, however many callers race"
     )
-    assert exit_status_guard._is_installed is True
+    assert exit_status_guard._is_installed is True, (
+        "the flag must record the successful registration"
+    )
 
 
 def test_importing_cuprum_installs_nothing() -> None:
