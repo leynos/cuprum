@@ -1,4 +1,15 @@
 version: 2
+
+# maturin (uv) and PyO3 (Cargo) are versioned independently yet build one
+# extension, so an update to either alone cannot be built against the other.
+# Joining both stanzas to this group makes the pair arrive in a single pull
+# request, where one CI run builds them together. A group cannot choose
+# compatible versions; it only keeps the pair from splitting.
+multi-ecosystem-groups:
+  maturin-pyo3:
+    schedule:
+      interval: "daily"
+
 updates:
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -27,6 +38,9 @@ updates:
   # Enable version updates for Python (uv-managed pyproject.toml)
   - package-ecosystem: "uv"
     directory: "/"
+    multi-ecosystem-group: "maturin-pyo3"
+    patterns:
+      - "maturin"
     groups:
       # Pylint declares the Astroid range it supports (<=4.1.dev0 for 4.0.9),
       # so the exact pins in pyproject.toml are a mutually compatible pair and
@@ -56,6 +70,9 @@ updates:
   # Enable version updates for the Cargo workspace
   - package-ecosystem: "cargo"
     directory: "/rust"
+    multi-ecosystem-group: "maturin-pyo3"
+    patterns:
+      - "pyo3"
     groups:
       minor-and-patch:
         patterns:

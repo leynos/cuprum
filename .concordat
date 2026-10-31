@@ -2,3 +2,4 @@ language:
   rust:
     surfaces:
       - path: rust/Cargo.toml
+      - path: rust/cuprum-rust/Cargo.toml

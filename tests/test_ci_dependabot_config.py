@@ -59,6 +59,16 @@ NARROW_GROUPS = {
 #: The `applies-to` value a routine-update group must carry, when it names one.
 VERSION_UPDATES = "version-updates"
 
+#: The multi-ecosystem group that moves the extension's two build halves in one
+#: pull request. maturin (uv) and PyO3 (Cargo) are versioned independently yet
+#: build one extension, so an update to either alone cannot be built against
+#: the other. A group cannot choose compatible versions; it makes the pair
+#: arrive together so one CI run sees both.
+MATURIN_PYO3_GROUP = "maturin-pyo3"
+
+#: The dependencies each ecosystem contributes to that group.
+MATURIN_PYO3_MEMBERS = {"uv": ["maturin"], "cargo": ["pyo3"]}
+
 
 @dc.dataclass(frozen=True, slots=True)
 class ExpectedStanza:
@@ -398,3 +408,62 @@ def _watched_path(stanza: ExpectedStanza) -> Path:
     # `Path` treats a leading slash as absolute, so the Dependabot-relative
     # form has to be stripped before it can be joined under the repository.
     return ROOT / stanza.directory.strip("/") / stanza.manifest
+
+
+def _multi_ecosystem_groups() -> dict[str, object]:
+    """Return the top-level ``multi-ecosystem-groups`` mapping, or fail."""
+    document = _mapping(
+        yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")),
+        f"{CONFIG_PATH} must parse to a mapping",
+    )
+    return _mapping(
+        document.get("multi-ecosystem-groups"),
+        f"{CONFIG_PATH} must define `multi-ecosystem-groups`",
+    )
+
+
+def test_the_maturin_pyo3_group_is_defined_with_a_daily_schedule() -> None:
+    """Define the group the two stanzas join, on the estate's daily cadence."""
+    groups = _multi_ecosystem_groups()
+    assert MATURIN_PYO3_GROUP in groups, (
+        f"`multi-ecosystem-groups` must define {MATURIN_PYO3_GROUP!r}; "
+        f"got {sorted(groups)}"
+    )
+    group = _mapping(groups[MATURIN_PYO3_GROUP], "the group must be a mapping")
+    schedule = _mapping(group.get("schedule"), "the group must declare a `schedule`")
+    assert schedule.get("interval") == INTERVAL, (
+        f"the {MATURIN_PYO3_GROUP} group must run {INTERVAL!r}; "
+        f"got {schedule.get('interval')!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("ecosystem", "members"),
+    [pytest.param(*item, id=item[0]) for item in MATURIN_PYO3_MEMBERS.items()],
+)
+def test_each_half_of_the_extension_build_joins_the_group(
+    ecosystem: str, members: list[str]
+) -> None:
+    """Name the group and the member in the stanza, or the pair arrives split."""
+    stanza = dependabot_stanzas()[ecosystem]
+    assert stanza.get("multi-ecosystem-group") == MATURIN_PYO3_GROUP, (
+        f"the {ecosystem} stanza must join {MATURIN_PYO3_GROUP!r}; "
+        f"got {stanza.get('multi-ecosystem-group')!r}"
+    )
+    assert stanza.get("patterns") == members, (
+        f"the {ecosystem} stanza must offer exactly {members} to the group; "
+        f"got {stanza.get('patterns')!r}"
+    )
+
+
+def test_no_other_stanza_joins_a_multi_ecosystem_group() -> None:
+    """Keep the group to the two halves of the extension build."""
+    joined = {
+        ecosystem
+        for ecosystem, stanza in dependabot_stanzas().items()
+        if "multi-ecosystem-group" in stanza
+    }
+    assert joined == set(MATURIN_PYO3_MEMBERS), (
+        f"only {sorted(MATURIN_PYO3_MEMBERS)} may join {MATURIN_PYO3_GROUP!r}; "
+        f"got {sorted(joined)}"
+    )

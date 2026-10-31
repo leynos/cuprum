@@ -1069,6 +1069,17 @@ The `uv` stanza lists a `pylint-astroid` group (`pylint` and `astroid`, no
 supports, and `pyproject.toml` pins the two as one compatible pair, so a bump
 of either alone would break the other; the group moves them in one pull request.
 
+The `uv` and `cargo` stanzas also join the `maturin-pyo3` multi-ecosystem
+group, defined at the top of the file with its own daily schedule. The `uv`
+stanza offers `maturin` and the `cargo` stanza offers `pyo3`. maturin and PyO3
+are versioned independently yet build one extension, so a bump of either alone
+cannot be built against the other; the group makes the pair arrive in a single
+pull request, where one CI run builds them together. A group cannot choose
+compatible versions, so it coordinates the update without proving it.
+`.concordat` lists `rust/cuprum-rust/Cargo.toml` as a governed Rust surface so
+the Concordat `dependency-family-contracts` rule can see PyO3, which only that
+crate declares, and read this group as protecting the pair (DF-002).
+
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
 actions there would otherwise keep stale pins.
@@ -1078,8 +1089,11 @@ every composite action under `.github/actions`, at any depth, is reached by one
 of the stanza's directory globs. It also checks that each stanza lists exactly
 its expected directories, whether under `directory` or `directories`, that the
 primary directory holds the stanza's manifest, that each stanza carries its
-labels, and that each stanza bounds its open pull requests. A new ecosystem
-needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
+labels, and that each stanza bounds its open pull requests. It also checks that
+the `maturin-pyo3` group is defined with a daily schedule, that the `uv` and
+`cargo` stanzas each join it with exactly their member, and that no other
+stanza joins a multi-ecosystem group. A new ecosystem needs a new entry in
+`EXPECTED_STANZAS` as well as a stanza.
 
 ## Linux debug-build acceleration
 
