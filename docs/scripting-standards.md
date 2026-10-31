@@ -33,9 +33,10 @@ as a default.
   `#!/usr/bin/env -S uv run --script` followed by the metadata block shown in
   the example below. Running the script directly (for example, `./script.py`)
   follows that shebang, so `uv run --script` reads the PEP 723 metadata and
-  installs its declared dependencies before execution. By contrast,
-  `uv run python script.py` starts Python directly and does not consume the
-  script's metadata; use it only when dependencies are managed separately.
+  installs its declared dependencies before execution; `uv run script.py`
+  behaves the same way. Prefer those forms, because `uv run python script.py`
+  starts the interpreter directly and, as observed with uv 0.13.2, does not
+  install the script's inline dependencies.
 - External processes are invoked via
   [`cuprum` v0.2.0-beta2][cuprum-guide] to provide typed, allowlist-based
   command execution rather than ad‑hoc shell strings. Cuprum's catalogue system
@@ -267,8 +268,9 @@ with scoped(catalogue=CATALOGUE):
     assert result.stdout == "ok\n"
 ```
 
-Use `scoped(ScopeConfig(...))` only when the scope also needs hooks, a timeout,
-or environment settings:
+Use `scoped(ScopeConfig(...))` when the scope needs a custom allowlist without
+selecting a catalogue, or when it also needs hooks, a timeout, or environment
+settings:
 
 <!-- tested-example: scoped-scope-config -->
 
