@@ -501,13 +501,14 @@ here, because the run is already over.
 one `atexit` callback; the callback flushes each of `sys.stdout` and
 `sys.stderr`, and when — and only when — a flush raises `BrokenPipeError` it
 points that stream's descriptor at the null device, so the interpreter's own
-final flush succeeds harmlessly. A dead stream with no usable descriptor is
-replaced by a sink that discards writes. When the descriptor is redirected
-successfully the stream object keeps its identity, so later writes and
-`fileno()` calls still address the same stream; if the null device cannot be
-opened or duplicated, the stream is replaced by the same sink instead. A stream
-that is `None`, healthy, or deliberately closed (which raises `ValueError`
-rather than `BrokenPipeError`) is left untouched, and the callback never raises.
+final flush succeeds harmlessly. A dead stream with no usable descriptor —
+including a proxy that has no `fileno()` method at all — is replaced by a sink
+that discards writes. When the descriptor is redirected successfully the stream
+object keeps its identity, so later writes and `fileno()` calls still address
+the same stream; if the null device cannot be opened or duplicated, the stream
+is replaced by the same sink instead. A stream that is `None`, healthy, or
+deliberately closed (which raises `ValueError` rather than `BrokenPipeError`)
+is left untouched, and the callback never raises.
 
 The guard is opt-in and per process, and calling it more than once is harmless.
 Importing `cuprum` does not install it. `atexit` runs handlers in reverse
