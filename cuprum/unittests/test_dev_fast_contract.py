@@ -152,7 +152,9 @@ def test_the_fragment_carries_the_estate_fast_flags_on_linux() -> None:
     fragment = tomllib.loads((repo_root() / FRAGMENT).read_text(encoding="utf-8"))
     linux = fragment["target"]['cfg(target_os = "linux")']["rustflags"]
     assert "-Zthreads=8" in linux, "the Linux flags must carry the parallel frontend"
-    assert "-Clink-arg=-fuse-ld=mold" in linux, "the Linux flags must carry the linker flag"
+    assert "-Clink-arg=-fuse-ld=mold" in linux, (
+        "the Linux flags must carry the linker flag"
+    )
     assert fragment["profile"]["dev"]["codegen-backend"] == "cranelift", (
         "the fast path selects Cranelift for the dev profile only"
     )
