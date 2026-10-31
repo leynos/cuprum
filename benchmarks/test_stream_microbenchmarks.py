@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections.abc as cabc
 import os
 import sys
+import threading
 import typing as typ
 
 import pytest
@@ -18,9 +19,12 @@ from cuprum import (
     scoped,
     sh,
 )
+from cuprum.unittests._rust_stream_test_support import _safe_close
 from tests.helpers.parity import parity_catalogue
 
 if typ.TYPE_CHECKING:
+    from types import ModuleType
+
     from cuprum.sh import PipelineResult
 
 if os.environ.get("CUPRUM_RUN_BENCHMARKS") != "1":
@@ -34,6 +38,19 @@ type _PipelineResultBenchmark = cabc.Callable[
     PipelineResult,
 ]
 type _IntBenchmark = cabc.Callable[[cabc.Callable[[], int]], int]
+type _StrBenchmark = cabc.Callable[[cabc.Callable[[], str]], str]
+
+
+def _write_and_close(fd: int, payload: bytes) -> None:
+    """Write `payload` to `fd` and close the writer end."""
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            assert written > 0, "expected os.write to make progress"
+            view = view[written:]
+    finally:
+        _safe_close(fd)
 
 
 def _pump_pipeline(
@@ -119,4 +136,62 @@ def test_benchmark_consume_throughput(
     consumed = benchmark(run_once)
     assert consumed == payload_bytes, (
         f"expected {payload_bytes} consumed bytes, got {consumed}"
+    )
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
+@pytest.mark.benchmark(group="consume-invalid-utf8")
+@pytest.mark.parametrize(
+    "payload_bytes",
+    [64 * 1024, 256 * 1024, 1024 * 1024],
+    ids=["64KiB", "256KiB", "1MiB"],
+)
+def test_benchmark_consume_invalid_utf8(
+    benchmark: _StrBenchmark,
+    rust_streams: ModuleType,
+    payload_bytes: int,
+) -> None:
+    """Benchmark one buffered read of an all-invalid UTF-8 payload.
+
+    A large payload cannot be written to a pipe before the consumer starts
+    without blocking, so a writer thread feeds it while the extension reads.
+    The buffer size equals the payload size, so every read takes as much of the
+    malformed run as the kernel delivers at once: the shape that previously
+    triggered quadratic work. Each case asserts the decoded text still matches
+    Python's ``replace`` semantics, so the benchmark cannot silently measure a
+    decoder that returns the wrong answer quickly.
+    """
+    payload = b"\xff" * payload_bytes
+    expected = payload.decode("utf-8", errors="replace")
+
+    def run_once() -> str:
+        """Consume the payload once and return the decoded text."""
+        read_fd, write_fd = os.pipe()
+        try:
+            writer = threading.Thread(
+                target=_write_and_close,
+                args=(write_fd, payload),
+                daemon=True,
+            )
+            writer.start()
+            try:
+                return typ.cast(
+                    "str",
+                    rust_streams.rust_consume_stream(
+                        read_fd,
+                        buffer_size=payload_bytes,
+                    ),
+                )
+            finally:
+                writer.join()
+        finally:
+            _safe_close(read_fd)
+
+    output = benchmark(run_once)
+    assert output == expected, (
+        f"invalid UTF-8 payload of {payload_bytes} bytes must decode like "
+        "Python's replace semantics"
     )

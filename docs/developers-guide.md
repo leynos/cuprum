@@ -3819,6 +3819,11 @@ Run the pytest-benchmark microbenchmarks, which write
 make benchmark-micro
 ```
 
+Its `consume-invalid-utf8` group feeds 64 KiB, 256 KiB, and 1 MiB all-invalid
+payloads straight to `cuprum._streams_rs.rust_consume_stream`, with
+`buffer_size` equal to the payload size, so one decoded chunk exposes the shape
+that previously caused quadratic work.
+
 Run the hyperfine end-to-end throughput benchmarks, which write
 `dist/benchmarks/pipeline-throughput.json`:
 
@@ -5476,6 +5481,19 @@ that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
 vectors and chunk split points, then compare the decoded output with
 `String::from_utf8_lossy` as the oracle.
 
+The UTF-8 decoder does a bounded amount of work per byte in each buffered read:
+it scans with a moving offset, never re-validates bytes it has already
+consumed, and compacts only the at-most-three-byte incomplete tail. That
+matters because `rust_consume_stream` decodes lower-trust bytes, so a chunk of
+invalid UTF-8 is adversarial input rather than a programming error.
+`rust/cuprum-streams/src/utf8_scaling_tests.rs` guards the contract by
+comparing the minimum decode time for 32 KiB and 256 KiB malformed workloads;
+it is compiled out under Miri and Kani, where wall-clock measurement is
+meaningless. The all-invalid case in
+`benchmarks/test_stream_microbenchmarks.py` measures the same shape at 64 KiB,
+256 KiB, and 1 MiB with `buffer_size` equal to the payload size; it is opt-in
+with `CUPRUM_RUN_BENCHMARKS=1` and runs through `make benchmark-micro`.
+
 When a property fails, proptest writes the shrunk case to a seed file under
 `rust/cuprum-rust/proptest-regressions/`. Commit that file: it re-runs the
 failing case ahead of the generated ones, so the same regression cannot return
@@ -5505,11 +5523,13 @@ text diff rather than a boolean failure.
 
 These Rust-side cases are not the only coverage of these categories, and it is
 worth knowing why they carry the load. `TestRustConsumeStream` in
-`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust
-boundary tests over the same four inputs — ASCII, multibyte UTF-8 split across
-a read boundary, invalid UTF-8, and an incomplete trailing sequence — each case
-calls `rust_consume_stream` and compares the result against Python's own
-replacement decoding, `payload.decode("utf-8", errors="replace")`.
+`cuprum/unittests/test_rust_consume_stream.py` also defines Python/Rust
+boundary tests over named malformed vectors — overlong encodings, a surrogate,
+a scalar above U+10FFFF, lone continuation bytes, invalid runs, truncated 2-,
+3-, and 4-byte sequences at end of input, and valid 2-, 3-, and 4-byte scalars.
+Each vector is crossed with buffer sizes from one byte to 64 KiB and run twice;
+every case calls `rust_consume_stream` and compares the result against Python's
+own replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
 Those cases do now execute in CI — see
 [Building the extension for tests](#building-the-extension-for-tests) — but
@@ -5729,24 +5749,24 @@ follow-up once `#124` lands.
 
 Table 1: modules gated on the compiled extension
 
-| Module                                                  | Covers                                                                                                                                                               |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                     |
-| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
-| `test_rust_streams_boundary_property.py`                | the rejection boundary: invalid buffer sizes and descriptors                                                                                                         |
-| `test_rust_streams_roundtrip_property.py`               | randomized payloads over a real pipe, and that omitting `buffer_size` equals the explicit default                                                                    |
-| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                    |
-| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                            |
-| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                         |
-| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
-| `test_rust_errno_windows.py`                            | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                             |
-| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                      |
-| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
-| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                           |
-| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                       |
-| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                   |
-| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                               |
-| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                        |
+| Module                                                  | Covers                                                                                                                                                                           |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                                 |
+| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the malformed-vector and buffer-size matrix that is the end-to-end regression coverage for `#105` and the I/O-error boundary case |
+| `test_rust_streams_boundary_property.py`                | the rejection boundary: invalid buffer sizes and descriptors                                                                                                                     |
+| `test_rust_streams_roundtrip_property.py`               | randomized payloads over a real pipe, and that omitting `buffer_size` equals the explicit default                                                                                |
+| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                                |
+| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                                        |
+| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                                     |
+| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                                      |
+| `test_rust_errno_windows.py`                            | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                                         |
+| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                                  |
+| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                                       |
+| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                                       |
+| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                                   |
+| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                               |
+| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                                           |
+| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                                    |
 
 The behavioural modules are listed for the same reason as the unit ones: their
 extension-dependent scenarios skip in the ordinary test jobs, so they were

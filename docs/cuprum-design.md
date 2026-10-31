@@ -3866,31 +3866,32 @@ and incomplete trailing bytes are handled.
 
 ```mermaid
 flowchart TD
-    A[Start decode_utf8_replace] --> B[Attempt from_utf8 on pending]
-    B -->|Ok| C[Append entire valid string to output]
-    C --> D[Clear pending]
-    D --> E[Stop loop]
+    A[Start decode_utf8_replace] --> B[Set scan offset to zero]
+    B --> C[Attempt from_utf8 on pending from offset]
+    C -->|Ok| D[Append entire valid string to output]
+    D --> E[Clear pending]
+    E --> F[Stop]
 
-    B -->|Err Utf8Error| F[Get valid_up_to and error_len]
-    F --> G[append_valid_prefix using valid_up_to]
+    C -->|Err Utf8Error| G[Get valid_up_to and error_len]
+    G --> H[append_valid_prefix using valid_up_to]
 
-    G --> H{error_len is Some}
-    H -->|Yes| I[Push replacement char U+FFFD to output]
-    I --> J[Drain valid_up_to + error_len bytes from pending]
-    J --> K{pending is empty}
-    K -->|Yes| E
-    K -->|No| B
+    H --> I{error_len is Some}
+    I -->|Yes| J[Push replacement char U+FFFD to output]
+    J --> K[Advance offset by valid_up_to + error_len]
+    K --> L{offset reached end of pending}
+    L -->|Yes| E
+    L -->|No| C
 
-    H -->|No| L[Handle incomplete sequence]
-    L --> M{final_chunk is true}
-    M -->|Yes| N[Push replacement char U+FFFD]
-    N --> O[Clear pending]
-    O --> E
+    I -->|No| M[Note incomplete sequence at offset + valid_up_to]
+    M --> N{final_chunk is true}
+    N -->|Yes| O[Push replacement char U+FFFD]
+    O --> P[Clear pending]
+    P --> F
 
-    M -->|No| P{valid_up_to > 0}
-    P -->|Yes| Q[Drain valid_up_to bytes from pending]
-    Q --> E
-    P -->|No| E
+    N -->|No| Q{incomplete tail starts after offset}
+    Q -->|Yes| R[Drain the consumed prefix once, keep the tail]
+    R --> F
+    Q -->|No| F
 ```
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
