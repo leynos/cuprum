@@ -8,13 +8,13 @@ cancellation that lands before the spawn, one that lands in the yield after the
 transfer, a failure while building the receipt, and the ordinary launch that
 succeeds.
 
-The remaining cases are about what the caller inherits. A receipt is returned
-even when the worker exits at once, because a receipt reports a successful
-``exec`` and nothing more. Dropping cuprum's process object must leave the
-worker running, without a ``ResourceWarning`` and without waiting on it at
-interpreter shutdown. And the abandonment path itself — kill the group, reap
-the worker — is exercised against a real child, so the safety net closing the
-earlier cases is not taken on trust.
+The remaining cases are about what the caller inherits: a receipt is returned
+even when the worker exits at once, because it reports a successful ``exec`` and
+nothing more; dropping cuprum's process object leaves the worker running without
+a ``ResourceWarning``; and the abandonment path itself is exercised against a
+real child. Two cases reach past the receipt to the spawn: one interrupts
+``Popen``'s constructor after the fork, the other cancels a real launch at the
+transfer boundary, so the cancellation route is proved on a worker too.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import warnings
 
 import pytest
 
-from cuprum import ScopeConfig, _detached_launch, scoped
+from cuprum import ScopeConfig, _detached_launch, _detached_spawn, scoped
 from cuprum._detached_launch import _abandon_detached
 from cuprum._detached_spawn import _DetachedPopen, _spawn_detached
 from cuprum.context import bind_executable
@@ -98,6 +98,26 @@ def _open_descriptor_count() -> int:
     return sum(1 for _ in _FD_DIRECTORY.iterdir())
 
 
+class _InterruptedPopen(_DetachedPopen):
+    """A process object interrupted after its child exists, as a signal handler does.
+
+    ``Popen`` has forked and closed its descriptors, then propagates without
+    terminating the child or handing back an object.
+    """
+
+    created: typ.ClassVar[list[int]] = []
+
+    def __init__(self, argv: cabc.Sequence[str], **kwargs: object) -> None:
+        """Spawn a real child, record its PID, and fail like an interrupted wait."""
+        # ``kwargs`` are the spawn's own keywords, forwarded unchanged so this
+        # double keeps mirroring whatever ``_spawn_detached`` passes.
+        spawn_keywords = typ.cast("dict[str, typ.Any]", kwargs)
+        super().__init__(argv, **spawn_keywords)
+        type(self).created.append(self.pid)
+        message = "interrupted while waiting for the exec report"
+        raise KeyboardInterrupt(message)
+
+
 def test_a_task_cancelled_before_it_runs_creates_no_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,6 +178,59 @@ def test_a_cancellation_requested_during_the_launch_stops_the_worker(
 
     assert spawned == [FAKE_PID], "the launch must reach the spawn exactly once"
     assert abandoned == [FAKE_PID], "the orphaned worker must be stopped"
+
+
+def test_a_cancellation_at_the_transfer_boundary_reclaims_a_real_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real cancellation route stops and reaps the child it orphaned.
+
+    The spawn double in the previous case proves the decision; this case proves
+    the consequence, driving a real worker through the same boundary so the
+    process group is actually signalled and the child actually reaped.
+    """
+    reclaimed: list[int] = []
+    real_abandon = _detached_launch._abandon_detached
+
+    def recording_abandon(pid: int) -> None:
+        """Record the PID, then run the real kill-and-reap."""
+        reclaimed.append(pid)
+        real_abandon(pid)
+
+    monkeypatch.setattr(_detached_launch, "_abandon_detached", recording_abandon)
+    builder, program = _interpreter()
+    command = builder("-c", _SLEEP_SOURCE)
+
+    async def run() -> None:
+        """Cancel the launch once it has spawned but before it returns."""
+        with scoped(ScopeConfig(allowlist=frozenset({program}))):
+            task = asyncio.create_task(command.launch_detached())
+            asyncio.get_running_loop().call_soon(task.cancel)
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(run())
+
+    [pid] = reclaimed
+    assert not _is_running(pid), "the cancelled launch must stop its worker"
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
+
+
+def test_an_interrupted_spawn_reclaims_the_child_it_created(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A constructor that fails after the fork must not leave a child running."""
+    _InterruptedPopen.created.clear()
+    monkeypatch.setattr(_detached_spawn, "_DetachedPopen", _InterruptedPopen)
+
+    with pytest.raises(KeyboardInterrupt):
+        _spawn_sleeper()
+
+    [pid] = _InterruptedPopen.created
+    assert not _is_running(pid), "the interrupted spawn must stop its child"
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
 
 
 def test_a_failure_while_building_the_receipt_stops_the_spawned_worker(

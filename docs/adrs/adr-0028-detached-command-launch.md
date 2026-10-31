@@ -84,10 +84,11 @@ managed run would — `_enforce_allowlist`, `_resolve_executable_for`, and
 `_spawn_detached` uses `_DetachedPopen`, a `subprocess.Popen` subclass whose
 only override is a no-op `__del__`. Spawning, the error-pipe report that turns
 a failed exec into an exception, and parent-side descriptor close stay
-`Popen`'s. The finalizer is removed because `Popen.__del__` reports a
-still-running child as a `ResourceWarning` and enrols the object in
-`subprocess._active`, which waits for the child at interpreter shutdown. Both
-behaviours assume ownership that, by then, the launch has given away.
+`Popen`'s. The finalizer is removed because `Popen.__del__` assumes the object
+still owns its child: it reports a still-running child as a `ResourceWarning`,
+polls the child and reaps it if it has already exited, and appends the object to
+`subprocess._active`, where a later `Popen` construction polls it again. Each
+acts on ownership that, by then, the launch has given away.
 
 The child is started with `stdin`, `stdout`, and `stderr` on
 `subprocess.DEVNULL`, `close_fds=True`, and the `start_new_session` keyword
@@ -109,6 +110,18 @@ kills its group with `_abandon_detached` before re-raising. The same
 abandonment covers a failure while the receipt is being constructed. The caller
 therefore either holds a receipt or has no child, and can never hold a receipt
 for a worker cuprum has already stopped.
+
+One failure window lies outside that guard: `Popen.__init__` can raise after
+the fork and before it returns — a `KeyboardInterrupt` delivered during its
+wait for the exec-status pipe is the realistic case — leaving a running child
+and no process object for the caller. `Popen`'s own error path closes its
+descriptors but does not terminate that child. `_spawn_detached` therefore
+constructs the object in two steps and keeps the reference when construction
+fails, then reclaims the child before re-raising. It first confirms the child
+is still an unreaped child of this process, so an ordinary exec failure that
+`Popen` already reaped is never signalled again through a possibly reused PID.
+A live child is signalled through its process group once `setsid` has run, and
+through the child itself when the session has not been created yet.
 
 After the transfer Cuprum keeps nothing: no process object, no transport, no
 stream consumer, no task, and no registration. The process object is dropped
