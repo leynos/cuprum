@@ -1075,10 +1075,10 @@ stanza offers `maturin` and the `cargo` stanza offers `pyo3`. maturin and PyO3
 are versioned independently yet build one extension, so a bump of either alone
 cannot be built against the other; the group makes the pair arrive in a single
 pull request, where one CI run builds them together. A group cannot choose
-compatible versions, so it coordinates the update without proving it.
-`.concordat` lists `rust/cuprum-rust/Cargo.toml` as a governed Rust surface so
-the Concordat `dependency-family-contracts` rule can see PyO3, which only that
-crate declares, and read this group as protecting the pair (DF-002).
+compatible versions, so it coordinates the update without proving it. The
+Concordat `dependency-family-contracts` rule reads PyO3, which only the
+`cuprum-rust` workspace member declares, through the governed `rust/Cargo.toml`
+workspace root, and reads this group as protecting the pair (DF-002).
 
 The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
 Dependabot does not descend from `/` into `.github/actions`, and the composite
