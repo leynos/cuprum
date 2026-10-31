@@ -86,6 +86,12 @@ class _ProxyReturningNoDescriptor(_DeadProxy):
         """Return no descriptor at all."""
 
 
+class _ProxyWithNonCallableFileno(_DeadProxy):
+    """A dead proxy whose ``fileno`` attribute is not callable."""
+
+    fileno = None
+
+
 class _RecordingAtexit:
     """A stand-in for the ``atexit`` module that records registrations."""
 
@@ -250,6 +256,20 @@ def test_dead_stream_reporting_no_descriptor_is_replaced(
 
     assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
         "a proxy with no descriptor value must be replaced by the null sink"
+    )
+
+
+def test_proxy_with_non_callable_fileno_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``fileno`` attribute that is not callable is a descriptor failure."""
+    monkeypatch.setattr(sys, "stdout", _ProxyWithNonCallableFileno())
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+
+    exit_status_guard._guard_standard_streams()
+
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+        "a proxy with a non-callable fileno must be replaced by the null sink"
     )
 
 

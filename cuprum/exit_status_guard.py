@@ -66,6 +66,19 @@ _STANDARD_STREAM_NAMES: typ.Final = ("stdout", "stderr")
 _install_lock = threading.Lock()
 _is_installed = False
 
+# Every way a proxy can decline a descriptor: no ``fileno`` attribute at all,
+# a descriptorless stream, an attribute that is not callable, a proxy that
+# reports itself closed, and a descriptor number the kernel rejects. The hook
+# has already seen a broken pipe, so each of these means "cannot redirect"
+# rather than a defect to report.
+_DESCRIPTOR_FAILURES: typ.Final = (
+    AttributeError,
+    OSError,
+    OverflowError,
+    TypeError,
+    ValueError,
+)
+
 
 def install_exit_status_guard() -> None:
     """Install a process-level guard that preserves the exit status.
@@ -127,15 +140,16 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
     A stream with no usable descriptor cannot be redirected, and CPython will
     still flush it during finalization, so it is replaced with a sink that
     cannot fail. "No usable descriptor" covers every way a proxy can decline
-    one: no ``fileno`` method at all (``AttributeError``), a descriptorless
-    stream (``OSError``), a proxy that reports itself closed (``ValueError``),
-    and a ``fileno`` whose result ``os.dup2`` rejects (``TypeError``). A
-    fallback replacement keeps the same promise when opening or duplicating
+    one: no ``fileno`` attribute (``AttributeError``), an attribute that is
+    not callable (``TypeError``), a descriptorless or closed proxy
+    (``OSError`` or ``ValueError``), a descriptor number the kernel rejects
+    (``OverflowError``), and a ``fileno`` whose result ``os.dup2`` refuses.
+    A fallback replacement keeps the same promise when opening or duplicating
     the null device fails.
     """
     try:
         descriptor = stream.fileno()
-    except (AttributeError, OSError, ValueError):
+    except _DESCRIPTOR_FAILURES:
         setattr(sys, name, _NullTextSink())
         return
     try:
@@ -144,7 +158,7 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
             os.dup2(null_descriptor, descriptor)
         finally:
             os.close(null_descriptor)
-    except (OSError, TypeError):
+    except _DESCRIPTOR_FAILURES:
         setattr(sys, name, _NullTextSink())
 
 
