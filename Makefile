@@ -51,7 +51,7 @@ DEV_FAST_HOST_IS_LINUX := $(if $(filter Linux,$(shell uname -s)),yes)
 DEV_FAST_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) $(CARGO) --config $(DEV_FAST_RUST_CONFIG)
 MSRV_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(MSRV_TOOLCHAIN) $(CARGO)
 override MODERN_STABLE_ENV = env -u RUSTC -u CARGO_ENCODED_RUSTFLAGS \
-	-u CARGO_BUILD_WARNINGS \
+	-u CARGO_ENCODED_RUSTDOCFLAGS -u CARGO_BUILD_WARNINGS \
 	RUSTUP_TOOLCHAIN=$(MODERN_STABLE_TOOLCHAIN) CARGO=$(CARGO) \
 	CARGO_TARGET_DIR=$(MODERN_STABLE_TARGET_DIR) \
 	RUSTFLAGS="$(MODERN_STABLE_RUSTFLAGS)"
@@ -62,7 +62,7 @@ override MODERN_STABLE_TOOLCHAIN_CHECK_COMMAND = \
 	components="$$(rustup component list --installed --toolchain "$(MODERN_STABLE_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
 	printf '%s\n' "$$components" | grep -q '^clippy' || { printf 'install clippy for %s before using modern-stable\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
 	rustc_output="$$(rustup run "$(MODERN_STABLE_TOOLCHAIN)" rustc -vV)" || { printf 'cannot run rustc with %s\n' "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
-	cargo_output="$$(RUSTUP_TOOLCHAIN=$(MODERN_STABLE_TOOLCHAIN) $(CARGO) +$(MODERN_STABLE_TOOLCHAIN) -V)" || { printf 'CARGO=%s does not honour rustup toolchain selection for %s\n' "$(CARGO)" "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
+	cargo_output="$$(env -u RUSTC RUSTUP_TOOLCHAIN=$(MODERN_STABLE_TOOLCHAIN) $(CARGO) -V)" || { printf 'CARGO=%s does not honour rustup toolchain selection for %s\n' "$(CARGO)" "$(MODERN_STABLE_TOOLCHAIN)" >&2; exit 1; }; \
 	rustc_release="$$(printf '%s\n' "$$rustc_output" | sed -n 's/^release: //p')"; \
 	case "$$rustc_release" in "$(MODERN_STABLE_TOOLCHAIN)") ;; *) printf 'expected rustc %s, got %s\n' "$(MODERN_STABLE_TOOLCHAIN)" "$$rustc_release" >&2; exit 1 ;; esac; \
 	case "$$cargo_output" in "cargo $(MODERN_STABLE_TOOLCHAIN) "*) ;; *) printf 'CARGO=%s does not honour rustup toolchain selection for %s (got: %s)\n' "$(CARGO)" "$(MODERN_STABLE_TOOLCHAIN)" "$$cargo_output" >&2; exit 1 ;; esac; \

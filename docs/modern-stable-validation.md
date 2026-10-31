@@ -79,7 +79,9 @@ replace explicit manifest lint levels. `rust/Cargo.toml` retains its
 baseline, workspace lint level, or source compatibility declaration is relaxed.
 
 Rustdoc and doctests keep their own warning controls. The modern route uses
-`RUSTDOC_FLAGS` for both; it does not send the nightly-only
+`RUSTDOC_FLAGS` for both and clears any ambient `CARGO_ENCODED_RUSTDOCFLAGS`
+first, because Cargo gives that variable precedence over `RUSTDOCFLAGS`; it
+does not send the nightly-only
 `DOCTEST_RUSTDOC_FLAGS` to stable Rust. The existing nightly doctest route
 retains those flags. On stable, `RUSTDOC_FLAGS` denies rustdoc lints only: it
 does not make a compiler warning raised while compiling a doctest fatal, because

@@ -1229,7 +1229,12 @@ tests, documentation, and doctests in that order.
 through Maturin, and runs the existing extension-gated suite.
 `make modern-stable` runs those two aggregates sequentially. Cargo work uses
 the dedicated `rust/target/modern-stable` directory and `--locked`; the route
-retains `-C codegen-units=1` as its only Rust compiler flag.
+retains `-C codegen-units=1` as its only Rust compiler flag. Each command
+starts from an environment with `RUSTC`, `CARGO_ENCODED_RUSTFLAGS`,
+`CARGO_ENCODED_RUSTDOCFLAGS`, and `CARGO_BUILD_WARNINGS` removed, so ambient
+caller settings cannot replace the route's compiler, rustdoc flags, or warning
+policy. The toolchain guard selects Cargo through `RUSTUP_TOOLCHAIN` alone,
+which is the same mechanism the recipes use.
 
 The check, Clippy, test, and Maturin routes use `CARGO_BUILD_WARNINGS=deny` on
 Cargo 1.97 or later. Cargo applies that setting to warnings from local
