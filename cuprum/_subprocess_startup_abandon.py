@@ -160,15 +160,35 @@ async def _release_pipes(
     if stdin is not None and not stdin.is_closing():
         with contextlib.suppress(Exception):
             await _close_stdin(process, stdin, execution.observation)
-    for stream in (process.stdout, process.stderr):
-        if stream is not None:
-            # Suppressed per stream, so a read that fails or a grace that
-            # expires still leaves the other stream its turn and the close
-            # below its chance to release both descriptors.
-            with contextlib.suppress(Exception):
-                async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
-                    await _discard_to_eof(stream)
+    # Suppressed here rather than inside, so a read that fails or a grace that
+    # expires still leaves the close below its chance to release both
+    # descriptors.
+    with contextlib.suppress(Exception):
+        await _discard_outputs(process)
     await _release_output_transports(process)
+
+
+async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
+    """Discard both output streams within the capture drain's single grace.
+
+    One window covers both readers, as it does in the drain itself
+    (:func:`cuprum._stream_drain._await_eof_grace`), so two pipes kept open by
+    a descendant cost one grace rather than one each — which is what the
+    documented bound promises. Each read is still settled on its own:
+    ``return_exceptions=True`` keeps a failure on one stream from cancelling
+    the other, and a grace that expires reaches the caller as a ``TimeoutError``
+    to suppress.
+    """
+    streams = tuple(
+        stream for stream in (process.stdout, process.stderr) if stream is not None
+    )
+    if not streams:
+        return
+    async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
+        await asyncio.gather(
+            *(_discard_to_eof(stream) for stream in streams),
+            return_exceptions=True,
+        )
 
 
 async def _release_output_transports(

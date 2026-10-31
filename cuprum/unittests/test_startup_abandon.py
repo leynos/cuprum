@@ -15,7 +15,10 @@ result that would have carried the spill handle, so the accumulator is the last
 reference to a temporary file the library created and is therefore responsible
 for. The descriptors matter because a descendant that inherited an output pipe
 can outlive the child and keep it from ever reaching end-of-file, and reaping
-the direct child closes nothing of the parent's.
+the direct child closes nothing of the parent's. A further case pins the bound
+those discards share — one grace for both streams, as the capture drain gives
+them — with two stalled readers rather than a child, because the number of
+windows is what that case reads.
 """
 
 from __future__ import annotations
@@ -23,14 +26,21 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+import types
 import typing as typ
+
+import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._pipeline_stream_fds import _extract_stream_fd
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._stdio_plan import _resolve_stdio
+from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
 from cuprum._subprocess_execution import _SubprocessExecution
-from cuprum._subprocess_startup_abandon import _abandon_started_process
+from cuprum._subprocess_startup_abandon import (
+    _abandon_started_process,
+    _discard_outputs,
+)
 from cuprum._subprocess_streams import _prepare_stream_spawn
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.sh import ExecutionContext, RunOutputOptions
@@ -308,5 +318,53 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
                 )
         finally:
             _kill_descendant(_recorded_pid(pid_file))
+
+    asyncio.run(run_case())
+
+
+class _StalledReader:
+    """A stream whose read never completes, as a pipe a descendant holds open."""
+
+    def __init__(self, entered: list[str], name: str) -> None:
+        self._entered = entered
+        self._name = name
+
+    async def read(self, _size: int) -> bytes:
+        """Record that this read was entered, then wait to be cancelled."""
+        self._entered.append(self._name)
+        await asyncio.Event().wait()
+        raise AssertionError("a stalled read must be cancelled, never resumed")
+
+
+def test_both_outputs_share_one_end_of_file_grace() -> None:
+    """A stalled pair must cost one grace, not one grace per stream.
+
+    Both reads are entered inside the same window, so the grace that ends one
+    also ends the other. A sequential discard would enter the second only after
+    the first returned — which two held-open pipes never let it do — and would
+    then spend a second grace timing it out, contradicting the single bound the
+    capture drain gives its own readers and the users' guide states.
+    """
+
+    async def run_case() -> None:
+        entered: list[str] = []
+        pipes = types.SimpleNamespace(
+            stdout=_StalledReader(entered, "stdout"),
+            stderr=_StalledReader(entered, "stderr"),
+        )
+        process = typ.cast("asyncio.subprocess.Process", pipes)
+        started_at = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await _discard_outputs(process)
+        elapsed = time.monotonic() - started_at
+
+        assert entered == ["stdout", "stderr"], (
+            "both reads must be entered inside the one grace; a sequential "
+            "discard would never reach the second stream"
+        )
+        assert elapsed < _CAPTURE_EOF_GRACE_S * 2, (
+            f"the discard took {elapsed:.3f}s; a stalled pair must be bounded "
+            "by one grace, not one per stream"
+        )
 
     asyncio.run(run_case())
