@@ -310,6 +310,43 @@ def test_encode_prefix_omits_a_pending_multibyte_tail() -> None:
     assert encoded == b"ab", f"the encoding must match the prefix, got={encoded!r}"
 
 
+_TEXT_ENCODINGS = ("utf-8", "shift_jis", "latin-1", "ascii")
+_ERROR_POLICIES = ("strict", "replace", "ignore")
+
+
+@given(
+    line=st.binary(max_size=200),
+    budget=st.integers(min_value=0, max_value=200),
+    encoding=st.sampled_from(_TEXT_ENCODINGS),
+    errors=st.sampled_from(_ERROR_POLICIES),
+)
+def test_text_sink_prefix_is_bounded_and_on_a_character_boundary(
+    line: bytes,
+    budget: int,
+    encoding: str,
+    errors: str,
+) -> None:
+    """A text-sink prefix fits its budget and encodes whole retained characters."""
+    retained, encoded = _encode_prefix(
+        line,
+        budget=budget,
+        settings=_EchoEncoding(encoding, errors, is_text_sink=True),
+    )
+
+    assert len(encoded) <= budget, (
+        f"{encoding}/{errors} emitted {len(encoded)} bytes for budget {budget}"
+    )
+    assert line.startswith(retained), (
+        f"the retained source must be a prefix of the line, got={retained!r}"
+    )
+    # Re-encoding the retained text with a whole-string codec is an independent
+    # oracle for the incremental scan, including lenient invalid-byte handling.
+    assert encoded == retained.decode(encoding, errors).encode(encoding, errors), (
+        f"{encoding}/{errors} echoed bytes must encode the retained source text, "
+        f"got={encoded!r} for retained={retained!r}"
+    )
+
+
 def test_final_unterminated_line_includes_its_marker_in_the_bound() -> None:
     """EOF finalization applies the same inclusive byte limit without an ending."""
     finished = _finish(b"x" * 80, bound=40, options=_FinishOptions(ending=b""))
