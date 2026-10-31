@@ -81,13 +81,12 @@ baseline, workspace lint level, or source compatibility declaration is relaxed.
 Rustdoc and doctests keep their own warning controls. The modern route uses
 `RUSTDOC_FLAGS` for both and clears any ambient `CARGO_ENCODED_RUSTDOCFLAGS`
 first, because Cargo gives that variable precedence over `RUSTDOCFLAGS`; it
-does not send the nightly-only
-`DOCTEST_RUSTDOC_FLAGS` to stable Rust. The existing nightly doctest route
-retains those flags. On stable, `RUSTDOC_FLAGS` denies rustdoc lints only: it
-does not make a compiler warning raised while compiling a doctest fatal, because
-`--doctest-build-arg` is unstable and this route omits `-Zunstable-options`.
-The probe's Rustdoc result is recorded as an observation, not a Rustdoc
-migration claim.
+does not send the nightly-only `DOCTEST_RUSTDOC_FLAGS` to stable Rust. The
+existing nightly doctest route retains those flags. On stable, `RUSTDOC_FLAGS`
+denies rustdoc lints only: it does not make a compiler warning raised while
+compiling a doctest fatal, because `--doctest-build-arg` is unstable and this
+route omits `-Zunstable-options`. The probe's Rustdoc result is recorded as an
+observation, not a Rustdoc migration claim.
 
 The wheel action's existing `toolchain: stable` selection is outside this route
 and remains unchanged. The separate Maturin `build-backend` packaging
