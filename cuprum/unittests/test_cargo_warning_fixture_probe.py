@@ -19,6 +19,8 @@ from tests.helpers.cargo_warning_fixture import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from tests.helpers import cargo_warning_fixture as fixture
 
 TOOLCHAIN = "9.9.9"
@@ -37,7 +39,9 @@ def _locate(name: str) -> str | None:
 def _probe(*, rustc: str, cargo: str, clippy: bool) -> fixture.Probe:
     """Build a probe that answers each toolchain query from fixed facts."""
 
-    def probe(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def probe(
+        argv: list[str], _env: cabc.Mapping[str, str] | None
+    ) -> subprocess.CompletedProcess[str]:
         """Answer one toolchain query from the fixed facts."""
         if "run" in argv:
             return _process(f"rustc {rustc} (fixture)\n")
@@ -73,42 +77,51 @@ def test_each_requirement_decides_availability(
         probe=_probe(rustc=rustc, cargo=cargo, clippy=clippy),
         locate=_locate,
     )
-    assert is_available is is_expected
+    assert is_available is is_expected, (
+        f"availability for rustc={rustc}, cargo={cargo}, clippy={clippy}"
+    )
 
 
 def test_a_missing_executable_is_unavailable_without_probing() -> None:
     """Report absence without starting a probe for an executable not found."""
 
-    def forbidden(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def forbidden(
+        argv: list[str], env: cabc.Mapping[str, str] | None
+    ) -> subprocess.CompletedProcess[str]:
         """Fail the test if the query starts any probe at all."""
-        message = f"no probe should run: {argv}"
+        message = f"no probe should run: {argv} with {env}"
         raise AssertionError(message)
 
-    assert not toolchain_available(probe=forbidden, locate=lambda name: None)
+    is_available = toolchain_available(probe=forbidden, locate=lambda name: None)
+    assert not is_available, "an absent executable must report unavailability"
 
 
 def test_a_probe_that_gives_no_answer_is_unavailable() -> None:
     """Count a silent probe as unavailable so a loaded host skips, not errors."""
-    assert not toolchain_available(probe=lambda argv: None, locate=_locate)
+    is_available = toolchain_available(probe=lambda argv, env: None, locate=_locate)
+    assert not is_available, "a probe that never answered must be unavailable"
 
 
-def test_the_query_probes_the_toolchain_it_is_given() -> None:
-    """Carry the explicit toolchain into every probe the query issues."""
-    seen: list[list[str]] = []
+def test_the_query_selects_the_toolchain_it_is_given() -> None:
+    """Select Cargo through the environment and rustup through its arguments."""
+    seen: list[tuple[list[str], cabc.Mapping[str, str] | None]] = []
 
-    def probe(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        """Record each argument vector and answer as the named toolchain."""
-        seen.append(argv)
+    def probe(
+        argv: list[str], env: cabc.Mapping[str, str] | None
+    ) -> subprocess.CompletedProcess[str]:
+        """Record each query and its environment, and answer as available."""
+        seen.append((argv, env))
         if "run" in argv:
             return _process(f"rustc {TOOLCHAIN} (fixture)\n")
         if argv[-1] == "-V":
             return _process(f"cargo {TOOLCHAIN} (fixture)\n")
         return _process("clippy-x86_64-unknown-linux-gnu\n")
 
-    assert toolchain_available(toolchain=TOOLCHAIN, probe=probe, locate=_locate)
-    assert seen == [
+    is_available = toolchain_available(toolchain=TOOLCHAIN, probe=probe, locate=_locate)
+    assert is_available, "a complete toolchain must report availability"
+    assert [argv for argv, _env in seen] == [
         ["/fixture/rustup", "run", TOOLCHAIN, "rustc", "-V"],
-        ["/fixture/cargo", f"+{TOOLCHAIN}", "-V"],
+        ["/fixture/cargo", "-V"],
         [
             "/fixture/rustup",
             "component",
@@ -117,7 +130,13 @@ def test_the_query_probes_the_toolchain_it_is_given() -> None:
             "--toolchain",
             TOOLCHAIN,
         ],
-    ], "every probe must select the toolchain the caller passed"
+    ], "each probe must address the toolchain the caller passed"
+    assert [env for argv, env in seen if argv[0] == "/fixture/cargo"] == [
+        {"RUSTUP_TOOLCHAIN": TOOLCHAIN}
+    ], "Cargo must be selected through RUSTUP_TOOLCHAIN, not a +toolchain argument"
+    assert all(env is None for argv, env in seen if argv[0] == "/fixture/rustup"), (
+        "the rustup probes already name the toolchain, so they inherit the environment"
+    )
 
 
 def test_a_probe_that_cannot_run_is_an_environment_fault() -> None:

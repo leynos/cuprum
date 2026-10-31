@@ -67,8 +67,12 @@ CARGO_COMMAND_TIMEOUT_SECONDS = 1800
 PROBE_TIMEOUT_SECONDS = 60
 
 
-#: Runs one fixed toolchain probe, returning ``None`` when it gave no answer.
-type Probe = cabc.Callable[[list[str]], subprocess.CompletedProcess[str] | None]
+#: Runs one fixed toolchain probe under optional extra environment entries,
+#: returning ``None`` when it gave no answer.
+type Probe = cabc.Callable[
+    [list[str], cabc.Mapping[str, str] | None],
+    subprocess.CompletedProcess[str] | None,
+]
 #: Resolves an executable name to its path, or to ``None`` when it is absent.
 type Locator = cabc.Callable[[str], str | None]
 
@@ -77,14 +81,17 @@ class ToolchainProbeError(RuntimeError):
     """Raised when a toolchain probe could not be started at all."""
 
 
-def _probe(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
+def _probe(
+    argv: list[str], env: cabc.Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str] | None:
     """Run one fixed toolchain probe, or report that it gave no answer.
 
     A probe that outlived `PROBE_TIMEOUT_SECONDS` is reported as no answer,
     because a loaded host can delay a working toolchain past any fixed bound;
     counting that as absence keeps the contract skipping instead of erroring.
-    A probe that cannot be started is a different fault: the executable was
-    located, so the environment, not the toolchain, is broken.
+    `env` adds entries to this child's environment. A probe that cannot be
+    started is a different fault: the executable was located, so the
+    environment, not the toolchain, is broken.
 
     Returns
     -------
@@ -96,11 +103,13 @@ def _probe(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
     ToolchainProbeError
         If the probe could not be started.
     """
+    child_env = None if env is None else {**os.environ, **env}
     try:
         return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed toolchain probe.
             argv,
             capture_output=True,
             check=False,
+            env=child_env,
             timeout=PROBE_TIMEOUT_SECONDS,
             text=True,
         )
@@ -145,8 +154,8 @@ def toolchain_available(
         Toolchain the probe must reach, passed explicitly so the query never
         reads a selection from the ambient environment.
     probe : Probe
-        Adapter that runs one fixed argument vector. It reports ``None`` when
-        the child gave no answer, and raises only when it cannot be started.
+        Adapter running one fixed argument vector under optional environment
+        entries; it reports no answer as ``None`` and raises only on start failure.
     locate : collections.abc.Callable[[str], str | None]
         Resolver for executable names, injected so the query does not have to
         read `PATH` itself.
@@ -158,6 +167,10 @@ def toolchain_available(
 
     Notes
     -----
+    Cargo is selected through ``RUSTUP_TOOLCHAIN``, not a ``+toolchain``
+    argument, because the ``+`` form is a rustup proxy feature that a direct
+    Cargo binary ignores; the Make route uses the same mechanism.
+
     A probe that gave no answer counts as unavailable, so a loaded host skips
     the contract rather than failing it. A probe that could not be started
     propagates :class:`ToolchainProbeError`; that fault is the environment's,
@@ -167,21 +180,23 @@ def toolchain_available(
     cargo = locate("cargo")
     if rustup is None or cargo is None:
         return False
+    rustc_query = [rustup, "run", toolchain, "rustc", "-V"]
+    clippy_query = [
+        rustup,
+        "component",
+        "list",
+        "--installed",
+        "--toolchain",
+        toolchain,
+    ]
     return (
-        _reports_version(
-            probe([rustup, "run", toolchain, "rustc", "-V"]), "rustc", toolchain
+        _reports_version(probe(rustc_query, None), "rustc", toolchain)
+        and _reports_version(
+            probe([cargo, "-V"], {"RUSTUP_TOOLCHAIN": toolchain}),
+            "cargo",
+            toolchain,
         )
-        and _reports_version(probe([cargo, f"+{toolchain}", "-V"]), "cargo", toolchain)
-        and _reports_clippy(
-            probe([
-                rustup,
-                "component",
-                "list",
-                "--installed",
-                "--toolchain",
-                toolchain,
-            ])
-        )
+        and _reports_clippy(probe(clippy_query, None))
     )
 
 
