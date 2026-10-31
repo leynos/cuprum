@@ -38,6 +38,14 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import DetachedLaunch, SafeCmd
 
+#: Every case that reaches the launch resolves the session policy before the
+#: spawn, so it needs POSIX process groups. The platform-refusal case is
+#: deliberately left unmarked: it is the one that must run everywhere.
+_requires_posix = pytest.mark.skipif(
+    os.name != "posix",
+    reason="a detached launch requires POSIX session isolation",
+)
+
 
 def _command(*argv: str) -> tuple[SafeCmd, Program, ProgramCatalogue]:
     """Build an allowlisted Python command and the scope it needs."""
@@ -56,6 +64,7 @@ def _launch_in_scope(
         return command.launch_detached_sync(context=context)
 
 
+@_requires_posix
 def test_the_receipt_names_the_process_the_spawn_reported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -71,6 +80,7 @@ def test_the_receipt_names_the_process_the_spawn_reported(
     assert receipt.executable == str(program)
 
 
+@_requires_posix
 def test_the_spawn_receives_the_catalogued_argv_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -84,6 +94,7 @@ def test_the_spawn_receives_the_catalogued_argv_unchanged(
     assert calls[0].argv == (str(program), *arguments)
 
 
+@_requires_posix
 def test_the_child_is_spawned_as_a_session_leader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -96,6 +107,7 @@ def test_the_child_is_spawned_as_a_session_leader(
     assert calls[0].start_new_session is True
 
 
+@_requires_posix
 def test_the_context_environment_overlay_reaches_the_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -115,6 +127,7 @@ def test_the_context_environment_overlay_reaches_the_spawn(
     assert env["PATH"] == os.environ["PATH"]
 
 
+@_requires_posix
 def test_replace_mode_starts_the_child_from_an_empty_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -131,6 +144,7 @@ def test_replace_mode_starts_the_child_from_an_empty_environment(
     assert calls[0].env == {"CUPRUM_ONLY": "1"}
 
 
+@_requires_posix
 def test_an_unset_entry_removes_a_variable_from_the_child_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -150,6 +164,7 @@ def test_an_unset_entry_removes_a_variable_from_the_child_environment(
     assert "PATH" in os.environ
 
 
+@_requires_posix
 def test_the_context_working_directory_reaches_the_spawn(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -163,6 +178,7 @@ def test_the_context_working_directory_reaches_the_spawn(
     assert calls[0].cwd == str(tmp_path)
 
 
+@_requires_posix
 def test_a_bound_executable_is_what_runs_and_what_the_receipt_names(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -184,6 +200,7 @@ def test_a_bound_executable_is_what_runs_and_what_the_receipt_names(
     assert receipt.executable == str(bound)
 
 
+@_requires_posix
 def test_an_unbound_program_runs_under_the_shared_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

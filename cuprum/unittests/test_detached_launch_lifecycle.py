@@ -49,6 +49,13 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import DetachedLaunch, SafeCmd
 
+#: Every case here either spawns a worker or reaches the platform guard that
+#: refuses a host without POSIX sessions, so none of them can run elsewhere.
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="a detached launch requires POSIX session isolation",
+)
+
 #: Long enough that the worker cannot plausibly exit on its own, so a case that
 #: finds it alive is not racing its natural exit.
 _SLEEP_SOURCE = "import time; time.sleep(300)"
