@@ -149,6 +149,9 @@ init process.
 
 - The feature is POSIX-first. A Windows launcher receives `ValueError` rather
   than a weaker emulation.
+- No observation runs. Registered `before()`, `after()`, and `observe()` hooks
+  do not fire and no `ExecEvent` is emitted, so logging, metrics, and tracing
+  adapters that describe managed runs see nothing for a detached launch.
 - A receipt says the `exec` succeeded, not that the worker is ready. A worker
   that rejects its arguments or exits immediately still produces one; readiness
   remains the caller's contract with the worker.

@@ -213,6 +213,8 @@ class _DetachedLaunchEntryPoints:
             directory, and executable-binding base. Capture, echo, timeout, and
             ``process_group`` have no effect: a detached launch never captures,
             never streams, and never supervises the child's lifetime.
+            Registered ``before()``, ``after()``, and ``observe()`` hooks do not
+            fire and no ``ExecEvent`` is emitted.
 
         Returns
         -------

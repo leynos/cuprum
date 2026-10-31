@@ -46,10 +46,10 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import DetachedLaunch, SafeCmd
     from tests.helpers.catalogue import PythonCatalogue
 
-# A detached launch requires POSIX session isolation, and one scenario asserts
-# the refusal a non-POSIX platform receives, so both halves run wherever the
-# feature exists.
-pytestmark = pytest.mark.skipif(
+#: A detached launch requires POSIX session isolation. The two refusal
+#: scenarios are deliberately left unmarked, because each is refused before the
+#: platform guard and so runs on any host.
+_requires_posix = pytest.mark.skipif(
     os.name != "posix",
     reason="a detached launch requires POSIX session isolation",
 )
@@ -222,6 +222,7 @@ def _orphan_stopped(launch_scenario: LaunchScenario) -> None:
     )
 
 
+@_requires_posix
 @scenario(
     "../features/detached_launch.feature",
     "An allowed program is launched and its lifetime transferred",
@@ -246,6 +247,7 @@ def test_unsupported_platform_is_refused() -> None:
     """A platform without session isolation never reaches the spawn."""
 
 
+@_requires_posix
 @scenario(
     "../features/detached_launch.feature",
     "A missing executable fails the launch instead of returning a receipt",
@@ -254,6 +256,7 @@ def test_missing_executable_fails_the_launch() -> None:
     """An unstartable executable surfaces as an error, not a receipt."""
 
 
+@_requires_posix
 @scenario(
     "../features/detached_launch.feature",
     "Cancelling at the transfer boundary stops the worker",

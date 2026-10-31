@@ -1150,12 +1150,14 @@ still produces one. Readiness is the caller's contract with the worker.
 
 From the receipt onward, stopping and reaping the worker belong to the caller.
 Signal `receipt.pid`, or its group with `os.killpg`, which also reaches
-anything the worker started. A PID is meaningful only while the process it
-names is alive and unreaped; once the worker has been reaped the number may be
-reused, so confirm that a stored receipt still names the original worker before
-signalling it. While the launcher lives, a worker that exits stays a zombie
-until the launcher exits, because reaping it would be the ownership the launch
-gave away. A long-lived process that detaches workers should reap them itself.
+descendants that stayed in the group; a descendant that calls `setsid()` or
+`setpgid()` leaves it and survives the signal. A PID is meaningful only while
+the process it names is alive and unreaped; once the worker has been reaped the
+number may be reused, so confirm that a stored receipt still names the original
+worker before signalling it. While the launcher lives, a worker that exits
+stays a zombie until the launcher exits, because reaping it would be the
+ownership the launch gave away. A long-lived process that detaches workers
+should reap them itself.
 
 Detachment is POSIX-only. A platform without POSIX process groups receives
 `ValueError` before any child is created. A program outside the allowlist raises
@@ -1173,9 +1175,11 @@ Dropping a `RunningCommand` or leaving its `async with` block never detaches
 anything, and no option on `run()` or `start()` turns a managed run into a
 detached one. Only these entry points transfer lifetime. Capture, echo,
 timeouts, and `process_group` have no effect on a detached launch: it never
-captures, never streams, and never supervises the child. Pass an
-`ExecutionContext` for its `env`, `env_mode`, and `cwd` when the worker needs
-an environment overlay or a different working directory.
+captures, never streams, and never supervises the child. Registered `before()`,
+`after()`, and `observe()` hooks do not run, and no `ExecEvent` is emitted, so
+logging, metrics, and tracing adapters see nothing for a detached launch. Pass
+an `ExecutionContext` for its `env`, `env_mode`, and `cwd` when the worker
+needs an environment overlay or a different working directory.
 
 Survival of the launcher is not survival of the host. Job cleanup, container
 shutdown, and external termination still end the worker.
