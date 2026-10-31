@@ -45,10 +45,18 @@ def _dedent_body(lines: list[str], indent: str) -> str:
     return "\n".join(dedented) + "\n"
 
 
-def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
-    """Return whether ``line`` closes a fence opened at ``indent``.
+def _opening_delimiter(opening: str) -> str:
+    """Return the full backtick or tilde run that opens a fence."""
+    marker = opening[0]
+    return marker * (len(opening) - len(opening.lstrip(marker)))
 
-    CommonMark allows a closing fence up to three spaces beyond the
+
+def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
+    """Return whether ``line`` closes a fence opened by ``delimiter``.
+
+    CommonMark allows a closing fence to use more than the opening run, so
+    only the fence's own marker character and a length at least that of the
+    opener matter. The closer may sit up to three spaces beyond the
     indentation of its container; anything deeper is indented code.
 
     Returns
@@ -56,7 +64,8 @@ def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
     bool
         Whether ``line`` terminates the fence.
     """
-    if line.strip() != delimiter:
+    stripped = line.strip()
+    if len(stripped) < len(delimiter) or set(stripped) != {delimiter[0]}:
         return False
     leading = len(line) - len(line.lstrip())
     return leading <= len(indent) + 3
@@ -77,7 +86,7 @@ def _consume_fence(
     raw_opening = lines[index]
     opening = raw_opening.strip()
     indent = raw_opening[: len(raw_opening) - len(raw_opening.lstrip())]
-    delimiter = opening[:3]
+    delimiter = _opening_delimiter(opening)
     if kind == ILLUSTRATIVE:
         assert opening[len(delimiter) :].strip(), (
             f"{path}:{index + 1}: illustrative fence must declare a language"
@@ -133,11 +142,17 @@ def _exclusion_bullets(prose: str) -> list[str]:
     return bullets
 
 
+def _exclusion_reason(bullet: str, name: str) -> str:
+    """Return a bullet's text without its code spans or the example name."""
+    text = re.sub(r"`[^`]*`", "", bullet[2:])
+    return re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", "", text)
+
+
 def _states_exclusion(prose: str, name: str) -> bool:
     """Return whether a bullet names ``name`` and says why it is excluded."""
     return any(
         _names_example(bullet, name)
-        and re.search(r"[A-Za-z]{3,}", re.sub(r"`[^`]*`", "", bullet[2:]))
+        and re.search(r"[A-Za-z]{3,}", _exclusion_reason(bullet, name))
         for bullet in _exclusion_bullets(prose)
     )
 
@@ -252,6 +267,11 @@ def test_a_wrapped_bullet_states_its_reason() -> None:
             id="bullet-names-the-example-without-a-reason",
         ),
         pytest.param(
+            "- build\n<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="name-only-bullet-without-a-code-span",
+        ),
+        pytest.param(
             "The build example needs a prepared runner.\n"
             "<!-- illustrative-example: build -->\n"
             "```yaml\n- name: Build\n```\n",
@@ -307,6 +327,18 @@ def test_deeply_indented_fence_text_stays_inside_the_example() -> None:
     assert _parse_examples("doc.md", text) == [
         ("quoted", 'text = """\n    ```\n"""\nassert "```" in text\n')
     ], "an indented fence line must not end the example early"
+
+
+def test_a_longer_fence_needs_an_equally_long_closer() -> None:
+    """A four-backtick fence is not closed by a three-backtick line inside it."""
+    text = (
+        "- `workflow`: needs a prepared runner.\n"
+        "<!-- illustrative-example: workflow -->\n"
+        "````yaml\n"
+        "```\n"
+        "````\n"
+    )
+    assert not _parse_examples("doc.md", text), "the inner fence closed the example"
 
 
 def test_tested_examples_are_returned_in_document_order() -> None:

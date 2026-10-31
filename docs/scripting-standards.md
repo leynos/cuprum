@@ -844,8 +844,9 @@ while that credential is live; every network call these scripts might otherwise
 make instead stays in the workflow's own `curl` and `gh` steps. See
 [ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
 for the full rationale. This exception is confined to those seven modules; no
-other script in the repository is exempt from the Cyclopts, Cuprum, and Python
-3.14 defaults above.
+other script in the repository departs from the Cyclopts, Cuprum, and Python
+defaults above without documenting the integration constraint inline, as the
+language and runtime section requires.
 
 ## CI wiring: GitHub Actions (Cyclopts‑first)
 

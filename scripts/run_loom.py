@@ -3,6 +3,10 @@
 # requires-python = ">=3.13"
 # dependencies = ["cyclopts>=4.0", "cuprum==0.2.0b2"]
 # ///
+# The 3.13 floor is the integration exception allowed by
+# docs/scripting-standards.md: the Loom CI jobs in ci.yml and loom.yml
+# provision Python 3.13, so a 3.14 floor would make uv fetch an interpreter
+# those jobs did not install.
 """Run Cuprum's bounded Loom models and emit an auditable summary."""
 
 from __future__ import annotations
