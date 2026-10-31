@@ -13,16 +13,14 @@ custom iterator on ``break``.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
-from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._line_stream_finalization import (
-    _line_stream_outcome,
-    _LineStreamFinalization,
-    _reconcile_line_stream,
+    _LineIterationState,
+    _settle_line_iteration,
 )
 from cuprum._pipeline_types import _EventDetails
-from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_result
 from cuprum.lines import LineEvent
 
@@ -34,6 +32,7 @@ if typ.TYPE_CHECKING:
     from cuprum._line_stream import _LineQueueItem
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import CommandResult
+    from cuprum.sh.line_options import _PreparedLineIteration
 
 
 class LineStream:
@@ -123,66 +122,33 @@ async def _iter_line_events(
     stranding them. The delivery worker is closed first: mirrored lines it
     still holds have to land inside the framing.
 
-    A generator body runs in the context of the task that pulls it, so this
-    function owns the authoritative checks, not ``SafeCmd.lines()``.
-
-    Parameters
-    ----------
-    execution_factory : collections.abc.Callable[[], _SubprocessExecution]
-        Builds the execution bundle once the pull is authorized.
-    tracking : _ExecutionTracking
-        The hook bookkeeping and sink bracket this iteration owns.
-    requested_timeout : float | None
-        The raw timeout, re-resolved in the consuming scope.
-    open_sink : collections.abc.Callable[[], None]
-        Frames the configured presentation sink, if any, exactly once. Called
-        before the bundle is built so its log destinations are the session's.
+    A generator body runs in the task that pulls it, so the authoritative
+    checks live here, not in ``SafeCmd.lines()``. ``open_sink`` frames the
+    configured presentation sink exactly once and is called before the bundle
+    is built, so its log destinations are the session's.
 
     Yields
     ------
     LineEvent | CommandResult
-        One ``LineEvent`` per decoded output line, then the run's
-        ``CommandResult`` once the subprocess has exited.
+        One line event per decoded output line, then the run's result.
     """
-    execution: _SubprocessExecution | None = None
-    queue: asyncio.Queue[_LineQueueItem] | None = None
-    result_future: asyncio.Future[CommandResult] | None = None
-    coordinator: asyncio.Task[None] | None = None
+    # Setup and teardown each live in one helper. The state record carries a
+    # partial build to the finalizer, so a failure before the built names are
+    # bound here still releases the sink session and the delivery worker.
+    state = _LineIterationState()
     failure: BaseException | None = None
     result: CommandResult | None = None
-
-    from cuprum._line_stream import (
-        _line_event_queue,
-        _refresh_line_stream_execution,
-    )
-
-    # The plan event and the before hooks run inside the try, not ahead of it:
-    # both emit, and a synchronous observe hook that raises on either would
-    # otherwise strand the async-hook tasks already queued behind it, which only
-    # this generator's reconcile drains.
     try:
-        # The opener runs first: the bundle resolves its destinations from the
-        # session, and a refresh refusal after it still owes the bracket close
-        # handled below.
-        open_sink()
-        execution = execution_factory()
-        execution = _refresh_line_stream_execution(execution, requested_timeout)
-        queue = _line_event_queue()
-        result_future = asyncio.get_running_loop().create_future()
-        execution.observation.emit("plan", _EventDetails(pid=None))
-        for hook in execution.observation.hooks.before_hooks:
-            hook(execution.cmd)
-        coordinator = asyncio.create_task(
-            _drive_line_stream(execution, queue, result_future)
+        started = _start_line_iteration(
+            state,
+            execution_factory,
+            requested_timeout=requested_timeout,
+            open_sink=open_sink,
         )
-        while True:
-            item = await _next_queue_item(queue, result_future)
-            if isinstance(item, LineEvent):
-                yield item
-            else:
-                break
-        result = await result_future
-        _publish_line_completion(execution, result)
+        async for event in _stream_line_events(started):
+            yield event
+        result = await started.result_future
+        _publish_line_completion(started.execution, result)
         yield result
     except BaseException as error:
         # Broader than ``Exception`` on purpose: the teardown classifies what
@@ -192,35 +158,102 @@ async def _iter_line_events(
         failure = error
         raise
     finally:
-        try:
-            if execution is not None:
-                try:
-                    # A refusal before the queue existed has nothing to
-                    # reconcile; the bundle's own builder or refresh has
-                    # already stopped its delivery worker.
-                    if result_future is not None:
-                        await _reconcile_line_stream(
-                            coordinator,
-                            result_future,
-                            tracking,
-                            _LineStreamFinalization(execution, result, failure),
-                        )
-                finally:
-                    await _shielded_cleanup(
-                        _close_delivery_worker(
-                            execution.delivery_worker,
-                            drain_grace_s=execution.delivery_grace_s,
-                        ),
-                    )
-        finally:
-            # Outside the guard: even a refused or half-built run must release
-            # the session its opener created. This is the last writer, so the
-            # release and the group close land after every mirrored line.
-            await _shielded_cleanup(
-                tracking.sink_bracket.aclose(
-                    outcome=_line_stream_outcome(result, failure),
-                ),
-            )
+        await _settle_line_iteration(state, tracking, result, failure)
+
+
+def _open_line_stream(
+    prepared: _PreparedLineIteration,
+    *,
+    requested_timeout: float | None,
+) -> LineStream:
+    """Build the lazy stream over a prepared line iteration.
+
+    ``requested_timeout`` is the raw timeout, not the value preparation
+    resolved: re-resolving that value would keep a timeout from a scope the
+    caller has since left, and ``None`` must stay ``None`` so the consuming
+    scope's default can apply.
+
+    Returns
+    -------
+    LineStream
+        The lazy stream the caller iterates.
+    """
+    return LineStream(
+        _iter_line_events(
+            prepared.execution_factory,
+            prepared.tracking,
+            requested_timeout=requested_timeout,
+            open_sink=prepared.open_sink,
+        )
+    )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StartedLineIteration:
+    """A line iteration that has been authorized, planned, and started."""
+
+    execution: _SubprocessExecution
+
+    queue: asyncio.Queue[_LineQueueItem]
+
+    result_future: asyncio.Future[CommandResult]
+
+
+def _start_line_iteration(
+    state: _LineIterationState,
+    execution_factory: cabc.Callable[[], _SubprocessExecution],
+    *,
+    requested_timeout: float | None,
+    open_sink: cabc.Callable[[], None],
+) -> _StartedLineIteration:
+    """Frame the sink, resolve the run, and start the coordinator.
+
+    The opener runs first: the bundle resolves its destinations from the
+    session, and a refresh refusal after it still owes the bracket close the
+    caller's finalizer performs. Each step records itself on *state* as it
+    completes, so closing a half-built run releases exactly what exists.
+
+    The plan event and the before hooks run here, inside the caller's ``try``,
+    rather than ahead of it: both emit, and a synchronous observe hook that
+    raises on either would otherwise strand the async-hook tasks already
+    queued behind it, which only this iteration's reconcile drains.
+
+    Returns
+    -------
+    _StartedLineIteration
+        The started run, holding its queue, result future, and bundle.
+    """
+    from cuprum._line_stream import (
+        _line_event_queue,
+        _refresh_line_stream_execution,
+    )
+
+    open_sink()
+    execution = execution_factory()
+    state.execution = execution
+    execution = _refresh_line_stream_execution(execution, requested_timeout)
+    state.execution = execution
+    queue = _line_event_queue()
+    result_future = asyncio.get_running_loop().create_future()
+    state.result_future = result_future
+    execution.observation.emit("plan", _EventDetails(pid=None))
+    for hook in execution.observation.hooks.before_hooks:
+        hook(execution.cmd)
+    state.coordinator = asyncio.create_task(
+        _drive_line_stream(execution, queue, result_future)
+    )
+    return _StartedLineIteration(execution, queue, result_future)
+
+
+async def _stream_line_events(
+    started: _StartedLineIteration,
+) -> cabc.AsyncGenerator[LineEvent, None]:
+    """Yield the run's line events, stopping once its outcome is published."""
+    while True:
+        item = await _next_queue_item(started.queue, started.result_future)
+        if not isinstance(item, LineEvent):
+            return
+        yield item
 
 
 def _publish_line_completion(

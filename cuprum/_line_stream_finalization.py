@@ -18,6 +18,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
@@ -44,6 +45,22 @@ class _LineStreamFinalization:
     execution: _SubprocessExecution
     result: CommandResult | None
     failure: BaseException | None
+
+
+@dc.dataclass(slots=True)
+class _LineIterationState:
+    """What a line iteration has built so far, recorded as it is built.
+
+    A setup failure can still leave a delivery worker or an opened sink
+    session behind, and the generator that raised never binds the locals a
+    finalizer at the call site would need. Recording each piece here lets
+    teardown release whatever exists without the setup having to unwind
+    itself on every failure path.
+    """
+
+    execution: _SubprocessExecution | None = None
+    result_future: asyncio.Future[CommandResult] | None = None
+    coordinator: asyncio.Task[None] | None = None
 
 
 def _line_stream_outcome(
@@ -186,8 +203,73 @@ async def _drain_line_stream_tasks(
     )
 
 
+async def _settle_line_iteration(
+    state: _LineIterationState,
+    tracking: _ExecutionTracking,
+    result: CommandResult | None,
+    failure: BaseException | None,
+) -> None:
+    """Reconcile the child, stop the delivery worker, then close the frame.
+
+    The bracket closes last and outside every guard: even a refused or
+    half-built run must release the session its opener created. It is also the
+    last writer, so the release and the group close land after every mirrored
+    line.
+    """
+    try:
+        await _reconcile_and_close(state, tracking, result, failure)
+    finally:
+        await _shielded_cleanup(
+            tracking.sink_bracket.aclose(
+                outcome=_line_stream_outcome(result, failure),
+            ),
+        )
+
+
+async def _reconcile_and_close(
+    state: _LineIterationState,
+    tracking: _ExecutionTracking,
+    result: CommandResult | None,
+    failure: BaseException | None,
+) -> None:
+    """Reconcile a started run, then stop its delivery worker."""
+    execution = state.execution
+    if execution is None:
+        return
+    try:
+        await _reconcile_if_started(state, tracking, result, failure)
+    finally:
+        await _shielded_cleanup(
+            _close_delivery_worker(
+                execution.delivery_worker,
+                drain_grace_s=execution.delivery_grace_s,
+            ),
+        )
+
+
+async def _reconcile_if_started(
+    state: _LineIterationState,
+    tracking: _ExecutionTracking,
+    result: CommandResult | None,
+    failure: BaseException | None,
+) -> None:
+    """Reconcile the coordinator once setup got as far as creating one."""
+    execution = state.execution
+    result_future = state.result_future
+    if execution is None or result_future is None:
+        return
+    await _reconcile_line_stream(
+        state.coordinator,
+        result_future,
+        tracking,
+        _LineStreamFinalization(execution, result, failure),
+    )
+
+
 __all__ = [
+    "_LineIterationState",
     "_LineStreamFinalization",
     "_line_stream_outcome",
     "_reconcile_line_stream",
+    "_settle_line_iteration",
 ]
