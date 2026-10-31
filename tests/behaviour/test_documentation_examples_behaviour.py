@@ -16,11 +16,18 @@ DOCUMENTS = (
     "README.md",
     "docs/users-guide.md",
     "docs/v0-2-0-migration-guide.md",
+    "docs/scripting-standards.md",
 )
-MARKER = re.compile(r"<!-- (tested|shell)-example: ([a-z0-9-]+) -->")
+MARKER = re.compile(
+    r"^\s*<!-- (tested|illustrative|shell)-example: ([a-z0-9-]+) -->\s*$"
+)
 # Python fences must execute; shell fences (installation commands, for
 # example) are published for copying and are never run by this suite.
 LANGUAGES = {"tested": "python", "shell": "shell"}
+# An illustrative fence is a published example whose dependencies or side
+# effects make execution unsuitable for a documentation gate. The document
+# must state why each one is excluded, as a bullet that names it.
+ILLUSTRATIVE = "illustrative"
 # Both CommonMark fence characters open a block, so neither can hide an
 # example from marker validation.
 FENCE_DELIMITERS = ("```", "~~~")
@@ -29,6 +36,30 @@ FENCE_DELIMITERS = ("```", "~~~")
 def _has_outcome_assertion(code: str) -> bool:
     """Return whether ``code`` contains an executable ``assert`` statement."""
     return any(isinstance(node, ast.Assert) for node in ast.walk(ast.parse(code)))
+
+
+def _dedent_body(lines: list[str], indent: str) -> str:
+    """Return fenced lines with up to the fence's indentation removed."""
+    width = len(indent)
+    dedented = (line[min(width, len(line) - len(line.lstrip(" "))) :] for line in lines)
+    return "\n".join(dedented) + "\n"
+
+
+def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
+    """Return whether ``line`` closes a fence opened at ``indent``.
+
+    CommonMark allows a closing fence up to three spaces beyond the
+    indentation of its container; anything deeper is indented code.
+
+    Returns
+    -------
+    bool
+        Whether ``line`` terminates the fence.
+    """
+    if line.strip() != delimiter:
+        return False
+    leading = len(line) - len(line.lstrip())
+    return leading <= len(indent) + 3
 
 
 def _consume_fence(
@@ -43,27 +74,79 @@ def _consume_fence(
         example the fence holds, if any.
     """
     kind, name = marker
-    opening = lines[index]
+    raw_opening = lines[index]
+    opening = raw_opening.strip()
+    indent = raw_opening[: len(raw_opening) - len(raw_opening.lstrip())]
     delimiter = opening[:3]
-    assert opening == f"{delimiter}{LANGUAGES[kind]}", (
-        f"{path}:{index + 1}: expected {LANGUAGES[kind]} fence for {kind} example"
-    )
+    if kind == ILLUSTRATIVE:
+        assert opening[len(delimiter) :].strip(), (
+            f"{path}:{index + 1}: illustrative fence must declare a language"
+        )
+    else:
+        assert opening == f"{delimiter}{LANGUAGES[kind]}", (
+            f"{path}:{index + 1}: expected {LANGUAGES[kind]} fence for {kind} example"
+        )
     start = index + 1
     closing = (
-        number for number in range(start, len(lines)) if lines[number] == delimiter
+        number
+        for number in range(start, len(lines))
+        if _is_closing_fence(lines[number], delimiter, indent)
     )
     end = next(closing, None)
     assert end is not None, f"{path}:{start}: unterminated fence"
     if kind != "tested":
         return end + 1, []
-    code = "\n".join(lines[start:end]) + "\n"
+    code = _dedent_body(lines[start:end], indent)
     assert _has_outcome_assertion(code), f"{path}:{start}: example has no outcome check"
     return end + 1, [(name, code)]
+
+
+def _names_example(prose: str, name: str) -> bool:
+    """Return whether ``prose`` mentions ``name`` as a whole token."""
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", prose) is not None
+
+
+def _exclusion_bullets(prose: str) -> list[str]:
+    """Return each Markdown bullet, with wrapped continuation lines joined.
+
+    Returns
+    -------
+    list[str]
+        One entry per bullet, in document order.
+    """
+    bullets: list[str] = []
+    current: list[str] = []
+    for line in prose.splitlines():
+        stripped = line.strip()
+        is_bullet = stripped.startswith(("- ", "* "))
+        if is_bullet:
+            if current:
+                bullets.append(" ".join(current))
+            current = [stripped]
+        elif current and line.startswith((" ", "\t")):
+            current.append(stripped)
+        elif current:
+            bullets.append(" ".join(current))
+            current = []
+    if current:
+        bullets.append(" ".join(current))
+    return bullets
+
+
+def _states_exclusion(prose: str, name: str) -> bool:
+    """Return whether a bullet names ``name`` and says why it is excluded."""
+    return any(
+        _names_example(bullet, name)
+        and re.search(r"[A-Za-z]{3,}", re.sub(r"`[^`]*`", "", bullet[2:]))
+        for bullet in _exclusion_bullets(prose)
+    )
 
 
 def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
     """Return a document's tested Python examples, rejecting uncovered fences."""
     examples: list[tuple[str, str]] = []
+    prose: list[str] = []
+    illustrative: list[tuple[str, int]] = []
     lines = text.splitlines()
     pending: tuple[str, str] | None = None
     index = 0
@@ -73,6 +156,8 @@ def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
         if marker is not None:
             assert pending is None, f"{path}:{index + 1}: marker without a fence"
             pending = (marker.group(1), marker.group(2))
+            if pending[0] == ILLUSTRATIVE:
+                illustrative.append((pending[1], index + 1))
         elif line.lstrip().startswith(FENCE_DELIMITERS):
             assert pending is not None, f"{path}:{index + 1}: unmarked fence"
             index, found = _consume_fence(path, lines, index, pending)
@@ -83,8 +168,15 @@ def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
             assert pending is None or not line, (
                 f"{path}:{index + 1}: marker is not beside a fence"
             )
+            prose.append(line)
         index += 1
     assert pending is None, f"{path}: marker without a fence"
+    prose_text = "\n".join(prose)
+    for name, line_number in illustrative:
+        assert _states_exclusion(prose_text, name), (
+            f"{path}:{line_number}: illustrative example {name!r} has no "
+            "documented exclusion reason"
+        )
     return examples
 
 
@@ -118,6 +210,103 @@ def test_shell_examples_are_published_but_not_executed() -> None:
     """A marked shell fence is accepted without joining the executed set."""
     text = "<!-- shell-example: install -->\n\n```shell\npip install cuprum\n```\n"
     assert not _parse_examples("doc.md", text), "shell example was queued to run"
+
+
+def test_illustrative_examples_are_published_but_not_executed() -> None:
+    """An illustrative fence in any language is accepted without being run."""
+    text = (
+        "- `workflow`: needs a prepared runner environment.\n"
+        "<!-- illustrative-example: workflow -->\n"
+        "```yaml\n- name: Build\n```\n"
+    )
+    assert not _parse_examples("doc.md", text), "illustrative example was queued to run"
+
+
+def test_a_wrapped_bullet_states_its_reason() -> None:
+    """A reason that wraps onto continuation lines still justifies exclusion."""
+    text = (
+        "- `build`:\n"
+        "  needs a prepared runner and a checkout.\n"
+        "<!-- illustrative-example: build -->\n"
+        "```yaml\n- name: Build\n```\n"
+    )
+    assert not _parse_examples("doc.md", text), "wrapped reason was not accepted"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "<!-- illustrative-example: unexplained -->\n```yaml\n- name: Build\n```\n",
+            id="no-prose",
+        ),
+        pytest.param(
+            "Building happens elsewhere.\n"
+            "<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="name-only-inside-a-longer-word",
+        ),
+        pytest.param(
+            "- `build`:\n<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="bullet-names-the-example-without-a-reason",
+        ),
+        pytest.param(
+            "The build example needs a prepared runner.\n"
+            "<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="reason-away-from-a-bullet",
+        ),
+    ],
+)
+def test_illustrative_examples_require_a_documented_reason(text: str) -> None:
+    """An exclusion the document's prose does not name fails the gate."""
+    with pytest.raises(AssertionError, match="has no documented exclusion reason"):
+        _parse_examples("doc.md", text)
+
+
+def test_indented_markers_and_fences_are_recognized() -> None:
+    """A tested fence nested in a list item keeps its Python, dedented."""
+    text = (
+        "  <!-- tested-example: nested -->\n"
+        "  ```python\n"
+        "  value = 1\n"
+        "  assert value == 1\n"
+        "  ```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("nested", "value = 1\nassert value == 1\n")
+    ], "an indented tested example must be dedented into valid Python"
+
+
+def test_short_indented_body_lines_lose_their_indentation() -> None:
+    """A body line indented less than the fence keeps no stray indentation."""
+    text = (
+        "  <!-- tested-example: partial -->\n"
+        "  ```python\n"
+        " value = 1\n"
+        "  assert value == 1\n"
+        "  ```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("partial", "value = 1\nassert value == 1\n")
+    ], "a shallower body line must not stay indented"
+
+
+def test_deeply_indented_fence_text_stays_inside_the_example() -> None:
+    """Four spaces beyond the fence open indented code, not a closing fence."""
+    text = (
+        "<!-- tested-example: quoted -->\n"
+        "```python\n"
+        'text = """\n'
+        "    ```\n"
+        '"""\n'
+        'assert "```" in text\n'
+        "```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("quoted", 'text = """\n    ```\n"""\nassert "```" in text\n')
+    ], "an indented fence line must not end the example early"
 
 
 def test_tested_examples_are_returned_in_document_order() -> None:

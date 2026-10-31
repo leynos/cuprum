@@ -1,7 +1,7 @@
-#!/usr/bin/env -S uv run python
+#!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.13"
-# dependencies = ["cyclopts>=4.0", "cuprum==0.1.0"]
+# dependencies = ["cyclopts>=4.0", "cuprum==0.2.0b2"]
 # ///
 """Run Cuprum's bounded Loom models and emit an auditable summary."""
 
@@ -28,17 +28,9 @@ from cuprum import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import contextlib
 
     from cuprum.sh import CommandResult, SafeCmd
-
-try:
-    from cuprum.context import ScopeConfig
-except ImportError as error:  # Cuprum 0.1.0 exposes the older keyword scope API.
-    if error.name != "cuprum.context":
-        raise
-    ScopeConfig = None
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOOM_MANIFEST = Path("rust/cuprum-rust/Cargo.toml")
@@ -262,12 +254,7 @@ def _cargo_command(*tail: str) -> SafeCmd:
 
 
 def _catalogue_scope() -> contextlib.AbstractContextManager[object]:
-    """Return a catalogue scope across Cuprum's supported scope APIs."""
-    if ScopeConfig is None:
-        legacy_scoped = typ.cast(
-            "cabc.Callable[..., contextlib.AbstractContextManager[object]]", scoped
-        )
-        return legacy_scoped(allowlist=CATALOGUE.allowlist)
+    """Return a scope that allows the Loom tool catalogue."""
     return scoped(catalogue=CATALOGUE)
 
 

@@ -27,25 +27,25 @@ python -m pip install "cuprum==0.2.0b2"
 Then work through Table 1. Each row names a change, the code it affects, and
 where to find the fix. A row that does not match the application can be skipped.
 
-| Change                                                                                            | Affects code that…                                                  |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [`run(capture=, echo=)` moved to `RunOutputOptions`](#capture-and-echo-moved-to-runoutputoptions) | passes `capture=` or `echo=` to `run()` or `run_sync()`             |
-| [Captured single-command streams are non-optional](#captured-single-command-results)              | coalesces result streams with `or ""` or checks the exact type      |
-| [Scopes take a `ScopeConfig`](#scopes-take-a-scopeconfig)                                         | calls `scoped(allowlist=...)` or `CuprumContext.narrow(...)`        |
-| [Disjoint nested scopes deny](#disjoint-nested-scopes-now-deny-everything)                        | nests scopes whose allowlists share no program                      |
-| [Scope managers derive policy on entry](#scope-managers-derive-policy-on-entry)                   | constructs a manager before entering under a restriction            |
-| [Execution options are not child flags](#execution-options-are-no-longer-child-flags)             | passes `cwd=`, `env=`, `timeout=`, and similar to a builder         |
-| [Configured timeouts include post-exit work](#configured-timeouts-include-post-exit-work)         | uses `timeout=` where post-exit stdin or pipe work now counts       |
-| [Builder arguments are typed](#builder-arguments-are-a-typed-contract)                            | passes `bytes`, lists, or other objects to a builder                |
-| [`rsync_sync()` takes local operands only](#rsync_sync-takes-local-operands-only)                 | passes a remote `host:path` or `rsync://` operand to `rsync_sync()` |
-| [`sh.make` uses the scoped catalogue](#shmake-resolves-the-scoped-catalogue)                      | calls `sh.make()` inside `scoped(catalogue=...)`                    |
-| [Construct `ExecutionContext` by keyword](#construct-executioncontext-by-keyword)                 | passes four or more positional arguments to `ExecutionContext`      |
-| [New execution event phases](#observe-hooks-see-new-event-phases)                                 | has an observe hook that rejects unknown `ExecEvent.phase` values   |
-| [Metrics move to the settled event](#metrics-count-failures-from-the-settled-event)               | builds dashboards on `cuprum_failures_total` or durations           |
-| [`ExecHook` moved](#import-exechook-from-cuprum)                                                  | imports `ExecHook` from `cuprum.context`                            |
-| [Echo is bounded and fails soft](#echo-is-bounded-and-no-longer-fails-on-encoding)                | echoes very long lines, or relied on `UnicodeEncodeError`           |
-| [Environment overlays resolve at spawn](#environment-overlays-resolve-at-spawn)                   | relied on an overlay snapshotting `os.environ`                      |
-| [Smaller changes](#smaller-changes)                                                               | uses `visible_settings()`, `IOOptions`, or internal module paths    |
+| Change                                                                                            | Affects code that…                                                                    |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`run(capture=, echo=)` moved to `RunOutputOptions`](#capture-and-echo-moved-to-runoutputoptions) | passes `capture=` or `echo=` to `run()` or `run_sync()`                               |
+| [Captured single-command streams are non-optional](#captured-single-command-results)              | coalesces result streams with `or ""` or checks the exact type                        |
+| [Scopes take a `ScopeConfig`](#scopes-take-a-scopeconfig)                                         | passes a bare `allowlist=` keyword to `scoped()` or calls `CuprumContext.narrow(...)` |
+| [Disjoint nested scopes deny](#disjoint-nested-scopes-now-deny-everything)                        | nests scopes whose allowlists share no program                                        |
+| [Scope managers derive policy on entry](#scope-managers-derive-policy-on-entry)                   | constructs a manager before entering under a restriction                              |
+| [Execution options are not child flags](#execution-options-are-no-longer-child-flags)             | passes `cwd=`, `env=`, `timeout=`, and similar to a builder                           |
+| [Configured timeouts include post-exit work](#configured-timeouts-include-post-exit-work)         | uses `timeout=` where post-exit stdin or pipe work now counts                         |
+| [Builder arguments are typed](#builder-arguments-are-a-typed-contract)                            | passes `bytes`, lists, or other objects to a builder                                  |
+| [`rsync_sync()` takes local operands only](#rsync_sync-takes-local-operands-only)                 | passes a remote `host:path` or `rsync://` operand to `rsync_sync()`                   |
+| [`sh.make` uses the scoped catalogue](#shmake-resolves-the-scoped-catalogue)                      | calls `sh.make()` inside `scoped(catalogue=...)`                                      |
+| [Construct `ExecutionContext` by keyword](#construct-executioncontext-by-keyword)                 | passes four or more positional arguments to `ExecutionContext`                        |
+| [New execution event phases](#observe-hooks-see-new-event-phases)                                 | has an observe hook that rejects unknown `ExecEvent.phase` values                     |
+| [Metrics move to the settled event](#metrics-count-failures-from-the-settled-event)               | builds dashboards on `cuprum_failures_total` or durations                             |
+| [`ExecHook` moved](#import-exechook-from-cuprum)                                                  | imports `ExecHook` from `cuprum.context`                                              |
+| [Echo is bounded and fails soft](#echo-is-bounded-and-no-longer-fails-on-encoding)                | echoes very long lines, or relied on `UnicodeEncodeError`                             |
+| [Environment overlays resolve at spawn](#environment-overlays-resolve-at-spawn)                   | relied on an overlay snapshotting `os.environ`                                        |
+| [Smaller changes](#smaller-changes)                                                               | uses `visible_settings()`, `IOOptions`, or internal module paths                      |
 
 _Table 1: Upgrade checklist for applications using Cuprum 0.1._
 
@@ -158,7 +158,7 @@ from cuprum import Program, ScopeConfig, current_context, scoped
 PYTHON = Program(sys.executable)
 started = []
 
-# 0.1: with scoped(allowlist=frozenset([PYTHON]), before_hooks=(hook,)):
+# 0.1 form: scoped() took allowlist=frozenset([PYTHON]) and before_hooks=(hook,):
 with scoped(ScopeConfig(allowlist=frozenset([PYTHON]), before_hooks=(started.append,))):
     assert current_context().is_allowed(PYTHON)
     assert not current_context().is_allowed(Program("rm"))
