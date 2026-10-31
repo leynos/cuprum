@@ -14,6 +14,7 @@ alters ambient configuration; every command runs with an explicit
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import dataclasses as dc
 import os
 import shutil
@@ -33,6 +34,9 @@ __all__ = (
     "MODERN_STABLE_TOOLCHAIN",
     "TARGET_DIR",
     "CargoFixture",
+    "Locator",
+    "Probe",
+    "ToolchainProbeError",
     "diagnostics",
     "host_target",
     "make_crate",
@@ -57,27 +61,64 @@ BASE_RUSTFLAGS = "-C codegen-units=1"
 #: exists to turn a wedged compilation into a named test failure.
 CARGO_COMMAND_TIMEOUT_SECONDS = 1800
 
+#: A toolchain probe answers in well under a second on an idle host. The bound
+#: is generous because a loaded host can take tens of seconds to schedule a
+#: process; it exists only to keep a wedged child from hanging the suite.
+PROBE_TIMEOUT_SECONDS = 60
+
+
+#: Runs one fixed toolchain probe, returning ``None`` when it gave no answer.
+type Probe = cabc.Callable[[list[str]], subprocess.CompletedProcess[str] | None]
+#: Resolves an executable name to its path, or to ``None`` when it is absent.
+type Locator = cabc.Callable[[str], str | None]
+
+
+class ToolchainProbeError(RuntimeError):
+    """Raised when a toolchain probe could not be started at all."""
+
 
 def _probe(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
-    """Run one fixed toolchain probe, or return ``None`` if it cannot run."""
+    """Run one fixed toolchain probe, or report that it gave no answer.
+
+    A probe that outlived `PROBE_TIMEOUT_SECONDS` is reported as no answer,
+    because a loaded host can delay a working toolchain past any fixed bound;
+    counting that as absence keeps the contract skipping instead of erroring.
+    A probe that cannot be started is a different fault: the executable was
+    located, so the environment, not the toolchain, is broken.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str] | None
+        The finished probe, or ``None`` when it did not answer in time.
+
+    Raises
+    ------
+    ToolchainProbeError
+        If the probe could not be started.
+    """
     try:
         return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed toolchain probe.
             argv,
             capture_output=True,
             check=False,
-            timeout=10,
+            timeout=PROBE_TIMEOUT_SECONDS,
             text=True,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         return None
+    except OSError as error:
+        message = f"toolchain probe could not start: {' '.join(argv)}"
+        raise ToolchainProbeError(message) from error
 
 
-def _reports_version(probe: subprocess.CompletedProcess[str] | None, tool: str) -> bool:
-    """Return whether a probe succeeded and named the selected toolchain."""
+def _reports_version(
+    probe: subprocess.CompletedProcess[str] | None, tool: str, toolchain: str
+) -> bool:
+    """Return whether a probe answered and named the requested toolchain."""
     return (
         probe is not None
         and probe.returncode == 0
-        and probe.stdout.startswith(f"{tool} {MODERN_STABLE_TOOLCHAIN} ")
+        and probe.stdout.startswith(f"{tool} {toolchain} ")
     )
 
 
@@ -90,31 +131,76 @@ def _reports_clippy(probe: subprocess.CompletedProcess[str] | None) -> bool:
     )
 
 
-def toolchain_available() -> bool:
-    """Return whether the selected compiler, Cargo, and Clippy are installed."""
-    rustup = shutil.which("rustup")
-    cargo = shutil.which("cargo")
+def toolchain_available(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> bool:
+    """Return whether the named compiler, Cargo, and Clippy are installed.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the probe must reach, passed explicitly so the query never
+        reads a selection from the ambient environment.
+    probe : Probe
+        Adapter that runs one fixed argument vector. It reports ``None`` when
+        the child gave no answer, and raises only when it cannot be started.
+    locate : collections.abc.Callable[[str], str | None]
+        Resolver for executable names, injected so the query does not have to
+        read `PATH` itself.
+
+    Returns
+    -------
+    bool
+        Whether rustc, Cargo, and Clippy all reported the named toolchain.
+
+    Notes
+    -----
+    A probe that gave no answer counts as unavailable, so a loaded host skips
+    the contract rather than failing it. A probe that could not be started
+    propagates :class:`ToolchainProbeError`; that fault is the environment's,
+    not the toolchain's.
+    """
+    rustup = locate("rustup")
+    cargo = locate("cargo")
     if rustup is None or cargo is None:
         return False
-    rustc = _probe([rustup, "run", MODERN_STABLE_TOOLCHAIN, "rustc", "-V"])
-    cargo_version = _probe([cargo, f"+{MODERN_STABLE_TOOLCHAIN}", "-V"])
-    components = _probe([
-        rustup,
-        "component",
-        "list",
-        "--installed",
-        "--toolchain",
-        MODERN_STABLE_TOOLCHAIN,
-    ])
     return (
-        _reports_version(rustc, "rustc")
-        and _reports_version(cargo_version, "cargo")
-        and _reports_clippy(components)
+        _reports_version(
+            probe([rustup, "run", toolchain, "rustc", "-V"]), "rustc", toolchain
+        )
+        and _reports_version(probe([cargo, f"+{toolchain}", "-V"]), "cargo", toolchain)
+        and _reports_clippy(
+            probe([
+                rustup,
+                "component",
+                "list",
+                "--installed",
+                "--toolchain",
+                toolchain,
+            ])
+        )
     )
 
 
-def require_toolchain() -> str:
+def require_toolchain(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> str:
     """Return Cargo or skip locally, while making CI absence a failure.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the caller needs.
+    probe : Probe
+        Adapter used for the availability probe.
+    locate : collections.abc.Callable[[str], str | None]
+        Resolver for executable names.
 
     Returns
     -------
@@ -124,18 +210,26 @@ def require_toolchain() -> str:
     Raises
     ------
     AssertionError
-        If Cargo disappears between the availability probe and the return.
+        If the locator resolved no Cargo while the availability query still
+        reported the toolchain present.
+
+    Notes
+    -----
+    A probe that could not be started propagates :class:`ToolchainProbeError`,
+    because that is an environment fault and must not be reported as a skipped
+    test. A probe that gave no answer counts as unavailable, so it skips here
+    and fails under ``CUPRUM_REQUIRE_MODERN_STABLE=1``.
     """
-    cargo = shutil.which("cargo")
-    if cargo is None or not toolchain_available():
-        message = (
-            f"Rust and Cargo {MODERN_STABLE_TOOLCHAIN} with Clippy are unavailable"
-        )
+    cargo = locate("cargo")
+    if cargo is None or not toolchain_available(
+        toolchain=toolchain, probe=probe, locate=locate
+    ):
+        message = f"Rust and Cargo {toolchain} with Clippy are unavailable"
         if os.environ.get("CUPRUM_REQUIRE_MODERN_STABLE") == "1":
             pytest.fail(message)
         pytest.skip(message)
     if cargo is None:
-        message = "Cargo must remain available after the toolchain check"
+        message = "Cargo must be locatable whenever the toolchain is available"
         raise AssertionError(message)
     return cargo
 
