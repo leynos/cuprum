@@ -1271,16 +1271,18 @@ runtime evidence.
 
 The warning fixture's availability query takes its toolchain, its probe, and
 its executable locator as parameters; it never reads a selection from `PATH` or
-the ambient environment itself. Unit tests inject a probe and a locator, so
-they can settle a complete toolchain, a mismatched compiler, a missing Clippy,
-a silent probe, and an unstartable probe without that toolchain being
-installed. A probe that outlives its bound reports no answer, which counts as
-an unavailable toolchain: a loaded host can delay a working toolchain past any
-fixed bound, and a delayed probe must not turn the contract into an error. A
-probe that cannot be started raises `ToolchainProbeError` instead, because the
-executable was located, so that fault belongs to the environment. A genuinely
-absent toolchain still skips locally and fails under
-`CUPRUM_REQUIRE_MODERN_STABLE=1`.
+the ambient environment itself. It probes Cargo through an injected
+`RUSTUP_TOOLCHAIN` entry rather than a `+toolchain` argument, because the `+`
+form is a rustup proxy feature that a direct Cargo binary ignores. Unit tests
+inject a probe and a locator, so they can settle a complete toolchain, a
+mismatched compiler, a missing Clippy, a silent probe, and an unstartable probe
+without that toolchain being installed. A probe that outlives its bound reports
+no answer, which counts as an unavailable toolchain: a loaded host can delay a
+working toolchain past any fixed bound, and a delayed probe must not turn the
+contract into an error. A probe that cannot be started raises
+`ToolchainProbeError` instead, because the executable was located, so that
+fault belongs to the environment. A genuinely absent toolchain still skips
+locally and fails under `CUPRUM_REQUIRE_MODERN_STABLE=1`.
 
 ## Tar and rsync builder helpers
 
