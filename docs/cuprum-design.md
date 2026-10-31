@@ -2089,7 +2089,25 @@ implemented with the following decisions:
   production code alone.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results, so `run_sync()` does not leak pending tasks.
+  returning results, so `run_sync()` does not leak pending tasks. Retention is
+  bounded per execution, not per stream: every stage of a pipeline shares one
+  `pending_tasks` list, and the unfinished count is admitted against
+  `_OBSERVE_TASK_CEILING` (256). Without a bound, a child that floods output
+  while an async hook is installed schedules one task per line and retains
+  every one of them until finalization, exhausting parent memory even when
+  capture and echo are off. Two rules keep it bounded. First, settled tasks are
+  pruned *during* execution: a successful task can never fail, and finalization
+  reports only the earliest failed or cancelled task in list order, so
+  everything else is discarded once its exception has been retrieved. Second,
+  line observation admits work before dispatch — it checks the shared list and,
+  when the unfinished count has reached the ceiling, waits for a task to settle
+  before scheduling the next line's observation. Delivery therefore stays
+  lossless and per-stream ordered, while a slow or blocked observer applies
+  backpressure to the child through its pipe rather than growing the list.
+  Capacity is checked once per event, so one event carrying several async hooks
+  can leave the unfinished count at the ceiling plus one fewer than that hook
+  count; the one settled failure finalization still needs may add one more
+  entry to the raw list.
 
 ### 8.1.4 Timeouts
 

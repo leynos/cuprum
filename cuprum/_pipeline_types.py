@@ -20,7 +20,14 @@ import time
 import types
 import typing as typ
 
-from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
+from cuprum._observability import (
+    _emit_exec_event,
+    _ExecEventEmissionError,
+)
+from cuprum._observe_task_retention import (
+    _OBSERVE_TASK_CEILING,
+    _prune_finished_hook_tasks,
+)
 from cuprum.events import (
     CaptureMode,
     ExecEvent,
@@ -321,6 +328,12 @@ class _StageObservation:
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
-            self.pending_tasks.extend(exc.scheduled_tasks)
+            self._retain_hook_tasks(exc.scheduled_tasks)
             raise exc.error from exc
-        self.pending_tasks.extend(scheduled_tasks)
+        self._retain_hook_tasks(scheduled_tasks)
+
+    def _retain_hook_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
+        """Extend the shared retention list, pruning once it reaches the ceiling."""
+        self.pending_tasks.extend(tasks)
+        if len(self.pending_tasks) >= _OBSERVE_TASK_CEILING:
+            _prune_finished_hook_tasks(self.pending_tasks)

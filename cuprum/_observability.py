@@ -5,6 +5,10 @@ inputs shared by the single-command and pipeline execution paths:
 :func:`_resolve_env_overlay` and :func:`_base_stage_tags`. The observation tag
 schema is a wire contract for observability, so it is computed in exactly one
 place; the pipeline builders graft on only their stage-specific keys.
+
+Retention of the asynchronous tasks this module schedules is bounded in
+:mod:`cuprum._observe_task_retention`, which owns the ceiling, the pruning
+rule, and the admission pair the line paths wait on.
 """
 
 from __future__ import annotations

@@ -37,7 +37,7 @@ from hypothesis.stateful import (
 )
 
 from cuprum import CommandResult, Program
-from cuprum._line_callbacks import _chain_line_hooks
+from cuprum._line_hook_chaining import _chain_line_hooks
 from cuprum._line_iteration import _next_queue_item
 from cuprum._line_stream import (
     _coordinate_line_stream,

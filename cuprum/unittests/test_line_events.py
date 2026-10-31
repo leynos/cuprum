@@ -13,9 +13,9 @@ import pytest
 from cuprum import lines
 from cuprum._line_callbacks import (
     _compose_line_callbacks,
-    _fan_out_hooks,
     _LineEmissionContext,
 )
+from cuprum._line_hook_chaining import _fan_out_hooks
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 
 if typ.TYPE_CHECKING:
