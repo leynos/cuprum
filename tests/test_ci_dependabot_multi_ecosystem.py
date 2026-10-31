@@ -108,7 +108,10 @@ def test_each_stanza_bounds_its_pull_request_count(stanza: ExpectedStanza) -> No
             f"Dependabot rejects its own bound {limit!r}; set it on the group"
         )
         return
-    assert isinstance(limit, int)
+    assert isinstance(limit, int), (
+        f"the {stanza.ecosystem} stanza needs an integer `open-pull-requests-limit`; "
+        f"got {limit!r}"
+    )
     assert limit > 0, (
         f"the {stanza.ecosystem} stanza needs a positive "
         f"`open-pull-requests-limit`; got {limit!r}"
@@ -118,7 +121,10 @@ def test_each_stanza_bounds_its_pull_request_count(stanza: ExpectedStanza) -> No
 def test_the_group_bounds_its_pull_request_count() -> None:
     """Cap the group's concurrent pull requests, since its entries cannot."""
     limit = _groups()[MATURIN_PYO3_GROUP].get("open-pull-requests-limit")
-    assert isinstance(limit, int)
+    assert isinstance(limit, int), (
+        f"the {MATURIN_PYO3_GROUP} group needs an integer "
+        f"`open-pull-requests-limit`; got {limit!r}"
+    )
     assert limit > 0, (
         f"the {MATURIN_PYO3_GROUP} group needs a positive "
         f"`open-pull-requests-limit`; got {limit!r}"
