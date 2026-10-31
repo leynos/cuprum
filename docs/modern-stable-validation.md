@@ -155,8 +155,10 @@ compiled, checked, or fresh.
 
 The results below come from Linux runs on the implementation candidate at commit
 `b047b5644` on 30 October 2026, except the contract row, which was re-measured
-after that route gained a regression test. They record statuses and Cargo
-freshness; they do not claim a measured speedup.
+after that route gained further regression tests and now reports 26 passed. The
+route counts below were confirmed unchanged on the rebased candidate
+`d8f70abc9`. These results record statuses and Cargo freshness; they do not
+claim a measured speedup.
 
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
@@ -164,14 +166,14 @@ freshness; they do not claim a measured speedup.
 | Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
 | Native extension suite                              | 142 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
-| Cargo warning fixture and warm-cache controls       | 25 passed; wrapper variant included     | `make test-modern-stable-contract`                                    |
+| Cargo warning fixture and warm-cache controls       | 26 passed; wrapper variant included     | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
 | Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
 | `rust/Cargo.lock` unchanged                         | Passed; SHA-256 recorded below          | CI lockfile check and local checksum                                  |
 
 _Table 3: Implementation validation evidence._
 
-The contract route reported 25 passed with `sccache` on `PATH` and
+The contract route reported 26 passed with `sccache` on `PATH` and
 `RUSTC_WRAPPER` set, so its configured-wrapper variant ran rather than being
 skipped.
 
@@ -181,7 +183,10 @@ versions printed above. Its Rust test run reported 165 passed and no skipped
 tests; the separate doctest run reported 8 passed and 3 ignored. The extension
 suite reported 142 passed and 4 skipped; those skips are Windows-only tests and
 are not Linux runtime evidence. The lockfile SHA-256 was
-`f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591`.
+`f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591` at that
+commit. This branch does not modify `rust/Cargo.lock`: after the base advanced
+to take the `pyo3` bump (#682), the file is byte-identical to the base and
+hashes to `70a937c356f2b3c4baa5ffdd4e5bb6887799960502472bd2a2372d8fbb23bff0`.
 
 The full-gate harness reported these exit statuses and Cargo freshness counts.
 Exit 2 is the expected denied-warning result; exit 0 is the expected
