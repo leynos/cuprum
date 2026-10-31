@@ -38,6 +38,15 @@ def _has_outcome_assertion(code: str) -> bool:
     return any(isinstance(node, ast.Assert) for node in ast.walk(ast.parse(code)))
 
 
+def _dedent_body(lines: list[str], prefix: str) -> str:
+    """Return fenced lines as Python source without the fence's indentation."""
+    dedented = (
+        line[len(prefix) :] if prefix and line.startswith(prefix) else line
+        for line in lines
+    )
+    return "\n".join(dedented) + "\n"
+
+
 def _consume_fence(
     path: str, lines: list[str], index: int, marker: tuple[str, str]
 ) -> tuple[int, list[tuple[str, str]]]:
@@ -50,7 +59,9 @@ def _consume_fence(
         example the fence holds, if any.
     """
     kind, name = marker
-    opening = lines[index].strip()
+    raw_opening = lines[index]
+    opening = raw_opening.strip()
+    indent = raw_opening[: len(raw_opening) - len(raw_opening.lstrip())]
     delimiter = opening[:3]
     if kind == ILLUSTRATIVE:
         assert opening[len(delimiter) :].strip(), (
@@ -70,14 +81,21 @@ def _consume_fence(
     assert end is not None, f"{path}:{start}: unterminated fence"
     if kind != "tested":
         return end + 1, []
-    code = "\n".join(lines[start:end]) + "\n"
+    code = _dedent_body(lines[start:end], indent)
     assert _has_outcome_assertion(code), f"{path}:{start}: example has no outcome check"
     return end + 1, [(name, code)]
+
+
+def _names_example(prose: str, name: str) -> bool:
+    """Return whether ``prose`` mentions ``name`` as a whole token."""
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", prose) is not None
 
 
 def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
     """Return a document's tested Python examples, rejecting uncovered fences."""
     examples: list[tuple[str, str]] = []
+    prose: list[str] = []
+    illustrative: list[tuple[str, int]] = []
     lines = text.splitlines()
     pending: tuple[str, str] | None = None
     index = 0
@@ -87,6 +105,8 @@ def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
         if marker is not None:
             assert pending is None, f"{path}:{index + 1}: marker without a fence"
             pending = (marker.group(1), marker.group(2))
+            if pending[0] == ILLUSTRATIVE:
+                illustrative.append((pending[1], index + 1))
         elif line.lstrip().startswith(FENCE_DELIMITERS):
             assert pending is not None, f"{path}:{index + 1}: unmarked fence"
             index, found = _consume_fence(path, lines, index, pending)
@@ -97,8 +117,15 @@ def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
             assert pending is None or not line, (
                 f"{path}:{index + 1}: marker is not beside a fence"
             )
+            prose.append(line)
         index += 1
     assert pending is None, f"{path}: marker without a fence"
+    prose_text = "\n".join(prose)
+    for name, line_number in illustrative:
+        assert _names_example(prose_text, name), (
+            f"{path}:{line_number}: illustrative example {name!r} has no "
+            "documented exclusion reason"
+        )
     return examples
 
 
@@ -136,14 +163,47 @@ def test_shell_examples_are_published_but_not_executed() -> None:
 
 def test_illustrative_examples_are_published_but_not_executed() -> None:
     """An illustrative fence in any language is accepted without being run."""
-    text = "<!-- illustrative-example: workflow -->\n```yaml\n- name: Build\n```\n"
+    text = (
+        "The `workflow` example needs a prepared runner environment.\n"
+        "<!-- illustrative-example: workflow -->\n"
+        "```yaml\n- name: Build\n```\n"
+    )
     assert not _parse_examples("doc.md", text), "illustrative example was queued to run"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "<!-- illustrative-example: unexplained -->\n```yaml\n- name: Build\n```\n",
+            id="no-prose",
+        ),
+        pytest.param(
+            "Building happens elsewhere.\n"
+            "<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="name-only-inside-a-longer-word",
+        ),
+    ],
+)
+def test_illustrative_examples_require_a_documented_reason(text: str) -> None:
+    """An exclusion the document's prose does not name fails the gate."""
+    with pytest.raises(AssertionError, match="has no documented exclusion reason"):
+        _parse_examples("doc.md", text)
+
+
 def test_indented_markers_and_fences_are_recognized() -> None:
-    """A marker and fence nested in a list item are still matched."""
-    text = "  <!-- illustrative-example: nested -->\n  ```python\n  value = 1\n  ```\n"
-    assert not _parse_examples("doc.md", text), "an indented marker went unnoticed"
+    """A tested fence nested in a list item keeps its Python, dedented."""
+    text = (
+        "  <!-- tested-example: nested -->\n"
+        "  ```python\n"
+        "  value = 1\n"
+        "  assert value == 1\n"
+        "  ```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("nested", "value = 1\nassert value == 1\n")
+    ], "an indented tested example must be dedented into valid Python"
 
 
 def test_tested_examples_are_returned_in_document_order() -> None:
