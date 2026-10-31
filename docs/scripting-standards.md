@@ -828,6 +828,25 @@ results and exceptions that prevent completion.
 11. Update command tests to use cmd-mox PATH shims and the production catalogue;
     exercise cwd, environment, argv, output and failure semantics.
 
+## Exception: stdlib-only release scripts
+
+`scripts/release_assets_cli.py`, `scripts/release_telemetry.py`, and
+`scripts/release_version.py` are the release workflow's argparse entry points,
+and `scripts/release_gh_version.py` is a standard-input filter with no options.
+`scripts/release_assets.py`, `scripts/release_github_upload.py`, and
+`scripts/release_provenance.py` are the stdlib-only libraries they import. None
+follow this baseline: they use only the Python standard library, parse their
+own arguments with `argparse` where they take any, and run under the runner's
+preinstalled `python3` rather than `uv run`. `publish-pypi` in
+`.github/workflows/release.yml` holds the PyPI Trusted Publishing (OIDC)
+credential and must resolve no third-party package, from PyPI or elsewhere,
+while that credential is live; every network call these scripts might otherwise
+make instead stays in the workflow's own `curl` and `gh` steps. See
+[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+for the full rationale. This exception is confined to those seven modules; no
+other script in the repository is exempt from the Cyclopts, Cuprum, and Python
+3.14 defaults above.
+
 ## CI wiring: GitHub Actions (Cyclopts‑first)
 
 <!-- illustrative-example: ci-build-workflow -->
