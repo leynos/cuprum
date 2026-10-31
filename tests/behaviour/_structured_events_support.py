@@ -34,6 +34,7 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.catalogue import ProgramCatalogue
+    from cuprum.lines import LineEvent
     from cuprum.program import Program
 
 # A fixed, JSON-like tag every scenario sets so correlation is checkable.
@@ -198,6 +199,11 @@ def run_with_async_observation(
     stage observation records the high-water mark of the run-wide pending-task
     list, which is the quantity the retention bound applies to.
 
+    A no-op ``on_line`` sink keeps stdout piped. With capture and echo both
+    off, cuprum only reads a stream something still consumes for lines; the
+    sink is that consumer, and it is what lets the observer see the flood at
+    all. The retention bound is the observer's, not the sink's.
+
     Parameters
     ----------
     behaviour_state
@@ -228,9 +234,18 @@ def run_with_async_observation(
         seen.append(typ.cast("str", event.line))
         await asyncio.sleep(0)
 
+    def keep_stdout_piped(_event: LineEvent) -> None:
+        """Consume each line so an uncaptured stream is still read."""
+
     async def execute() -> None:
-        """Run the command with output capture left at its default."""
-        _ = await command.run(context=ExecutionContext(tags={"run_id": RUN_TAG}))
+        """Run the command without capture but with its stdout still read."""
+        _ = await command.run(
+            output=RunOutputOptions(
+                capture=False,
+                on_line=keep_stdout_piped,
+            ),
+            context=ExecutionContext(tags={"run_id": RUN_TAG}),
+        )
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(_StageObservation, "_emit_event", spy)

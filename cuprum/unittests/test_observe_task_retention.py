@@ -22,8 +22,10 @@ from cuprum._line_callbacks import (
     _compose_line_callbacks,
     _LineEmissionContext,
 )
+from cuprum._line_stream import _LINE_QUEUE_CAPACITY
 from cuprum._observability import _wait_for_exec_hook_tasks
 from cuprum._observe_task_retention import (
+    _OBSERVE_TASK_CEILING,
     _await_hook_capacity,
     _has_hook_capacity,
     _prune_finished_hook_tasks,
@@ -73,6 +75,14 @@ def _spawn(
         task.cancel()
         return task
     return asyncio.create_task(_hold(gate))
+
+
+def test_observe_task_ceiling_matches_line_queue_capacity() -> None:
+    """The two per-run bounds describe one quantity, so neither may drift."""
+    assert _OBSERVE_TASK_CEILING == _LINE_QUEUE_CAPACITY, (
+        "the observe-task ceiling must match the line queue capacity: "
+        f"{_OBSERVE_TASK_CEILING} != {_LINE_QUEUE_CAPACITY}"
+    )
 
 
 def test_prune_drops_successes_and_keeps_unfinished_tasks() -> None:
