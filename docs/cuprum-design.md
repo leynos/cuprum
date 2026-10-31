@@ -2320,7 +2320,7 @@ child, cancels and gathers the started tasks, closes stdin, and discards stdout
 and stderr to end-of-file before the original error reaches the caller. When
 the setup succeeds, the started run is returned instead.
 
-Figure 10: Startup abandonment after a post-spawn failure, from
+Figure 9: Startup abandonment after a post-spawn failure, from
 `_start_owned_process` to `_abandon_started_process`
 
 ```mermaid
@@ -2499,7 +2499,7 @@ the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 9: Capturing drain EOF-grace sequence
+Figure 10: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
