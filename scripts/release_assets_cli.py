@@ -13,10 +13,11 @@ or Cuprum) at release time, and every network call stays in the workflow's ``cur
 ``gh`` steps. That is the documented exception to the scripting standards'
 Cyclopts, Cuprum, and Python 3.13 defaults. Each subcommand is one step of
 ``release.yml``: ``carryover`` (``draft-release``), ``stage-pypi``
-(``publish-pypi``), then ``stage-github``, ``check-fetched``, and ``verify``
-(``publish-release``). The reconciliation logic itself lives in
-``scripts/release_assets.py``; this module only wires it to ``argparse`` and
-the workflow's ``GITHUB_OUTPUT`` protocol.
+(``publish-pypi``), then ``stage-github``, ``check-fetched``,
+``check-provenance``, and ``verify`` (``publish-release``). The reconciliation
+logic itself lives in ``scripts/release_assets.py`` and
+``scripts/release_github_upload.py``; this module only wires it to ``argparse``
+and the workflow's ``GITHUB_OUTPUT`` protocol.
 """
 
 from __future__ import annotations
@@ -30,11 +31,14 @@ from scripts.release_assets import (
     ReleaseAssetError,
     State,
     carryover,
-    check_fetched,
-    stage_github,
     stage_pypi,
     verify,
     write_output,
+)
+from scripts.release_github_upload import (
+    check_fetched,
+    check_provenance,
+    stage_github,
 )
 
 if typ.TYPE_CHECKING:
@@ -85,6 +89,9 @@ def _stage_pypi(state: State, args: argparse.Namespace) -> None:
 
 def _stage_github(state: State, args: argparse.Namespace) -> None:
     """Stage GitHub's upload set and print PyPI's files as TSV rows."""
+    # Without the index PyPI looks empty, so every artefact would be staged
+    # from the local build instead of fetched from PyPI's published bytes.
+    _path(args, "index")
     output = _path(args, "output")
     fetch = stage_github(state, _path(args, "bundles"), output)
     for name, url in fetch:
@@ -94,7 +101,22 @@ def _stage_github(state: State, args: argparse.Namespace) -> None:
 
 def _check_fetched(state: State, args: argparse.Namespace) -> None:
     """Check every fetched PyPI file against PyPI's digest."""
+    # Without the index there is no digest to compare against, so the check
+    # would pass over every fetched file without examining one.
+    _path(args, "index")
     check_fetched(state, _path(args, "output"))
+
+
+def _check_provenance(state: State, args: argparse.Namespace) -> None:
+    """Check every fetched PyPI file against approved build provenance."""
+    # Without the index the plan holds no PyPI names, so there would be
+    # nothing to check; refuse rather than silently verifying nothing.
+    _path(args, "index")
+    check_provenance(
+        state,
+        _path(args, "output"),
+        _path(args, "provenance"),
+    )
 
 
 def _verify(state: State, args: argparse.Namespace) -> None:
@@ -110,6 +132,7 @@ _COMMANDS: dict[str, cabc.Callable[[State, argparse.Namespace], None]] = {
     "stage-pypi": _stage_pypi,
     "stage-github": _stage_github,
     "check-fetched": _check_fetched,
+    "check-provenance": _check_provenance,
     "verify": _verify,
 }
 

@@ -7,7 +7,10 @@ checked-in step scripts execute unchanged against state the test controls:
 
 - ``FAKE_GITHUB_ASSETS``: a directory holding one file per release asset.
 - ``FAKE_PYPI_FILES``: a directory holding one file per PyPI file.
-- ``FAKE_ATTESTATIONS``: JSON records for repository build attestations.
+- ``FAKE_ATTESTATIONS``: JSON records for repository build attestations. Each
+  carries a subject name and digest plus the repository, signer workflow,
+  source ref, source digest, predicate type, and runner kind that
+  ``gh attestation verify`` must match.
 - ``FAKE_GITHUB_DIGEST_OVERRIDES``: JSON filename-to-SHA-256 hex metadata
   overrides, without the ``sha256:`` prefix.
 - ``FAKE_CALLS``: a file each call appends its argument vector to, as JSON.
@@ -133,13 +136,32 @@ def _matches_attestation_policy(
     record: dict[str, object],
     args: list[str],
 ) -> bool:
-    """Return whether a record satisfies each requested identity constraint."""
+    """Return whether a record satisfies each requested identity constraint.
+
+    The repository, signer workflow and source ref are always compared, so a
+    verifier call that omits one cannot match a record that carries it. The
+    source digest and predicate type are compared only when the verifier asks
+    for them: ``draft-release`` relies on the omission of ``--source-digest``
+    to keep an interrupted attempt for the same tag eligible.
+
+    Returns
+    -------
+    bool
+        Whether the record satisfies every constraint the call supplied.
+    """
     if record.get("repository") != _option(args, "--repo"):
         return False
     if record.get("signer_workflow") != _option(args, "--signer-workflow"):
         return False
     if record.get("source_ref") != _option(args, "--source-ref"):
         return False
+    for option, field in (
+        ("--source-digest", "source_digest"),
+        ("--predicate-type", "predicate_type"),
+    ):
+        requested = _option(args, option)
+        if requested is not None and record.get(field) != requested:
+            return False
     return (
         "--deny-self-hosted-runners" not in args or record.get("self_hosted") is False
     )

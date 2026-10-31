@@ -211,6 +211,29 @@ def test_stage_pypi_requires_the_provenance_directory(
     ), "the CLI must explain that stage-pypi requires provenance records"
 
 
+@pytest.mark.parametrize(
+    "command", ["stage-github", "check-fetched", "check-provenance"]
+)
+def test_the_index_dependent_commands_require_the_index(
+    tmp_path: pth.Path, command: str
+) -> None:
+    """Without the index each command would consider no PyPI file at all."""
+    link_scripts(tmp_path)
+    _touch(tmp_path / "dist" / "publish", *_ARTEFACTS)
+    (tmp_path / "assets.json").write_text('{"assets": []}', encoding="utf-8")
+    completed = run_bash(
+        f"python3 -m scripts.release_assets_cli {command} "
+        "--publish dist/publish --assets assets.json --output github-upload "
+        "--bundles dist/attestations --provenance pypi-provenance",
+        tmp_path,
+    )
+
+    assert completed.returncode == 1, f"{command} must reject a missing index"
+    assert f"--index is required for {command}" in completed.stderr, (
+        "the CLI must explain that the command needs the PyPI index"
+    )
+
+
 def test_a_transient_failure_is_retried_and_counted(tmp_path: pth.Path) -> None:
     """A 503 then a 429 then a 200 succeeds on the third attempt."""
     fake, completed, written = _fetch_and_skip(tmp_path, "503,429,200")

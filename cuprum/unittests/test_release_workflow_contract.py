@@ -26,6 +26,8 @@ if typ.TYPE_CHECKING:
 _PINNED = re.compile(r"@[0-9a-f]{40}$")
 _CARGO_CHECK = "leynos/shared-actions/.github/actions/ensure-cargo-version"
 _PYPROJECT_CHECK = "Check the pyproject.toml version against the tag"
+_GH_VERSION_CHECK = "Check the GitHub CLI version"
+_GH_VERSION_COMMAND = "gh --version | python3 scripts/release_gh_version.py"
 
 #: Each job's exact token scopes. Only the GitHub Release jobs may write
 #: repository contents, and only the attesting and uploading jobs may mint an
@@ -37,9 +39,11 @@ _EXPECTED_PERMISSIONS: typ.Final = {
     "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
     "publish-pypi": {"contents": "read", "id-token": "write"},
     "draft-release": {"contents": "write", "attestations": "read"},
-    "publish-release": {"contents": "write"},
+    "publish-release": {"contents": "write", "attestations": "read"},
 }
 _FETCH_INDEX = "Fetch the PyPI index"
+_PROVENANCE_STEP = "Verify provenance of PyPI bytes"
+_PROVENANCE_DIR = "pypi-provenance"
 
 #: The `id` of the publisher step that reports whether the CodeScene token
 #: exists, and that step's whole command.
@@ -153,6 +157,28 @@ def test_every_publishing_job_waits_on_the_version_check() -> None:
     }, "the pyproject check must compare against the same tag-derived version"
 
 
+def test_the_cli_version_is_checked_before_anything_is_published() -> None:
+    """An old CLI must stop the release before PyPI holds any of its files."""
+    found = step("check-version", _GH_VERSION_CHECK)
+    assert "if" not in found, (
+        "the early gate must run on every release, including one with no carryover"
+    )
+    assert step_script("check-version", _GH_VERSION_CHECK) == _GH_VERSION_COMMAND, (
+        "check-version must use the same version gate as the verifier steps"
+    )
+    assert _GH_VERSION_COMMAND in step_script("publish-release", _PROVENANCE_STEP), (
+        "the verifier step must still check the CLI that verifies attestations"
+    )
+    telemetry = next(
+        item
+        for item in _job("check-version")["steps"]
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    assert (
+        "version_mismatch=${{ steps.gh-version.outcome }}" in telemetry["with"]["steps"]
+    ), "check-version telemetry must record the CLI version outcome"
+
+
 def test_the_published_artefacts_are_the_attested_ones() -> None:
     """Provenance covers every file, and later jobs ship exactly those bytes."""
     attest = _uses("attest", "actions/attest-build-provenance")
@@ -252,14 +278,75 @@ def test_the_release_is_published_only_after_pypi() -> None:
         "draft-release", "Create or reuse the draft release"
     )
     names = [item.get("name") for item in _job("publish-release")["steps"]]
+    fetched = names.index("Check the fetched PyPI bytes")
+    provenance = names.index(_PROVENANCE_STEP)
     upload = names.index("Upload the assets the release lacks")
     check = names.index("Check both destinations hold the same bytes")
-    assert upload < check < names.index("Publish the GitHub Release"), (
-        "the digests must be compared after the upload and before the release"
+    assert (
+        fetched
+        < provenance
+        < upload
+        < check
+        < names.index("Publish the GitHub Release")
+    ), (
+        "provenance must precede the upload, and the digests must be compared "
+        "after the upload and before the release"
     )
     assert "--draft=false" in step_script(
         "publish-release", "Publish the GitHub Release"
     )
+
+
+def test_pypi_bytes_are_verified_before_the_release_upload() -> None:
+    """Fetched PyPI bytes need approved provenance, not just the index digest."""
+    found = step("publish-release", _PROVENANCE_STEP)
+    assert "if" not in found, (
+        "the gate must run unconditionally, even with an empty fetch list"
+    )
+    script = step_script("publish-release", _PROVENANCE_STEP)
+    for fragment in (
+        "gh --version | python3 scripts/release_gh_version.py",
+        f"mkdir -p {_PROVENANCE_DIR}",
+        '--repo "${GITHUB_REPOSITORY}"',
+        '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"',
+        '--source-ref "${GITHUB_REF}"',
+        '--source-digest "${GITHUB_SHA}"',
+        "--predicate-type https://slsa.dev/provenance/v1",
+        "--deny-self-hosted-runners",
+        "--format json",
+        f'record="{_PROVENANCE_DIR}/${{name}}.json"',
+        'rm -f "${record}"',
+        "failed=0",
+        "failed=1",
+        '[ "${failed}" -eq 0 ] || exit 1',
+        "::error title=pypi-provenance::",
+        "check-provenance --publish dist/publish",
+        "--index pypi-index.json",
+        "--output github-upload",
+        f"--provenance {_PROVENANCE_DIR}",
+    ):
+        assert fragment in script, f"the provenance gate must include {fragment!r}"
+    assert "${{" not in script, (
+        "the provenance script must not interpolate workflow expressions"
+    )
+    assert "done < pypi-fetch.tsv" in script, (
+        "only the files actually fetched from PyPI need verification"
+    )
+    loop = script.partition("done < pypi-fetch.tsv")[0]
+    assert "exit 1" not in loop, (
+        "a failed verification must not stop the remaining checks"
+    )
+    assert script.index("done < pypi-fetch.tsv") < script.index(
+        '[ "${failed}" -eq 0 ] || exit 1'
+    ), "the gate must finish verifying every file before it exits"
+    telemetry = next(
+        item
+        for item in _job("publish-release")["steps"]
+        if item.get("uses") == "./.github/actions/release-telemetry"
+    )
+    recorded = telemetry["with"]["steps"]
+    attestation = "attestation=${{ steps.pypi-provenance.outcome }}"
+    assert attestation in recorded, "provenance failures must not count as setup"
 
 
 def test_nothing_is_ever_overwritten_and_pypi_holds_no_github_token() -> None:

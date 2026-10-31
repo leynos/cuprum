@@ -61,6 +61,11 @@ jobs:
         env:
           TAG_VERSION: ${{ steps.cargo-version.outputs.version }}
         run: python3 scripts/release_version.py
+      # Checked first here so a runner with an old CLI fails before the PyPI
+      # upload, rather than after it, when only a draft Release is left to fix.
+      - name: Check the GitHub CLI version
+        id: gh-version
+        run: gh --version | python3 scripts/release_gh_version.py
       - uses: ./.github/actions/release-telemetry
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -70,6 +75,7 @@ jobs:
           steps: >-
             version_mismatch=${{ steps.cargo-version.outcome }}
             version_mismatch=${{ steps.pyproject-version.outcome }}
+            version_mismatch=${{ steps.gh-version.outcome }}
 
   build-wheels:
     permissions:
@@ -373,6 +379,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      attestations: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -404,6 +411,41 @@ jobs:
         run: |
           python3 -m scripts.release_assets_cli check-fetched --publish dist/publish \
             --index pypi-index.json --assets release-assets.json --output github-upload
+      # PyPI's index digest proves only that the download arrived intact, not
+      # who built the bytes. The release must carry only bytes this
+      # repository's workflow attested for this tag and this commit, so every
+      # fetched file is verified before it is uploaded. The evidence is kept
+      # outside `github-upload/` so it never becomes a release asset.
+      - name: Verify provenance of PyPI bytes
+        id: pypi-provenance
+        run: |
+          set -euo pipefail
+          gh --version | python3 scripts/release_gh_version.py
+          mkdir -p pypi-provenance
+          failed=0
+          while IFS=$'\t' read -r name url; do
+            [ -n "${name}" ] || continue
+            record="pypi-provenance/${name}.json"
+            if ! gh attestation verify "github-upload/${name}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              --source-ref "${GITHUB_REF}" \
+              --source-digest "${GITHUB_SHA}" \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --deny-self-hosted-runners \
+              --format json > "${record}"; then
+              rm -f "${record}"
+              echo "::error title=pypi-provenance::Could not verify build provenance" \
+                "for ${name}." >&2
+              failed=1
+            fi
+          done < pypi-fetch.tsv
+          # Verify every file before stopping, so one run names every
+          # unattested file rather than only the first one it meets.
+          [ "${failed}" -eq 0 ] || exit 1
+          python3 -m scripts.release_assets_cli check-provenance --publish dist/publish \
+            --index pypi-index.json --assets release-assets.json \
+            --output github-upload --provenance pypi-provenance
       # No `--clobber`: an asset the release already holds is canonical.
       - name: Upload the assets the release lacks
         id: upload
@@ -423,6 +465,7 @@ jobs:
             github_api=${{ steps.assets.outcome }}
             index_http=${{ steps.stage.outcome }}
             digest_mismatch=${{ steps.fetched.outcome }}
+            attestation=${{ steps.pypi-provenance.outcome }}
             upload=${{ steps.upload.outcome }}
       - name: Check both destinations hold the same bytes
         id: verify

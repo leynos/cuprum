@@ -191,11 +191,13 @@ a consumer.
 ### Stdlib-only release scripts
 
 `scripts/release_assets_cli.py`, `scripts/release_telemetry.py`, and
-`scripts/release_version.py` are the release workflow's `argparse` entry points;
-`scripts/release_assets_cli.py` wraps the importable reconciliation library
-`scripts/release_assets.py`, which declares no command line of its own. All
-four modules use only the Python standard library, not Cyclopts or Cuprum, and
-the entry points run under the runner's preinstalled `python3` rather than
+`scripts/release_version.py` are the release workflow's `argparse` entry
+points, and `scripts/release_gh_version.py` is a standard-input filter with no
+options. `scripts/release_assets_cli.py` wraps the importable reconciliation
+libraries `scripts/release_assets.py`, `scripts/release_github_upload.py`, and
+`scripts/release_provenance.py`, which declare no command line of their own.
+All seven modules use only the Python standard library, not Cyclopts or Cuprum,
+and the entry points run under the runner's preinstalled `python3` rather than
 through `uv run`. This is a deliberate, documented exception to
 [scripting standards](scripting-standards.md): `publish-pypi` holds the PyPI
 OIDC credential and must not resolve any third-party package, from PyPI or
@@ -324,3 +326,83 @@ digest and provenance, then delete the named asset and rerun if downloaded
 bytes still disagree with GitHub's reported digest or provenance remains
 untrusted. The release phases still have no tracing spans: GitHub Actions has
 no tracing collector or backend to receive them.
+
+## Addendum (2026-10-30): verify provenance before publishing PyPI bytes
+
+The 2026-10-26 addendum closed the GitHub-to-PyPI direction: a carried GitHub
+asset needs approved provenance before PyPI may receive it. The reverse
+direction remained open. When PyPI already held a filename the GitHub Release
+lacked, `publish-release` downloaded the URL named by PyPI's index, checked it
+against the digest in that same index, and uploaded it. The index digest
+establishes only that the download arrived intact; it says nothing about who
+built the bytes, and an index record that agrees with malicious bytes would
+agree just as readily. A PyPI file could therefore become a GitHub Release
+asset without any approved build provenance.
+
+### Verification before upload
+
+`publish-release` now runs an unconditional step between `check-fetched` and
+`gh release upload`. It first requires GitHub CLI `2.102.0` or newer through
+`scripts/release_gh_version.py`, then verifies every name in `pypi-fetch.tsv`
+into `pypi-provenance/<name>.json`, and finally runs
+`release_assets_cli check-provenance`. That command hashes the staged bytes
+rather than trusting the index digest, and requires a verifier record binding
+that exact filename and digest in one statement subject. Missing, malformed,
+split-subject, or mismatched evidence fails the step, names every failing file,
+and leaves the release a draft.
+
+The evidence directory sits outside `github-upload/`, so verifier output never
+becomes a release asset. The step has no `if:` condition: an empty fetch list
+still succeeds, but a fetch list the step cannot read stops the job rather than
+silently skipping verification. Every index-dependent command refuses to run
+without `--index`, because without it the plan holds no PyPI names: staging
+would substitute the local rebuild for PyPI's bytes, and both checks would pass
+while examining nothing. The `publish-release` telemetry record maps the step
+to the existing `attestation` failure category, so a failure here is counted as
+an attestation failure rather than as `setup`.
+
+### Attestation identity and a moved tag
+
+The verifier binds the repository, the signer workflow
+`.github/workflows/release.yml`, the full tag ref from `GITHUB_REF`, the
+triggering commit from `GITHUB_SHA`, the SLSA v1 predicate type, and denial of
+self-hosted runners. It also requires the asset's exact filename and SHA-256 in
+the statement subject.
+
+Pinning the source digest is what separates this gate from the carried-asset
+one. `draft-release` deliberately omits `--source-digest` so an interrupted
+attempt for the same tag remains eligible. `publish-release` must not inherit
+that latitude: bytes it publishes claim to be this release's build, so it pins
+the commit the tag names now. A moved tag cannot carry PyPI's bytes over from a
+different commit: PyPI stays canonical for a filename it holds, so a rerun
+keeps those bytes and discards its own rebuild, and the gate fails until the
+tag names the attesting commit again.
+
+### Token scopes for the new gate
+
+`publish-release` adds `attestations: read`; it already holds `contents: write`
+for the upload and the un-drafting edit. It reads `GITHUB_REPOSITORY`,
+`GITHUB_REF`, and `GITHUB_SHA` from the runner environment rather than
+interpolating them into the script, keeping the workflow-wide rule that no
+`run` body expands a `${{ }}` expression.
+
+### Manual remediation
+
+Bytes already on PyPI cannot be deleted or replaced. When the check fails,
+first confirm the tag names the intended commit; if it was moved, restore it to
+the commit that built PyPI's files and rerun. If PyPI holds bytes no run
+attested, no rerun can approve them unless the rebuild is byte-identical, so
+publish a new version. Deleting the GitHub asset is not a remedy here: the
+blocking bytes are on PyPI, and the release simply stays a draft.
+
+### Early CLI version check
+
+`check-version` now runs `gh --version | python3 scripts/release_gh_version.py`
+before any job attests, publishes to PyPI, or touches a release. Without it, a
+runner whose CLI predates `2.102.0` would build and publish to PyPI and only
+then fail in `publish-release`, leaving the GitHub Release a draft that a rerun
+or a manual repair has to finish. The later checks remain: `draft-release`
+needs the minimum only when it must verify carried assets, and
+`publish-release` checks the exact CLI that verifies PyPI bytes on every run.
+The `check-version` telemetry record maps this step to the existing
+`version_mismatch` failure category.

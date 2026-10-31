@@ -25,9 +25,9 @@ from scripts.release_assets import (
     State,
     mismatches,
     plan,
-    stage_github,
     stage_pypi,
 )
+from scripts.release_github_upload import stage_github
 from tests.helpers.release_asset_provenance import provenance_record, sha256_hex
 
 if typ.TYPE_CHECKING:

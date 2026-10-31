@@ -1,11 +1,14 @@
 """Reconcile release artefacts across PyPI and the GitHub Release.
 
-PyPI bytes remain canonical. Carried GitHub bytes require approved provenance.
-Identical local bytes remain, unverified differences stop staging, and each
-destination receives only missing names.
+PyPI bytes remain canonical. Carried GitHub bytes require approved provenance,
+and so do PyPI bytes uploaded to the GitHub Release. Identical local bytes
+remain, unverified differences stop staging, and each destination receives only
+missing names.
 
 The CLI imports this module in the PyPI-token job, so it stays
 standard-library-only; workflow ``curl``/``gh`` steps own network access.
+``scripts/release_github_upload.py`` assembles and checks the upload set the
+GitHub Release receives.
 """
 
 from __future__ import annotations
@@ -201,8 +204,22 @@ def local_names(directory: Path) -> list[str]:
     return names
 
 
-def _check_digest(path: Path, expected: str | None) -> None:
-    """Raise unless ``path`` holds bytes with the ``expected`` digest."""
+def require_digest(path: Path, expected: str | None) -> None:
+    """Raise unless ``path`` holds bytes with the ``expected`` digest.
+
+    Parameters
+    ----------
+    path : Path
+        File whose bytes are hashed.
+    expected : str | None
+        Expected SHA-256 hex digest; ``None`` never matches, because a
+        destination that reports no digest establishes nothing.
+
+    Raises
+    ------
+    ReleaseAssetError
+        When the file's digest differs from ``expected``.
+    """
     actual = sha256_of(path)
     if expected is None or actual != expected:
         msg = f"{path.name} has sha256 {actual}, expected {expected}"
@@ -229,7 +246,7 @@ def _verify_carried_asset(
 ) -> None:
     """Validate carried bytes and provenance, with an actionable error."""
     try:
-        _check_digest(asset, expected)
+        require_digest(asset, expected)
         require_matching_record(provenance / f"{name}.json", name, expected)
     except OSError as error:
         reason = "cannot read the downloaded GitHub bytes"
@@ -334,54 +351,6 @@ def stage_pypi(state: State, github_files: Path, provenance: Path) -> bool:
     if not decided.pypi_uploads:
         print("Every artefact is already on PyPI; nothing to publish.")
     return bool(decided.pypi_uploads)
-
-
-def _pypi_fetch_list(
-    lacking: cabc.Iterable[str], pypi: cabc.Mapping[str, PypiFile]
-) -> list[tuple[str, str]]:
-    """Return the PyPI (name, url) pairs to fetch, insisting on HTTPS."""
-    fetch = [(name, pypi[name].url) for name in lacking if name in pypi]
-    if any(not url.startswith("https://") for _, url in fetch):
-        msg = "every PyPI download must use HTTPS"
-        raise ReleaseAssetError(msg)
-    return fetch
-
-
-def _copy_pypi_gap(
-    lacking: cabc.Iterable[str],
-    pypi: cabc.Mapping[str, PypiFile],
-    publish: Path,
-    output: Path,
-) -> None:
-    """Copy each lacking artefact that PyPI does not list into ``output``."""
-    for name in lacking:
-        if name not in pypi:
-            shutil.copyfile(publish / name, output / name)
-
-
-def _copy_unattached_bundles(
-    bundles: Path, github: cabc.Mapping[str, str | None], output: Path
-) -> None:
-    """Copy each bundle the GitHub Release does not already hold into ``output``."""
-    for bundle in sorted(bundles.iterdir()):
-        if bundle.name not in github:
-            shutil.copyfile(bundle, output / bundle.name)
-
-
-def stage_github(state: State, bundles: Path, output: Path) -> list[tuple[str, str]]:
-    """Stage what the GitHub Release lacks; return the PyPI files to fetch."""
-    lacking = sorted(state.plan().github_uploads)
-    fetch = _pypi_fetch_list(lacking, state.pypi)
-    output.mkdir(parents=True, exist_ok=True)
-    _copy_pypi_gap(lacking, state.pypi, state.publish, output)
-    _copy_unattached_bundles(bundles, state.github, output)
-    return fetch
-
-
-def check_fetched(state: State, output: Path) -> None:
-    """Raise unless every file fetched from PyPI matches PyPI's digest."""
-    for name in sorted(state.plan().github_uploads & set(state.pypi)):
-        _check_digest(output / name, state.pypi[name].sha256)
 
 
 def verify(state: State, bundles: Path) -> list[str]:
