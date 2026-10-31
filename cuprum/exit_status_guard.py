@@ -126,14 +126,16 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
 
     A stream with no usable descriptor cannot be redirected, and CPython will
     still flush it during finalization, so it is replaced with a sink that
-    cannot fail. A proxy that does not implement ``fileno`` at all is treated
-    the same way: attribute lookup raises ``AttributeError`` rather than the
-    ``OSError`` a descriptorless stream reports. A fallback replacement keeps
-    the same promise when opening or duplicating the null device fails.
+    cannot fail. "No usable descriptor" covers every way a proxy can decline
+    one: no ``fileno`` method at all (``AttributeError``), a descriptorless
+    stream (``OSError``), a proxy that reports itself closed (``ValueError``),
+    and a ``fileno`` whose result ``os.dup2`` rejects (``TypeError``). A
+    fallback replacement keeps the same promise when opening or duplicating
+    the null device fails.
     """
     try:
         descriptor = stream.fileno()
-    except (AttributeError, OSError):
+    except (AttributeError, OSError, ValueError):
         setattr(sys, name, _NullTextSink())
         return
     try:
@@ -142,7 +144,7 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
             os.dup2(null_descriptor, descriptor)
         finally:
             os.close(null_descriptor)
-    except OSError:
+    except (OSError, TypeError):
         setattr(sys, name, _NullTextSink())
 
 
