@@ -82,6 +82,7 @@ def test_modern_stable_pull_requests_use_a_dedicated_changes_filter() -> None:
         "uv.lock",
         "scripts/modern_stable_warning_controls.py",
         "scripts/tests/test_modern_stable_warning_controls.py",
+        "scripts/tests/test_modern_stable_warning_controls_e2e.py",
         "tests/helpers/cargo_warning_fixture.py",
         "tests/helpers/modern_stable_make.py",
         "tests/helpers/docs.py",

@@ -134,6 +134,17 @@ replay a cached warning without recompiling its local package. Clippy has its
 own warn-level lint fixture and warm failure control. Where the environment has
 a configured sccache wrapper, the warm policy replay runs through it as well.
 
+The warning-control command is covered at two levels. Its orchestration accepts
+injected gate, worktree, and runner boundaries, and the contract tests drive
+every control phase, a mid-gate failure that must restore the Makefile policy
+and source, a worktree setup fault, and an aggregated cleanup fault through
+them. A separate end-to-end test invokes the shipped entry point against a
+throwaway one-crate Git repository under `rust/target`, so the real Git
+worktree, `make`, Cargo, log retention, report, and cleanup paths all run; only
+the crate's size is reduced. The host-triple lookup the fixtures use accepts an
+injected probe and executable locator, so its success, fault, and
+missing-toolchain paths are tested without depending on the host toolchain.
+
 The Rustdoc probe sets `CARGO_BUILD_WARNINGS=deny` without `RUSTDOCFLAGS` and
 uses a warn-level rustdoc lint. Cargo 1.99.1 exited 101 and reported that
 `build.warnings` denied the Rustdoc warning. This is informational: the modern
@@ -155,10 +166,10 @@ compiled, checked, or fresh.
 
 The results below come from Linux runs on the implementation candidate at commit
 `b047b5644` on 30 October 2026, except the contract row, which was re-measured
-after that route gained further regression tests and now reports 26 passed. The
-test counts below (165 Rust tests, 8 doctests and 142 extension tests passed)
-were confirmed unchanged on the rebased candidate `d8f70abc9`. The full-gate
-warning controls in Table 4 last completed on `b047b5644`, and
+after that route gained further regression tests and now reports 33 passed with
+no skips. The test counts below (165 Rust tests, 8 doctests and 142 extension
+tests passed) were confirmed unchanged on the rebased candidate `d8f70abc9`.
+The full-gate warning controls in Table 4 last completed on `b047b5644`, and
 `make modern-stable-warning-controls` did not complete on the later candidate.
 These results record statuses and Cargo freshness; they do not claim a measured
 speedup.
@@ -169,16 +180,18 @@ speedup.
 | Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
 | Native extension suite                              | 142 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
-| Cargo warning fixture and warm-cache controls       | 26 passed; wrapper variant included     | `make test-modern-stable-contract`                                    |
+| Cargo warning fixture and warm-cache controls       | 33 passed; no skips                     | `make test-modern-stable-contract`                                    |
 | Informational Rustdoc probe                         | Exit 101; Cargo denied the lint warning | `rust/target/cargo-build-warnings-contract/rustdoc-warning-probe.txt` |
 | Full-gate warning controls                          | Passed; no control failures             | `make modern-stable-warning-controls`                                 |
 | `rust/Cargo.lock` unchanged                         | Passed; SHA-256 recorded below          | CI lockfile check and local checksum                                  |
 
 _Table 3: Implementation validation evidence._
 
-The contract route reported 26 passed with `sccache` on `PATH` and
+The contract route reported 33 passed with `sccache` on `PATH` and
 `RUSTC_WRAPPER` set, so its configured-wrapper variant ran rather than being
-skipped.
+skipped. That run also covers the new end-to-end case, which executes the
+shipped warning-control entry point against a throwaway one-crate Git
+repository.
 
 The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the

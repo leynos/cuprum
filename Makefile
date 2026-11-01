@@ -779,7 +779,8 @@ test-modern-stable-contract: build uv $(VENV_TOOLS) ## Validate modern stable ro
 	$(PYTEST) -v \
 		cuprum/unittests/test_modern_stable_make_contract.py \
 		cuprum/unittests/test_cargo_build_warnings_contract.py \
-		scripts/tests/test_modern_stable_warning_controls.py
+		scripts/tests/test_modern_stable_warning_controls.py \
+		scripts/tests/test_modern_stable_warning_controls_e2e.py
 
 dev-fast-check: ## Verify Linux dev-fast prerequisites
 	@$(DEV_FAST_CHECK_COMMAND)

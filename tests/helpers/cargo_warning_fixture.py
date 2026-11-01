@@ -84,20 +84,7 @@ class ToolchainProbeTimeoutError(ToolchainProbeError):
 def _probe(
     argv: list[str], env: cabc.Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Run one fixed toolchain probe under optional environment entries.
-
-    Returns
-    -------
-    subprocess.CompletedProcess[str]
-        The finished probe.
-
-    Raises
-    ------
-    ToolchainProbeError
-        If the probe could not be started.
-    ToolchainProbeTimeoutError
-        If the probe outlived `PROBE_TIMEOUT_SECONDS`.
-    """
+    """Run one fixed probe, translating start and timeout faults."""
     child_env = None if env is None else {**os.environ, **env}
     try:
         return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed toolchain probe.
@@ -158,15 +145,12 @@ def toolchain_available(
     Notes
     -----
     Cargo is selected through ``RUSTUP_TOOLCHAIN``, not a ``+toolchain``
-    argument, because the ``+`` form is a rustup proxy feature that a direct
-    Cargo binary ignores; the Make route uses the same mechanism.
+    argument, because the ``+`` form is a rustup proxy feature a direct Cargo
+    binary ignores; the Make route uses the same mechanism.
 
-    A missing executable is a read result: an absent toolchain is reported as
-    unavailable. A probe fault is the host's failure, so it propagates instead
-    of masquerading as absence; callers that may skip a loaded host decide that
-    policy themselves. :class:`ToolchainProbeError` covers a probe that could
-    not start, and :class:`ToolchainProbeTimeoutError` one that outlived its
-    bound.
+    An absent executable is a read result, but a probe fault propagates: a
+    located executable that will not run is a broken environment, not a
+    missing toolchain.
     """
     rustup = locate("rustup")
     cargo = locate("cargo")
@@ -225,13 +209,12 @@ def require_toolchain(
     -----
     A missing toolchain and a probe that outlived its bound both skip here and
     fail under ``CUPRUM_REQUIRE_MODERN_STABLE=1``. A probe that could not be
-    started is different: :class:`ToolchainProbeError` propagates, because a
-    located executable that will not run is a broken environment.
+    started propagates instead, because a located executable that will not run
+    is a broken environment.
     """
     cargo = locate("cargo")
     if cargo is None:
         _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
-    is_available = False
     try:
         is_available = toolchain_available(
             toolchain=toolchain, probe=probe, locate=locate
@@ -243,8 +226,22 @@ def require_toolchain(
     return cargo
 
 
-def host_target() -> str:
-    """Return the exact host triple reported by the selected rustc.
+def host_target(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> str:
+    """Return the exact host triple reported by the named rustc.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the probe must reach; never read from the environment.
+    probe : Probe
+        Adapter running one fixed argument vector.
+    locate : Locator
+        Resolver for executable names, injected so `PATH` is not read here.
 
     Returns
     -------
@@ -253,20 +250,22 @@ def host_target() -> str:
 
     Raises
     ------
-    AssertionError
-        If rustup is unavailable or `rustc -vV` omits its host triple.
+    ToolchainProbeError
+        If ``rustc -vV`` fails or omits its host triple.
+
+    Notes
+    -----
+    An absent ``rustup`` follows the same skip-or-fail policy as
+    :func:`require_toolchain`, so a missing toolchain never masquerades as a
+    probe fault.
     """
-    rustup = shutil.which("rustup")
+    rustup = locate("rustup")
     if rustup is None:
-        message = "rustup must be available with the pinned toolchain"
-        raise AssertionError(message)
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed toolchain probe.
-        [rustup, "run", MODERN_STABLE_TOOLCHAIN, "rustc", "-vV"],
-        capture_output=True,
-        check=True,
-        timeout=PROBE_TIMEOUT_SECONDS,
-        text=True,
-    )
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
+    result = probe([rustup, "run", toolchain, "rustc", "-vV"], None)
+    if result.returncode != 0:
+        message = f"rustc -vV failed for toolchain {toolchain} ({result.returncode})"
+        raise ToolchainProbeError(message)
     target = next(
         (
             line.removeprefix("host: ")
@@ -276,8 +275,8 @@ def host_target() -> str:
         None,
     )
     if target is None:
-        message = "rustc -vV must report its host target"
-        raise AssertionError(message)
+        message = f"rustc -vV must report its host target for toolchain {toolchain}"
+        raise ToolchainProbeError(message)
     return target
 
 

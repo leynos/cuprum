@@ -19,6 +19,7 @@ from tests.helpers.cargo_warning_fixture import (
     CargoFixture,
     ToolchainProbeError,
     ToolchainProbeTimeoutError,
+    host_target,
     require_toolchain,
     toolchain_available,
 )
@@ -189,6 +190,49 @@ def test_a_timed_out_probe_fails_a_required_run(
     monkeypatch.setenv("CUPRUM_REQUIRE_MODERN_STABLE", "1")
     with pytest.raises(pytest.fail.Exception, match="probe timed out"):
         require_toolchain(probe=_timed_out_probe, locate=_locate)
+
+
+def test_host_target_reads_the_reported_host_triple() -> None:
+    """Address the named toolchain and return the host triple it reports."""
+    seen: list[list[str]] = []
+
+    def probe(
+        argv: list[str], _env: cabc.Mapping[str, str] | None
+    ) -> subprocess.CompletedProcess[str]:
+        """Record the query and answer with a complete `rustc -vV` report."""
+        seen.append(argv)
+        return _process("rustc 1.99.1 (fixture)\nhost: aarch64-apple-darwin\n")
+
+    target = host_target(toolchain=TOOLCHAIN, probe=probe, locate=_locate)
+
+    assert target == "aarch64-apple-darwin", "the host line must supply the triple"
+    assert seen == [["/fixture/rustup", "run", TOOLCHAIN, "rustc", "-vV"]], (
+        "the query must reach rustup with the caller's toolchain"
+    )
+
+
+def test_a_failed_host_probe_is_a_fault() -> None:
+    """Report a probe that ran but answered with a failure as a fault."""
+    with pytest.raises(ToolchainProbeError, match="rustc -vV failed"):
+        host_target(probe=lambda argv, env: _process("", returncode=1), locate=_locate)
+
+
+def test_a_host_probe_without_a_host_line_is_a_fault() -> None:
+    """Reject a successful probe that never names its host triple."""
+    with pytest.raises(ToolchainProbeError, match="must report its host target"):
+        host_target(
+            probe=lambda argv, env: _process("rustc 1.99.1 (fixture)\n"),
+            locate=_locate,
+        )
+
+
+def test_an_absent_rustup_skips_a_local_host_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip a host without rustup instead of reporting a probe fault."""
+    monkeypatch.delenv("CUPRUM_REQUIRE_MODERN_STABLE", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="unavailable"):
+        host_target(locate=lambda name: None)
 
 
 class _RunRecorder:

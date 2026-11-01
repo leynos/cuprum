@@ -2,22 +2,87 @@
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 from scripts.modern_stable_warning_controls import (
     GATES,
-    WARNING_DENIAL,
     WARNING_FUNCTION,
-    WARNING_REPLAY_STATE,
-    GateRun,
+    ControlHarness,
     _append_warning,
     _child_environment,
-    _has_warning_failure,
-    _observe_output,
-    _verify_prewarm,
-    _verify_warm,
+    _exercise_gates,
+    _run_controls,
     _with_warning_policy,
+    main,
 )
+from scripts.modern_stable_warning_observation import (
+    WARNING_DENIAL,
+    WARNING_REPLAY_STATE,
+    GateRun,
+    has_warning_failure,
+    observe_output,
+    verify_prewarm,
+    verify_warm,
+)
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+POLICY_MAKEFILE = (
+    "MODERN_STABLE_ENV = CARGO_BUILD_WARNINGS=deny "
+    "CARGO_TARGET_DIR=rust/target/modern-stable\n"
+)
+FIXTURE_SOURCE = "//! Fixture module.\n"
+
+
+def _write_worktree(worktree: pth.Path) -> None:
+    """Write the Makefile and gate source a control run edits."""
+    source = worktree / GATES[0].source
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(FIXTURE_SOURCE, encoding="utf-8")
+    (worktree / "Makefile").write_text(POLICY_MAKEFILE, encoding="utf-8")
+
+
+def _control_run(gate: str, phase: str) -> GateRun:
+    """Return the result each phase of a healthy control run produces."""
+    if phase == "warning-cold":
+        return GateRun(
+            gate,
+            "cuprum-streams",
+            phase,
+            101,
+            f"warning: {WARNING_FUNCTION}\n{WARNING_DENIAL}",
+            "Checking",
+            1,
+            0,
+        )
+    if phase == "warning-prewarm":
+        return GateRun(
+            gate, "cuprum-streams", phase, 0, WARNING_FUNCTION, "Fresh", 0, 1
+        )
+    if phase == "clean":
+        return GateRun(
+            gate,
+            "cuprum-streams",
+            phase,
+            0,
+            "Compiling cuprum-streams",
+            "Compiling",
+            1,
+            0,
+        )
+    return GateRun(
+        gate,
+        "cuprum-streams",
+        phase,
+        101,
+        f"Fresh dep\nwarning: {WARNING_FUNCTION}\n{WARNING_DENIAL}",
+        WARNING_REPLAY_STATE,
+        0,
+        1,
+    )
 
 
 def test_warning_injection_appends_one_private_unused_function() -> None:
@@ -93,7 +158,7 @@ def test_observation_counts_compile_and_fresh_lines() -> None:
         "    \x1b[1mChecking\x1b[0m cuprum-rust v0.1.0\n"
     )
 
-    result = _observe_output(GATES[0], "warning-warm", 101, output)
+    result = observe_output(GATES[0], "warning-warm", 101, output)
 
     assert result.exit_code == 101, (
         "the fixture must retain Cargo's warning-denial exit"
@@ -122,7 +187,7 @@ def test_warning_prewarm_accepts_a_fresh_cached_package() -> None:
     )
     failures: list[str] = []
 
-    _verify_prewarm(run, failures)
+    verify_prewarm(run, failures)
 
     assert not failures, "a fresh cached warning prewarm must be accepted"
 
@@ -134,10 +199,10 @@ def test_warm_warning_replay_needs_no_local_fresh_line() -> None:
         f"warning: {WARNING_FUNCTION}\n"
         f"{WARNING_DENIAL}\n"
     )
-    run = _observe_output(GATES[0], "warning-warm", 101, output)
+    run = observe_output(GATES[0], "warning-warm", 101, output)
     failures: list[str] = []
 
-    _verify_warm(run, failures)
+    verify_warm(run, failures)
 
     assert run.package_state == WARNING_REPLAY_STATE, (
         "a cached warning denial must be distinguishable from a missing state"
@@ -173,9 +238,149 @@ def test_warning_failure_requires_the_cargo_policy_diagnostic() -> None:
         fresh_lines=0,
     )
 
-    assert not _has_warning_failure(failed_for_another_reason), (
+    assert not has_warning_failure(failed_for_another_reason), (
         "a non-Cargo failure must not count as warning-policy evidence"
     )
-    assert _has_warning_failure(denied_by_cargo), (
+    assert has_warning_failure(denied_by_cargo), (
         "Cargo's build.warnings denial must count as warning-policy evidence"
+    )
+
+
+def test_each_gate_runs_every_control_phase(tmp_path: pth.Path) -> None:
+    """Exercise cold denial, prewarm, two warm replays, and a clean rerun."""
+    worktree = tmp_path / "worktree"
+    _write_worktree(worktree)
+    phases: list[str] = []
+
+    def run_gate(edited: pth.Path, gate: str, phase: str) -> GateRun:
+        """Record the requested phase and answer with its expected result."""
+        phases.append(phase)
+        return _control_run(gate, phase)
+
+    results, failures = _exercise_gates(worktree, (GATES[0],), run_gate)
+
+    assert phases == [
+        "warning-cold",
+        "warning-prewarm",
+        "warning-warm",
+        "warning-warm-repeat",
+        "clean",
+    ], "each gate must run every control phase in order"
+    assert [run.phase for run in results] == phases, (
+        "the retained results must follow the phase order"
+    )
+    assert not failures, "a healthy control run must report no failures"
+
+
+def test_a_gate_restores_the_policy_and_source_after_a_failure(
+    tmp_path: pth.Path,
+) -> None:
+    """Leave the shared worktree usable when one phase raises."""
+
+    def run_gate(edited: pth.Path, gate: str, phase: str) -> GateRun:
+        """Fail during the first warm replay."""
+        if phase == "warning-warm":
+            message = "gate runner failed"
+            raise RuntimeError(message)
+        return _control_run(gate, phase)
+
+    worktree = tmp_path / "worktree"
+    _write_worktree(worktree)
+
+    with pytest.raises(RuntimeError, match="gate runner failed"):
+        _exercise_gates(worktree, (GATES[0],), run_gate)
+
+    assert (worktree / "Makefile").read_text(encoding="utf-8") == POLICY_MAKEFILE, (
+        "a failure must restore the checked-in warning denial"
+    )
+    assert (worktree / GATES[0].source).read_text(encoding="utf-8") == (
+        FIXTURE_SOURCE
+    ), "a failure must remove the injected warning from the source"
+
+
+def test_a_worktree_setup_failure_is_reported_without_cleanup(
+    tmp_path: pth.Path,
+) -> None:
+    """Report a worktree that was never created and skip removal."""
+
+    def forbidden(path: pth.Path, root: pth.Path) -> str | None:
+        """Fail the test if cleanup runs for a worktree never created."""
+        message = f"cleanup must not run for {path} under {root}"
+        raise AssertionError(message)
+
+    harness = ControlHarness(
+        add_worktree=lambda path, root: "git worktree add failed (1): boom",
+        remove_worktree=forbidden,
+    )
+
+    results, failures = _run_controls(root=tmp_path, harness=harness)
+
+    assert not results, "a setup failure must not report gate results"
+    assert failures == ("git worktree add failed (1): boom",), (
+        "the setup failure must be the reported cause"
+    )
+
+
+def test_cleanup_runs_and_its_failure_is_aggregated(tmp_path: pth.Path) -> None:
+    """Remove the created worktree and report a cleanup fault separately."""
+
+    def add_worktree(path: pth.Path, root: pth.Path) -> str | None:
+        """Create the worktree contents the exercise phase edits."""
+        _write_worktree(path)
+
+    removed: list[pth.Path] = []
+
+    def remove_worktree(path: pth.Path, root: pth.Path) -> str | None:
+        """Record the removal and report a cleanup fault."""
+        removed.append(path)
+        return "git worktree remove failed (1): boom"
+
+    harness = ControlHarness(
+        gates=(GATES[0],),
+        add_worktree=add_worktree,
+        remove_worktree=remove_worktree,
+        run_gate=lambda worktree, gate, phase, root: _control_run(gate, phase),
+    )
+
+    results, failures = _run_controls(root=tmp_path, harness=harness)
+
+    assert len(removed) == 1, "the created worktree must be removed exactly once"
+    assert len(results) == 5, "the healthy gate must retain all five phase results"
+    assert failures == ("git worktree remove failed (1): boom",), (
+        "a cleanup fault must be reported alongside the gate results"
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup_failure", "expected_exit"),
+    [(None, 0), ("git worktree add failed (1): boom", 1)],
+)
+def test_main_returns_its_status_and_retains_the_report(
+    tmp_path: pth.Path, setup_failure: str | None, expected_exit: int
+) -> None:
+    """Prove a complete control exits zero and a failed one exits non-zero."""
+
+    def add_worktree(path: pth.Path, root: pth.Path) -> str | None:
+        """Create the worktree contents unless the case tests a setup fault."""
+        if setup_failure is None:
+            _write_worktree(path)
+        return setup_failure
+
+    harness = ControlHarness(
+        gates=(GATES[0],),
+        add_worktree=add_worktree,
+        remove_worktree=lambda path, root: None,
+        run_gate=lambda worktree, gate, phase, root: _control_run(gate, phase),
+    )
+
+    exit_code = main(root=tmp_path, harness=harness)
+
+    report = (
+        tmp_path / "rust/target/modern-stable-warning-controls/report.md"
+    ).read_text(encoding="utf-8")
+    assert exit_code == expected_exit, (
+        "main must return zero only when every control phase succeeds"
+    )
+    assert ("Failures:\n\n- none" in report) is (setup_failure is None), (
+        "the retained report must state whether any control failed"
     )
