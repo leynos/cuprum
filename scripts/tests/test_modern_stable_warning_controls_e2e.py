@@ -1,7 +1,7 @@
 """Exercise the warning-control command end to end in a fixture repository.
 
 The contract tests call the orchestration with injected boundaries. This test
-runs the shipped entry point instead: it initialises a throwaway Git repository
+runs the shipped entry point instead: it initializes a throwaway Git repository
 whose Makefile checks one tiny crate, then lets the command create, exercise,
 and remove its own worktree. Only the scale is reduced; every Git, Make, Cargo,
 file, and cleanup operation is the one the real run performs.
@@ -18,9 +18,12 @@ import tempfile
 import typing as typ
 from pathlib import Path
 
+import pytest
+
 from scripts.modern_stable_warning_controls import ControlHarness, main
 from scripts.modern_stable_warning_observation import Gate
 from tests.helpers.cargo_warning_fixture import (
+    BASE_RUSTFLAGS,
     MODERN_STABLE_TOOLCHAIN,
     require_toolchain,
 )
@@ -34,6 +37,12 @@ E2E_PARENT = repo_root() / "rust/target/modern-stable-warning-controls-e2e"
 #: Absolute Git path so the fixture never relies on a partial executable path.
 GIT = shutil.which("git")
 
+#: The bound catches a wedged subprocess, not machine load: the phases run five
+#: Cargo invocations through a pinned toolchain, and compile admission may queue
+#: them behind work from other repositories. The global 30 s default would fail
+#: on that queue rather than on anything the test controls.
+E2E_TIMEOUT_SECONDS = 600
+
 PHASES = (
     "warning-cold",
     "warning-prewarm",
@@ -42,11 +51,16 @@ PHASES = (
     "clean",
 )
 
+# Own the compiler and warning settings the way the real route does: clear the
+# inherited variables and set RUSTFLAGS here. A CI runner exports
+# ``RUSTFLAGS=-D warnings``, which would otherwise turn the permissive prewarm
+# into a fatal error and make the phases prove the runner's policy, not ours.
 MAKEFILE = (
-    "MODERN_STABLE_ENV = CARGO_BUILD_WARNINGS=deny CARGO_TERM_COLOR=never "
-    "CARGO_TARGET_DIR=$(CURDIR)/target RUSTUP_TOOLCHAIN="
-    + MODERN_STABLE_TOOLCHAIN
-    + "\n"
+    "MODERN_STABLE_ENV = env -u RUSTC -u CARGO_ENCODED_RUSTFLAGS "
+    "-u CARGO_ENCODED_RUSTDOCFLAGS -u CARGO_BUILD_WARNINGS "
+    f'RUSTFLAGS="{BASE_RUSTFLAGS}" CARGO_BUILD_WARNINGS=deny '
+    "CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$(CURDIR)/target "
+    "RUSTUP_TOOLCHAIN=" + MODERN_STABLE_TOOLCHAIN + "\n"
     "\n"
     "check:\n"
     "\t$(MODERN_STABLE_ENV) cargo check --locked --offline --verbose "
@@ -104,8 +118,17 @@ def _fixture_repository(root: pth.Path) -> Gate:
     return Gate("check", "check", "warning-control-fixture", Path("crate/src/lib.rs"))
 
 
-def test_the_command_runs_every_phase_and_cleans_up() -> None:
-    """Prove the real entry point exercises a worktree and removes it again."""
+@pytest.mark.timeout(E2E_TIMEOUT_SECONDS)
+def test_the_command_runs_every_phase_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove the real entry point exercises a worktree and removes it again.
+
+    The ambient ``RUSTFLAGS`` mirrors the hosted CI runner. The fixture
+    Makefile must own its own flags, so the control phases stay meaningful
+    whatever the caller exports.
+    """
+    monkeypatch.setenv("RUSTFLAGS", "-D warnings")
     require_toolchain()
     E2E_PARENT.mkdir(parents=True, exist_ok=True)
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-import functools
 import os
 import tempfile
 import typing as typ
@@ -278,7 +277,11 @@ def _run_controls(
         setup_failure = harness.add_worktree(worktree, root)
         if setup_failure is not None:
             return (), (setup_failure,)
-        run_gate = functools.partial(harness.run_gate, root=root)
+
+        def run_gate(worktree_path: Path, gate: Gate, phase: str) -> GateRun:
+            """Bind the run gate to the root that owns the retained logs."""
+            return harness.run_gate(worktree_path, gate, phase, root)
+
         try:
             results, failures = _exercise_gates(worktree, harness.gates, run_gate)
         finally:

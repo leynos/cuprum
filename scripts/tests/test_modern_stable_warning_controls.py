@@ -20,6 +20,7 @@ from scripts.modern_stable_warning_controls import (
 from scripts.modern_stable_warning_observation import (
     WARNING_DENIAL,
     WARNING_REPLAY_STATE,
+    Gate,
     GateRun,
     has_warning_failure,
     observe_output,
@@ -252,10 +253,10 @@ def test_each_gate_runs_every_control_phase(tmp_path: pth.Path) -> None:
     _write_worktree(worktree)
     phases: list[str] = []
 
-    def run_gate(edited: pth.Path, gate: str, phase: str) -> GateRun:
+    def run_gate(edited: pth.Path, gate: Gate, phase: str) -> GateRun:
         """Record the requested phase and answer with its expected result."""
         phases.append(phase)
-        return _control_run(gate, phase)
+        return _control_run(gate.name, phase)
 
     results, failures = _exercise_gates(worktree, (GATES[0],), run_gate)
 
@@ -277,12 +278,12 @@ def test_a_gate_restores_the_policy_and_source_after_a_failure(
 ) -> None:
     """Leave the shared worktree usable when one phase raises."""
 
-    def run_gate(edited: pth.Path, gate: str, phase: str) -> GateRun:
+    def run_gate(edited: pth.Path, gate: Gate, phase: str) -> GateRun:
         """Fail during the first warm replay."""
         if phase == "warning-warm":
             message = "gate runner failed"
             raise RuntimeError(message)
-        return _control_run(gate, phase)
+        return _control_run(gate.name, phase)
 
     worktree = tmp_path / "worktree"
     _write_worktree(worktree)
@@ -339,7 +340,7 @@ def test_cleanup_runs_and_its_failure_is_aggregated(tmp_path: pth.Path) -> None:
         gates=(GATES[0],),
         add_worktree=add_worktree,
         remove_worktree=remove_worktree,
-        run_gate=lambda worktree, gate, phase, root: _control_run(gate, phase),
+        run_gate=lambda worktree, gate, phase, root: _control_run(gate.name, phase),
     )
 
     results, failures = _run_controls(root=tmp_path, harness=harness)
@@ -370,7 +371,7 @@ def test_main_returns_its_status_and_retains_the_report(
         gates=(GATES[0],),
         add_worktree=add_worktree,
         remove_worktree=lambda path, root: None,
-        run_gate=lambda worktree, gate, phase, root: _control_run(gate, phase),
+        run_gate=lambda worktree, gate, phase, root: _control_run(gate.name, phase),
     )
 
     exit_code = main(root=tmp_path, harness=harness)
