@@ -226,6 +226,20 @@ def test_a_host_probe_without_a_host_line_is_a_fault() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("probe", "match"),
+    [
+        (_timed_out_probe, "probe timed out"),
+        (_unstartable_probe, "toolchain probe could not start"),
+    ],
+    ids=["timeout", "unstartable"],
+)
+def test_a_host_probe_fault_propagates(probe: fixture.Probe, match: str) -> None:
+    """Keep a host-probe fault out of the unavailable-toolchain path."""
+    with pytest.raises(ToolchainProbeError, match=match):
+        host_target(probe=probe, locate=_locate)
+
+
 def test_an_absent_rustup_skips_a_local_host_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
