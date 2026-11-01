@@ -156,9 +156,12 @@ compiled, checked, or fresh.
 The results below come from Linux runs on the implementation candidate at commit
 `b047b5644` on 30 October 2026, except the contract row, which was re-measured
 after that route gained further regression tests and now reports 26 passed. The
-route counts below were confirmed unchanged on the rebased candidate
-`d8f70abc9`. These results record statuses and Cargo freshness; they do not
-claim a measured speedup.
+test counts below (165 Rust tests, 8 doctests and 142 extension tests passed)
+were confirmed unchanged on the rebased candidate `d8f70abc9`. The full-gate
+warning controls in Table 4 last completed on `b047b5644`, and
+`make modern-stable-warning-controls` did not complete on the later candidate.
+These results record statuses and Cargo freshness; they do not claim a measured
+speedup.
 
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
@@ -189,10 +192,12 @@ to take the `pyo3` bump (#682), the file is byte-identical to the base and
 hashes to `70a937c356f2b3c4baa5ffdd4e5bb6887799960502472bd2a2372d8fbb23bff0`.
 
 The full-gate harness reported these exit statuses and Cargo freshness counts.
-Exit 2 is the expected denied-warning result; exit 0 is the expected
-permissive-prewarm or clean-source success. A cached warning replay has no
-`Fresh` line for the local package, so the report labels that state separately
-and records the positive number of fresh dependency lines.
+The `Exit` column records the status of the Make recipe the harness invoked,
+whereas the Rustdoc probe above records Cargo's own exit status. Exit 2 is the
+expected denied-warning result; exit 0 is the expected permissive-prewarm or
+clean-source success. A cached warning replay has no `Fresh` line for the local
+package, so the report labels that state separately and records the positive
+number of fresh dependency lines.
 
 | Gate    | Package          | Phase               | Exit | Package state         | Compile/check lines | Fresh lines |
 | ------- | ---------------- | ------------------- | ---: | --------------------- | ------------------: | ----------: |

@@ -1,9 +1,10 @@
 """Unit tests for the modern toolchain availability probe.
 
-The probe decides whether the Cargo warning-policy contracts run or skip, so
-its logic needs witnesses that do not depend on the machine having the modern
-toolchain installed. These tests inject a locator and a probe, so they touch
-neither `PATH` nor a real process.
+The probe decides whether the Cargo warning-policy contracts run or skip, and
+the Cargo fixture decides which inherited environment reaches a measured run,
+so both need witnesses that do not depend on the machine having the modern
+toolchain installed. These tests inject a locator, a probe, and a subprocess
+stand-in, so they touch neither `PATH` nor a real process.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ import typing as typ
 
 import pytest
 
+from tests.helpers import cargo_warning_fixture as fixture
 from tests.helpers.cargo_warning_fixture import (
+    CargoFixture,
     ToolchainProbeError,
     ToolchainProbeTimeoutError,
     require_toolchain,
@@ -22,8 +25,7 @@ from tests.helpers.cargo_warning_fixture import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from tests.helpers import cargo_warning_fixture as fixture
+    import pathlib as pth
 
 TOOLCHAIN = "9.9.9"
 
@@ -187,3 +189,41 @@ def test_a_timed_out_probe_fails_a_required_run(
     monkeypatch.setenv("CUPRUM_REQUIRE_MODERN_STABLE", "1")
     with pytest.raises(pytest.fail.Exception, match="probe timed out"):
         require_toolchain(probe=_timed_out_probe, locate=_locate)
+
+
+class _RunRecorder:
+    """Stand in for ``subprocess`` so a fixture run starts no Cargo process."""
+
+    def __init__(self) -> None:
+        self.environments: list[dict[str, str]] = []
+
+    def run(
+        self, _argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """Record the environment the measured run would receive."""
+        self.environments.append(typ.cast("dict[str, str]", kwargs["env"]))
+        return _process("")
+
+
+@pytest.mark.parametrize(
+    "variable",
+    ["RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTDOCFLAGS"],
+    ids=["rustdocflags", "encoded", "build"],
+)
+def test_a_cargo_run_scrubs_inherited_rustdoc_flags(
+    variable: str, monkeypatch: pytest.MonkeyPatch, tmp_path: pth.Path
+) -> None:
+    """Keep ambient rustdoc flags out of the warning-policy measurements."""
+    monkeypatch.setenv(variable, "-D warnings")
+    recorder = _RunRecorder()
+    monkeypatch.setattr(fixture, "subprocess", recorder)
+
+    CargoFixture("cargo", "x86_64-unknown-linux-gnu", tmp_path).run("doc")
+
+    (environment,) = recorder.environments
+    assert variable not in environment, (
+        f"{variable} must not reach the measured Cargo run"
+    )
+    assert environment["CARGO_BUILD_WARNINGS"] == "deny", (
+        "the run must still carry the policy under test"
+    )

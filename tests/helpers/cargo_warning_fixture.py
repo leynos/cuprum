@@ -58,13 +58,9 @@ TARGET_DIR = repo_root() / "rust/target/cargo-build-warnings-contract"
 #: so changing `build.warnings` must not invalidate a build that keeps it.
 BASE_RUSTFLAGS = "-C codegen-units=1"
 
-#: A cold Cargo build of a tiny crate fits comfortably inside this bound; it
-#: exists to turn a wedged compilation into a named test failure.
+#: A cold build of a tiny crate fits inside this bound; it names a wedged build.
 CARGO_COMMAND_TIMEOUT_SECONDS = 1800
-
-#: A toolchain probe answers in well under a second on an idle host. The bound
-#: is generous because a loaded host can take tens of seconds to schedule a
-#: process; it exists only to keep a wedged child from hanging the suite.
+#: A probe answers in under a second idle; the bound tolerates a loaded host.
 PROBE_TIMEOUT_SECONDS = 60
 
 
@@ -227,12 +223,10 @@ def require_toolchain(
 
     Notes
     -----
-    A missing toolchain, and a probe that outlived its bound, both skip here
-    and fail under ``CUPRUM_REQUIRE_MODERN_STABLE=1``. A loaded host must not
-    fail a local run, while CI still reports the toolchain it could not use. A
-    probe that could not be started is different: :class:`ToolchainProbeError`
-    propagates, because a located executable that will not run is a broken
-    environment rather than a missing toolchain.
+    A missing toolchain and a probe that outlived its bound both skip here and
+    fail under ``CUPRUM_REQUIRE_MODERN_STABLE=1``. A probe that could not be
+    started is different: :class:`ToolchainProbeError` propagates, because a
+    located executable that will not run is a broken environment.
     """
     cargo = locate("cargo")
     if cargo is None:
@@ -270,7 +264,7 @@ def host_target() -> str:
         [rustup, "run", MODERN_STABLE_TOOLCHAIN, "rustc", "-vV"],
         capture_output=True,
         check=True,
-        timeout=10,
+        timeout=PROBE_TIMEOUT_SECONDS,
         text=True,
     )
     target = next(
@@ -370,7 +364,13 @@ class CargoFixture:
             The finished Cargo invocation, never raised on a non-zero exit.
         """
         environment = os.environ.copy()
-        for variable in ("RUSTC", "CARGO_ENCODED_RUSTFLAGS", "RUSTDOCFLAGS"):
+        for variable in (
+            "RUSTC",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
+            "RUSTDOCFLAGS",
+            "CARGO_BUILD_RUSTDOCFLAGS",
+        ):
             environment.pop(variable, None)
         environment.update({
             "CARGO_BUILD_WARNINGS": warnings,
