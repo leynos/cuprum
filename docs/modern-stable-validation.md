@@ -195,9 +195,11 @@ The full-gate harness reported these exit statuses and Cargo freshness counts.
 The `Exit` column records the status of the Make recipe the harness invoked,
 whereas the Rustdoc probe above records Cargo's own exit status. Exit 2 is the
 expected denied-warning result; exit 0 is the expected permissive-prewarm or
-clean-source success. A cached warning replay has no `Fresh` line for the local
-package, so the report labels that state separately and records the positive
-number of fresh dependency lines.
+clean-source success. A cached warning replay under check, Clippy, and test has
+no `Fresh` line for the local package, so the report labels that state
+separately and records the positive number of fresh dependency lines. Maturin
+differs: both of its warning replays report the affected package as `Fresh`,
+which Table 4 records in the Package state column.
 
 | Gate    | Package          | Phase               | Exit | Package state         | Compile/check lines | Fresh lines |
 | ------- | ---------------- | ------------------- | ---: | --------------------- | ------------------: | ----------: |
