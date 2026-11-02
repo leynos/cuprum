@@ -251,7 +251,7 @@ def host_target(
     Raises
     ------
     ToolchainProbeError
-        If ``rustc -vV`` fails or omits its host triple.
+        If ``rustc -vV`` fails, or omits or blanks its host triple.
 
     Notes
     -----
@@ -268,13 +268,13 @@ def host_target(
         raise ToolchainProbeError(message)
     target = next(
         (
-            line.removeprefix("host: ")
+            line.removeprefix("host: ").strip()
             for line in result.stdout.splitlines()
             if line.startswith("host: ")
         ),
         None,
     )
-    if target is None:
+    if not target:
         message = f"rustc -vV must report its host target for toolchain {toolchain}"
         raise ToolchainProbeError(message)
     return target

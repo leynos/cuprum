@@ -16,7 +16,14 @@ import tempfile
 import typing as typ
 from pathlib import Path
 
-from cuprum import ExecutionContext, Program, ProgramCatalogue, scoped, sh
+from cuprum import (
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    TimeoutExpired,
+    scoped,
+    sh,
+)
 from scripts.modern_stable_warning_observation import (
     Gate,
     GateRun,
@@ -31,6 +38,11 @@ from scripts.modern_stable_warning_observation import (
 ROOT = Path(__file__).resolve().parent.parent
 WARNING_FUNCTION = "fn issue_506_warning_control() { std::thread::yield_now(); }"
 DENIED_WARNING_SETTING = "CARGO_BUILD_WARNINGS=deny"
+#: A cold gate builds the whole workspace under compile admission, so this bound
+#: is generous; it exists to name a wedged Make or Cargo, not to pace a build.
+GATE_TIMEOUT_SECONDS = 3600
+#: Exit status reported for a gate that outlived :data:`GATE_TIMEOUT_SECONDS`.
+GATE_TIMEOUT_EXIT_CODE = 124
 GIT_PROGRAM = Program("git")
 MAKE_PROGRAM = Program("make")
 CATALOGUE = ProgramCatalogue.from_programs(GIT_PROGRAM, MAKE_PROGRAM)
@@ -122,13 +134,30 @@ def _child_environment() -> dict[str, str]:
     return environment
 
 
+def _timeout_output(arguments: tuple[str, ...], error: TimeoutExpired) -> str:
+    """Describe an expired gate, retaining whatever the command printed."""
+    captured = "".join(
+        part.decode(errors="replace") if isinstance(part, bytes) else part
+        for part in (error.output, error.stderr)
+        if part
+    )
+    message = f"gate timed out after {GATE_TIMEOUT_SECONDS}s: {' '.join(arguments)}"
+    return f"{captured}\n{message}\n"
+
+
 def _run(
     program: SafeCmdBuilder, arguments: tuple[str, ...], cwd: Path
 ) -> tuple[int, str]:
     """Run one allowlisted command with bounded Cargo and test concurrency."""
-    context = ExecutionContext(cwd=cwd.as_posix(), env=_child_environment())
-    with scoped(catalogue=CATALOGUE):
-        result: CommandResult = program(*arguments).run_sync(context=context)
+    context = ExecutionContext(
+        cwd=cwd.as_posix(), env=_child_environment(), timeout=GATE_TIMEOUT_SECONDS
+    )
+    try:
+        with scoped(catalogue=CATALOGUE):
+            result: CommandResult = program(*arguments).run_sync(context=context)
+    except TimeoutExpired as error:
+        # Expiry is a gate failure, not a crash: the caller still logs and reports.
+        return GATE_TIMEOUT_EXIT_CODE, _timeout_output(arguments, error)
     output = (result.stdout or "") + (result.stderr or "")
     return result.exit_code, output
 

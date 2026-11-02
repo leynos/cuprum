@@ -189,11 +189,12 @@ speedup.
 
 _Table 3: Implementation validation evidence._
 
-The contract route reported 33 passed with `sccache` on `PATH` and
-`RUSTC_WRAPPER` set, so its configured-wrapper variant ran rather than being
-skipped. That run also covers the new end-to-end case, which executes the
-shipped warning-control entry point against a throwaway one-crate Git
-repository.
+The contract route was re-measured after `b047b5644` and reported 33 passed with
+`sccache` on `PATH` and `RUSTC_WRAPPER` set, so its configured-wrapper variant
+ran rather than being skipped. That run also covers the new end-to-end case,
+which executes the shipped warning-control entry point against a throwaway
+one-crate Git repository. The later 34-pass remeasurement did not record
+whether the wrapper was configured.
 
 The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the

@@ -6,12 +6,16 @@ import typing as typ
 
 import pytest
 
+from cuprum import TimeoutExpired
 from scripts.modern_stable_warning_controls import (
+    GATE_TIMEOUT_EXIT_CODE,
+    GATE_TIMEOUT_SECONDS,
     GATES,
     WARNING_FUNCTION,
     _append_warning,
     _child_environment,
     _exercise_gates,
+    _run,
     _with_warning_policy,
 )
 from scripts.modern_stable_warning_observation import (
@@ -34,6 +38,8 @@ from scripts.tests.modern_stable_warning_controls_support import (
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
+
+    from cuprum.sh import SafeCmdBuilder
 
 
 def test_warning_injection_appends_one_private_unused_function() -> None:
@@ -63,6 +69,36 @@ def test_child_environment_clears_inherited_make_flags(
     assert environment["CARGO_BUILD_JOBS"] == "2", "Cargo builds must stay bounded"
     assert environment["CARGO_TERM_COLOR"] == "never", "logs must be plain text"
     assert environment["TEST_JOBS"] == "2", "test threads must stay bounded"
+
+
+class _ExpiredCommand:
+    """Raise the timeout the real command raises, without starting a process."""
+
+    def run_sync(self, *, context: object) -> typ.NoReturn:
+        """Fail the way a command that outlived its bound fails."""
+        message = f"expired under {context}"
+        raise TimeoutExpired(cmd=["make"], timeout=GATE_TIMEOUT_SECONDS, output=message)
+
+
+class _ExpiredProgram:
+    """Stand in for a command builder whose run outlives its bound."""
+
+    def __call__(self, *_arguments: str) -> _ExpiredCommand:
+        """Return a command that expires instead of running."""
+        return _ExpiredCommand()
+
+
+def test_a_gate_that_outlives_its_bound_is_a_failure(tmp_path: pth.Path) -> None:
+    """Report an expired gate as a failure instead of waiting forever."""
+    program = typ.cast("SafeCmdBuilder", _ExpiredProgram())
+
+    exit_code, output = _run(program, ("-C", "worktree", "target"), tmp_path)
+
+    assert exit_code == GATE_TIMEOUT_EXIT_CODE, (
+        "an expired gate must report a failure exit status"
+    )
+    assert "expired under" in output, "captured output must survive the expiry"
+    assert "timed out after" in output, "the log must name the expiry"
 
 
 def test_controls_cover_each_migrated_gate_and_the_maturin_boundary() -> None:

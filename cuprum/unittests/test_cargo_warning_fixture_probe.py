@@ -227,6 +227,17 @@ def test_a_host_probe_without_a_host_line_is_a_fault() -> None:
 
 
 @pytest.mark.parametrize(
+    "stdout",
+    ["rustc 1.99.1 (fixture)\nhost: \n", "rustc 1.99.1 (fixture)\nhost:   \n"],
+    ids=["empty", "whitespace"],
+)
+def test_a_blank_host_line_is_a_fault(stdout: str) -> None:
+    """Reject a host line whose value is empty or only whitespace."""
+    with pytest.raises(ToolchainProbeError, match="must report its host target"):
+        host_target(probe=lambda argv, env: _process(stdout), locate=_locate)
+
+
+@pytest.mark.parametrize(
     ("probe", "match"),
     [
         (_timed_out_probe, "probe timed out"),
