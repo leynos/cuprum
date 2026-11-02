@@ -84,7 +84,7 @@ PR #672, addressing issue #506, added an independent, fragment-free validation
 route that explicitly selects Rust/Cargo `1.99.1`. It preserves the workspace's
 Rust 1.85.0 source contract and the separate MSRV check. Its Cargo
 warning-policy migration is recorded in
-[modern-stable validation](modern-stable-validation.md). The dev-fast route
+[modern-stable validation](../modern-stable-validation.md). The dev-fast route
 keeps its existing `-D warnings` compiler flags because it uses an
 independently pinned nightly toolchain.
 
