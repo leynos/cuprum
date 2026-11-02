@@ -163,7 +163,7 @@ def test_the_fragment_carries_the_estate_fast_flags_on_linux() -> None:
 
 
 EXPECTED_WAIVED_CLAUSES = ["BD-002", "BD-004", "BD-008"]
-ADR_012 = "docs/adr-012-linux-dev-fast-routing.md"
+ADR_012 = "docs/adrs/adr-0012-linux-dev-fast-routing.md"
 
 
 def _exception_problems(entry: object) -> list[str]:

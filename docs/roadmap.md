@@ -107,7 +107,7 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
   command and pipeline terminal path, and users' guide plus ADR-013
   documentation.
   - [x] Document the sink in the users' guide and record the decision in
-    `docs/adr-013-opt-in-github-actions-presentation-sink.md`.
+    `docs/adrs/adr-0013-opt-in-github-actions-presentation-sink.md`.
 
 ### 2.3. Concurrency helpers
 
@@ -185,7 +185,7 @@ from one vocabulary that in-tree and adopter-written builders share. Its
 outcome is the reusable layer the lading adoption assessment §6.4 asks for:
 typed construction without a tool-specific schema. The project-builder scaffold
 in 3.1.2 can then present this vocabulary as its assembly layer. See
-[RFC 0002](rfcs/0002-command-composition-helpers.md).
+[RFC 0002](rfcs/rfc-0002-command-composition-helpers.md).
 
 - [ ] 3.5.1. Add `cuprum/sh/compose.py` with `OptionSpelling`, `flags`,
   `option`, `repeated_option`, and `separated_operands`, re-exported from
@@ -218,7 +218,7 @@ in 3.1.2 can then present this vocabulary as its assembly layer. See
   standards, append the ADR-020 addendum recording that RFC 0002 supersedes the
   positional `"--check"` workaround, and add a changelog entry.
   - Requires 3.5.1 and 3.5.2.
-  - See adr-020-typed-argument-contract-for-sh-make.md.
+  - See adrs/adr-0020-typed-argument-contract-for-sh-make.md.
 
 ## 4. Performance extensions
 
@@ -323,7 +323,7 @@ This step answers how much consume overhead a buffer-size bump alone reclaims
 and where it plateaus. Its outcome sets the tuned Python baseline that the
 consume dispatcher in phase 6 must beat. See
 tee-hotpath-profiling-baseline-2026-06-12.md §1 (Table 3) and
-adr-002-additional-rust-components.md Proposal 3.
+adrs/adr-0002-additional-rust-components.md Proposal 3.
 
 - [x] 5.1.1. Raise `_READ_SIZE` (`cuprum/_streams_pump.py:29`) from 4 KiB to
   the profiled plateau in the 16-64 KiB range, choosing the value from a fresh
@@ -420,8 +420,8 @@ This step answers whether `rust_pump_stream` and `rust_consume_stream` map
 errors and decode identically to Python across the full input domain, not just
 scenario fixtures. Its outcome is the correctness foundation the dispatcher
 relies on. See issue `#90`, tee-hotpath-profiling-baseline-2026-06-12.md §§3-4,
-and adr-002-additional-rust-components.md (decoding-drift and FD-ownership
-risks).
+and adrs/adr-0002-additional-rust-components.md (decoding-drift and
+FD-ownership risks).
 
 - [x] 6.1.1. Introduce a `RustStreamError` enum in `rust/cuprum-rust/src/lib.rs`
   and convert it to PyO3 errors at a single boundary point.
@@ -440,9 +440,9 @@ risks).
 
 This step answers whether native read-and-decode beats the tuned Python consume
 by the 20% the ADR requires, on the one eligible scenario. Its outcome decides
-whether wiring proceeds at all. See adr-002-additional-rust-components.md Phase
-2, tee-hotpath-profiling-baseline-2026-06-12.md §"Implications" item 1, and
-roadmap step 4.4.
+whether wiring proceeds at all. See adrs/adr-0002-additional-rust-components.md
+Phase 2, tee-hotpath-profiling-baseline-2026-06-12.md §"Implications" item 1,
+and roadmap step 4.4.
 
 - [ ] 6.2.1. Add a Rust-versus-Python consume dispatcher benchmark for the
   fd-backed, UTF-8/replace, capture-only, no-echo, no-callback scenario,
@@ -453,7 +453,7 @@ roadmap step 4.4.
     least 20% lower on the eligible path, small-output fallback scenarios stay
     within a 5% median wall-time regression budget, Python/Rust parity is
     confirmed before any Rust routing, and the verdict (pass or fail) is recorded
-    in adr-002-additional-rust-components.md.
+    in adrs/adr-0002-additional-rust-components.md.
 
 ### 6.3. Wire `_consume_stream_dispatch` and route capture through it
 
@@ -499,8 +499,8 @@ if the gate in 6.2 passed. See `cuprum/_pipeline_streams.py:290`
 ### 6.4. Reflect the outcome in the ADR and the guides
 
 This step answers how readers learn the symbol's true status, whichever way the
-gate fell. See adr-002-additional-rust-components.md Phase 2, cuprum-design.md
-§13, and docs/users-guide.md.
+gate fell. See adrs/adr-0002-additional-rust-components.md Phase 2,
+cuprum-design.md §13, and docs/users-guide.md.
 
 - [ ] 6.4.1. Record the phase 6 outcome in the documentation set.
   - Requires 6.2.1 in all cases. The passed-gate branch also requires 6.3.2.
@@ -524,7 +524,7 @@ deliver.
 
 This phase extends the established Rust pathway to the echo and tee directions
 rather than building a parallel path, reusing the boundary hardening from step
-6.1. See adr-002-additional-rust-components.md Phase 3 and Proposal 2.
+6.1. See adrs/adr-0002-additional-rust-components.md Phase 3 and Proposal 2.
 
 ### 7.1. Profile and bound the raw-sink opportunity before building
 
@@ -544,7 +544,7 @@ tee-hotpath-profiling-baseline-2026-06-12.md §"Implications" item 4 and Table 2
 
 This step answers whether the native helper can accelerate qualifying sinks
 while falling back transparently for the rest. See
-adr-002-additional-rust-components.md Proposal 2 and cuprum-design.md §13.
+adrs/adr-0002-additional-rust-components.md Proposal 2 and cuprum-design.md §13.
 
 - [ ] 7.2.1. Implement the Rust raw-sink echo and tee helper with FD capability
   detection and Python fallback, routing only the sink kinds qualified by 7.1.1.
@@ -553,7 +553,7 @@ adr-002-additional-rust-components.md Proposal 2 and cuprum-design.md §13.
     Python;
     non-qualifying sinks (including PTY unless 7.1.1 qualified it) fall back
     transparently; and the open question of which raw sink types qualify is
-    resolved in adr-002-additional-rust-components.md.
+    resolved in adrs/adr-0002-additional-rust-components.md.
 
 ## 8. Deferred reliability and native-orchestration extensions
 
@@ -566,8 +566,8 @@ rather than gating the acceleration work.
 
 This step aims to remove a silent failure observed by the baseline on the
 shipped pump path. See tee-hotpath-profiling-baseline-2026-06-12.md
-§"Incidental findings" item 1 and adr-002-additional-rust-components.md (FD
-ownership risk).
+§"Incidental findings" item 1 and adrs/adr-0002-additional-rust-components.md
+(FD ownership risk).
 
 The panic-unwind FD ownership hazard tracked under `#125` is **resolved**.
 `with_borrowed_reader` now wraps the borrowed reader in `ManuallyDrop`, so a
@@ -620,26 +620,26 @@ findings" item 2.
 ### 8.3. Decide on native subprocess and pipeline orchestration
 
 This step resolves the two heaviest ADR-002 bets, which the design explicitly
-defers. See adr-002-additional-rust-components.md Proposals 4 and 5 (Phases 4
-and 5).
+defers. See adrs/adr-0002-additional-rust-components.md Proposals 4 and 5
+(Phases 4 and 5).
 
 - [ ] 8.3.1. Prototype the synchronous Rust subprocess fast path and record a
   go/no-go decision.
   - Requires phase 6.
   - Success: a benchmark-backed decision is captured in
-    adr-002-additional-rust-components.md.
+    adrs/adr-0002-additional-rust-components.md.
 - [ ] 8.3.2. Decide whether full native pipeline orchestration graduates from
   deferral.
   - Requires 8.3.1.
   - Success: the decision and its rationale (likely continued deferral) are
-    recorded in adr-002-additional-rust-components.md.
+    recorded in adrs/adr-0002-additional-rust-components.md.
 
 ### 8.4. Isolate unsafe Rust in audited boundary crates
 
 This step resolves issue #379 by keeping abstract stream policy safe while
 placing native descriptor, handle, and syscall obligations behind small
-workspace boundaries. See [ADR-011](adr-011-audited-rust-boundaries.md) and
-[Rust boundary verification](rust-boundary-verification.md).
+workspace boundaries. See [ADR-011](adrs/adr-0011-audited-rust-boundaries.md)
+and [Rust boundary verification](rust-boundary-verification.md).
 
 - [x] 8.4.1. Keep `cuprum-streams` free of unsafe Rust, including test and
   helper targets, and keep `cuprum-rust` limited to the PyO3/maturin hand-off.
@@ -666,7 +666,7 @@ workspace boundaries. See [ADR-011](adr-011-audited-rust-boundaries.md) and
 
 Native wheels target the CPython 3.12 stable ABI, so each platform needs one
 wheel for every supported interpreter. See
-[ADR-016](adr-016-stable-abi-native-wheels.md).
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md).
 
 - [ ] 8.5.1. Publish a Windows arm64 native wheel in a later 0.2.0 beta.
   - Success: the release workflow builds a `cp312-abi3` `win_arm64` wheel, and
@@ -758,13 +758,13 @@ contract below and leaves the native-consume routing question to 9.1.6.
 ## 10. Free-threaded stable-ABI wheels (after 0.2.0)
 
 Idea: the `cp312-abi3` wheel adopted in
-[ADR-016](adr-016-stable-abi-native-wheels.md) cannot load on free-threaded
-CPython, so those interpreters fall back to the pure Python wheel. PEP 803
-defines `abi3t`, a stable ABI that free-threaded and GIL-enabled builds of
-CPython 3.15 and later can both load. If PyO3's `abi3t-py315` feature and a
-maturin release that emits `abi3.abi3t` tags can produce one extra wheel per
-platform, and the extension and Cuprum's Python layer stay correct without a
-GIL, then free-threaded 3.15 users gain Rust acceleration without a
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md) cannot load on
+free-threaded CPython, so those interpreters fall back to the pure Python
+wheel. PEP 803 defines `abi3t`, a stable ABI that free-threaded and GIL-enabled
+builds of CPython 3.15 and later can both load. If PyO3's `abi3t-py315` feature
+and a maturin release that emits `abi3.abi3t` tags can produce one extra wheel
+per platform, and the extension and Cuprum's Python layer stay correct without
+a GIL, then free-threaded 3.15 users gain Rust acceleration without a
 per-interpreter build matrix. This work is out of scope for 0.2.0.
 
 ### 10.1. Establish the toolchain and the decision
@@ -863,8 +863,8 @@ for, and for what it does with a failure, without a child process, a `PATH`
 stub, a handwritten port type, or a bypass of the catalogue check. This is
 capability work for adopters: it removes the last reason a test runner
 substitutes the process rather than the call. See
-[RFC 0001](rfcs/0001-execution-interception.md). The adopter-parity issue list
-for leynos/lading phase 5 is tracked separately in phase 12.
+[RFC 0001](rfcs/rfc-0001-execution-interception.md). The adopter-parity issue
+list for leynos/lading phase 5 is tracked separately in phase 12.
 
 ### 11.1. Make the spawn injectable without changing a default run
 
@@ -1132,7 +1132,8 @@ it spawned. If a caller could opt into owning a child's process group, then
 teardown could signal every member of that group, the inherited pipes would
 reach end-of-file, and the guarantee could be stated precisely: the group the
 run created is terminated, descendants that leave it are not, and no caller who
-does not opt in is affected. See [ADR-021](adr-021-process-group-ownership.md).
+does not opt in is affected. See
+[ADR-021](adrs/adr-0021-process-group-ownership.md).
 
 ### 13.1. Make group ownership a policy on the execution context
 

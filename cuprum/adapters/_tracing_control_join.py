@@ -9,7 +9,7 @@ placed correctly.
 
 Two registrations are needed and both are explicit. Control events travel on
 their own channel, per
-[ADR-008](../../docs/adr-008-rust-pump-observation-channel.md), so a caller who
+[ADR-008](../../docs/adrs/adr-0008-rust-pump-observation-channel.md), so a caller who
 wants them traced asks for them; a caller who does not pays nothing and sees no
 behavioural change.
 

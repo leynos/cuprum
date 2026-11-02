@@ -29,7 +29,7 @@ exhausted to get there.
 
 The obvious route — a new `ExecPhase` member consumed by the existing
 observation hooks — is closed for the same reasons
-[ADR-008](adr-008-rust-pump-observation-channel.md) closed it for pump routing.
+[ADR-008](adr-0008-rust-pump-observation-channel.md) closed it for pump routing.
 `ExecPhase` is a closed `Literal` and its consumers match it exhaustively, and
 hook exceptions are not swallowed. Adding a member would therefore start
 raising inside consumers a caller had already registered, converting a
@@ -83,8 +83,8 @@ fail-open.
 
 Give each control operation its own span rather than decorating the run's.
 
-Rejected on the two grounds [ADR-010](adr-010-rust-pump-hop-span.md) raised for
-executor-hop spans. A control operation can complete *after* the run has
+Rejected on the two grounds [ADR-010](adr-0010-rust-pump-hop-span.md) raised
+for executor-hop spans. A control operation can complete *after* the run has
 settled — a `kill()` on an already-exited child, or a stop whose reaping
 outlives the run's own span — so a self-owned control span would either outlive
 the execution it describes, reporting a duration the run never had, or have to

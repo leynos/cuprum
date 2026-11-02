@@ -137,7 +137,7 @@ Relevant files and directories:
 
 - `pyproject.toml` currently uses `uv_build` as the build backend.
 - `docs/roadmap.md` defines Phase 4.1 tasks (4.1.1 to 4.1.4).
-- `docs/adr-001-rust-extension.md` records the Rust extension architecture
+- `docs/adrs/adr-0001-rust-extension.md` records the Rust extension architecture
   decision record (ADR) and runtime selection model.
 - `docs/cuprum-design.md` contains Section 13 on performance-optimized stream
   operations (needs revision to meet the prompt's Section 13 requirements).
@@ -161,7 +161,7 @@ Terminology:
 
 Stage A: discovery and decisions (no code changes).
 
-- Re-read `docs/roadmap.md`, `docs/adr-001-rust-extension.md`, and
+- Re-read `docs/roadmap.md`, `docs/adrs/adr-0001-rust-extension.md`, and
   `docs/cuprum-design.md` Section 13 to confirm intended architecture and
   ensure the plan aligns with existing decisions.
 - Inspect `pyproject.toml` and existing CI workflows to decide how to support

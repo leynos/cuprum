@@ -362,7 +362,7 @@ stream's record names under `captures`, not in the payload.
 `require_captured()` raises `ValueError` naming such a stream rather than
 reporting an empty string, because an absent payload and an empty stream are
 different facts. See
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md).
 
 <!-- tested-example: capture-and-echo -->
 
@@ -2159,8 +2159,8 @@ The flags carry no `force` and are validated: anything but a `bool` raises
 `ValueError`. The default sink does not serialize overlapping sessions, so run
 grouped commands sequentially when they share the parent's stderr; otherwise
 their workflow frames can interleave.
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md) records why the
-flags construct the sink rather than teach the execution layer workflow
+[ADR-013](adrs/adr-0013-opt-in-github-actions-presentation-sink.md) records why
+the flags construct the sink rather than teach the execution layer workflow
 commands.
 
 #### Configure the sink directly

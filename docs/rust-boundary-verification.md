@@ -220,7 +220,7 @@ requiring a source-level unsafe prohibition on each. Its current measured run
 found the library and compile-contract target, compiled six unsafe probes, and
 separately rejected unannotated future binary, build-script, example,
 integration-test, and benchmark targets.
-[ADR-011's 2026-09-20 addendum](adr-011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
+[ADR-011's 2026-09-20 addendum](adrs/adr-0011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records the implementation evolution, including Cargo's automatic-target
 switches and the I/O boundary around discovery.
 

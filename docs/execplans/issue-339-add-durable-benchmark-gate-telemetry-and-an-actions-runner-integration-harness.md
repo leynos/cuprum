@@ -702,11 +702,11 @@ generations found different ones. Renumbering `012` to `014` in
 telemetry reference, but for the harness reference it bumped only the label,
 leaving `[ADR-013](adr-014-actions-runner-integration-harness.md)` — a link
 whose text promises ADR-013 and whose target is ADR-014. A sweep of every
-`[ADR-NNN](adr-MMM-*.md)` label/target pair and every reference-style
-`[adr-NNN]` definition across `docs/` and `README.md` now reports no mismatch
-and no link to a missing file. The lesson is that a renumber is a two-field
-edit — number and target — and reviewing it as one field is how this survives
-three generations of replay.
+``[ADR-NNN](adrs/adr-NNNN-title-slug.md)`` label/target pair and every
+reference-style `[adr-NNNN]` definition across `docs/` and `README.md` now
+reports no mismatch and no link to a missing file. The lesson is that a
+renumber is a two-field edit — number and target — and reviewing it as one
+field is how this survives three generations of replay.
 
 2026-09-19: Diagnosed the branch's CodeRabbit pre-merge table as a stale
 artefact, not a merely outdated one. The live walkthrough comment on PR #418
@@ -774,11 +774,12 @@ the tip commit resolves. All 89 paths main touched and the branch did not are
 byte-identical to `50ecdf2a`, and no path the branch deletes is present.
 
 The renumber is a two-field edit and was verified as one: every
-`[ADR-NNN](adr-MMM-*.md)` pair and every reference-style `[adr-NNN]` definition
-agrees, `contents.md` has no duplicate keys, and every target resolves. The one
-remaining `[ADR-013](adr-014-...)` is inside backticks in the revision note
-above, quoting the historical defect `ab977364` repaired; it is narration
-rather than a link, and is preserved deliberately.
+``[ADR-NNN](adrs/adr-NNNN-title-slug.md)`` pair and every reference-style
+`[adr-NNNN]` definition agrees, `contents.md` has no duplicate keys, and every
+target resolves. The one remaining
+`[ADR-013](adr-014-actions-runner-integration-harness.md)` is inside backticks
+in the revision note above, quoting the historical defect `ab977364` repaired;
+it is narration rather than a link, and is preserved deliberately.
 
 The replay also surfaced a divergence the merge could not see. Main bumped
 `actions/upload-artifact` to v7.0.1, `actions/checkout` to v7.0.1, and
