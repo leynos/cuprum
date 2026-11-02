@@ -1,0 +1,399 @@
+"""Build dependency-free crates against the selected modern-stable toolchain.
+
+The warning-policy contract needs real Cargo invocations: only a live build
+shows that changing `build.warnings` replays a cached artefact instead of
+recompiling it. These helpers own the awkward parts of that fixture — probing
+the toolchain, writing a locked crate, keeping each pytest run's target
+directory under the Rust workspace, and constructing the environment — so the
+test module can assert what each Cargo transcript proves.
+
+Scope: the Cargo warning-policy contracts. Nothing here installs a toolchain or
+alters ambient configuration; every command runs with an explicit
+`RUSTUP_TOOLCHAIN`, an explicit target directory, `--locked`, and `--offline`.
+"""
+
+from __future__ import annotations
+
+import collections.abc as cabc
+import dataclasses as dc
+import os
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo argv.
+import typing as typ
+
+import pytest
+
+from tests.helpers.docs import repo_root
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
+
+__all__ = (
+    "BASE_RUSTFLAGS",
+    "CARGO_COMMAND_TIMEOUT_SECONDS",
+    "MODERN_STABLE_TOOLCHAIN",
+    "TARGET_DIR",
+    "CargoFixture",
+    "Locator",
+    "Probe",
+    "ToolchainProbeError",
+    "ToolchainProbeTimeoutError",
+    "diagnostics",
+    "host_target",
+    "make_crate",
+    "require_toolchain",
+    "target_dir",
+    "toolchain_available",
+)
+
+#: The compiler the modern-stable route selects, pinned independently here so
+#: a Makefile bump that forgets this contract fails rather than silently
+#: testing the previous compiler.
+MODERN_STABLE_TOOLCHAIN = "1.99.1"
+
+#: Test artefacts stay in the shared Rust workspace, never under `/tmp`.
+TARGET_DIR = repo_root() / "rust/target/cargo-build-warnings-contract"
+
+#: The only compiler flag the modern route retains. It is not a warning flag,
+#: so changing `build.warnings` must not invalidate a build that keeps it.
+BASE_RUSTFLAGS = "-C codegen-units=1"
+
+#: A cold build of a tiny crate fits inside this bound; it names a wedged build.
+CARGO_COMMAND_TIMEOUT_SECONDS = 1800
+#: A probe answers in under a second idle; the bound tolerates a loaded host.
+PROBE_TIMEOUT_SECONDS = 60
+
+
+#: Runs one fixed toolchain probe with optional extra environment entries.
+type Probe = cabc.Callable[
+    [list[str], cabc.Mapping[str, str] | None],
+    subprocess.CompletedProcess[str],
+]
+#: Resolves an executable name to its path, or to ``None`` when it is absent.
+type Locator = cabc.Callable[[str], str | None]
+
+
+class ToolchainProbeError(RuntimeError):
+    """Raised when a toolchain probe could not be started at all."""
+
+
+class ToolchainProbeTimeoutError(ToolchainProbeError):
+    """Raised when a toolchain probe outlived its scheduling bound."""
+
+
+def _probe(
+    argv: list[str], env: cabc.Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run one fixed probe, translating start and timeout faults."""
+    child_env = None if env is None else {**os.environ, **env}
+    try:
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed toolchain probe.
+            argv,
+            capture_output=True,
+            check=False,
+            env=child_env,
+            timeout=PROBE_TIMEOUT_SECONDS,
+            text=True,
+        )
+    except subprocess.TimeoutExpired as error:
+        message = f"probe timed out after {PROBE_TIMEOUT_SECONDS}s: {' '.join(argv)}"
+        raise ToolchainProbeTimeoutError(message) from error
+    except OSError as error:
+        message = f"toolchain probe could not start: {' '.join(argv)}"
+        raise ToolchainProbeError(message) from error
+
+
+def _reports_version(
+    probe: subprocess.CompletedProcess[str], tool: str, toolchain: str
+) -> bool:
+    """Return whether a probe named the requested toolchain."""
+    return probe.returncode == 0 and probe.stdout.startswith(f"{tool} {toolchain} ")
+
+
+def _reports_clippy(probe: subprocess.CompletedProcess[str]) -> bool:
+    """Return whether a component-listing probe found Clippy installed."""
+    return probe.returncode == 0 and any(
+        line.startswith("clippy") for line in probe.stdout.splitlines()
+    )
+
+
+def toolchain_available(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> bool:
+    """Return whether the named compiler, Cargo, and Clippy are installed.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the probe must reach, passed explicitly so the query never
+        reads a selection from the ambient environment.
+    probe : Probe
+        Adapter running one fixed argument vector under optional environment
+        entries; it returns the answer and raises when it cannot give one.
+    locate : collections.abc.Callable[[str], str | None]
+        Resolver for executable names, injected so the query does not have to
+        read `PATH` itself.
+
+    Returns
+    -------
+    bool
+        Whether rustc, Cargo, and Clippy all reported the named toolchain.
+
+    Notes
+    -----
+    Cargo is selected through ``RUSTUP_TOOLCHAIN``, not a ``+toolchain``
+    argument, because the ``+`` form is a rustup proxy feature a direct Cargo
+    binary ignores; the Make route uses the same mechanism.
+
+    An absent executable is a read result, but a probe fault propagates: a
+    located executable that will not run is a broken environment, not a
+    missing toolchain.
+    """
+    rustup = locate("rustup")
+    cargo = locate("cargo")
+    if rustup is None or cargo is None:
+        return False
+    rustc_query = [rustup, "run", toolchain, "rustc", "-V"]
+    clippy_query = [
+        rustup,
+        "component",
+        "list",
+        "--installed",
+        "--toolchain",
+        toolchain,
+    ]
+    return (
+        _reports_version(probe(rustc_query, None), "rustc", toolchain)
+        and _reports_version(
+            probe([cargo, "-V"], {"RUSTUP_TOOLCHAIN": toolchain}),
+            "cargo",
+            toolchain,
+        )
+        and _reports_clippy(probe(clippy_query, None))
+    )
+
+
+def _skip_or_fail(message: str) -> typ.NoReturn:
+    """Skip locally, or fail when CI requires the modern toolchain."""
+    if os.environ.get("CUPRUM_REQUIRE_MODERN_STABLE") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def require_toolchain(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> str:
+    """Return Cargo or skip locally, while making CI absence a failure.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the caller needs.
+    probe : Probe
+        Adapter used for the availability probe.
+    locate : collections.abc.Callable[[str], str | None]
+        Resolver for executable names.
+
+    Returns
+    -------
+    str
+        The Cargo executable that honours the modern toolchain selection.
+
+    Notes
+    -----
+    A missing toolchain and a probe that outlived its bound both skip here and
+    fail under ``CUPRUM_REQUIRE_MODERN_STABLE=1``. A probe that could not be
+    started propagates instead, because a located executable that will not run
+    is a broken environment.
+    """
+    cargo = locate("cargo")
+    if cargo is None:
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
+    try:
+        is_available = toolchain_available(
+            toolchain=toolchain, probe=probe, locate=locate
+        )
+    except ToolchainProbeTimeoutError as error:
+        _skip_or_fail(str(error))
+    if not is_available:
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
+    return cargo
+
+
+def host_target(
+    *,
+    toolchain: str = MODERN_STABLE_TOOLCHAIN,
+    probe: Probe = _probe,
+    locate: Locator = shutil.which,
+) -> str:
+    """Return the exact host triple reported by the named rustc.
+
+    Parameters
+    ----------
+    toolchain : str
+        Toolchain the probe must reach; never read from the environment.
+    probe : Probe
+        Adapter running one fixed argument vector.
+    locate : Locator
+        Resolver for executable names, injected so `PATH` is not read here.
+
+    Returns
+    -------
+    str
+        The host triple, such as ``x86_64-unknown-linux-gnu``.
+
+    Raises
+    ------
+    ToolchainProbeError
+        If ``rustc -vV`` fails, or omits or blanks its host triple.
+
+    Notes
+    -----
+    An absent ``rustup`` follows the same skip-or-fail policy as
+    :func:`require_toolchain`, so a missing toolchain never masquerades as a
+    probe fault.
+    """
+    rustup = locate("rustup")
+    if rustup is None:
+        _skip_or_fail(f"Rust and Cargo {toolchain} with Clippy are unavailable")
+    result = probe([rustup, "run", toolchain, "rustc", "-vV"], None)
+    if result.returncode != 0:
+        message = f"rustc -vV failed for toolchain {toolchain} ({result.returncode})"
+        raise ToolchainProbeError(message)
+    target = next(
+        (
+            line.removeprefix("host: ").strip()
+            for line in result.stdout.splitlines()
+            if line.startswith("host: ")
+        ),
+        None,
+    )
+    if not target:
+        message = f"rustc -vV must report its host target for toolchain {toolchain}"
+        raise ToolchainProbeError(message)
+    return target
+
+
+def make_crate(directory: pth.Path, name: str, source: str) -> pth.Path:
+    """Create one dependency-free library with a fixed lockfile.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Temporary directory that will hold the crate.
+    name : str
+        Crate and package name; also used in Cargo's freshness messages.
+    source : str
+        Contents of ``src/lib.rs``.
+
+    Returns
+    -------
+    pathlib.Path
+        The crate root, ready for a locked Cargo command.
+    """
+    crate = directory / name
+    source_path = crate / "src/lib.rs"
+    source_path.parent.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2024"\n',
+        encoding="utf-8",
+    )
+    (crate / "Cargo.lock").write_text(
+        f'version = 4\n\n[[package]]\nname = "{name}"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    source_path.write_text(source, encoding="utf-8")
+    return crate
+
+
+def target_dir(crate: pth.Path) -> pth.Path:
+    """Keep each pytest run isolated while sharing its policy-toggle cache."""
+    return TARGET_DIR / crate.parent.name
+
+
+def diagnostics(result: subprocess.CompletedProcess[str]) -> str:
+    """Return Cargo's combined output for a focused assertion message."""
+    return result.stdout + result.stderr
+
+
+@dc.dataclass(frozen=True, slots=True)
+class CargoFixture:
+    """One crate bound to the selected Cargo and host target.
+
+    Attributes
+    ----------
+    cargo : str
+        Cargo executable honouring the modern toolchain selection.
+    target : str
+        Host triple reported by the selected rustc.
+    crate : pathlib.Path
+        Crate root produced by :func:`make_crate`.
+    """
+
+    cargo: str
+    target: str
+    crate: pth.Path
+
+    def run(
+        self,
+        *arguments: str,
+        warnings: str = "deny",
+        rustflags: str = BASE_RUSTFLAGS,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one locked command through the selected stable toolchain.
+
+        Parameters
+        ----------
+        *arguments : str
+            Cargo subcommand and its arguments.
+        warnings : str
+            Value for ``CARGO_BUILD_WARNINGS``; ``"warn"`` or ``"deny"``.
+        rustflags : str
+            Value for ``RUSTFLAGS``, excluding any warning flag.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            The finished Cargo invocation, never raised on a non-zero exit.
+        """
+        environment = os.environ.copy()
+        for variable in (
+            "RUSTC",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
+            "RUSTDOCFLAGS",
+            "CARGO_BUILD_RUSTDOCFLAGS",
+        ):
+            environment.pop(variable, None)
+        environment.update({
+            "CARGO_BUILD_WARNINGS": warnings,
+            "CARGO_TERM_COLOR": "never",
+            "CARGO_TARGET_DIR": str(target_dir(self.crate)),
+            "RUSTFLAGS": rustflags,
+            "RUSTUP_TOOLCHAIN": MODERN_STABLE_TOOLCHAIN,
+        })
+        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv.
+            [
+                self.cargo,
+                *arguments,
+                "--locked",
+                "--offline",
+                "--verbose",
+                "--target",
+                self.target,
+                "--profile",
+                "dev",
+            ],
+            capture_output=True,
+            check=False,
+            cwd=self.crate,
+            env=environment,
+            timeout=CARGO_COMMAND_TIMEOUT_SECONDS,
+            text=True,
+        )
