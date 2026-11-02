@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import dataclasses as dc
 
 import pytest
@@ -314,6 +315,32 @@ _TEXT_ENCODINGS = ("utf-8", "shift_jis", "latin-1", "ascii")
 _ERROR_POLICIES = ("strict", "replace", "ignore")
 
 
+def _expected_text_prefix(
+    line: bytes,
+    *,
+    budget: int,
+    encoding: str,
+    errors: str,
+) -> bytes:
+    """Return the longest source prefix that fits *budget* when re-encoded."""
+    expected = b""
+    for length in range(len(line) + 1):
+        candidate = line[:length]
+        decoder = codecs.getincrementaldecoder(encoding)(errors=errors)
+        try:
+            encoded = decoder.decode(candidate, final=False).encode(encoding, errors)
+        except UnicodeError:
+            # A strict decoder rejects the invalid byte, so no longer candidate
+            # can decode either.
+            break
+        if decoder.getstate()[0]:
+            # The candidate ends mid-character and is not a complete prefix.
+            continue
+        if len(encoded) <= budget:
+            expected = candidate
+    return expected
+
+
 @given(
     line=st.binary(max_size=200),
     budget=st.integers(min_value=0, max_value=200),
@@ -338,6 +365,16 @@ def test_text_sink_prefix_is_bounded_and_on_a_character_boundary(
     )
     assert line.startswith(retained), (
         f"the retained source must be a prefix of the line, got={retained!r}"
+    )
+    expected = _expected_text_prefix(
+        line,
+        budget=budget,
+        encoding=encoding,
+        errors=errors,
+    )
+    assert retained == expected, (
+        f"{encoding}/{errors} must retain the largest fitting prefix, "
+        f"expected={expected!r}, got={retained!r}"
     )
     # Re-encoding the retained text with a whole-string codec is an independent
     # oracle for the incremental scan, including lenient invalid-byte handling.
