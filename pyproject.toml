@@ -185,6 +185,10 @@ extend-ignore = [
 "cuprum/unittests/*_test_helpers.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "cuprum/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
+# The documentation-example parser enforces the published-document contract on
+# behalf of the behaviour tests that call it, so its failures are test
+# assertions just as they were before the parser moved out of the test module.
+"tests/behaviour/_documentation_examples_support.py" = ["assert"]
 
 [tool.ruff.lint.flake8-import-conventions]
 # Declare the banned `from` imports.
