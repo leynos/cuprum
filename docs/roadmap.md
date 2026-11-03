@@ -1098,7 +1098,7 @@ capability.
     sentence and closed 2026-10-11 by merged PR
     [#502](https://github.com/leynos/cuprum/pull/502), which delivered the
     typed `ArgValue` contract,
-    [ADR-020](adr-020-typed-argument-contract-for-sh-make.md), and the
+    [ADR-020](adrs/adr-0020-typed-argument-contract-for-sh-make.md), and the
     [changelog](../CHANGELOG.md) entry.
 - [x] 12.1.7. Bind catalogue identity to a validated executable path
   ([#440](https://github.com/leynos/cuprum/issues/440)).
