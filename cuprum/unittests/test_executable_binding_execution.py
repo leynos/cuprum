@@ -346,6 +346,49 @@ def test_a_bound_but_unlisted_program_is_refused_without_resolving(
     )
 
 
+def test_an_allowlisted_basename_does_not_admit_an_unlisted_program(
+    tmp_path: Path,
+) -> None:
+    """A bound executable's basename plays no part in admission.
+
+    The workaround #440 rejects is to accept any executable whose basename
+    matches an allowlisted program. Here the bound executable is a working
+    script named ``echo`` — a name the allowlist contains — while the logical
+    program it is bound to, ``ls``, is catalogued but not allowlisted. An
+    implementation keyed on the executable's basename would admit the command
+    and run the script; the allowlist must refuse the logical program before
+    the binding is ever resolved.
+    """
+    approved = _write_script(tmp_path / str(ECHO), _APPROVED)
+    catalogue, (echo_prog, unlisted) = _catalogue_for(ECHO, LS)
+    allowlist = frozenset([echo_prog])
+    calls: list[int] = []
+
+    def resolver() -> str:
+        """Record evaluation, so a basename-keyed admission would show up."""
+        calls.append(len(calls))
+        return str(approved)
+
+    assert approved.name == str(ECHO), (
+        f"the bound executable's basename must match the allowlisted program, "
+        f"got {approved.name!r}"
+    )
+    assert echo_prog in allowlist, "the allowlist must contain the basename's program"
+    assert unlisted not in allowlist, "the bound logical program must be unlisted"
+
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        bind_executable(unlisted, resolver),
+        pytest.raises(ForbiddenProgramError, match=str(LS)),
+    ):
+        _run_capturing(sh.make(unlisted, catalogue=catalogue)())
+
+    assert len(calls) == 0, (
+        "a resolver must not run for a program refused even though the bound "
+        f"executable's basename is allowed, ran {len(calls)} times"
+    )
+
+
 def test_a_pipeline_refused_at_a_later_stage_resolves_no_stage(
     tmp_path: Path,
 ) -> None:
