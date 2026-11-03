@@ -66,9 +66,10 @@ with bind_executable(SCCACHE, "/opt/toolchains/1.79/bin/sccache"):
 ```
 
 The allowlist still gates on `SCCACHE`, telemetry still reports
-`program="sccache"`, and `resolved_path` reports what actually ran. The
-allowlist admits or refuses a command by its logical `Program` only; the
-basename and path of the bound executable play no part in that decision.
+`program="sccache"`, and `resolved_path` reports the executable string passed
+to the child. The allowlist admits or refuses a command by its logical
+`Program` only; the basename and path of the bound executable play no part in
+that decision.
 `test_an_allowlisted_basename_does_not_admit_an_unlisted_program` witnesses the
 refusal of an unlisted program whose bound executable is named for an
 allowlisted program. It does not witness rejection of an unapproved path.
@@ -3733,15 +3734,15 @@ the repository convention requires.
 Acceptance is behavioural. After EP-M4, each of the following must be true and
 each is asserted by a named test:
 
-1. An unapproved executable that shares a bound program's basename is rejected.
-   The discriminating arrangement catalogues two programs, allowlists one, and
-   binds the *unlisted* program to a working executable whose basename is the
-   allowlisted program's name. Expect `ForbiddenProgramError` naming the
-   unlisted program, with the resolver never called. The weaker form — bind
-   `Program("sccache")` to `/opt/.../sccache` and keep `sccache` off the
-   allowlist — is satisfied by any implementation that refuses every unlisted
-   program, whether or not it understands basenames, so it cannot detect
-   basename-keyed admission. Witnessed by
+1. An unlisted logical `Program` is refused even when its bound executable's
+   basename is allowlisted. The discriminating arrangement catalogues two
+   programs, allowlists one, and binds the *unlisted* program to a working
+   executable whose basename is the allowlisted program's name. Expect
+   `ForbiddenProgramError` naming the unlisted program, with the resolver never
+   called. The weaker form — bind `Program("sccache")` to `/opt/.../sccache`
+   and keep `sccache` off the allowlist — is satisfied by any implementation
+   that refuses every unlisted program, whether or not it understands
+   basenames, so it cannot detect basename-keyed admission. Witnessed by
    `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`. This is
    the issue's explicit rejection requirement.
 2. A configured approved path runs exactly. Bind an allowlisted logical
