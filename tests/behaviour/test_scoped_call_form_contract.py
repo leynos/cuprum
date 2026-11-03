@@ -124,14 +124,15 @@ def _cuprum_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
     scoped_names = {"scoped"}
     module_names: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "cuprum":
-            for alias in node.names:
-                if alias.name == "scoped":
-                    scoped_names.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == "cuprum":
-                    module_names.add(alias.asname or alias.name)
+        match node:
+            case ast.ImportFrom(module="cuprum", names=aliases):
+                for alias in aliases:
+                    if alias.name == "scoped":
+                        scoped_names.add(alias.asname or alias.name)
+            case ast.Import(names=aliases):
+                for alias in aliases:
+                    if alias.name == "cuprum":
+                        module_names.add(alias.asname or alias.name)
     return scoped_names, module_names
 
 

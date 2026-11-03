@@ -56,12 +56,13 @@ def _indent_columns(line: str) -> int:
     """Return the width of ``line``'s leading whitespace in CommonMark columns."""
     columns = 0
     for char in line:
-        if char == " ":
-            columns += 1
-        elif char == "\t":
-            columns += 4 - columns % 4
-        else:
-            break
+        match char:
+            case " ":
+                columns += 1
+            case "\t":
+                columns += 4 - columns % 4
+            case _:
+                break
     return columns
 
 
