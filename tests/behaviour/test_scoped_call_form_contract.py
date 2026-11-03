@@ -26,6 +26,54 @@ _STRING_PREFIXES = "rbufRBUF"
 _ARGUMENT_BOUNDARY = "=([{,: \t\n"
 
 
+def _literal_prefix_length(text: str, index: int) -> int:
+    """Return how many characters of a string-literal prefix start at ``index``."""
+    for prefix in range(2):
+        position = index + prefix
+        if position >= len(text):
+            return prefix
+        if text[position] not in _STRING_PREFIXES:
+            return prefix
+    return 2
+
+
+def _starts_literal(text: str, index: int, prefix: int) -> bool:
+    """Return whether a quote at ``index + prefix`` opens a literal."""
+    if prefix:
+        return True
+    if index == 0:
+        return True
+    return text[index - 1] in _ARGUMENT_BOUNDARY
+
+
+def _closing_delimiter(text: str, quote_index: int) -> str:
+    """Return the quote run that closes the literal opened at ``quote_index``."""
+    quote = text[quote_index]
+    return quote * 3 if text.startswith(quote * 3, quote_index) else quote
+
+
+def _ends_single_line_literal(delimiter: str, char: str) -> bool:
+    """Return whether ``char`` breaks an unterminated single-line literal."""
+    if len(delimiter) != 1:
+        return False
+    return char == "\n"
+
+
+def _scan_literal(text: str, position: int, delimiter: str) -> int | None:
+    """Return the index just past ``delimiter``, or ``None`` if unterminated."""
+    while position < len(text):
+        char = text[position]
+        if char == "\\":
+            position += 2
+            continue
+        if text.startswith(delimiter, position):
+            return position + len(delimiter)
+        if _ends_single_line_literal(delimiter, char):
+            return None
+        position += 1
+    return None
+
+
 def _string_end(text: str, index: int) -> int | None:
     """Return the index just past a Python string literal at ``index``.
 
@@ -34,32 +82,16 @@ def _string_end(text: str, index: int) -> int | None:
     int | None
         The end of the literal, or ``None`` when no literal starts there.
     """
-    prefix = 0
-    while (
-        prefix < 2
-        and index + prefix < len(text)
-        and text[index + prefix] in _STRING_PREFIXES
-    ):
-        prefix += 1
+    prefix = _literal_prefix_length(text, index)
     quote_index = index + prefix
-    if quote_index >= len(text) or text[quote_index] not in "'\"":
+    if quote_index >= len(text):
         return None
-    has_boundary = index == 0 or text[index - 1] in _ARGUMENT_BOUNDARY
-    if prefix == 0 and not has_boundary:
+    if text[quote_index] not in "'\"":
         return None
-    quote = text[quote_index]
-    delimiter = quote * 3 if text.startswith(quote * 3, quote_index) else quote
-    position = quote_index + len(delimiter)
-    while position < len(text):
-        if text[position] == "\\":
-            position += 2
-            continue
-        if text.startswith(delimiter, position):
-            return position + len(delimiter)
-        if len(delimiter) == 1 and text[position] == "\n":
-            return None
-        position += 1
-    return None
+    if not _starts_literal(text, index, prefix):
+        return None
+    delimiter = _closing_delimiter(text, quote_index)
+    return _scan_literal(text, quote_index + len(delimiter), delimiter)
 
 
 def _mask_strings(text: str) -> str:
@@ -113,6 +145,11 @@ def _text_passes_retired_keyword(text: str) -> bool:
     )
 
 
+def _bound_names(aliases: cabc.Iterable[ast.alias], imported: str) -> set[str]:
+    """Return the names that bind ``imported`` among ``aliases``."""
+    return {alias.asname or alias.name for alias in aliases if alias.name == imported}
+
+
 def _cuprum_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
     """Return the names bound to ``scoped`` and to the ``cuprum`` module.
 
@@ -126,13 +163,9 @@ def _cuprum_bindings(tree: ast.AST) -> tuple[set[str], set[str]]:
     for node in ast.walk(tree):
         match node:
             case ast.ImportFrom(module="cuprum", names=aliases):
-                for alias in aliases:
-                    if alias.name == "scoped":
-                        scoped_names.add(alias.asname or alias.name)
+                scoped_names |= _bound_names(aliases, "scoped")
             case ast.Import(names=aliases):
-                for alias in aliases:
-                    if alias.name == "cuprum":
-                        module_names.add(alias.asname or alias.name)
+                module_names |= _bound_names(aliases, "cuprum")
     return scoped_names, module_names
 
 

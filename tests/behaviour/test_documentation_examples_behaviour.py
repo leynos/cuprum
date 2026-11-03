@@ -119,36 +119,27 @@ def test_short_indented_body_lines_lose_their_indentation() -> None:
     ], "a shallower body line must not stay indented"
 
 
-def test_deeply_indented_fence_text_stays_inside_the_example() -> None:
-    """Four spaces beyond the fence open indented code, not a closing fence."""
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        pytest.param("    ```", id="four-spaces"),
+        pytest.param("\t```", id="tab"),
+    ],
+)
+def test_indented_fence_lines_stay_inside_the_example(body_line: str) -> None:
+    """Indentation of three columns or more keeps a fence line inside the example."""
     text = (
         "<!-- tested-example: quoted -->\n"
         "```python\n"
         'text = """\n'
-        "    ```\n"
+        f"{body_line}\n"
         '"""\n'
         'assert "```" in text\n'
         "```\n"
     )
     assert _parse_examples("doc.md", text) == [
-        ("quoted", 'text = """\n    ```\n"""\nassert "```" in text\n')
+        ("quoted", f'text = """\n{body_line}\n"""\nassert "```" in text\n')
     ], "an indented fence line must not end the example early"
-
-
-def test_a_tab_indented_fence_marker_stays_inside_the_example() -> None:
-    """A tab is four CommonMark columns, so its fence marker is example content."""
-    text = (
-        "<!-- tested-example: tabbed -->\n"
-        "```python\n"
-        'text = """\n'
-        "\t```\n"
-        '"""\n'
-        'assert "```" in text\n'
-        "```\n"
-    )
-    assert _parse_examples("doc.md", text) == [
-        ("tabbed", 'text = """\n\t```\n"""\nassert "```" in text\n')
-    ], "a tab-indented fence line must not end the example early"
 
 
 def test_a_longer_fence_needs_an_equally_long_closer() -> None:
