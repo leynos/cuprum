@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - a real pipe is the boundary under test.
 import sys
 import typing as typ
@@ -141,6 +142,24 @@ def _assert_status(probe_scenario: _ProbeScenario, status: int) -> None:
     )
 
 
+def _probe_environment() -> dict[str, str]:
+    """Return an environment that leaves the probe's standard streams buffered.
+
+    ``PYTHONUNBUFFERED`` would make the probe's post-run ``print`` write to the
+    already-closed pipe during the run, so the scenario would observe an in-run
+    ``BrokenPipeError`` instead of CPython's final flush. The contract under
+    test is the flush, so the probe must not inherit that setting.
+
+    Returns
+    -------
+    dict[str, str]
+        The current environment without ``PYTHONUNBUFFERED``.
+    """
+    environment = os.environ.copy()
+    environment.pop("PYTHONUNBUFFERED", None)
+    return environment
+
+
 def _start_probe(
     script: Path,
     marker: Path,
@@ -153,6 +172,20 @@ def _start_probe(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
         text=True,
+        env=_probe_environment(),
+    )
+
+
+def test_probe_environment_drops_pythonunbuffered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inherited unbuffered setting must not reach the probe."""
+    monkeypatch.setenv("PYTHONUNBUFFERED", "1")
+
+    environment = _probe_environment()
+
+    assert "PYTHONUNBUFFERED" not in environment, (
+        "the probe must run with buffered standard streams"
     )
 
 
