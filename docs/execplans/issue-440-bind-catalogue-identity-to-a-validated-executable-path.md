@@ -68,7 +68,10 @@ with bind_executable(SCCACHE, "/opt/toolchains/1.79/bin/sccache"):
 The allowlist still gates on `SCCACHE`, telemetry still reports
 `program="sccache"`, and `resolved_path` reports what actually ran. An
 unapproved path that shares the basename is rejected by the existing allowlist,
-because the binding never participates in allowlist enforcement.
+because the binding never participates in allowlist enforcement. That claim is
+witnessed by `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`,
+whose bound executable is *named* for an allowlisted program while its logical
+program is not: an admission rule keyed on the basename would run it.
 
 ## Constraints
 
@@ -2706,6 +2709,29 @@ escalation, not a workaround.
   diff?" and "did this branch cause the defect?" are different questions, and a
   file can be in the diff for unrelated work while the defect in it is
   inherited.
+- Observation: **acceptance clause 1's named witnesses could not falsify the
+  defect the clause exists to reject.** Clause 1 asks for an unapproved
+  executable sharing a bound program's basename to be rejected, and named
+  `test_a_bound_but_unlisted_program_is_refused_without_resolving` and the
+  `catalogue.feature` scenario "A binding cannot authorize an unlisted logical
+  program" as its witnesses. Both are genuine evidence for a different and
+  still-required constraint — that the allowlist, not the binding, decides
+  which logical programs may run — but in both arrangements the bound
+  executable's basename is itself absent from the allowlist (`unlisted.py` in
+  the unit test, `sccache` in the scenario). An implementation that admitted a
+  bound path by matching its basename against the allowlist would refuse those
+  two commands as well, so both pass either way. The behaviour was already
+  correct; what was missing was a shape that distinguishes the two rules.
+  Evidence: a probe against the checked-out tree binds an unlisted program to a
+  working executable named for the allowlisted program, is refused with
+  `Program 'sccache' is not allowed in the current context`, and records zero
+  resolver calls. The arrangement now ships as
+  `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`. Impact:
+  clause 1 and the coverage claim are corrected to name the discriminating
+  shape, and the two unlisted-program witnesses are described as what they are.
+  The lesson is that a passing refusal test is evidence for *a* refusal, not
+  necessarily for the refusal the requirement names; the arrangement, not the
+  outcome, is what makes a negative test discriminating.
 
 ## Decision log
 
@@ -2999,6 +3025,21 @@ escalation, not a workaround.
   The named witnesses and all assertions were kept, per the reply's explicit
   instruction that this is prose, not a production or test gap. Date/Author:
   2026-10-10, implementing agent.
+- Decision: acceptance clause 1 is re-prescribed around a basename-matching
+  refusal, and a new unit test supplies that witness, rather than reopening
+  issue #440 or changing production behaviour. Rationale: the shipped behaviour
+  was already correct — the allowlist refuses the logical program before the
+  resolver runs — so there was no production defect to fix. The defect was in
+  the evidence: the clause's original arrangement (bind `sccache`, keep
+  `sccache` off the allowlist) is satisfied by any implementation that refuses
+  every unlisted program, so it could not distinguish the basename-keyed
+  workaround the issue rejects. The new test binds an unlisted program to a
+  working executable whose basename is an allowlisted program's name, which a
+  basename-keyed rule would admit. Considered and rejected: a behavioural
+  scenario in `catalogue.feature` (the question is which key admission uses,
+  which reads more directly as a unit test), and replacing the existing refusal
+  tests (they witness a separate constraint and remain valid). Date/Author:
+  2026-11-03, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -3014,19 +3055,29 @@ allowlist even accidentally. The issue's rejected workaround — accepting any
 executable with a matching basename — is absent: the basename plays no part in
 any decision, and the execution suite is arranged so a basename-based fallback
 would *succeed* rather than error, which means the passing test can only be
-explained by the binding having been honoured.
+explained by the binding having been honoured. That arrangement describes the
+*positive* working-impostor test,
+`test_a_bound_program_runs_the_bound_file_not_the_catalogued_one`, and not a
+refusal. A refusal that a basename-keyed rule would not share is witnessed
+separately by `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`.
 
 Each acceptance clause is discharged by a named test or a named documentation
-section. An unapproved path is refused before its resolver runs
-(`test_executable_binding_execution.py`, the refusal case, asserting a recorded
-call count of zero, plus the `catalogue.feature` scenario whose counting
-resolver must never fire). A configured approved path runs exactly, witnessed
-from both sides — the library's `resolved_path` and the child's own report of
-its `sys.argv[0]` — because checking only the former could not distinguish the
-two. Nested and concurrent bindings stay isolated, covered by the stateful
-property test and the context-isolation suite. The filesystem-replacement limit
-is documented rather than papered over: `docs/users-guide.md` and section 5.1.2
-of `docs/cuprum-design.md` state that a path binding narrows the window between
+section. Basename rejection is discharged by
+`test_an_allowlisted_basename_does_not_admit_an_unlisted_program`, in which the
+bound executable's basename is allowlisted while the bound logical program is
+not, so an admission rule keyed on the basename would run it — a shape the
+unlisted-program witnesses below cannot distinguish. An unapproved logical
+program is separately refused before its resolver runs
+(`test_a_bound_but_unlisted_program_is_refused_without_resolving`, asserting a
+recorded call count of zero, plus the `catalogue.feature` scenario "A binding
+cannot authorize an unlisted logical program", whose counting resolver must
+never fire). A configured approved path runs exactly, witnessed from both sides
+— the library's `resolved_path` and the child's own report of its
+`sys.argv[0]` — because checking only the former could not distinguish the two.
+Nested and concurrent bindings stay isolated, covered by the stateful property
+test and the context-isolation suite. The filesystem-replacement limit is
+documented rather than papered over: `docs/users-guide.md` and section 5.1.2 of
+`docs/cuprum-design.md` state that a path binding narrows the window between
 validation and `exec` without closing it, so it is not an immutable binary
 identity.
 
@@ -3273,9 +3324,14 @@ O3 — Resolution ordering: enforcement precedes resolution.
   `len(calls) == 1` for the allowlisted run, proving the counter works;
   `test_a_bound_but_unlisted_program_is_refused_without_resolving` then asserts
   `len(calls) == 0`, proving the ordering. Without the positive case the empty
-  list would be indistinguishable from a broken counter. The pipeline path
-  carries its own pair, because ordering inside one stage's observation is not
-  the same property as ordering *across* stages:
+  list would be indistinguishable from a broken counter. The refusal's
+  *arrangement* is itself witnessed by
+  `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`, which
+  binds an unlisted program to a working executable whose basename matches the
+  allowlisted one: zero calls there cannot be explained by a basename-keyed
+  rule, because such a rule would admit and run it. The pipeline path carries
+  its own pair, because ordering inside one stage's observation is not the same
+  property as ordering *across* stages:
   `test_a_pipeline_refused_at_a_later_stage_resolves_no_stage` binds an allowed
   first stage and a forbidden later one with a counting resolver on each and
   asserts `ForbiddenProgramError` with **both** counters at zero. A mutation
@@ -3678,9 +3734,16 @@ Acceptance is behavioural. After EP-M4, each of the following must be true and
 each is asserted by a named test:
 
 1. An unapproved executable that shares a bound program's basename is rejected.
-   Bind `Program("sccache")` to `/opt/.../sccache`, keep `sccache` off the
-   allowlist, and expect `ForbiddenProgramError` with the resolver never
-   called. This is the issue's explicit rejection requirement.
+   The discriminating arrangement catalogues two programs, allowlists one, and
+   binds the *unlisted* program to a working executable whose basename is the
+   allowlisted program's name. Expect `ForbiddenProgramError` naming the
+   unlisted program, with the resolver never called. The weaker form — bind
+   `Program("sccache")` to `/opt/.../sccache` and keep `sccache` off the
+   allowlist — is satisfied by any implementation that refuses every unlisted
+   program, whether or not it understands basenames, so it cannot detect
+   basename-keyed admission. Witnessed by
+   `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`. This is
+   the issue's explicit rejection requirement.
 2. A configured approved path runs exactly. Bind an allowlisted logical
    program to a script whose catalogued name resolves to a different, working
    script, and assert the child's own `sys.argv[0]` report names the bound file
