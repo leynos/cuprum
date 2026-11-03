@@ -226,10 +226,10 @@ def _passes_retired_keyword(text: str) -> bool:
     return _python_passes_retired_keyword(tree)
 
 
-def _tracked_text_files() -> list[Path]:
+def _tracked_files() -> list[Path]:
     """Return every tracked regular file below the repository root."""
     result = sh.make(GIT)("ls-files", "-z").run_sync(context=ExecutionContext(cwd=ROOT))
-    assert result.ok, result.stderr
+    assert result.ok, f"git ls-files failed: {result.stderr}"
     paths: list[Path] = []
     for name in result.stdout.split("\0"):
         if not name:
@@ -238,6 +238,21 @@ def _tracked_text_files() -> list[Path]:
         if path.is_file():
             paths.append(path)
     return paths
+
+
+def _read_tracked_text(path: Path) -> str:
+    """Return ``path``'s text without letting an I/O failure pass unnoticed.
+
+    A tracked file that is not valid UTF-8 is still scanned rather than
+    skipped: the retired keyword is ASCII, so replacement characters cannot
+    hide it. Read errors propagate with the offending path intact.
+
+    Returns
+    -------
+    str
+        The file's text, with undecodable bytes replaced.
+    """
+    return path.read_bytes().decode("utf-8", errors="replace")
 
 
 @pytest.mark.parametrize(
@@ -310,14 +325,11 @@ def test_retired_keyword_detection(source: str, is_retired: bool) -> None:
 
 def test_no_tracked_file_passes_allowlist_directly_to_scoped() -> None:
     """No tracked file calls ``scoped()`` with a bare ``allowlist=`` keyword."""
-    offenders = []
-    for path in _tracked_text_files():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if _passes_retired_keyword(text):
-            offenders.append(str(path.relative_to(ROOT)))
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in _tracked_files()
+        if _passes_retired_keyword(_read_tracked_text(path))
+    ]
     assert not offenders, (
         "the retired keyword-scope call form remains in: " + ", ".join(offenders)
     )
