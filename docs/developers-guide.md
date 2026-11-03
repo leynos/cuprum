@@ -2199,6 +2199,8 @@ lifetime to the caller. The feature is two modules, split by what they own:
 | `cuprum/_detached_launch.py` | The `DetachedLaunch` receipt, the launch core, the ownership boundary, and the two `SafeCmd` entry points contributed as `_DetachedLaunchEntryPoints`.        |
 | `cuprum/_detached_spawn.py`  | `_DetachedPopen` and `_spawn_detached`: the one place a detached child is created, and the one place `subprocess.Popen`'s finalizer is replaced with a no-op. |
 
+*Table 1: Modules that implement detached command launch.*
+
 Both entry points are thin spellings of `_launch_detached`, which is a plain
 synchronous function: it enforces the allowlist, reads the platform gate through
 `_ownership_spawn_kwargs(ProcessGroupPolicy.OWN_GROUP)`, resolves the

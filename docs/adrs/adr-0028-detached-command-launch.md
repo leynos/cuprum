@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted on 2026-10-30.
+Accepted on 2026-10-30. Cuprum adds `SafeCmd.launch_detached()` and
+`SafeCmd.launch_detached_sync()`, which return an immutable `DetachedLaunch`
+receipt recording the worker's PID, catalogued program, and executed file.
 
 ## Date
 
@@ -21,8 +23,9 @@ workflow step reads that PID and stops it.
 
 Using a managed entry point for this is wrong in both directions. A run that is
 waited for blocks until the helper exits, which is the opposite of the
-requirement. Dropping a `RunningCommand`, or leaving its `async with` block, is
-a cancellation, not a transfer: the handle stops the child it owns. Reaching
+requirement. Leaving a `RunningCommand`'s `async with` block is a cancellation,
+not a transfer: the handle stops the child it owns. Dropping the last handle
+runs no Cuprum settlement, so Cuprum does not stop that child either. Reaching
 `subprocess.Popen` directly restores the problem the adopter is trying to leave
 — no catalogue, no allowlist, no argv contract, and no typed environment policy.
 
@@ -56,9 +59,10 @@ can tell whether Cuprum or the caller owns the process that call produced.
    which ownership contract applies.
 
 2. **Transfer ownership when a `RunningCommand` is dropped or its `async with`
-   block is left.** Rejected. Both are cancellation paths today. Making them
-   transfer lifetime would mean a forgotten handle leaks a process instead of
-   stopping one, and the same expression would mean opposite things at
+   block is left.** Rejected. Leaving the block is a cancellation path today.
+   Dropping a handle runs no settlement, so Cuprum does not stop the child.
+   Making the block exit transfer lifetime would leave a child running after
+   the block ends, and the same expression would mean opposite things at
    different call sites.
 
 3. **Return a `RunningCommand` that is never settled.** Rejected. The handle

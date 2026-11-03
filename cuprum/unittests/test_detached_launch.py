@@ -75,9 +75,9 @@ def test_the_receipt_names_the_process_the_spawn_reported(
     receipt = _launch_in_scope(command, program)
 
     assert calls, "the launch must spawn exactly one child"
-    assert receipt.pid == FAKE_PID
-    assert receipt.program == program
-    assert receipt.executable == str(program)
+    assert receipt.pid == FAKE_PID, "the receipt carries the spawned PID"
+    assert receipt.program == program, "the receipt names the catalogued program"
+    assert receipt.executable == str(program), "the receipt names the executed file"
 
 
 @_requires_posix
@@ -91,7 +91,9 @@ def test_the_spawn_receives_the_catalogued_argv_unchanged(
 
     _launch_in_scope(command, program)
 
-    assert calls[0].argv == (str(program), *arguments)
+    assert calls[0].argv == (str(program), *arguments), (
+        "the spawn must see the catalogued argv verbatim"
+    )
 
 
 @_requires_posix
@@ -104,7 +106,9 @@ def test_the_child_is_spawned_as_a_session_leader(
 
     _launch_in_scope(command, program)
 
-    assert calls[0].start_new_session is True
+    assert calls[0].start_new_session is True, (
+        "a detached launch must lead its own session"
+    )
 
 
 @_requires_posix
@@ -147,9 +151,11 @@ def test_the_context_environment_overlay_reaches_the_spawn(
     )
 
     env = calls[0].env
-    assert env is not None
-    assert env["CUPRUM_DETACHED"] == "1"
-    assert env["PATH"] == os.environ["PATH"]
+    assert env is not None, "an overlay environment must reach the child"
+    assert env["CUPRUM_DETACHED"] == "1", "the overlay must reach the child"
+    assert env["PATH"] == os.environ["PATH"], (
+        "an overlay must keep the parent's environment"
+    )
 
 
 @_requires_posix
@@ -166,7 +172,9 @@ def test_replace_mode_starts_the_child_from_an_empty_environment(
         context=ExecutionContext(env={"CUPRUM_ONLY": "1"}, env_mode=EnvMode.REPLACE),
     )
 
-    assert calls[0].env == {"CUPRUM_ONLY": "1"}
+    assert calls[0].env == {"CUPRUM_ONLY": "1"}, (
+        "REPLACE must give the child only the overlay"
+    )
 
 
 @_requires_posix
@@ -184,9 +192,9 @@ def test_an_unset_entry_removes_a_variable_from_the_child_environment(
     )
 
     env = calls[0].env
-    assert env is not None
-    assert "PATH" not in env
-    assert "PATH" in os.environ
+    assert env is not None, "an UNSET environment must reach the child"
+    assert "PATH" not in env, "UNSET must withhold the variable from the child"
+    assert "PATH" in os.environ, "UNSET must not mutate the parent environment"
 
 
 @_requires_posix
@@ -200,7 +208,9 @@ def test_the_context_working_directory_reaches_the_spawn(
 
     _launch_in_scope(command, program, context=ExecutionContext(cwd=tmp_path))
 
-    assert calls[0].cwd == str(tmp_path)
+    assert calls[0].cwd == str(tmp_path), (
+        "the child must start in the context's working directory"
+    )
 
 
 @_requires_posix
@@ -221,8 +231,8 @@ def test_a_bound_executable_is_what_runs_and_what_the_receipt_names(
     ):
         receipt = command.launch_detached_sync()
 
-    assert calls[0].argv[0] == str(bound)
-    assert receipt.executable == str(bound)
+    assert calls[0].argv[0] == str(bound), "the binding must decide argv[0]"
+    assert receipt.executable == str(bound), "the receipt must name the bound file"
 
 
 @_requires_posix
@@ -240,8 +250,8 @@ def test_an_unbound_program_runs_under_the_shared_fallback(
     receipt = _launch_in_scope(command, program)
 
     expected = _bound_executable(program, None)
-    assert calls[0].argv[0] == expected
-    assert receipt.executable == expected
+    assert calls[0].argv[0] == expected, "the fallback must decide argv[0]"
+    assert receipt.executable == expected, "the receipt must name the fallback file"
 
 
 def test_a_forbidden_program_is_refused_before_anything_is_spawned(
@@ -289,14 +299,22 @@ def test_the_entry_points_are_contributed_by_the_mixin() -> None:
     did not also grow a divergent definition of its own.
     """
     mixin = _DetachedLaunchEntryPoints
-    assert sh.SafeCmd.launch_detached is mixin.launch_detached
-    assert sh.SafeCmd.launch_detached_sync is mixin.launch_detached_sync
+    assert sh.SafeCmd.launch_detached is mixin.launch_detached, (
+        "SafeCmd must not define a second launch_detached"
+    )
+    assert sh.SafeCmd.launch_detached_sync is mixin.launch_detached_sync, (
+        "SafeCmd must not define a second launch_detached_sync"
+    )
 
 
 def test_the_public_receipt_is_exported_from_both_import_paths() -> None:
     """The receipt is reachable as ``cuprum.DetachedLaunch`` and from ``sh``."""
-    assert cuprum.DetachedLaunch is _detached_launch.DetachedLaunch
-    assert sh.DetachedLaunch is _detached_launch.DetachedLaunch
+    assert cuprum.DetachedLaunch is _detached_launch.DetachedLaunch, (
+        "cuprum.DetachedLaunch must be the module's receipt"
+    )
+    assert sh.DetachedLaunch is _detached_launch.DetachedLaunch, (
+        "sh.DetachedLaunch must be the module's receipt"
+    )
     for module in (cuprum, sh):
         assert "DetachedLaunch" in module.__all__, (
             f"{module.__name__}.__all__ must advertise the receipt"

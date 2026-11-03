@@ -1330,13 +1330,11 @@ implemented, and whether a caller can find out what it promises.
 Idea: adopters migrating from `subprocess.Popen` need one pattern Cuprum cannot
 express — launching a helper that must outlive the process and event loop that
 started it. Every managed entry point keeps its child: `run()` waits, `start()`
-hands back a handle that settles, and dropping a handle is cancellation. The
-requirement is an explicit transfer of lifetime, with catalogue identity,
-allowlist enforcement, argv boundaries, environment policy, and working
-directory preserved, and with nothing the launcher must service left behind. See
-[ADR-028](adrs/adr-0028-detached-command-launch.md).
-
-Status: implemented on the issue branch; awaiting review and merge.
+hands back a handle that settles, and leaving its `async with` block is
+cancellation. The requirement is an explicit transfer of lifetime, with
+catalogue identity, allowlist enforcement, argv boundaries, environment policy,
+and working directory preserved, and with nothing the launcher must service
+left behind. See [ADR-028](adrs/adr-0028-detached-command-launch.md).
 
 ### 15.1. Add the entry points and the receipt
 

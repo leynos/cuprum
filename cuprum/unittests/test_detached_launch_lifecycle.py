@@ -285,8 +285,8 @@ def test_a_receipt_is_returned_for_a_worker_that_exits_at_once() -> None:
 
     pid, status = os.waitpid(receipt.pid, 0)
 
-    assert pid == receipt.pid
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert pid == receipt.pid, "waitpid must reap the worker the receipt names"
+    assert os.waitstatus_to_exitcode(status) == 0, "the worker must exit cleanly"
 
 
 def test_dropping_the_process_object_leaves_the_worker_running() -> None:

@@ -1172,14 +1172,16 @@ re-raises the cancellation. The caller therefore ends up with either a receipt
 or no child.
 
 Dropping a `RunningCommand` or leaving its `async with` block never detaches
-anything, and no option on `run()` or `start()` turns a managed run into a
-detached one. Only these entry points transfer lifetime. Capture, echo,
-timeouts, and `process_group` have no effect on a detached launch: it never
-captures, never streams, and never supervises the child. Registered `before()`,
-`after()`, and `observe()` hooks do not run, and no `ExecEvent` is emitted, so
-logging, metrics, and tracing adapters see nothing for a detached launch. Pass
-an `ExecutionContext` for its `env`, `env_mode`, and `cwd` when the worker
-needs an environment overlay or a different working directory.
+anything. Leaving the block settles the child and stops it; dropping the handle
+runs no Cuprum settlement, so Cuprum does not stop that child either. No option
+on `run()` or `start()` turns a managed run into a detached one. Only these
+entry points transfer lifetime. Capture, echo, timeouts, and `process_group`
+have no effect on a detached launch: it never captures, never streams, and
+never supervises the child. Registered `before()`, `after()`, and `observe()`
+hooks do not run, and no `ExecEvent` is emitted, so logging, metrics, and
+tracing adapters see nothing for a detached launch. Pass an `ExecutionContext`
+for its `env`, `env_mode`, and `cwd` when the worker needs an environment
+overlay or a different working directory.
 
 Survival of the launcher is not survival of the host. Job cleanup, container
 shutdown, and external termination still end the worker.
