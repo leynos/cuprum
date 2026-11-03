@@ -65,6 +65,14 @@ warm test execution exceeds five minutes per platform, excluding compilation
 and compiler admission waits; retain coverage while investigating cost. There
 is no elapsed-time limit on planning or implementation work itself.
 
+The Windows consume-support stop was superseded by the user's explicit
+2026-11-03 direction to add Windows native consume support and retain
+cross-platform parity. Keep Python's public consume signature and production
+dispatch unchanged. Do not infer synchronous I/O from an arbitrary Win32
+handle. The Windows consume path must establish a binary CRT-descriptor
+boundary for the duration of the call; if that cannot preserve the stated
+ownership and error contracts, stop and report the exact incompatibility.
+
 ## Risks
 
 - High impact, medium likelihood: a pre-filled pipe blocks on a large input.
@@ -140,11 +148,27 @@ is no elapsed-time limit on planning or implementation work itself.
   full sequence. The final candidate then passed every required gate and both
   bridge failure controls; see the 2026-10-26 evidence below.
 - [x] M1: establish the real-boundary test bridge and prove its failure paths.
-- [x] M2: implementation and focused acceptance complete; full sequential
-  gates passed on tree `935680d697def77904afa2619506fcb7420e35c4`; commit
-  pending.
-- [ ] M3: not started; the Windows feasibility condition requires a revised
-  platform disposition before implementation can continue.
+- [x] M2: implementation and focused acceptance complete; the corrected
+  post-rebase candidate passed `make check-fmt`, `make test`, `make typecheck`,
+  and `make lint` on 2026-11-03. The final correction commit is pending.
+- [x] (2026-11-03) Rebase onto fetched `origin/main` at
+  `7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; resolve both conflicts while
+  preserving the target's deadline/ancestor handling and the branch's parity
+  coverage. The eight-commit range-diff maps every replayed commit.
+- [x] (2026-11-03) Diagnose the rebase-candidate lifecycle-test failure as a
+  stale test-helper keyword/type after the deadline API changed. Correct the
+  helper to retain the pipeline deadline clock; all four affected cases pass in
+  a focused run. The corrected candidate passed all four requested gates:
+  `make test` (6,160 Python tests and 173 Rust tests passed; 17 and 30 skipped,
+  respectively; 8 doctests passed and 3 were ignored), `make typecheck`, and
+  `make lint` passed; `make check-fmt` had also passed. Logs for test,
+  typecheck, and lint are respectively
+  `/tmp/test-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-4.out`,
+  `/tmp/typecheck-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`,
+  and
+  `/tmp/lint-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`.
+- [ ] M3: authorized on 2026-11-03 to add Windows native consume support and
+  preserve Linux/Windows parity; begin after the M2 correction is committed.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -299,9 +323,20 @@ reject raw handles before consume I/O. The parity oracle invokes both wrapper
 and direct native consume calls, and `.github/workflows/ci.yml` runs
 `make test-extension` in its Windows job; that target runs the parity suite
 unconditionally. Therefore the approved Linux-and-Windows feasibility condition
-is not met without a scope change. Per the existing tolerance, stop before M3
-and obtain an explicit platform-scope disposition after the M2 candidate passes
-its full local gates. No M3 code or documentation has been started.
+was not met with the existing raw-handle boundary. The user's explicit
+2026-11-03 instruction supersedes the earlier pause and authorizes M3 to add
+Windows consume support. Keep the existing pump capability checks intact and
+use a duplicated binary-mode CRT descriptor for Windows consume; converting a
+descriptor to a Win32 handle alone does not establish synchronous semantics.
+
+The 2026-11-03 rebase exposed a mismatch in the extracted lifecycle-test
+helper: the pipeline now passes a `_PipelineDeadline`, while the helper still
+accepted the former `timeout_deadline` keyword. This raised `TypeError` before
+the native worker started, causing four lifecycle cases to fail and
+typechecking to reject the helper. The corrected helper replaces only the
+deadline's timestamp and preserves its monotonic clock. The four cases now pass
+in a focused run; the full gate sequence must be repeated on the corrected
+candidate.
 
 ## Decision log
 
@@ -311,7 +346,13 @@ its full local gates. No M3 code or documentation has been started.
 - (2026-10-26) Pause before M3 because the Windows feasibility condition is not
   met by the current raw-handle API. Complete and commit the M2 candidate after
   its local gates, then request a platform-scope disposition; this pause does
-  not authorize a scope change.
+  not authorize a scope change. This decision was superseded by the user's
+  explicit 2026-11-03 scope direction below.
+- (2026-11-03) The user explicitly authorized Windows native consume support
+  and cross-platform parity, superseding the M3 pause. Keep Python's public
+  signature and dispatch unchanged. Use a duplicated binary-mode CRT descriptor
+  for Windows consume rather than treating an arbitrary raw handle as
+  synchronously readable; retain the existing pump safety boundary.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle
@@ -332,19 +373,20 @@ its full local gates. No M3 code or documentation has been started.
 
 ## Outcomes & retrospective
 
-The plan, six-perspective expert review, and documentation validation are
-complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619) publishes
-the plan on `6-1-2-boundary-proptest-parity`, tracking its `origin` branch. The
-branch has since been rebased onto `origin/main`; the two-commit `range-diff`
-is unchanged and the replay had no conflicts. Issues #90, #124, and #127 are
-closed through merged PRs. All requested post-rebase gates passed. The
-validated rebase was pushed with an explicit lease and its remote head
-verified; draft PR #619 records the updated scope and validation. The rebase
-adds no runtime changes or new parity tests and makes no performance claim.
-Approval is recorded and M1 is complete. M2 implementation and focused
-acceptance are complete, with the full local gate sequence passed and the
-milestone commit pending. M3 remains unstarted under the plan's Windows
-feasibility stop condition, and roadmap 6.1.2 remains open.
+The plan, six-perspective expert review, and original documentation validation
+are complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619)
+publishes the approved plan on `6-1-2-boundary-proptest-parity`. The merged
+implementation PRs for issues #90, #124, and #127 closed those issues. M1 and
+the original M2 candidate passed their recorded acceptance. On 2026-11-03, this
+branch was rebased onto `origin/main` at
+`7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; the replayed range-diff maps all
+eight commits after two documented conflict resolutions. The first
+rebase-candidate `make test` exposed the stale lifecycle-helper keyword, which
+was corrected; all four affected cases pass in a focused run. The full gate
+sequence on the corrected rebase candidate is pending. Windows consume support
+and cross-platform parity are now explicitly authorized, but M3 implementation
+and acceptance remain incomplete. The roadmap task remains open, and no speedup
+or production-dispatch change is claimed.
 
 ## Context and orientation
 
@@ -385,17 +427,19 @@ external documentation gaps, `logisphere-experts` for design review, and
 
 ## Conformance basis
 
-The current planning baseline is fetched `origin/main` at commit
-`40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24). The original plan was
-drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`; both are retained in
-local recovery refs for the rebase audit. There is no separate task-specific
-terms-of-reference document. The governing documents at the current baseline are
-`docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust extension strategy),
-`docs/adr-002-additional-rust-components.md` (decoding and descriptor risks),
-`docs/adr-008-rust-pump-observation-channel.md` (separate pump observations),
-and `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §§3–4. Consult
-`docs/developers-guide.md` for extension-required testing and CI ownership.
-Issue #90 was implemented by merged PR
+The original implementation-planning baseline was fetched `origin/main` at
+commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24). The branch was
+rebased again on 2026-11-03 onto `origin/main` at
+`7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; local recovery refs retain the
+pre-rebase head, base, target, and remote head. The original plan was drafted
+from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate
+task-specific terms-of-reference document. The governing documents at the
+latest baseline are `docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust
+extension strategy), `docs/adr-002-additional-rust-components.md` (decoding and
+descriptor risks), `docs/adr-008-rust-pump-observation-channel.md` (separate
+pump observations), and `docs/tee-hotpath-profiling-baseline-2026-06-12.md`
+§§3–4. Consult `docs/developers-guide.md` for extension-required testing and CI
+ownership. Issue #90 was implemented by merged PR
 [#229](https://github.com/leynos/cuprum/pull/229) (commit
 `a1840eb2662a14f6c171b01bc3cbc68fd2752b65`), which added a buffer-size cap and
 Python/Rust boundary property tests. Issue #124 was implemented by merged PR
@@ -608,7 +652,20 @@ run the configured fresh budgets. This plateau discharges R2–R5 through E2–E
 Record counts, exercised partitions, minimized failures, and warm runtime in
 this plan. Keep all properties and child failure paths active after refactoring.
 
-### M3: behavioural acceptance and documentation
+### M3: Windows consume support, behavioural acceptance, and documentation
+
+Use a Windows CRT descriptor for native consume. Python must duplicate the
+validated descriptor, set the duplicate to binary mode, pass that duplicate to
+the native consume call, and close it in `finally`; this keeps the caller's
+descriptor open and avoids mutating its text mode. The native reader must use
+the synchronous CRT descriptor API and must not treat an arbitrary Win32 handle
+as synchronously readable. Keep the existing handle capability checks for the
+pump path. The Python public signature and production dispatch remain
+unchanged. See Microsoft's documentation for
+[`_read`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/read?view=msvc-170),
+[`_dup`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/dup-dup2?view=msvc-170),
+and
+[`_setmode`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170).
 
 Extend `tests/features/rust_streams.feature` and its actual bound pytest-bdd
 module, or add a focused sibling feature and module to `EXTENSION_TEST_TARGETS`
@@ -788,6 +845,12 @@ readiness before the lifecycle fixture starts its timeout. Production timeout
 and dispatch behaviour are unchanged. `make check-fmt`, `make typecheck`,
 `make lint`, `make markdownlint`, and `make nixie` passed; logs are under
 `/tmp/pr619-verified-<gate>.out`, with zero exit-status sidecars.
+
+Revision note (2026-11-03): rebased onto `origin/main` at
+`7d56d0be8637dce2e38f99919c57bd4c7af0fd27`, repaired the lifecycle helper for
+the target's deadline value, and passed the corrected candidate's requested
+format, test, typecheck, and lint gates. The current change is ready for its M2
+correction commit; M3 implementation is still outstanding.
 
 The first full test run on the repaired candidate exhausted the existing
 1,800-second compile-time UI timeout while waiting for shared Cargo and

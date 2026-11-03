@@ -20,6 +20,7 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     import pytest
 
+    from cuprum._pipeline_collect import _PipelineDeadline
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_records import _PipelineSpawnResult
     from cuprum._pipeline_wait import _PipelineWaitResult
@@ -108,11 +109,11 @@ def _arm_timeout_after_worker_starts(
         spawn: _PipelineSpawnResult,
         config: _PipelineRunConfig,
         *,
-        timeout_deadline: float | None,
+        deadline: _PipelineDeadline,
         pipe_tasks: list[asyncio.Task[None]],
     ) -> _PipelineWaitResult:
         """Let startup finish before exercising the real timeout cleanup path."""
-        assert timeout_deadline is not None, "the fixture requires a deadline"
+        assert deadline.at is not None, "the fixture requires a deadline"
         assert config.timeout is not None, "the fixture requires an elapsed timeout"
         started = await asyncio.to_thread(worker_started.wait, 5.0)
         assert started, "the native worker must start before arming the deadline"
@@ -121,7 +122,10 @@ def _arm_timeout_after_worker_starts(
         return await original_wait(
             spawn,
             config,
-            timeout_deadline=time.monotonic() + config.timeout,
+            deadline=dc.replace(
+                deadline,
+                at=deadline.monotonic_clock() + config.timeout,
+            ),
             pipe_tasks=pipe_tasks,
         )
 
