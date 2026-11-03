@@ -128,6 +128,25 @@ bound. The fast contract test
 `test_real_compile_test_timeout_exceeds_compile_budget` pins the marker and
 both timeout relationships.
 
+## Doctest contract tier
+
+The doctest-warning contract in
+`cuprum/unittests/test_doctest_warning_contract.py` makes two real Cargo calls,
+one per Rustdoc route. Each call is bounded by `DOCTEST_CALL_TIMEOUT_SECONDS`
+(3600 s) and owns its process group. The test's pytest mark is
+`DOCTEST_TEST_TIMEOUT_SECONDS` (7260 s), twice the per-call bound plus a 60 s
+margin for surrounding work, and a fast contract test pins that relationship.
+
+The per-call bound is an end-to-end watchdog, not an execution budget. Both
+calls compete for the host's compiler-admission tokens, and the coordinator
+exposes no workload lease that could exclude that queue. On 2026-11-03 a
+270-second per-call bound expired while the captured stream reported
+`[build-limits] warning_doctest: waiting for a compile slot (343 ahead, 45s)`.
+The 3600 s bound therefore matches the boundary compile tier's finite watchdog
+rather than a measured workload; an expired call still terminates its Cargo
+descendants. Replace this with a measured execution budget once a documented
+workload lease exists.
+
 ## Packaging build measurement
 
 On 2026-10-26, the grouped packaging consumers built each frontend and archive

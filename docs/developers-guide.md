@@ -6218,15 +6218,18 @@ MSRV, coverage, release, verification, and Whitaker retain their prescribed
 routes.
 
 The Python doctest-warning contract invokes Cargo twice to prove that the
-former route accepts a warning and the corrected route rejects it. Its
-600-second pytest mark is a finite end-to-end watchdog and currently includes
-shared compiler-admission waits because the coordinator has no parent workload
-lease. It is not an execution-only budget. The suite's default 30-second
-unit-test budget is too short for the two Cargo calls. Build artefacts stay
-under the invocation's `rust/target/pytest-<run-key>/doctest-warning-contract`
-directory, outside the temporary fixture source directory. Independent pytest
-invocations get separate targets, while both Cargo calls in this test share one
-target. Both warning assertions remain mandatory.
+former route accepts a warning and the corrected route rejects it. Each call
+has its own finite 3600-second end-to-end watchdog and the pytest mark is 7260
+seconds, twice that bound plus a 60-second margin for surrounding work. These
+bounds include shared compiler-admission waits because the coordinator has no
+parent workload lease, so they are not execution-only budgets; on 2026-11-03 a
+270-second bound expired while the captured stream reported 343 requests ahead.
+The suite's default 30-second unit-test budget is too short for the two Cargo
+calls. Build artefacts stay under the invocation's
+`rust/target/pytest-<run-key>/doctest-warning-contract` directory, outside the
+temporary fixture source directory. Independent pytest invocations get separate
+targets, while both Cargo calls in this test share one target. Both warning
+assertions remain mandatory.
 
 ### Rustfmt fixture compatibility
 

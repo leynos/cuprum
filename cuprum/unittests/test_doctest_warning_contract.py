@@ -39,8 +39,14 @@ class _PreparedRun(typ.Protocol):
 
 
 DEV_FAST_TOOLCHAIN = os.environ.get("DEV_FAST_TOOLCHAIN", "nightly-2026-08-23")
-DOCTEST_CALL_TIMEOUT_SECONDS = 270
-DOCTEST_TEST_TIMEOUT_SECONDS = 600
+# Each scratch Cargo call must win a compiler-admission slot before it runs, and
+# the coordinator exposes no workload lease that could exclude that host-wide
+# queue. The per-call bound is therefore an end-to-end watchdog, not an
+# execution budget. On 2026-11-03 a 270-second bound expired while the captured
+# stream reported 343 requests ahead, so this matches the boundary compile
+# tier's finite 3600-second watchdog rather than a measured workload.
+DOCTEST_CALL_TIMEOUT_SECONDS = 3600
+DOCTEST_TEST_TIMEOUT_SECONDS = 2 * DOCTEST_CALL_TIMEOUT_SECONDS + 60
 DOCTEST_RUSTDOC_FLAGS = (
     "--cfg docsrs -D warnings -Zunstable-options --display-doctest-warnings "
     "--doctest-build-arg=-D --doctest-build-arg=warnings"
@@ -193,7 +199,14 @@ def test_doctest_calls_are_offline_bounded_and_group_owned(
     )
 
 
-# The end-to-end mark currently includes compiler admission waits because the
+def test_doctest_mark_encloses_both_call_watchdogs() -> None:
+    """The pytest mark must outlast both bounded Cargo calls and their setup."""
+    assert DOCTEST_TEST_TIMEOUT_SECONDS > 2 * DOCTEST_CALL_TIMEOUT_SECONDS, (
+        "the mark must not expire while a call can still reach its own bound"
+    )
+
+
+# The end-to-end mark encloses two compiler-admission waits because the
 # coordinator has no parent workload lease; it is not an execution-only budget.
 @pytest.mark.timeout(DOCTEST_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.skipif(
