@@ -271,6 +271,7 @@ class _StalledReader:
     """A stream whose read never completes, as a pipe a descendant holds open."""
 
     def __init__(self, entered: list[str], name: str) -> None:
+        """Record entries in *entered* under the stream *name*."""
         self._entered = entered
         self._name = name
 
@@ -292,6 +293,7 @@ def test_both_outputs_share_one_end_of_file_grace() -> None:
     """
 
     async def run_case() -> None:
+        """Time one discard whose pair of reads both stall."""
         entered: list[str] = []
         pipes = types.SimpleNamespace(
             stdout=_StalledReader(entered, "stdout"),
