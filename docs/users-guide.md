@@ -2925,7 +2925,7 @@ the child alone. Pipe release is bounded: a descendant that escaped the group
 can hold a pipe end open, so Cuprum waits no longer than its fixed end-of-file
 grace before surfacing the original error, and then closes its own end of the
 pipe rather than leave the descriptor to be collected later; see
-[ADR-021](adr-021-process-group-ownership.md).
+[ADR-021](adrs/adr-0021-process-group-ownership.md).
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
 reject unknown values. The set of phases can grow between releases, so such a
