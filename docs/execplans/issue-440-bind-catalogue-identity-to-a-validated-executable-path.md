@@ -66,12 +66,12 @@ with bind_executable(SCCACHE, "/opt/toolchains/1.79/bin/sccache"):
 ```
 
 The allowlist still gates on `SCCACHE`, telemetry still reports
-`program="sccache"`, and `resolved_path` reports what actually ran. An
-unapproved path that shares the basename is rejected by the existing allowlist,
-because the binding never participates in allowlist enforcement. That claim is
-witnessed by `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`,
-whose bound executable is *named* for an allowlisted program while its logical
-program is not: an admission rule keyed on the basename would run it.
+`program="sccache"`, and `resolved_path` reports what actually ran. The
+allowlist admits or refuses a command by its logical `Program` only; the
+basename and path of the bound executable play no part in that decision.
+`test_an_allowlisted_basename_does_not_admit_an_unlisted_program` witnesses the
+refusal of an unlisted program whose bound executable is named for an
+allowlisted program. It does not witness rejection of an unapproved path.
 
 ## Constraints
 
