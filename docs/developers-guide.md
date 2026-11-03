@@ -5075,6 +5075,18 @@ cache access only within one home, and offline mode does not remove those locks.
 `CARGO_BUILD_JOBS` remains caller-owned. CPU, memory, and the host-wide
 compiler-admission limit remain separate resource constraints.
 
+Target directories are keyed by build configuration: the route, toolchain
+fragment, Rust flags, and doctest Rustdoc flags all enter the key, so two
+incompatible configurations never share one. Configurations that do share a
+directory run in sequence within a single recipe, and Cargo's own
+target-directory lock arbitrates that intentional sharing. No repository-local
+target-directory ownership lock is added in front of it. Such a lock would only
+put a second queue ahead of the one Cargo already takes inside the same
+invocation, so it could not shorten the wait, and its expiry could not be
+reported as an allocation failure while Cargo's own lock was still held by
+another run. Only the external coordinator could bound that wait, and its
+contract exposes no workload lease.
+
 Snapshots remain in the per-user cache under their content keys. Remove an
 unneeded snapshot only when no preparation or run-home copy is active, first
 restoring its write permissions with `make_tree_writable` from
