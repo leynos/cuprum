@@ -25,18 +25,28 @@ import sys
 import time
 import typing as typ
 
+from cuprum import ScopeConfig, scoped, sh
 from cuprum._constants import STDERR_STREAM, STDOUT_STREAM
+from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
+from cuprum._stdio_plan import _resolve_stdio
+from cuprum._subprocess_execution import _SubprocessExecution
 from cuprum._wait4_spawn import DirectProcessConfig, spawn_wait4_process
+from cuprum.sh import ExecutionContext, RunOutputOptions
+from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import pathlib
 
+    from cuprum.capture_policy import FileBackedCapture
+
 __all__ = [
+    "_execution",
     "_is_fd_open",
     "_is_running",
     "_kill_descendant",
     "_recorded_pid",
     "_spawn_output_pipe_holder",
+    "_spawn_sleeper",
     "_wait_for_pid_file",
 ]
 
@@ -64,6 +74,64 @@ descendant = subprocess.Popen(
 pathlib.Path(sys.argv[1]).write_text(str(descendant.pid), encoding="ascii")
 time.sleep(float(lifetime))
 """
+
+
+def _execution(policy: FileBackedCapture) -> _SubprocessExecution:
+    """Build the run bundle the reclaim reads its teardown decisions from.
+
+    Returns
+    -------
+    _SubprocessExecution
+        A bundle that captures stdout under *policy* and leaves stderr
+        uncaptured, which is enough for the stream prep to build the
+        accumulator whose cleanup is under test.
+    """
+    catalogue, program = python_catalogue()
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+        command = sh.make(program, catalogue=catalogue)("-c", "pass")
+    return _SubprocessExecution(
+        cmd=command,
+        ctx=ExecutionContext(),
+        capture_stdout=policy,
+        capture_stderr=None,
+        echo_stdout=False,
+        echo_stderr=False,
+        max_echo_line_bytes=None,
+        sink_session=None,
+        timeout=None,
+        observation=_StageObservation(
+            cmd=command,
+            hooks=_ExecutionHooks(
+                before_hooks=(),
+                after_hooks=(),
+                observe_hooks=(),
+            ),
+            tags={},
+            cwd=None,
+            env_overlay=None,
+            pending_tasks=[],
+            wall_clock=time.monotonic,
+        ),
+        stdio=_resolve_stdio(None, RunOutputOptions(capture=True)),
+    )
+
+
+async def _spawn_sleeper() -> asyncio.subprocess.Process:
+    """Start a child that runs until it is signalled.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The running child, with all three standard streams piped.
+    """
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(30)",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
 
 
 async def _spawn_output_pipe_holder(

@@ -24,36 +24,31 @@ windows is what that case reads.
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 import types
 import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, scoped, sh
 from cuprum._pipeline_stream_fds import _extract_stream_fd
-from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
-from cuprum._stdio_plan import _resolve_stdio
 from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
-from cuprum._subprocess_execution import _SubprocessExecution
 from cuprum._subprocess_startup_abandon import (
     _abandon_started_process,
     _discard_outputs,
 )
 from cuprum._subprocess_streams import _prepare_stream_spawn
 from cuprum.capture_policy import FileBackedCapture
-from cuprum.sh import ExecutionContext, RunOutputOptions
 from cuprum.unittests._startup_abandon_support import (
+    _execution,
     _is_fd_open,
     _is_running,
     _kill_descendant,
     _recorded_pid,
     _spawn_output_pipe_holder,
+    _spawn_sleeper,
     _wait_for_pid_file,
 )
 from cuprum.unittests._wait4_process_support import _wait4_only
-from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -99,64 +94,6 @@ class _FailingSink:
     async def cleanup(self) -> None:
         """Fail, standing in for a spill file that cannot be removed."""
         raise _UnremovableSpillError
-
-
-def _execution(policy: FileBackedCapture) -> _SubprocessExecution:
-    """Build the run bundle the reclaim reads its teardown decisions from.
-
-    Returns
-    -------
-    _SubprocessExecution
-        A bundle that captures stdout under *policy* and leaves stderr
-        uncaptured, which is enough for the stream prep to build the
-        accumulator whose cleanup is under test.
-    """
-    catalogue, program = python_catalogue()
-    with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
-        command = sh.make(program, catalogue=catalogue)("-c", "pass")
-    return _SubprocessExecution(
-        cmd=command,
-        ctx=ExecutionContext(),
-        capture_stdout=policy,
-        capture_stderr=None,
-        echo_stdout=False,
-        echo_stderr=False,
-        max_echo_line_bytes=None,
-        sink_session=None,
-        timeout=None,
-        observation=_StageObservation(
-            cmd=command,
-            hooks=_ExecutionHooks(
-                before_hooks=(),
-                after_hooks=(),
-                observe_hooks=(),
-            ),
-            tags={},
-            cwd=None,
-            env_overlay=None,
-            pending_tasks=[],
-            wall_clock=time.monotonic,
-        ),
-        stdio=_resolve_stdio(None, RunOutputOptions(capture=True)),
-    )
-
-
-async def _spawn_sleeper() -> asyncio.subprocess.Process:
-    """Start a child that runs until it is signalled.
-
-    Returns
-    -------
-    asyncio.subprocess.Process
-        The running child, with all three standard streams piped.
-    """
-    return await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        "import time; time.sleep(30)",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
 
 
 def _spill_files(directory: pathlib.Path) -> list[pathlib.Path]:
@@ -322,6 +259,14 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
     asyncio.run(run_case())
 
 
+class _StalledReadResumedError(AssertionError):
+    """A stalled read was resumed instead of being cancelled."""
+
+    def __init__(self) -> None:
+        """Say what the violation means for the case that reads it."""
+        super().__init__("a stalled read must be cancelled, never resumed")
+
+
 class _StalledReader:
     """A stream whose read never completes, as a pipe a descendant holds open."""
 
@@ -333,7 +278,7 @@ class _StalledReader:
         """Record that this read was entered, then wait to be cancelled."""
         self._entered.append(self._name)
         await asyncio.Event().wait()
-        raise AssertionError("a stalled read must be cancelled, never resumed")
+        raise _StalledReadResumedError
 
 
 def test_both_outputs_share_one_end_of_file_grace() -> None:
