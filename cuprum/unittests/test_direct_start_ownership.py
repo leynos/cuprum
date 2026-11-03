@@ -100,28 +100,22 @@ def _fail_second_consumer(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return calls
 
 
+@pytest.mark.parametrize("streamed", [False, True], ids=["direct", "streamed"])
 @pytest.mark.parametrize("with_stdin", [True, False], ids=["stdin", "no-stdin"])
 def test_start_hook_failure_reaps_the_child_before_it_propagates(
-    with_stdin: bool,
-    tmp_path: Path,
-) -> None:
-    """A raising ``start`` hook cannot leave the direct child running."""
-    _assert_start_hook_failure_reaps(
-        streamed=False,
-        with_stdin=with_stdin,
-        tmp_path=tmp_path,
-    )
-
-
-@pytest.mark.parametrize("with_stdin", [True, False], ids=["stdin", "no-stdin"])
-def test_streamed_start_hook_failure_reaps_the_child_before_it_propagates(
+    streamed: bool,
     with_stdin: bool,
     tmp_path: Path,
     stream_backend: str,
 ) -> None:
-    """A raising ``start`` hook cannot leave the streamed child running."""
+    """A raising ``start`` hook cannot leave the child running on either route.
+
+    The matrix runs once per stream backend this host can actually provide, so
+    the streamed arm is exercised under each; the direct route never selects a
+    backend and uses the parameter only to share the same matrix.
+    """
     _assert_start_hook_failure_reaps(
-        streamed=True,
+        streamed=streamed,
         with_stdin=with_stdin,
         tmp_path=tmp_path,
     )

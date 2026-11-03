@@ -84,6 +84,23 @@ def test_streamed_run_cancellation_cleans_up_task(
     asyncio.run(_orchestrate())
 
 
+class _InjectedStdinError(Exception):
+    """Sentinel error injected by the fake stdin writer."""
+
+
+async def _raise_stdin(
+    process: asyncio.subprocess.Process,
+    stdin_data: bytes,
+    observation: object,
+) -> None:
+    """Close stdin, then fail the writer with an injected error."""
+    _ = (stdin_data, observation)
+    await asyncio.sleep(0)  # yield like the real writer's drain() await
+    if process.stdin is not None:
+        process.stdin.close()
+    raise _InjectedStdinError
+
+
 def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     python_builder: cabc.Callable[..., SafeCmd],
     monkeypatch: pytest.MonkeyPatch,
@@ -95,23 +112,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     tasks before it propagates, rather than leaving them pending (regression
     for #117).
     """
-
-    class _InjectedStdinError(Exception):
-        """Sentinel error injected by the fake stdin writer."""
-
     spawned_consumers: list[ConsumerTask] = []
-
-    async def _raise_stdin(
-        process: asyncio.subprocess.Process,
-        stdin_data: bytes,
-        observation: object,
-    ) -> None:
-        """Close stdin, then fail the writer with an injected error."""
-        _ = (stdin_data, observation)
-        await asyncio.sleep(0)  # yield like the real writer's drain() await
-        if process.stdin is not None:
-            process.stdin.close()
-        raise _InjectedStdinError
 
     def _spawn_blocking_consumers(
         process: object,
