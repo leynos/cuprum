@@ -135,6 +135,22 @@ def test_deeply_indented_fence_text_stays_inside_the_example() -> None:
     ], "an indented fence line must not end the example early"
 
 
+def test_a_tab_indented_fence_marker_stays_inside_the_example() -> None:
+    """A tab is four CommonMark columns, so its fence marker is example content."""
+    text = (
+        "<!-- tested-example: tabbed -->\n"
+        "```python\n"
+        'text = """\n'
+        "\t```\n"
+        '"""\n'
+        'assert "```" in text\n'
+        "```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("tabbed", 'text = """\n\t```\n"""\nassert "```" in text\n')
+    ], "a tab-indented fence line must not end the example early"
+
+
 def test_a_longer_fence_needs_an_equally_long_closer() -> None:
     """A four-backtick fence is not closed by a three-backtick line inside it."""
     text = (

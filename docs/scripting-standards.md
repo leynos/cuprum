@@ -13,8 +13,9 @@ as a default.
   parameters directly. Bash argument assembly and bespoke parsing can be
   removed.
 - Typed lists and paths from env. Parameters annotated as `list[str]` or
-  `list[pathlib.Path]` are populated from whitespace‑ or delimiter‑separated
-  environment values. Custom split/trim helpers are unnecessary.
+  `list[pathlib.Path]` are populated from whitespace‑ or
+  path‑separator‑separated environment values. A small callable splitter covers
+  other delimiters without shell glue.
 - Clear precedence model. CLI flags override environment variables, which
   override code defaults. Behaviour is predictable in both CI and local runs.
 - Small API surface. The API is explicit and integrates cleanly with type
@@ -78,8 +79,7 @@ The following examples are illustrative rather than executed:
 - `pytest-plugin`, `cmd-mox-tests`, `cmd-mox-spy`: require `cmd-mox`, which
   Cuprum does not depend on.
 - `cyclopts-parameter-name`, `cyclopts-parameter-config`,
-  `cyclopts-parameter-output`: annotation fragments rather than complete
-  statements.
+  `cyclopts-parameter-output`: fragments rather than complete scripts.
 - `ci-build-workflow`: a YAML workflow fragment, not Python.
 
 ### Cyclopts CLI pattern (environment‑first)
@@ -171,15 +171,24 @@ Guidance:
 
   <!-- illustrative-example: cyclopts-parameter-name -->
   ```python
-  package_name: Annotated[Optional[str], Parameter(aliases=["--name"])] = None
+  package_name: Annotated[Optional[str], Parameter(alias="--name")] = None
   ```
 
 - Where a specific delimiter is required for an environment list (for example,
-  comma‑separated `formats`), specify it per parameter:
+  comma‑separated `formats`), pass a callable splitter. Cyclopts calls it with
+  the parameter's type hint, the environment value, and its own `delimiter`
+  keyword, so the callable must accept all three:
 
   <!-- illustrative-example: cyclopts-parameter-config -->
   ```python
-  formats: Annotated[list[str] | None, Parameter(env_var_split=",")] = None
+  def split_on_comma(
+      _type: object, value: str, *, delimiter: str | None = None
+  ) -> list[str]:
+      """Split ``value`` on commas, dropping blank items."""
+      return [item.strip() for item in value.split(",") if item.strip()]
+
+
+  formats: Annotated[list[str] | None, Parameter(env_var_split=split_on_comma)] = None
   ```
 
 - Per‑parameter environment names can be pinned for backwards compatibility:
@@ -790,9 +799,10 @@ def test_spy_and_record(cmd_mox, tmp_path):
 3. Parameters: replace `typer.Option(...)` with annotations and
    `Parameter(...)`. Mark required options with `required=True`. Map any
    non‑matching environment names via `env_var=...`.
-4. Lists: remove custom split/trim code. Use list‑typed parameters; add
-   `env_var_split=","` where a non‑whitespace delimiter is required.
-5. Compatibility: retain legacy flag names using `aliases=["--old-name"]`.
+4. Lists: remove custom split/trim code. Use list‑typed parameters. For a
+   non‑whitespace delimiter, pass a callable such as `split_on_comma` to
+   `env_var_split=`.
+5. Compatibility: retain legacy flag names using `alias="--old-name"`.
 6. Bash glue: delete argument arrays and conditional appends in GitHub
    Actions. Export `INPUT_*` environment variables and call `uv run` on the
    script.

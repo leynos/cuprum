@@ -52,13 +52,28 @@ def _opening_delimiter(opening: str) -> str:
     return marker * (len(opening) - len(opening.lstrip(marker)))
 
 
+def _indent_columns(line: str) -> int:
+    """Return the width of ``line``'s leading whitespace in CommonMark columns."""
+    columns = 0
+    for char in line:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - columns % 4
+        else:
+            break
+    return columns
+
+
 def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
     """Return whether ``line`` closes a fence opened by ``delimiter``.
 
     CommonMark allows a closing fence to use more than the opening run, so
     only the fence's own marker character and a length at least that of the
-    opener matter. The closer may sit up to three spaces beyond the
-    indentation of its container; anything deeper is indented code.
+    opener matter. The closer may sit up to three columns beyond the
+    indentation of its container; anything deeper is indented code. Tabs
+    advance to the next four-column stop, so a tab-indented fence marker
+    inside an example stays example content.
 
     Returns
     -------
@@ -68,8 +83,7 @@ def _is_closing_fence(line: str, delimiter: str, indent: str) -> bool:
     stripped = line.strip()
     if len(stripped) < len(delimiter) or set(stripped) != {delimiter[0]}:
         return False
-    leading = len(line) - len(line.lstrip())
-    return leading <= len(indent) + 3
+    return _indent_columns(line) <= _indent_columns(indent) + 3
 
 
 def _consume_fence(
