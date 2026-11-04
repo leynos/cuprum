@@ -135,18 +135,7 @@ def _guard_stream(name: str, stream: typ.TextIO | None) -> None:
 
 
 def _redirect_stream(name: str, stream: typ.TextIO) -> None:
-    """Point *stream*'s descriptor at the null device, or replace the stream.
-
-    A stream with no usable descriptor cannot be redirected, and CPython will
-    still flush it during finalization, so it is replaced with a sink that
-    cannot fail. "No usable descriptor" covers every way a proxy can decline
-    one: no ``fileno`` attribute (``AttributeError``), an attribute that is
-    not callable (``TypeError``), a descriptorless or closed proxy
-    (``OSError`` or ``ValueError``), a descriptor number the kernel rejects
-    (``OverflowError``), and a ``fileno`` whose result ``os.dup2`` refuses.
-    A fallback replacement keeps the same promise when opening or duplicating
-    the null device fails.
-    """
+    """Point *stream*'s descriptor at the null device, or replace the stream."""
     try:
         descriptor = stream.fileno()
     except _DESCRIPTOR_FAILURES:
