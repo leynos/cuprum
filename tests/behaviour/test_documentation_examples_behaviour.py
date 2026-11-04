@@ -9,10 +9,19 @@ import pytest
 
 from cuprum import ExecutionContext, Program, ProgramCatalogue, sh
 from tests.behaviour._documentation_examples_support import (
+    DOCUMENTS,
     EXAMPLES,
     ROOT,
     _parse_examples,
 )
+
+SCRIPTING_STANDARDS_EXAMPLES = frozenset({
+    "catalogue-definition",
+    "scoped-catalogue",
+    "scoped-scope-config",
+    "capture-output",
+    "safe-globbing",
+})
 
 PYTHON = sh.make(
     Program(sys.executable),
@@ -25,6 +34,15 @@ def test_published_example_behaves_as_documented(name: str, code: str) -> None:
     """Execute one published example and its observable outcome assertions."""
     result = PYTHON("-c", code).run_sync(context=ExecutionContext(cwd=ROOT))
     assert result.ok, f"{name} failed:\n{result.stdout}\n{result.stderr}"
+
+
+def test_the_scripting_standards_document_is_gated() -> None:
+    """The imported standards document is registered and its examples are gated."""
+    assert "docs/scripting-standards.md" in DOCUMENTS, (
+        "docs/scripting-standards.md is not registered for example gating"
+    )
+    missing = SCRIPTING_STANDARDS_EXAMPLES - {name for name, _ in EXAMPLES}
+    assert not missing, f"scripting standards examples are not gated: {sorted(missing)}"
 
 
 def test_shell_examples_are_published_but_not_executed() -> None:
