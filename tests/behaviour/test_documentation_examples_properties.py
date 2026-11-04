@@ -47,7 +47,7 @@ class _Call:
 
 @st.composite
 def _valid_layouts(draw: st.DrawFn) -> _FenceLayout:
-    """Draw a fence whose closer is a valid delimiter for its opener."""
+    """Draw a well-formed fence; the broken variants start from one of these."""
     marker = draw(FENCE_CHARS)
     opening = draw(DELIMITER_LENGTHS)
     container = draw(CONTAINER_INDENTS)
@@ -62,47 +62,30 @@ def _valid_layouts(draw: st.DrawFn) -> _FenceLayout:
 
 @st.composite
 def _short_closers(draw: st.DrawFn) -> _FenceLayout:
-    """Draw a fence whose closer is shorter than its opener."""
-    marker = draw(FENCE_CHARS)
-    opening = draw(st.integers(min_value=4, max_value=6))
-    container = draw(CONTAINER_INDENTS)
-    return _FenceLayout(
-        opening=marker * opening,
-        closing=marker * (opening - draw(st.integers(min_value=1, max_value=3))),
-        container=container,
-        body=draw(st.integers(min_value=0, max_value=8)),
-        closer=draw(st.integers(min_value=0, max_value=container + 3)),
+    """Draw a well-formed fence whose closing run is one to three markers short."""
+    layout = draw(_valid_layouts())
+    return dc.replace(
+        layout,
+        closing=layout.opening[0]
+        * (len(layout.opening) - draw(st.integers(min_value=1, max_value=3))),
     )
 
 
 @st.composite
 def _mixed_markers(draw: st.DrawFn) -> _FenceLayout:
-    """Draw a fence whose closer uses the other marker character."""
-    marker = draw(FENCE_CHARS)
-    other = "~" if marker == "`" else "`"
-    length = draw(DELIMITER_LENGTHS)
-    container = draw(CONTAINER_INDENTS)
-    return _FenceLayout(
-        opening=marker * length,
-        closing=other * length,
-        container=container,
-        body=draw(st.integers(min_value=0, max_value=8)),
-        closer=draw(st.integers(min_value=0, max_value=container + 3)),
-    )
+    """Draw a well-formed fence whose closing run uses the other marker."""
+    layout = draw(_valid_layouts())
+    other = "~" if layout.opening[0] == "`" else "`"
+    return dc.replace(layout, closing=other * len(layout.opening))
 
 
 @st.composite
 def _over_indented_closers(draw: st.DrawFn) -> _FenceLayout:
-    """Draw a fence whose closer sits more than three columns past its container."""
-    marker = draw(FENCE_CHARS)
-    opening = draw(DELIMITER_LENGTHS)
-    container = draw(CONTAINER_INDENTS)
-    return _FenceLayout(
-        opening=marker * opening,
-        closing=marker * (opening + draw(st.integers(min_value=0, max_value=3))),
-        container=container,
-        body=draw(st.integers(min_value=0, max_value=8)),
-        closer=container + draw(st.integers(min_value=4, max_value=7)),
+    """Draw a well-formed fence whose closing run sits past the three-column rule."""
+    layout = draw(_valid_layouts())
+    return dc.replace(
+        layout,
+        closer=layout.container + draw(st.integers(min_value=4, max_value=7)),
     )
 
 
