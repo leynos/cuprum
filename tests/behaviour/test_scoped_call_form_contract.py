@@ -89,6 +89,16 @@ def _retired_call_offenders(paths: cabc.Iterable[Path]) -> list[str]:
             id="text-that-is-not-a-python-module",
         ),
         pytest.param(
+            "the runner's scoped(" + KEYWORD + "=m) isn't ok",
+            True,
+            id="apostrophe-after-a-word-ending-in-a-prefix-letter",
+        ),
+        pytest.param(
+            "call f(x, r" + "'scoped(" + KEYWORD + "=m)')",
+            False,
+            id="real-prefixed-literal-at-a-token-start",
+        ),
+        pytest.param(
             'usage: scoped(catalogue=build(")"), ' + KEYWORD + "=mate.allowlist)",
             True,
             id="text-with-parenthesis-inside-a-string",

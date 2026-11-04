@@ -37,12 +37,25 @@ def _literal_prefix_length(text: str, index: int) -> int:
 
 
 def _starts_literal(text: str, index: int, prefix: int) -> bool:
-    """Return whether a quote at ``index + prefix`` opens a literal."""
-    if prefix:
-        return True
+    """Return whether a quote at ``index + prefix`` opens a literal.
+
+    A prefixed quote that follows an identifier character is prose, not a
+    string: in "the runner's note" the ``r`` and the apostrophe are two
+    characters of one word. Reading that apostrophe as a raw-string opener
+    would mask the text up to the next apostrophe, hiding a retired call
+    between them. A prefix is only a string prefix when it starts a token.
+
+    Returns
+    -------
+    bool
+        Whether the quote opens a literal rather than sitting inside a word.
+    """
     if index == 0:
         return True
-    return text[index - 1] in _ARGUMENT_BOUNDARY
+    previous = text[index - 1]
+    if prefix:
+        return not (previous.isalnum() or previous == "_")
+    return previous in _ARGUMENT_BOUNDARY
 
 
 def _closing_delimiter(text: str, quote_index: int) -> str:
