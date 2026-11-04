@@ -202,6 +202,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   scripts/tests/test_cargo_workspace_state.py \
   scripts/tests/test_check_fmt_import_order_contract.py \
   scripts/tests/test_install_pypy312.py \
+  scripts/tests/test_prepare_cargo_state.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
