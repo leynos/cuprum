@@ -4,7 +4,9 @@ An observed run schedules one task per awaitable observe hook per event and
 retains them until finalization. These tests pin the rules that keep that list
 bounded: which tasks are dropped, which failure is kept, and how line
 observation waits for a slot. The end-to-end backpressure behaviour against a
-real child lives in ``test_line_observe_backpressure.py``.
+real child lives in ``test_line_observe_backpressure.py``, the two-producer
+pipeline case in ``test_line_observe_pipeline_backpressure.py``, and the
+child-write proof in ``test_line_observe_child_backpressure.py``.
 """
 
 from __future__ import annotations
@@ -246,18 +248,29 @@ def test_has_capacity_reports_saturation_of_unfinished_tasks() -> None:
 
 
 def test_await_hook_capacity_returns_when_a_task_settles() -> None:
-    """The waiter is released by one completing task, not by all of them."""
+    """One completion must release the waiter while the others stay blocked."""
 
     async def case() -> None:
         """Exercise the scenario inside a running event loop."""
-        gate = asyncio.Event()
-        pending = [asyncio.create_task(_hold(gate)) for _ in range(3)]
+        gates = [asyncio.Event() for _ in range(3)]
+        first, second, third = (asyncio.create_task(_hold(gate)) for gate in gates)
+        pending = [first, second, third]
         waiter = asyncio.create_task(_await_hook_capacity(pending, 3))
         await asyncio.sleep(0)
 
         assert not waiter.done(), "the waiter must block while every slot is held"
-        gate.set()
+        gates[1].set()
         await asyncio.wait_for(waiter, timeout=5.0)
+
+        # Pruning mutates the shared list, so hold the task references rather
+        # than indexing the list again: the settled task has been dropped.
+        assert second.done(), "the released task must have settled"
+        assert not first.done(), "the waiter must not wait for every task"
+        assert not third.done(), "the waiter must not wait for every task"
+        assert pending == [first, third], "only the settled task may be pruned"
+
+        gates[0].set()
+        gates[2].set()
         await _wait_for_exec_hook_tasks(pending)
 
     asyncio.run(case())
