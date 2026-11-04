@@ -2,10 +2,13 @@
 
 Each scenario runs a generated probe script under a real pipe. The probe is a
 cuprum adopter: it relays an allowlisted child with capture, stdout echo, and
-``BrokenPipePolicy.BEST_EFFORT``, prints once more after the run returns, and
-exits with the child's status. The child writes a readiness line, waits for a
-marker file, then floods stdout and exits with a requested status, so the
-scenario controls exactly when the reader leaves.
+``BrokenPipePolicy.BEST_EFFORT``, prints once more after the run returns, leaves
+unterminated bytes pending on standard error, and exits with the child's status.
+Both standard streams therefore have data to flush during finalization, so the
+merged-stream scenario cannot pass while the guard ignores standard error. The
+child writes a readiness line, waits for a marker file, then floods stdout and
+exits with a requested status, so the scenario controls exactly when the reader
+leaves.
 
 The probe is generated rather than committed so the guard is present in one
 variant and absent in the control without two near-identical scripts drifting
@@ -84,6 +87,10 @@ with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
         ),
     )
 print("probe finished")
+# No newline, so these bytes are still buffered at finalization. A merged
+# stderr therefore has to be guarded too, and not merely left pointing at the
+# closed pipe.
+sys.stderr.write("probe stderr pending")
 raise SystemExit(result.exit_code)
 """
 
