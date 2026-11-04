@@ -529,22 +529,29 @@ registration order, so the guard protects only output still buffered when its
 callback runs. A handler registered after the guard runs before it and must
 handle its own `BrokenPipeError` if it flushes a closed stream. A handler
 registered before the guard runs after it, so a later write it makes through
-`sys.stdout` or `sys.stderr` meets the repaired stream: when the descriptor was
-redirected, the write goes to the null device and is discarded, and when the
-stream was replaced, the module attribute now names the discarding sink.
-Install the guard at the entry point rather than in a library, since only the
-entry point chooses the process's exit status.
+`sys.stdout` or `sys.stderr` meets the repaired stream: after a descriptor
+redirection that handler can still use the same descriptor, which now names the
+null device, and its write is discarded; after a stream replacement the module
+attribute names the discarding sink.
 
-The guard does not repair writes that fail while the application runs; those
-remain the province of `BrokenPipePolicy` and of the application itself. It
-also cannot reach a stream object captured before installation: when it replaces
-`sys.stdout` or `sys.stderr` because the dead stream has no usable descriptor,
-a handler that kept its own reference to the old object still writes through
-that object and still fails. A captured or redirected destination that is
-healthy is not made writable by the guard; the guard repairs only the
-descriptor behind the current `sys.stdout` and `sys.stderr`. It observes
-CPython's finalization order, and `os._exit` skips finalization, so neither a
-different interpreter nor an immediate exit is protected.
+Whether that helps a handler that captured the stream depends on the repair
+that ran. A captured reference to a redirected stream is safe, because the
+repair changed the descriptor behind the object both references name. A
+captured reference to a replaced stream object is not: the replacement rebinds
+`sys.stdout` or `sys.stderr`, so the handler's own reference still writes
+through the old object and still fails. The guard repairs only the current
+standard streams; it does not touch any other stream object or file that writes
+to the same closed destination. Install the guard at the entry point rather
+than in a library, since only the entry point chooses the process's exit status.
+
+The guard does not repair writes that fail while the application runs. Those
+remain the province of `BrokenPipePolicy` and of the application itself; in
+particular, a write to an unbuffered stream fails at the write itself, before
+any shutdown callback runs, and needs write-time handling. The guard's
+protection begins at finalization, when it repairs the descriptor behind the
+current `sys.stdout` and `sys.stderr`. It observes CPython's finalization
+order, and `os._exit` skips finalization, so neither a different interpreter
+nor an immediate exit is protected.
 
 The guard's closed-pipe behaviour has been verified on POSIX only. The
 behavioural scenarios depend on a write to a closed pipe raising
