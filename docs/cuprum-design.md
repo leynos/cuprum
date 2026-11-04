@@ -181,8 +181,10 @@ Cuprum is built on top of `asyncio` (or a compatible abstraction) and treats
 asynchronous execution as the default. Every operation should have:
 
 - an **async** method (`await cmd.run()`, `await pipeline.run()`), and
-- a **sync** convenience method (`cmd.run_sync()`) that simply drives the event
-  loop under the hood.
+- a **sync** convenience method (`cmd.run_sync()`) that creates and owns a
+  fresh event loop. Because it owns that loop, it cannot run while another loop
+  is running in the same thread; a call from a coroutine raises
+  `RunningEventLoopError`, which names the async method to await instead.
 
 This ensures Cuprum integrates cleanly with async applications while remaining
 usable from simpler scripts.
@@ -1547,6 +1549,22 @@ worker has a bounded shutdown drain and reports output left queued or in flight
 as undelivered if it must be abandoned. See
 [ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the delivery,
 ownership, and failure contract.
+
+Output ownership also has a process-level complement outside any run. CPython
+flushes `sys.stdout` and `sys.stderr` after every `atexit` callback, so a
+reader that leaves before shutdown makes the final flush fail and replaces the
+requested exit status with 120. `cuprum.install_exit_status_guard()` registers
+one `atexit` callback that flushes both standard streams and, only for
+`BrokenPipeError`, points an existing descriptor at the null device, or
+replaces the dead stream with a discarding sink when it has no usable
+descriptor or the redirection itself fails. It is deliberately separate from
+`BrokenPipePolicy`: that policy governs echo writes during a run, while the
+guard governs the interpreter's own flush after the run has ended. The hook
+never raises, is idempotent, has no import-time side effect, and leaves `None`,
+healthy, and deliberately closed streams untouched. A flush that fails for any
+reason other than `BrokenPipeError` is contained at the per-stream boundary and
+reported, best effort, on `sys.stderr`, so an unexpected defect is not masked
+while the remaining stream is still guarded.
 
 Command and pipeline configuration keep their destination resolution and
 partial-setup cleanup local to their execution modules because each path owns
@@ -3418,6 +3436,10 @@ extend. The following decisions guide the core builder set:
   `allow_relative=True` opt-in for relative paths.
 - `GitRef` validation accepts only `[A-Za-z0-9._/-]` and rejects whitespace,
   leading `-`, `..`, `//`, `@{`, trailing `.lock`, and trailing `.`.
+- `git_checkout()` is revision-only. Its switch modes emit a trailing `--`, so
+  an operand that matches only a tracked path is refused instead of being
+  restored, and the builder never restores paths. `create_branch=True` names a
+  new branch at `HEAD` and emits no separator.
 - Builders validate inputs internally and expose `allow_relative` parameters
   on option dataclasses where relative paths are expected to be legitimate.
 - The rsync builders accept local operands only. `rsync_sync()` runs its

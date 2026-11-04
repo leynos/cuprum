@@ -136,6 +136,14 @@ assert result.stderr == ""
 
 `run_sync()` suits a synchronous script. In an async application, use
 `await command.run()` inside an async function. Both return `CommandResult`.
+
+The synchronous entry points — `run_sync()`, `run_bytes_sync()`, and their
+`Pipeline` counterparts — create and own a fresh event loop. They cannot be
+called while another loop is running in the same thread, so calling one from a
+coroutine raises `RunningEventLoopError` rather than running the command. The
+error names the asynchronous method to await instead. Await `run()` or
+`run_bytes()` from async code rather than wrapping the synchronous call.
+
 Cuprum passes an argument vector directly to the child, without a shell: shell
 quoting and pipes in a string are not interpreted.
 
@@ -484,7 +492,73 @@ policies.
 `BrokenPipePolicy` is exported from the package root next to
 `RunOutputOptions`, so an existing
 `from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
-needs `BrokenPipePolicy` added to it.
+needs `BrokenPipePolicy` added to it. Echo policy covers only cuprum's own
+writes during a run;
+[Preserve the exit status through a closed pipe](#preserve-the-exit-status-through-a-closed-pipe)
+covers the interpreter's final flush at shutdown.
+
+### Preserve the exit status through a closed pipe
+
+`BrokenPipePolicy` governs cuprum's own echo writes while a run is in progress.
+A command-line tool has a second, later opportunity to lose its status: CPython
+flushes `sys.stdout` and `sys.stderr` after every `atexit` callback has run, so
+a reader that has gone away by then makes that final flush fail, and the
+interpreter reports status 120 in place of the status the application asked for.
+[When an echo destination fails](#when-an-echo-destination-fails) cannot help
+here, because the run is already over.
+
+`cuprum.install_exit_status_guard()` arms a process-level guard. It registers
+one `atexit` callback; the callback flushes each of `sys.stdout` and
+`sys.stderr`, and when — and only when — a flush raises `BrokenPipeError` it
+points that stream's descriptor at the null device, so the interpreter's own
+final flush succeeds harmlessly. A dead stream that yields no usable descriptor
+— because it has no callable `fileno()`, raises from it, or reports a value the
+redirection rejects — is replaced by a sink that discards writes. When the
+descriptor is redirected successfully the stream object keeps its identity, so
+later writes and `fileno()` calls still address the same stream; if the null
+device cannot be opened or duplicated, the stream is replaced by the same sink
+instead. A stream that is `None`, healthy, or deliberately closed (which raises
+`ValueError` rather than `BrokenPipeError`) is left untouched, and the callback
+never raises. A flush that fails for any other reason — including that
+deliberate close — is reported, best effort, on `sys.stderr` and the stream is
+left alone, so a defect other than a closed reader is not silently masked.
+
+The guard is opt-in and per process, and calling it more than once is harmless.
+Importing `cuprum` does not install it. `atexit` runs handlers in reverse
+registration order, so the guard protects only output still buffered when its
+callback runs. A handler registered after the guard runs before it and must
+handle its own `BrokenPipeError` if it flushes a closed stream. A handler
+registered before the guard runs after it, so a later write it makes through
+`sys.stdout` or `sys.stderr` meets the repaired stream: after a descriptor
+redirection that handler can still use the same descriptor, which now names the
+null device, and its write is discarded; after a stream replacement the module
+attribute names the discarding sink.
+
+Whether that helps a handler that captured the stream depends on the repair
+that ran. A captured reference to a redirected stream is safe, because the
+repair changed the descriptor behind the object both references name. A
+captured reference to a replaced stream object is not: the replacement rebinds
+`sys.stdout` or `sys.stderr`, so the handler's own reference still writes
+through the old object and still fails. The guard repairs only the current
+standard streams; it does not touch any other stream object or file that writes
+to the same closed destination. Install the guard at the entry point rather
+than in a library, since only the entry point chooses the process's exit status.
+
+The guard does not repair writes that fail while the application runs. Those
+remain the province of `BrokenPipePolicy` and of the application itself; in
+particular, a write to an unbuffered stream fails at the write itself, before
+any shutdown callback runs, and needs write-time handling. The guard's
+protection begins at finalization, when it repairs the descriptor behind the
+current `sys.stdout` and `sys.stderr`. It observes CPython's finalization
+order, and `os._exit` skips finalization, so neither a different interpreter
+nor an immediate exit is protected.
+
+The guard's closed-pipe behaviour has been verified on POSIX only. The
+behavioural scenarios depend on a write to a closed pipe raising
+`BrokenPipeError`, and that has not been observed on Windows. The guard itself
+uses only `os.dup2`, which is documented on Windows as well, so it is not
+restricted to POSIX; the Windows outcome is unverified rather than refused, and
+the scenarios are skipped there until it is observed.
 
 ### Quiet children
 
@@ -1544,6 +1618,13 @@ the core builder set and need a custom builder.
 
 `git_ref()` rejects whitespace, a leading `-`, `..`, `@{`, and other constructs
 that Git would interpret as options or revision syntax.
+
+`git_checkout()` selects revisions only. In its switch modes — the default,
+`force=True`, and `detach=True` — it emits a trailing `--`, so Git must resolve
+the operand as a branch, tag, remote-tracking ref, or commit. A value that
+matches only a tracked path is refused and leaves the worktree unchanged; the
+builder never restores paths. `create_branch=True` names a new branch that
+starts at `HEAD` and emits no separator.
 
 The tar and rsync builders emit `--` before their positional path operands.
 `tar_create()` places it after the archive value, so a source named

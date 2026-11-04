@@ -81,6 +81,7 @@ from cuprum.echo_events import (
 )
 from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
+from cuprum.exit_status_guard import install_exit_status_guard
 from cuprum.line_stream_events import (
     LineStreamEvent,
     LineStreamHook,
@@ -125,6 +126,7 @@ from cuprum.sh import (
     PipelineResult,
     ProcessGroupPolicy,
     RunningCommand,
+    RunningEventLoopError,
     RunOutputOptions,
     SafeCmd,
     SafeCmdBuilder,
@@ -218,6 +220,7 @@ __all__ = [
     "RelayFallback",
     "RunOutputOptions",
     "RunningCommand",
+    "RunningEventLoopError",
     "RustPumpDeclineReason",
     "RustPumpHandoffOutcome",
     "SafeCmd",
@@ -240,6 +243,7 @@ __all__ = [
     "current_context",
     "env",
     "get_context",
+    "install_exit_status_guard",
     "is_rust_available",
     "logging_hook",
     "merge_env_overlays",

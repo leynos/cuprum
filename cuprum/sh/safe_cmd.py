@@ -27,7 +27,6 @@ detached launch shares their resolution rules without sharing their ownership.
 # eagerly and every name they use is a genuine runtime import. Only the forward
 # reference to ``Pipeline`` inside ``SafeCmd``'s own class body is quoted; the
 # module-level import that binds it sits at the bottom of this file.
-import asyncio
 import dataclasses as dc
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
@@ -43,6 +42,7 @@ from cuprum._process_handle.owned_start import _OwnedStart
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
 from cuprum.program import Program
+from cuprum.sh._sync_entry import _run_sync
 from cuprum.sh.bytes_entry_points import _BytesEntryPoints
 from cuprum.sh.execution import (
     ExecutionContext,
@@ -317,7 +317,11 @@ class SafeCmd(_OwnedStart, _DetachedLaunchEntryPoints, _BytesEntryPoints):
         context: ExecutionContext | None = None,
         stdin: StdinSource | None = None,
     ) -> CommandResult:
-        """Execute the command synchronously.
+        """Execute the command synchronously on a loop this call owns.
+
+        The call creates and closes a fresh event loop, so it cannot run while
+        another event loop is running in the calling thread. Await :meth:`run`
+        from async code instead.
 
         Parameters
         ----------
@@ -340,6 +344,9 @@ class SafeCmd(_OwnedStart, _DetachedLaunchEntryPoints, _BytesEntryPoints):
 
         Raises
         ------
+        RunningEventLoopError
+            If an event loop is already running in the calling thread. The
+            error names :meth:`run` as the asynchronous alternative.
         PermissionError
             If the command is not allowed by the active scope.
         TimeoutError
@@ -349,8 +356,15 @@ class SafeCmd(_OwnedStart, _DetachedLaunchEntryPoints, _BytesEntryPoints):
         StdinSourceError
             If a ``StdinStream`` producer or its encoder fails.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
-        return asyncio.run(
-            self.run(output=output, timeout=timeout, context=context, stdin=stdin),
+        return _run_sync(
+            lambda: self.run(
+                output=output,
+                timeout=timeout,
+                context=context,
+                stdin=stdin,
+            ),
+            entry_point="run_sync()",
+            async_alternative="run()",
         )
 
 
