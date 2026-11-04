@@ -47,44 +47,38 @@ def _reset_installed_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_dead_stream_is_redirected_and_keeps_its_identity(
     monkeypatch: pytest.MonkeyPatch,
+    pipe_write_fd: int,
 ) -> None:
     """A dead descriptor is pointed at the null device, not replaced."""
-    read_fd, write_fd = os.pipe()
-    try:
-        dead = _FakeStream(
-            flush_error=BrokenPipeError("reader left"),
-            descriptor=write_fd,
-        )
-        monkeypatch.setattr(sys, "stdout", dead)
-        monkeypatch.setattr(sys, "stderr", _FakeStream())
+    dead = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        descriptor=pipe_write_fd,
+    )
+    monkeypatch.setattr(sys, "stdout", dead)
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
 
-        exit_status_guard._guard_standard_streams()
+    exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is dead, "the stream object must keep its identity"
-        assert_points_at_devnull(write_fd)
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
+    assert sys.stdout is dead, "the stream object must keep its identity"
+    assert_points_at_devnull(pipe_write_fd)
 
 
-def test_healthy_stream_is_left_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_healthy_stream_is_left_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+    pipe_write_fd: int,
+) -> None:
     """A stream that flushes cleanly keeps its identity and descriptor."""
-    read_fd, write_fd = os.pipe()
-    try:
-        healthy = _FakeStream(descriptor=write_fd)
-        monkeypatch.setattr(sys, "stdout", healthy)
-        monkeypatch.setattr(sys, "stderr", _FakeStream())
+    healthy = _FakeStream(descriptor=pipe_write_fd)
+    monkeypatch.setattr(sys, "stdout", healthy)
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
 
-        exit_status_guard._guard_standard_streams()
+    exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is healthy, "a healthy stream must keep its identity"
-        assert healthy.flushes == 1, "the hook must still probe the stream"
-        assert not os.path.samestat(os.fstat(write_fd), Path(os.devnull).stat()), (
-            "a healthy descriptor must not be redirected"
-        )
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
+    assert sys.stdout is healthy, "a healthy stream must keep its identity"
+    assert healthy.flushes == 1, "the hook must still probe the stream"
+    assert not os.path.samestat(os.fstat(pipe_write_fd), Path(os.devnull).stat()), (
+        "a healthy descriptor must not be redirected"
+    )
 
 
 def test_none_stream_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,31 +148,27 @@ def test_dead_stream_without_a_usable_descriptor_is_replaced(
 
 def test_both_dead_streams_are_guarded_independently(
     monkeypatch: pytest.MonkeyPatch,
+    pipe_write_fd: int,
 ) -> None:
     """One descriptorless stream does not cost the other its redirect."""
-    read_fd, write_fd = os.pipe()
-    try:
-        stdout = _FakeStream(
-            flush_error=BrokenPipeError("reader left"),
-            descriptor=write_fd,
-        )
-        stderr = _FakeStream(
-            flush_error=BrokenPipeError("reader left"),
-            fileno_error=io.UnsupportedOperation("no descriptor"),
-        )
-        monkeypatch.setattr(sys, "stdout", stdout)
-        monkeypatch.setattr(sys, "stderr", stderr)
+    stdout = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        descriptor=pipe_write_fd,
+    )
+    stderr = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        fileno_error=io.UnsupportedOperation("no descriptor"),
+    )
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
 
-        exit_status_guard._guard_standard_streams()
+    exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is stdout, "the redirectable stream keeps its identity"
-        assert_points_at_devnull(write_fd)
-        assert isinstance(sys.stderr, exit_status_guard._NullTextSink), (
-            "the descriptorless stream must be replaced by the null sink"
-        )
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
+    assert sys.stdout is stdout, "the redirectable stream keeps its identity"
+    assert_points_at_devnull(pipe_write_fd)
+    assert isinstance(sys.stderr, exit_status_guard._NullTextSink), (
+        "the descriptorless stream must be replaced by the null sink"
+    )
 
 
 @pytest.mark.parametrize(
@@ -204,60 +194,52 @@ def test_non_broken_pipe_failures_leave_the_stream_untouched(
 
 def test_dup2_failure_falls_back_to_the_null_sink(
     monkeypatch: pytest.MonkeyPatch,
+    pipe_write_fd: int,
 ) -> None:
     """An unusable descriptor path still leaves a stream CPython can flush."""
-    read_fd, write_fd = os.pipe()
-    try:
-        dead = _FakeStream(
-            flush_error=BrokenPipeError("reader left"),
-            descriptor=write_fd,
-        )
-        monkeypatch.setattr(sys, "stdout", dead)
-        monkeypatch.setattr(sys, "stderr", _FakeStream())
-        failing_os = _FailingDup2Os(os)
-        monkeypatch.setattr(exit_status_guard, "os", failing_os)
+    dead = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        descriptor=pipe_write_fd,
+    )
+    monkeypatch.setattr(sys, "stdout", dead)
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+    failing_os = _FailingDup2Os(os)
+    monkeypatch.setattr(exit_status_guard, "os", failing_os)
 
-        exit_status_guard._guard_standard_streams()
+    exit_status_guard._guard_standard_streams()
 
-        assert failing_os.dup2_calls == 1, "the hook must have attempted the redirect"
-        assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
-            "a failed redirect must fall back to the null sink"
-        )
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
+    assert failing_os.dup2_calls == 1, "the hook must have attempted the redirect"
+    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
+        "a failed redirect must fall back to the null sink"
+    )
 
 
 def test_null_descriptor_reusing_the_stream_number_is_not_closed(
     monkeypatch: pytest.MonkeyPatch,
+    pipe_write_fd: int,
 ) -> None:
     """A null device opened at the stream's own number must stay open."""
-    read_fd, write_fd = os.pipe()
-    try:
-        dead = _FakeStream(
-            flush_error=BrokenPipeError("reader left"),
-            descriptor=write_fd,
-        )
-        monkeypatch.setattr(sys, "stdout", dead)
-        monkeypatch.setattr(sys, "stderr", _FakeStream())
-        reusing = _SelfDescriptorOs(os, write_fd)
-        monkeypatch.setattr(exit_status_guard, "os", reusing)
+    dead = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        descriptor=pipe_write_fd,
+    )
+    monkeypatch.setattr(sys, "stdout", dead)
+    monkeypatch.setattr(sys, "stderr", _FakeStream())
+    reusing = _SelfDescriptorOs(os, pipe_write_fd)
+    monkeypatch.setattr(exit_status_guard, "os", reusing)
 
-        exit_status_guard._guard_standard_streams()
+    exit_status_guard._guard_standard_streams()
 
-        assert sys.stdout is dead, "the stream must keep its identity"
-        assert reusing.opened == [(os.devnull, os.O_WRONLY)], (
-            "the guard must open the null device for the redirect"
-        )
-        assert reusing.closed == [], (
-            "the descriptor that took the stream's number must stay open"
-        )
-        assert os.fstat(write_fd) is not None, (
-            "the redirected descriptor must still be open"
-        )
-    finally:
-        os.close(read_fd)
-        os.close(write_fd)
+    assert sys.stdout is dead, "the stream must keep its identity"
+    assert reusing.opened == [(os.devnull, os.O_WRONLY)], (
+        "the guard must open the null device for the redirect"
+    )
+    assert reusing.closed == [], (
+        "the descriptor that took the stream's number must stay open"
+    )
+    assert os.fstat(pipe_write_fd) is not None, (
+        "the redirected descriptor must still be open"
+    )
 
 
 def test_install_registers_exactly_one_hook(monkeypatch: pytest.MonkeyPatch) -> None:
