@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,9 @@ from scripts.check_boundary_contract import (
 from scripts.tests.boundary_harness_support import (
     cargo_target_roots,
     copy_boundary_repository,
+    latest_run_root,
+    recorded_phases,
+    stub_cargo_preparation,
 )
 
 # The one diagnostic string that distinguishes a rejected probe from a compile
@@ -69,21 +71,10 @@ def _drive_contract(
     root = copy_boundary_repository(tmp_path)
     compiler = _RecordedCompile()
     monkeypatch.setattr(contract, "ROOT", root)
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    stub_cargo_preparation(monkeypatch, contract)
     monkeypatch.setattr(contract, "_compile", compiler)
     contract.main()
     return root, compiler
-
-
-def _latest_run_root(root: Path) -> Path:
-    """Return the unique retained run directory produced by the harness."""
-    runs = sorted((root / ".cache/boundary-contract/runs").glob("run-*"))
-    assert len(runs) == 1, "the contract invocation must have one private run root"
-    return runs[0]
 
 
 @pytest.mark.parametrize("extra", [", 'new-boundary'", ", 'cuprum-native-io'", ", '*'"])
@@ -214,16 +205,10 @@ def test_main_probes_every_target_with_every_unsafe_form(
         assert sum(probe in text for text in compiler.probes) == len(TARGETS), (
             f"the {probe!r} probe must be compiled against every target"
         )
-    run_root = _latest_run_root(root)
+    run_root = latest_run_root(root, "boundary-contract")
     workspace = run_root / "workspace"
     logs = run_root / "logs"
-    timings = [
-        json.loads(line)
-        for line in (run_root / "timings.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert [record["phase"] for record in timings] == [
+    assert recorded_phases(run_root) == [
         "dependency_preparation",
         "workload",
     ], "the harness must record preparation and execution separately"
@@ -265,16 +250,14 @@ def test_main_preserves_automatic_directory_symlinks(
     }, "Cargo must omit directory symlink targets before the copy"
     compiler = _RecordedCompile()
     monkeypatch.setattr(contract, "ROOT", root)
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    stub_cargo_preparation(monkeypatch, contract)
     monkeypatch.setattr(contract, "_compile", compiler)
 
     contract.main()
 
-    copied_crate = _latest_run_root(root) / "workspace/cuprum-streams"
+    copied_crate = (
+        latest_run_root(root, "boundary-contract") / "workspace/cuprum-streams"
+    )
     after = cargo_target_roots(copied_crate)
     assert {path.relative_to(copied_crate) for path in after} == {
         Path(path) for path in TARGETS
@@ -341,7 +324,7 @@ def test_every_probed_target_is_restored_afterwards(
 ) -> None:
     """A probe left behind would poison every later compile."""
     root, _compiler = _drive_contract(tmp_path, monkeypatch)
-    workspace = _latest_run_root(root) / "workspace"
+    workspace = latest_run_root(root, "boundary-contract") / "workspace"
     for target in TARGETS:
         source = (workspace / "cuprum-streams" / target).read_text(encoding="utf-8")
         for probe in contract.PROBES:
@@ -354,11 +337,7 @@ def test_a_probe_that_compiles_must_fail_the_check(
     """A safe target that accepts unsafe code must abort the harness."""
     root = copy_boundary_repository(tmp_path)
     monkeypatch.setattr(contract, "ROOT", root)
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    stub_cargo_preparation(monkeypatch, contract)
     # A compiler that never rejects anything stands in for a target whose lint
     # stopped applying; the harness must not report success.
     monkeypatch.setattr(
@@ -375,11 +354,7 @@ def test_a_failing_baseline_aborts_before_any_probe(
     root = copy_boundary_repository(tmp_path)
     probed: list[Path] = []
     monkeypatch.setattr(contract, "ROOT", root)
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    stub_cargo_preparation(monkeypatch, contract)
     monkeypatch.setattr(
         contract, "_compile", lambda _workspace: (101, "error: no compiler")
     )

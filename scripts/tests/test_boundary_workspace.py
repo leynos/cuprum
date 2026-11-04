@@ -97,11 +97,7 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
     scheduled: list[Path] = []
     monkeypatch.setattr(contract, "ROOT", root)
     monkeypatch.setattr(contract, "_compile", lambda _workspace: (0, "checked"))
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    boundary_harness_support.stub_cargo_preparation(monkeypatch, contract)
     monkeypatch.setattr(
         contract,
         "_check_target",
@@ -110,9 +106,8 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
 
     contract.main()
 
-    run_roots = sorted((root / ".cache/boundary-contract/runs").glob("run-*"))
-    assert len(run_roots) == 1, "the contract must use one private run root"
-    run_nested = run_roots[0] / "workspace" / nested.relative_to(rust)
+    run_root = boundary_harness_support.latest_run_root(root, "boundary-contract")
+    run_nested = run_root / "workspace" / nested.relative_to(rust)
     assert run_nested in scheduled, (
         "the run-local nested target must be scheduled for unsafe probes"
     )
@@ -222,11 +217,7 @@ def test_main_materializes_external_source_file_symlinks(
     monkeypatch.setattr(
         contract, "_compile", _recording_probe_compiler(observed_sources)
     )
-    monkeypatch.setattr(
-        contract,
-        "_prepare_run_cargo_home",
-        lambda _run, _workspace: 0.0,
-    )
+    boundary_harness_support.stub_cargo_preparation(monkeypatch, contract)
 
     contract.main()
 
@@ -252,9 +243,7 @@ def _assert_materialized_workspace_compiles(
     check: _MaterializedWorkspaceCheck,
 ) -> None:
     """Build the copied linked targets and verify source isolation."""
-    run_roots = sorted((check.root / ".cache/boundary-contract/runs").glob("run-*"))
-    assert len(run_roots) == 1, "the contract must use one private run root"
-    run_root = run_roots[0]
+    run_root = boundary_harness_support.latest_run_root(check.root, "boundary-contract")
     copied_crate = run_root / "workspace/cuprum-streams"
     create_run_cargo_home(check.prepared_run.cargo_home, run_root)
     code, output = check.compile_workspace(

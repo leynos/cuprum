@@ -40,11 +40,12 @@ def test_a_probe_is_removed_even_when_compilation_fails(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == original, (
         "the probe was not removed on the normal path"
     )
+    msg = "boom"
     with (
-        pytest.raises(ValueError, match="boom"),
+        pytest.raises(ValueError, match=msg),
         probe_appended(target, probe),
     ):
-        raise ValueError("boom")
+        raise ValueError(msg)
     assert target.read_text(encoding="utf-8") == original, (
         "the probe was not removed when the body raised"
     )
