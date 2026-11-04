@@ -16,8 +16,6 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-import pytest
-
 from cuprum import sh
 from cuprum._observe_task_retention import _OBSERVE_TASK_CEILING
 from cuprum.context import ScopeConfig, scoped
@@ -31,6 +29,8 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from cuprum.catalogue import ProgramCatalogue
     from cuprum.sh import SafeCmd
 
@@ -39,6 +39,7 @@ if typ.TYPE_CHECKING:
 _CHILD_WRITE_LINES = 4_000
 _PROGRESS_EVERY = 50
 _PAYLOAD = "x" * 1023
+_STALL_TIMEOUT = 5.0
 
 
 def _progress_command(progress_path: Path) -> tuple[SafeCmd, ProgramCatalogue]:
@@ -68,23 +69,20 @@ def _progress_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-async def _await_progress_stall(
-    path: Path,
-    *,
-    timeout: float = 5.0,
-) -> list[str]:
+async def _await_progress_stall(path: Path) -> list[str]:
     """Wait until the child's progress file stops changing."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
     previous = _progress_lines(path)
-    while loop.time() < deadline:
-        await asyncio.sleep(0.05)
-        current = _progress_lines(path)
-        if current and current == previous:
-            return current
-        previous = current
-    msg = f"the child's progress never stalled within {timeout}s"
-    raise AssertionError(msg)
+    try:
+        async with asyncio.timeout(_STALL_TIMEOUT):
+            while True:
+                await asyncio.sleep(0.05)
+                current = _progress_lines(path)
+                if current and current == previous:
+                    return current
+                previous = current
+    except TimeoutError as exc:
+        msg = f"the child's progress never stalled within {_STALL_TIMEOUT}s"
+        raise AssertionError(msg) from exc
 
 
 def _assert_child_delivery(seen: list[str], probe: _RetentionProbe) -> None:

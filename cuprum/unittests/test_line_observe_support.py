@@ -16,8 +16,6 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
-import pytest
-
 from cuprum import sh
 from cuprum._observe_task_retention import _OBSERVE_TASK_CEILING
 from cuprum._pipeline_types import _StageObservation
@@ -27,6 +25,8 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    import pytest
 
     from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecEvent
@@ -56,6 +56,12 @@ def _output_options(capture: bool) -> RunOutputOptions:
     Registering a line observer is what keeps the stream piped, so the flood
     reaches the observe hook in both modes and the two runs differ only in
     whether the lines are also retained on the result.
+
+    Returns
+    -------
+    RunOutputOptions
+        Options that capture only when ``capture`` is true and always keep the
+        stream piped for line observation.
     """
     return RunOutputOptions(capture=capture, on_line=_keep_stream_piped)
 
@@ -81,6 +87,11 @@ def _chatty_pipeline(line_count: int) -> tuple[Pipeline, ProgramCatalogue]:
     stderr floods start as soon as the two children spawn. That overlap is
     what makes the shared retention list contend: each stage dispatches line
     events while the other stage's tasks are still unfinished.
+
+    Returns
+    -------
+    tuple[Pipeline, ProgramCatalogue]
+        The two-stage pipeline and the catalogue that authorizes its terms.
     """
     catalogue, program = python_catalogue()
     build = sh.make(program, catalogue=catalogue)
