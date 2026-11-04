@@ -9,8 +9,10 @@ import time
 import typing as typ
 from pathlib import Path
 
+from scripts.cargo_diagnostics import DIAGNOSTICS_FILE_NAME
 from scripts.cargo_environment import cargo_environment
 from scripts.cargo_state import (
+    PreparationContext,
     create_run_cargo_home,
     default_snapshot_root,
     fetch_workspace_dependencies,
@@ -93,7 +95,14 @@ def prepare_run_cargo_home(
         If the run home or its files cannot be created or copied.
     """  # ruff: ignore[docstring-extraneous-exception] - failures propagate from the preparation helpers.
     started = time.monotonic()
-    snapshot = prepare_cargo_snapshot(repository_root, default_snapshot_root())
+    context = PreparationContext(
+        diagnostics_path=run_root / DIAGNOSTICS_FILE_NAME,
+    )
+    snapshot = prepare_cargo_snapshot(
+        repository_root,
+        default_snapshot_root(),
+        context=context,
+    )
     cargo_home = create_run_cargo_home(
         snapshot.path,
         run_root,
@@ -102,6 +111,7 @@ def prepare_run_cargo_home(
     fetch_workspace_dependencies(
         workspace / "Cargo.toml",
         cargo_home,
+        context=context,
     )
     return time.monotonic() - started
 

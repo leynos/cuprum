@@ -8,7 +8,9 @@ from pathlib import Path
 
 from cyclopts import App
 
+from scripts.cargo_diagnostics import DIAGNOSTICS_FILE_NAME
 from scripts.cargo_state import (
+    PreparationContext,
     create_run_cargo_home,
     default_snapshot_root,
     prepare_cargo_snapshot,
@@ -28,7 +30,13 @@ def main(
     """Prepare one snapshot and private run home, emitting non-secret metadata."""
     preparation_started = time.monotonic()
     cache_root = snapshot_root or default_snapshot_root()
-    prepared = prepare_cargo_snapshot(repository_root, cache_root)
+    prepared = prepare_cargo_snapshot(
+        repository_root,
+        cache_root,
+        context=PreparationContext(
+            diagnostics_path=run_root / DIAGNOSTICS_FILE_NAME,
+        ),
+    )
     run_home = create_run_cargo_home(
         prepared.path,
         run_root,

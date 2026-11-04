@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import stat
 import typing as typ
 from pathlib import Path
@@ -177,7 +178,9 @@ def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
     prepared = cargo_state.prepare_cargo_snapshot(
         inputs.repository,
         inputs.snapshot_root,
-        caller_environment=inputs.caller_environment,
+        context=cargo_state.PreparationContext(
+            caller_environment=inputs.caller_environment,
+        ),
     )
     _assert_fetch_setup(inputs, prepared, calls, fetch_configuration)
     _assert_snapshot_contents(inputs, prepared)
@@ -235,7 +238,9 @@ def test_losing_snapshot_publication_removes_read_only_staging_tree(
         inputs.repository,
         inputs.snapshot_root,
         inputs.source_home,
-        caller_environment=inputs.caller_environment,
+        context=cargo_state.PreparationContext(
+            caller_environment=inputs.caller_environment,
+        ),
     )
 
     assert prepared.reused, "the losing publisher must return the winner's path"
@@ -317,25 +322,27 @@ def test_missing_caller_home_is_not_created_during_snapshot_seeding(
     )
 
 
-def test_fetch_failure_hides_diagnostics_and_removes_staging_home(
+def test_fetch_failure_retains_redacted_diagnostics_and_removes_staging_home(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fetch failure is bounded and does not leak Cargo credential output."""
+    """A fetch failure keeps redacted Cargo output but no staging Cargo home."""
     repository = create_repository(tmp_path / "repo")
     snapshot_root = tmp_path / "snapshots"
-    diagnostic_marker = "do-not-leak-marker"
+    diagnostics_path = tmp_path / "cargo-diagnostics.jsonl"
+    diagnostic_marker = "registry index unavailable"
+    sensitive_value = "credential-value-that-must-not-leak"
 
     def run_cargo(
         arguments: tuple[str, ...],
         _cwd: Path,
-        _environment: dict[str, str],
+        environment: dict[str, str],
     ) -> SimpleNamespace:
-        """Return credential-like output only for the failing fetch."""
+        """Return Cargo's failure with a credential-shaped value in its output."""
         if arguments[0] == "fetch":
             return SimpleNamespace(
                 exit_code=17,
-                stdout=diagnostic_marker,
+                stdout=f"{diagnostic_marker} token={environment['CARGO_TOKEN']}",
                 stderr=diagnostic_marker,
             )
         return SimpleNamespace(exit_code=0, stdout="cargo 1.85.0\n", stderr="")
@@ -347,10 +354,29 @@ def test_fetch_failure_hides_diagnostics_and_removes_staging_home(
             repository,
             snapshot_root,
             tmp_path / "empty-caller-cargo-home",
+            context=cargo_state.PreparationContext(
+                caller_environment={"CARGO_TOKEN": sensitive_value},
+                diagnostics_path=diagnostics_path,
+            ),
         )
 
-    assert diagnostic_marker not in str(error.value), (
-        "Cargo diagnostics may contain credential data"
+    assert str(diagnostics_path) in str(error.value), (
+        "a preparation failure must name the retained diagnostics"
+    )
+    retained = diagnostics_path.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in retained.splitlines()]
+    fetch_record = next(
+        record for record in records if record["operation"] == "cargo fetch --locked"
+    )
+    assert fetch_record["exit_code"] == 17, "the record must keep Cargo's exit code"
+    assert diagnostic_marker in fetch_record["stdout"], (
+        "a maintainer needs Cargo's own message to diagnose the failure"
+    )
+    assert "<redacted>" in fetch_record["stdout"], (
+        "secret-looking environment values must be redacted before retention"
+    )
+    assert sensitive_value not in retained, (
+        "credentials must never reach the retained file"
     )
     assert not list(snapshot_root.glob(".*.staging-*")), (
         "failed preparation must remove its temporary Cargo home"

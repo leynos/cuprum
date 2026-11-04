@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 import os
 import shutil
 import stat
@@ -39,8 +38,16 @@ from scripts.cargo_environment import (
     _pinned_rustup_home,
     cargo_environment,
 )
+from scripts.cargo_preparation import (
+    CargoInvocation,
+    PreparationContext,
+    record_phase,
+)
+from scripts.cargo_preparation import (
+    run_recorded_cargo as _run_recorded_cargo,
+)
 from scripts.cargo_run_home import create_run_cargo_home
-from scripts.cargo_state_command import _run_cargo
+from scripts.cargo_state_command import run_cargo as _run_cargo
 from scripts.cargo_state_errors import CargoStatePreparationError
 from scripts.cargo_state_metadata import (
     _sha256,
@@ -51,8 +58,10 @@ from scripts.cargo_state_metadata import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+
 __all__ = (
     "CargoStatePreparationError",
+    "PreparationContext",
     "PreparedCargoSnapshot",
     "cargo_environment",
     "cargo_snapshot_key",
@@ -93,6 +102,7 @@ class _SnapshotPreparation:
     cargo_version: str
     key: str
     started: float
+    diagnostics_path: Path | None
 
     @property
     def snapshot_path(self) -> Path:
@@ -100,33 +110,12 @@ class _SnapshotPreparation:
         return self.snapshot_root / self.key
 
 
-def record_phase(timings_path: Path, phase: str, seconds: float) -> None:
-    """Append a monotonic phase duration without recording environment data.
-
-    Parameters
-    ----------
-    timings_path : Path
-        Run-local JSON-lines file receiving the phase record.
-    phase : str
-        Stable name for the measured phase.
-    seconds : float
-        Elapsed monotonic duration in seconds.
-
-    Raises
-    ------
-    OSError
-        If the timing file cannot be opened or written.
-    """  # ruff: ignore[docstring-extraneous-exception] - filesystem errors propagate from Path.open and write.
-    with timings_path.open("a", encoding="utf-8") as output:
-        output.write(json.dumps({"phase": phase, "seconds": seconds}) + "\n")
-
-
 def prepare_cargo_snapshot(
     repository_root: Path,
     snapshot_root: Path,
     source_cargo_home: Path | None = None,
     *,
-    caller_environment: cabc.Mapping[str, str] | None = None,
+    context: PreparationContext | None = None,
 ) -> PreparedCargoSnapshot:
     """Prepare and atomically publish a locked, all-target Cargo cache snapshot.
 
@@ -142,8 +131,9 @@ def prepare_cargo_snapshot(
     source_cargo_home : Path, optional
         Cargo home used to seed the temporary cache before locked fetch.
         Defaults to the caller's configured or default Cargo home.
-    caller_environment : Mapping of str to str, optional
-        Environment used to resolve caller cache paths and Cargo settings.
+    context : PreparationContext, optional
+        Caller environment and diagnostics sink for this preparation.
+        Defaults to the process environment and no retained diagnostics.
 
     Returns
     -------
@@ -160,14 +150,20 @@ def prepare_cargo_snapshot(
 
     """  # ruff: ignore[docstring-extraneous-exception] - errors propagate from file, subprocess, and copy helpers.
     started = time.monotonic()
-    environment = dict(os.environ if caller_environment is None else caller_environment)
+    context = context or PreparationContext()
+    environment = dict(
+        os.environ if context.caller_environment is None else context.caller_environment
+    )
     source_home = source_cargo_home or _caller_cargo_home(environment)
     rustup_home = _pinned_rustup_home(environment)
     cargo_version = _cargo_version(
-        repository_root=repository_root,
-        cargo_home=source_home,
-        rustup_home=rustup_home,
-        caller_environment=environment,
+        CargoInvocation(
+            arguments=("--version",),
+            working_directory=repository_root / "rust",
+            environment=_cargo_environment(source_home, rustup_home, environment),
+            operation="cargo version",
+        ),
+        context.diagnostics_path,
     )
     request = _SnapshotPreparation(
         repository_root=repository_root,
@@ -178,17 +174,22 @@ def prepare_cargo_snapshot(
         cargo_version=cargo_version,
         key=cargo_snapshot_key(repository_root, cargo_version),
         started=started,
+        diagnostics_path=context.diagnostics_path,
     )
     existing = _existing_snapshot(request)
     return existing if existing is not None else _create_snapshot(request)
 
 
+def _diagnostic_reference(message: str, diagnostics_path: Path | None) -> str:
+    """Name the retained diagnostics file so a failure is actionable."""
+    if diagnostics_path is None:
+        return message
+    return f"{message}; retained Cargo diagnostics: {diagnostics_path}"
+
+
 def _cargo_version(
-    *,
-    repository_root: Path,
-    cargo_home: Path,
-    rustup_home: str,
-    caller_environment: cabc.Mapping[str, str],
+    invocation: CargoInvocation,
+    diagnostics_path: Path | None,
 ) -> str:
     """Read Cargo's version using the caller's pinned Rustup installation.
 
@@ -202,10 +203,12 @@ def _cargo_version(
     CargoStatePreparationError
         If Cargo exits unsuccessfully or returns no version.
     """
-    environment = _cargo_environment(cargo_home, rustup_home, caller_environment)
-    result = _run_cargo(("--version",), repository_root / "rust", environment)
+    result = _run_recorded_cargo(invocation, diagnostics_path, _run_cargo)
     if result.exit_code != 0:
-        msg = f"cargo --version failed with exit code {result.exit_code}"
+        msg = _diagnostic_reference(
+            f"cargo --version failed with exit code {result.exit_code}",
+            diagnostics_path,
+        )
         raise CargoStatePreparationError(msg)
     version = (result.stdout or "").strip()
     if not version:
@@ -264,6 +267,7 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
                 request.rustup_home,
                 request.caller_environment,
             ),
+            diagnostics_path=request.diagnostics_path,
         )
 
         # The fetch needed the caller's configuration and credentials, but a
@@ -294,7 +298,7 @@ def fetch_workspace_dependencies(
     workspace_manifest: Path,
     cargo_home: Path,
     *,
-    caller_environment: cabc.Mapping[str, str] | None = None,
+    context: PreparationContext | None = None,
 ) -> float:
     """Fetch a copied workspace's locked dependencies before its build budget.
 
@@ -307,8 +311,9 @@ def fetch_workspace_dependencies(
         Copied workspace's ``Cargo.toml`` path.
     cargo_home : Path
         Writable Cargo home owned by the current run.
-    caller_environment : Mapping of str to str, optional
-        Environment copied into the fetch process before pinning Cargo homes.
+    context : PreparationContext, optional
+        Caller environment and diagnostics sink for this fetch. Defaults to
+        the process environment and no retained diagnostics.
 
     Returns
     -------
@@ -327,13 +332,25 @@ def fetch_workspace_dependencies(
     if not lockfile.is_file():
         msg = f"locked Cargo preparation requires {lockfile}"
         raise CargoStatePreparationError(msg)
-    environment = dict(os.environ if caller_environment is None else caller_environment)
+    context = context or PreparationContext()
+    environment = dict(
+        os.environ if context.caller_environment is None else context.caller_environment
+    )
     started = time.monotonic()
-    _fetch_locked(manifest, cargo_environment(cargo_home, environment))
+    _fetch_locked(
+        manifest,
+        cargo_environment(cargo_home, environment),
+        diagnostics_path=context.diagnostics_path,
+    )
     return time.monotonic() - started
 
 
-def _fetch_locked(manifest: Path, environment: cabc.Mapping[str, str]) -> None:
+def _fetch_locked(
+    manifest: Path,
+    environment: cabc.Mapping[str, str],
+    *,
+    diagnostics_path: Path | None = None,
+) -> None:
     """Fetch one workspace's locked dependencies and reject rewritten inputs.
 
     Network access is enabled only for this preparation call so Cargo can
@@ -349,13 +366,21 @@ def _fetch_locked(manifest: Path, environment: cabc.Mapping[str, str]) -> None:
     lockfile_digest = _sha256(lockfile)
     fetch_environment = dict(environment)
     fetch_environment["CARGO_NET_OFFLINE"] = "false"
-    result = _run_cargo(
-        ("fetch", "--locked", "--manifest-path", str(manifest)),
-        manifest.parent,
-        fetch_environment,
+    result = _run_recorded_cargo(
+        CargoInvocation(
+            arguments=("fetch", "--locked", "--manifest-path", str(manifest)),
+            working_directory=manifest.parent,
+            environment=fetch_environment,
+            operation="cargo fetch --locked",
+        ),
+        diagnostics_path,
+        _run_cargo,
     )
     if result.exit_code != 0:
-        msg = f"cargo fetch --locked failed with exit code {result.exit_code}"
+        msg = _diagnostic_reference(
+            f"cargo fetch --locked failed with exit code {result.exit_code}",
+            diagnostics_path,
+        )
         raise CargoStatePreparationError(msg)
     if _sha256(lockfile) != lockfile_digest:
         msg = f"cargo fetch changed {lockfile.name} during locked preparation"

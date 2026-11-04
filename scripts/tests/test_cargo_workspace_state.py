@@ -82,11 +82,13 @@ def test_copied_workspace_dependencies_are_fetched_locked_before_execution(
     elapsed = cargo_state.fetch_workspace_dependencies(
         manifest,
         cargo_home,
-        caller_environment={
-            "CARGO_BUILD_JOBS": "5",
-            "CARGO_NET_OFFLINE": "true",
-            "RUSTUP_HOME": str(rustup_home),
-        },
+        context=cargo_state.PreparationContext(
+            caller_environment={
+                "CARGO_BUILD_JOBS": "5",
+                "CARGO_NET_OFFLINE": "true",
+                "RUSTUP_HOME": str(rustup_home),
+            },
+        ),
     )
 
     assert calls[0][0] == (
