@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import typing as typ
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from tests.helpers.distribution_artefacts import (
 )
 from tests.helpers.grouped_recipe_flow import require_grouped_selector_drives_pytest
 from tests.helpers.makefile import recipe_of, variable_expansion
+from tests.helpers.suite_selection import selected_paths
 
 _FRONTEND_TIMEOUT_MESSAGE = "frontend exceeded its limit"
 #: Cold Maturin wheel build measured on a loaded developer host on 2026-10-30.
@@ -250,14 +250,13 @@ def test_makefile_groups_both_distribution_consumers() -> None:
         "prepared-home doctest route, "
         f"got {sorted(grouped_targets)}"
     )
-    selected_targets = set(variable_expansion("PYTEST_TARGETS"))
-    missing_targets = {
-        target
-        for target in expected
-        if not any(
-            fnmatch.fnmatchcase(target, selector) for selector in selected_targets
-        )
+    # Resolve the selector the way `make test-python` does: a shell glob, where
+    # `*` does not cross a directory separator. `fnmatch` would let a broad
+    # pattern such as `cuprum/*.py` stand in for a module pytest never collects.
+    selected_targets = {
+        path.as_posix() for path in selected_paths(variable_expansion("PYTEST_TARGETS"))
     }
+    missing_targets = expected - selected_targets
     assert not missing_targets, (
         "every shared-artefact consumer must remain selected by test-python"
         f": {sorted(missing_targets)}"

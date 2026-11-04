@@ -179,6 +179,9 @@ def test_doctest_mark_encloses_both_call_watchdogs() -> None:
 # The end-to-end mark encloses two compiler-admission waits because the
 # coordinator has no parent workload lease; it is not an execution-only budget.
 @pytest.mark.timeout(DOCTEST_TEST_TIMEOUT_SECONDS, func_only=True)
+# The session-scoped prepared Cargo home serves both the native wheel and the
+# doctest routes, so this consumer must share a worker with the packaging builds.
+@pytest.mark.xdist_group("distribution-artefacts")
 @pytest.mark.skipif(
     sys.platform != "linux", reason="the production doctest warning route is Linux-only"
 )

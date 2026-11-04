@@ -112,6 +112,12 @@ def test_verus_archives_the_negative_compiler_evidence() -> None:
 
     assert isinstance(archive, dict), "the verus job must archive its evidence"
     inputs = step_inputs(archive, "the verus archive must declare its inputs")
+    assert inputs.get("name") == (
+        "verus-and-compiler-contracts-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), (
+        "each attempt must upload under its own name; the uploader rejects a "
+        "duplicate name within one run, which would replace the original failure"
+    )
     paths = {
         line.strip()
         for line in str(inputs.get("path", "")).splitlines()

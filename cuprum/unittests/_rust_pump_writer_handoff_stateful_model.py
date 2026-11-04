@@ -64,6 +64,7 @@ class _RustPumpWriterHandoffModel(_WriterHandoffInvariantMixin, RuleBasedStateMa
                 "buffer_validated",
                 "platform_ready",
                 "native_finished",
+                "worker_finished",
             }
             and not self._native_settled
             and self._cancellation_count < self._MAX_CANCELLATIONS
@@ -175,7 +176,12 @@ class _RustPumpWriterHandoffModel(_WriterHandoffInvariantMixin, RuleBasedStateMa
                 _Transition("Rust closes writer", self._rust_closes_transferred_writer),
             ))
         if self._stage == "worker_finished":
-            return (_Transition("settle worker", self._settle_native_worker),)
+            # The worker has released its writer, but the executor future has not
+            # yet settled, so a cancellation can still arrive before the
+            # completion callback runs its cleanup.
+            return self._with_cancellation((
+                _Transition("settle worker", self._settle_native_worker),
+            ))
         if self._stage == "settled":
             return (_Transition("restore descriptors", self._restore_descriptors),)
         if self._stage == "restored":
