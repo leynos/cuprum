@@ -129,8 +129,25 @@ class _SelfDescriptorOs(_OsProxy):
         self.closed: list[int] = []
 
     def open(self, path: str, flags: int) -> int:
-        """Record the open, then hand back the stream's own number."""
+        """Record the open, redirect the reused number, and hand it back.
+
+        The kernel can only return the stream's own number when that number is
+        free, and opening the null device at a free number already points it at
+        the null device. Model that outcome so the guard is tested against a
+        real redirect rather than an unchanged descriptor.
+
+        Returns
+        -------
+        int
+            The stream's own descriptor number, now referring to the null
+            device.
+        """
         self.opened.append((path, flags))
+        null_descriptor = self._real.open(path, flags)
+        if null_descriptor == self._descriptor:
+            return null_descriptor
+        self._real.dup2(null_descriptor, self._descriptor)
+        self._real.close(null_descriptor)
         return self._descriptor
 
     def close(self, descriptor: int) -> None:

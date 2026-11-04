@@ -237,9 +237,7 @@ def test_null_descriptor_reusing_the_stream_number_is_not_closed(
     assert reusing.closed == [], (
         "the descriptor that took the stream's number must stay open"
     )
-    assert os.fstat(pipe_write_fd) is not None, (
-        "the redirected descriptor must still be open"
-    )
+    assert_points_at_devnull(pipe_write_fd)
 
 
 def test_install_registers_exactly_one_hook(monkeypatch: pytest.MonkeyPatch) -> None:
