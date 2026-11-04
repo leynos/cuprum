@@ -11,11 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import cargo_state
-from scripts.cargo_cache_tree import (
-    publish_snapshot,
-    seed_cargo_home,
-    selected_registry_archives,
-)
+from scripts.cargo_cache_tree import publish_snapshot
 from scripts.tests.cargo_state_support import (
     SEEDED_CARGO_FILES,
     SnapshotInputs,
@@ -29,7 +25,7 @@ if typ.TYPE_CHECKING:
 
 def _record_snapshot_cargo(
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]],
-    fetch_credentials: list[bool],
+    fetch_configuration: list[tuple[bool, bool]],
 ) -> cabc.Callable[[tuple[str, ...], Path, dict[str, str]], SimpleNamespace]:
     """Return a Cargo stub that records commands and adds a fetch marker."""
 
@@ -38,12 +34,14 @@ def _record_snapshot_cargo(
         cwd: Path,
         environment: dict[str, str],
     ) -> SimpleNamespace:
-        """Record Cargo and add a marker after dependency preparation."""
+        """Record Cargo and the configuration visible to the locked fetch."""
         calls.append((arguments, cwd, environment.copy()))
         if arguments[0] == "fetch":
-            fetch_credentials.append(
-                (Path(environment["CARGO_HOME"]) / "credentials.toml").is_file()
-            )
+            staging = Path(environment["CARGO_HOME"])
+            fetch_configuration.append((
+                (staging / "config.toml").is_file(),
+                (staging / "credentials.toml").is_file(),
+            ))
             marker = Path(environment["CARGO_HOME"]) / "registry/fetched.marker"
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text("prepared", encoding="utf-8")
@@ -56,7 +54,7 @@ def _assert_fetch_setup(
     inputs: SnapshotInputs,
     prepared: cargo_state.PreparedCargoSnapshot,
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]],
-    fetch_credentials: list[bool],
+    fetch_configuration: list[tuple[bool, bool]],
 ) -> None:
     """Verify Cargo fetch used the staged home and preserved caller policy."""
     assert [call[0] for call in calls] == [
@@ -90,8 +88,11 @@ def _assert_fetch_setup(
     assert fetch_environment["CARGO_NET_OFFLINE"] == "false", (
         "dependency preparation must fetch before the offline phase"
     )
-    assert fetch_credentials == [True], (
-        "Cargo fetch must be able to authenticate with copied caller credentials"
+    assert fetch_configuration == [(True, True)], (
+        "Cargo fetch must see copied caller settings and credentials"
+    )
+    assert prepared.source_cargo_home == inputs.source_home, (
+        "the prepared snapshot must name the caller home it read configuration from"
     )
 
 
@@ -101,9 +102,15 @@ def _assert_snapshot_contents(
 ) -> None:
     """Verify seeded cache copies, fetched state, credentials, and lockfile."""
     for relative, contents in SEEDED_CARGO_FILES.items():
-        if relative in {"credentials", "credentials.toml"}:
+        if relative in {
+            "config",
+            "config.toml",
+            "credentials",
+            "credentials.toml",
+        }:
             assert not (prepared.path / relative).exists(), (
-                "published Cargo snapshots must not retain authentication secrets"
+                "published Cargo snapshots must retain neither settings nor "
+                f"authentication secrets: {relative}"
             )
             continue
         if relative.startswith(("registry/src/", "git/checkouts/")):
@@ -148,55 +155,9 @@ def _assert_snapshot_contents(
     assert (inputs.source_home / "credentials.toml").read_text(encoding="utf-8") == (
         SEEDED_CARGO_FILES["credentials.toml"]
     ), "seeding must not modify caller credentials"
-
-
-def test_seeding_without_a_selection_copies_every_archive(tmp_path: Path) -> None:
-    """A caller without a lockfile retains the whole archive cache."""
-    inputs = create_snapshot_inputs(tmp_path)
-    staging = tmp_path / "unfiltered"
-    staging.mkdir()
-
-    seed_cargo_home(
-        inputs.source_home,
-        staging,
-        cargo_state.CargoStatePreparationError,
-    )
-
-    cache = staging / "registry/cache/crates-io"
-    assert {archive.name for archive in cache.glob("*.crate")} == {
-        "registry-1.0.0.crate",
-        "sparse-2.0.0.crate",
-        "stale-9.9.9.crate",
-        "git-source-3.0.0.crate",
-    }, "an absent selection must not silently drop cached archives"
-
-
-def test_seeding_skips_unselected_archives_before_the_fetch(tmp_path: Path) -> None:
-    """Staging never copies the caller's whole registry archive history."""
-    inputs = create_snapshot_inputs(tmp_path)
-    staging = tmp_path / "staging"
-    staging.mkdir()
-    selected = selected_registry_archives(inputs.repository / "rust/Cargo.lock")
-
-    seed_cargo_home(
-        inputs.source_home,
-        staging,
-        cargo_state.CargoStatePreparationError,
-        selected_archives=selected,
-    )
-
-    cache = staging / "registry/cache/crates-io"
-    assert {archive.name for archive in cache.glob("*.crate")} == {
-        "registry-1.0.0.crate",
-        "sparse-2.0.0.crate",
-    }, "seeding must copy only lockfile-selected registry archives"
-    assert (staging / "git/db/source.git/config").is_file(), (
-        "Git databases remain cache metadata because the lockfile exposes no "
-        "stable entry name for them"
-    )
-    assert (
-        inputs.source_home / "registry/cache/crates-io/stale-9.9.9.crate"
-    ).is_file(), "seeding must not modify the caller's archive cache"
+    assert (inputs.source_home / "config.toml").read_text(encoding="utf-8") == (
+        SEEDED_CARGO_FILES["config.toml"]
+    ), "seeding must not modify caller configuration"
 
 
 def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
@@ -206,11 +167,11 @@ def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
     """Fetch uses the copied home, preserves caller jobs, and publishes atomically."""
     inputs = create_snapshot_inputs(tmp_path)
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
-    fetch_credentials: list[bool] = []
+    fetch_configuration: list[tuple[bool, bool]] = []
     monkeypatch.setattr(
         cargo_state,
         "_run_cargo",
-        _record_snapshot_cargo(calls, fetch_credentials),
+        _record_snapshot_cargo(calls, fetch_configuration),
     )
 
     prepared = cargo_state.prepare_cargo_snapshot(
@@ -218,7 +179,7 @@ def test_preparation_fetches_locked_dependencies_into_a_staged_snapshot(
         inputs.snapshot_root,
         caller_environment=inputs.caller_environment,
     )
-    _assert_fetch_setup(inputs, prepared, calls, fetch_credentials)
+    _assert_fetch_setup(inputs, prepared, calls, fetch_configuration)
     _assert_snapshot_contents(inputs, prepared)
 
 

@@ -29,7 +29,11 @@ def main(
     preparation_started = time.monotonic()
     cache_root = snapshot_root or default_snapshot_root()
     prepared = prepare_cargo_snapshot(repository_root, cache_root)
-    run_home = create_run_cargo_home(prepared.path, run_root)
+    run_home = create_run_cargo_home(
+        prepared.path,
+        run_root,
+        source_cargo_home=prepared.source_cargo_home,
+    )
     preparation_seconds = time.monotonic() - preparation_started
     record_phase(
         run_root / "timings.jsonl",

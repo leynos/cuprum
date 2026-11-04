@@ -78,7 +78,11 @@ def prepared_cargo_run(
     run_root = tmp_path_factory.mktemp("cargo-run")
     preparation_started = time.monotonic()
     snapshot = prepare_cargo_snapshot(repository_root, default_snapshot_root())
-    cargo_home = create_run_cargo_home(snapshot.path, run_root)
+    cargo_home = create_run_cargo_home(
+        snapshot.path,
+        run_root,
+        source_cargo_home=snapshot.source_cargo_home,
+    )
     preparation_seconds = time.monotonic() - preparation_started
     run = PreparedCargoRun(
         repository_root,

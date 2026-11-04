@@ -15,6 +15,45 @@ if typ.TYPE_CHECKING:
     import pytest
 
 
+def test_run_homes_receive_current_caller_settings_but_never_credentials(
+    tmp_path: Path,
+) -> None:
+    """Each run captures current settings; a snapshot never supplies them."""
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "config.toml").write_text("[net]\noffline = true\n", encoding="utf-8")
+    source_home = tmp_path / "caller-cargo-home"
+    source_home.mkdir()
+    first_settings = "[net]\noffline = false\n"
+    (source_home / "config.toml").write_text(first_settings, encoding="utf-8")
+    (source_home / "credentials.toml").write_text(
+        "token = 'private-token'\n", encoding="utf-8"
+    )
+
+    first = cargo_state.create_run_cargo_home(
+        snapshot,
+        tmp_path / "run-one",
+        source_cargo_home=source_home,
+    )
+    second_settings = "[build]\nrustc-wrapper = 'build-limits-rustc'\n"
+    (source_home / "config.toml").write_text(second_settings, encoding="utf-8")
+    second = cargo_state.create_run_cargo_home(
+        snapshot,
+        tmp_path / "run-two",
+        source_cargo_home=source_home,
+    )
+
+    assert (first / "config.toml").read_text(encoding="utf-8") == first_settings, (
+        "a run home must receive the caller's settings, not a stale snapshot copy"
+    )
+    assert (second / "config.toml").read_text(encoding="utf-8") == second_settings, (
+        "a later run must see configuration changed after the snapshot was made"
+    )
+    assert not (first / "credentials.toml").exists(), (
+        "a run home must never receive caller credentials"
+    )
+
+
 def test_copied_workspace_dependencies_are_fetched_locked_before_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

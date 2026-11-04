@@ -95,7 +95,11 @@ def prepare_run_cargo_home(
     """  # ruff: ignore[docstring-extraneous-exception] - failures propagate from the preparation helpers.
     started = time.monotonic()
     snapshot = prepare_cargo_snapshot(repository_root, default_snapshot_root())
-    cargo_home = create_run_cargo_home(snapshot.path, run_root)
+    cargo_home = create_run_cargo_home(
+        snapshot.path,
+        run_root,
+        source_cargo_home=snapshot.source_cargo_home,
+    )
     fetch_workspace_dependencies(
         workspace / "Cargo.toml",
         cargo_home,

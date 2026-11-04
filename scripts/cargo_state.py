@@ -13,9 +13,9 @@ import typing as typ
 from pathlib import Path
 
 from scripts.cargo_cache_tree import (
-    _prepare_run_home,
     _prune_registry_archives,
-    _require_real_directory,
+    remove_cargo_credentials,
+    remove_cargo_settings,
     selected_registry_archives,
 )
 from scripts.cargo_cache_tree import (
@@ -39,7 +39,9 @@ from scripts.cargo_environment import (
     _pinned_rustup_home,
     cargo_environment,
 )
+from scripts.cargo_run_home import create_run_cargo_home
 from scripts.cargo_state_command import _run_cargo
+from scripts.cargo_state_errors import CargoStatePreparationError
 from scripts.cargo_state_metadata import (
     _sha256,
     cargo_snapshot_key,
@@ -64,11 +66,17 @@ __all__ = (
 
 @dc.dataclass(frozen=True, slots=True)
 class PreparedCargoSnapshot:
-    """Describe one prepared, immutable cache snapshot and its preparation."""
+    """Describe one prepared, immutable cache snapshot and its preparation.
+
+    ``source_cargo_home`` records the caller home whose current configuration
+    each run home receives. The snapshot itself holds cache data only, so a
+    reused snapshot cannot pin stale Cargo settings.
+    """
 
     path: Path
     key: str
     cargo_version: str
+    source_cargo_home: Path
     preparation_seconds: float
     reused: bool
 
@@ -90,10 +98,6 @@ class _SnapshotPreparation:
     def snapshot_path(self) -> Path:
         """Cache path derived from this snapshot's complete key."""
         return self.snapshot_root / self.key
-
-
-class CargoStatePreparationError(RuntimeError):
-    """Report a Cargo preparation failure without exposing cache credentials."""
 
 
 def record_phase(timings_path: Path, phase: str, seconds: float) -> None:
@@ -226,10 +230,11 @@ def _existing_snapshot(
         _reject_tree_symlinks_impl(snapshot_path, CargoStatePreparationError)
         _make_tree_read_only(snapshot_path)
     return PreparedCargoSnapshot(
-        snapshot_path,
-        request.key,
-        request.cargo_version,
-        time.monotonic() - request.started,
+        path=snapshot_path,
+        key=request.key,
+        cargo_version=request.cargo_version,
+        source_cargo_home=request.source_cargo_home,
+        preparation_seconds=time.monotonic() - request.started,
         reused=True,
     )
 
@@ -261,29 +266,28 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             ),
         )
 
+        # The fetch needed the caller's configuration and credentials, but a
+        # published snapshot must hold only cache data: settings are applied
+        # afresh to each run home, so they cannot go stale behind a shared key.
+        remove_cargo_credentials(temporary_path)
+        remove_cargo_settings(temporary_path)
         _reject_tree_symlinks_impl(temporary_path, CargoStatePreparationError)
         _prune_registry_archives(temporary_path, lockfile)
-        _remove_credentials(temporary_path)
         _reject_tree_symlinks_impl(temporary_path, CargoStatePreparationError)
         _make_tree_read_only(temporary_path)
         reused = not _publish_snapshot(temporary_path, request.snapshot_path)
         return PreparedCargoSnapshot(
-            request.snapshot_path,
-            request.key,
-            request.cargo_version,
-            time.monotonic() - request.started,
-            reused,
+            path=request.snapshot_path,
+            key=request.key,
+            cargo_version=request.cargo_version,
+            source_cargo_home=request.source_cargo_home,
+            preparation_seconds=time.monotonic() - request.started,
+            reused=reused,
         )
     finally:
         if temporary_path.exists():
             _make_tree_writable(temporary_path)
             shutil.rmtree(temporary_path)
-
-
-def _remove_credentials(cargo_home: Path) -> None:
-    """Keep fetch credentials out of persistent and run-local snapshots."""
-    for name in ("credentials", "credentials.toml"):
-        (cargo_home / name).unlink(missing_ok=True)
 
 
 def fetch_workspace_dependencies(
@@ -356,34 +360,3 @@ def _fetch_locked(manifest: Path, environment: cabc.Mapping[str, str]) -> None:
     if _sha256(lockfile) != lockfile_digest:
         msg = f"cargo fetch changed {lockfile.name} during locked preparation"
         raise CargoStatePreparationError(msg)
-
-
-def create_run_cargo_home(snapshot: Path, run_root: Path) -> Path:
-    """Copy a snapshot into a new writable home owned by one top-level run.
-
-    Parameters
-    ----------
-    snapshot : Path
-        Read-only, prepared cache snapshot to copy.
-    run_root : Path
-        Existing or new directory owned by this top-level run.
-
-    Returns
-    -------
-    Path
-        Newly created writable ``cargo-home`` directory beneath ``run_root``.
-
-    Raises
-    ------
-    CargoStatePreparationError
-        If the snapshot is not a real directory, contains a symlink, the run
-        root is a symlink, or the run-local ``cargo-home`` already exists.
-    OSError
-        If the run home cannot be created or copied.
-    """  # ruff: ignore[docstring-extraneous-exception] - filesystem errors propagate from directory creation and copying.
-    _require_real_directory(snapshot, CargoStatePreparationError, "Cargo snapshot")
-    _reject_tree_symlinks_impl(snapshot, CargoStatePreparationError)
-    run_home = _prepare_run_home(run_root, CargoStatePreparationError)
-    shutil.copytree(snapshot, run_home)
-    _make_tree_writable(run_home)
-    return run_home

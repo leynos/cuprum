@@ -193,6 +193,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_running_command_children_contract.py \
   scripts/tests/test_boundary_*.py \
   scripts/tests/test_cargo_state.py \
+  scripts/tests/test_cargo_seeding.py \
   scripts/tests/test_cargo_snapshot_key.py \
   scripts/tests/test_cargo_snapshot_root.py \
   scripts/tests/test_cargo_workspace_state.py \
