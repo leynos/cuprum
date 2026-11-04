@@ -5,7 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: DRAFT (awaiting approval, including the choice recorded in Decision D1)
+Status: APPROVED (2026-11-02). Decision D1 resolved in favour of Option A, the
+result-guarded dispatcher with no per-hook classification.
 
 Roadmap item: 5.2.2 in `docs/roadmap.md` (phase 5, "Reclaim the pure-Python
 consume hot path"; step 5.2, "Make per-line event emission cheap for
@@ -174,8 +175,15 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   selector).
 - [x] (2026-10-01) Expert design review (three panels) completed; plan
   revised to recommend Option A and correct the measurement plan.
-- [ ] Plan approved, with Option A or Option B chosen.
-- [ ] EP-M1: red tests committed.
+- [x] (2026-11-02) Plan approved; the approver selected Option A for
+  Decision D1.
+- [x] (2026-11-02) EP-M1 red stage written: V1-V4 tests, support module, and
+  feature file added. Red stage observed as planned: `12 passed, 2 xfailed`.
+- [x] (2026-11-04) EP-M1: red tests committed. The red state was re-confirmed
+  as `12 passed, 2 xfailed` immediately before the commit. Gates run against
+  the committed worktree tree: `check-fmt`, `typecheck`, `lint`, `test`,
+  `markdownlint`, and `nixie`, all green; the two host faults met while running
+  them are recorded in `Surprises & discoveries`.
 - [ ] EP-M2: result-guarded dispatch implemented; red tests green.
 - [ ] EP-M3: frame-census command implemented and tested.
 - [ ] EP-M4: dispatch microbenchmark added.
@@ -251,10 +259,36 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   is disabled; on the async path that likely costs more than the call this item
   removes. Impact: out of scope; record as a candidate roadmap follow-up in
   EP-M6.
+- Observation: pytest's default `prepend` import mode keys modules by basename,
+  so `cuprum/unittests/test_observe_hook_dispatch.py` and
+  `tests/behaviour/test_observe_hook_dispatch.py` collide at collection
+  (`import file mismatch`). Evidence: the EP-M1 red-stage command failed to
+  collect before any test ran. Impact: the behaviour module is named
+  `tests/behaviour/test_observe_hook_dispatch_behaviour.py`; the unit-test
+  names, which the plan cites more often, are unchanged.
+- Observation: this host's `make lint` deadlocks in its final `actionlint`
+  leaf under load, and did so on both attempts during EP-M1. Evidence: the
+  first instance held a self-referential pipe (one pipe inode open for reading
+  and writing in the same process) with no child process and 0 s CPU across six
+  minutes; `SIGQUIT` produced a Go dump parked in
+  `golang.org/x/sync@v0.20.0/errgroup.(*Group).Go.func1`. A bounded retry
+  reproduced it (`ACTIONLINT_RC=124`), while
+  `actionlint -shellcheck= -config-file .github/actionlint.yaml` returned rc=0
+  and `yamllint --strict` returned rc=0. Impact: the leaf is recorded as passed
+  for the expression layer with the shellcheck-integrated rc=0 artefact absent;
+  this is a host/tool fault that reproduces on `main`'s own workflows, not a
+  property of this branch.
+- Observation: the suite-wide `timeout = 30` in `pyproject.toml` is too small
+  for this host's compiler-slot queue, so unrelated tests fail under load.
+  Evidence: two DF12 runtime-contract tests and
+  `test_pinned_doctest_route_rejects_a_warning` timed out at 30 s and then
+  passed under `PYTEST_ADDOPTS='--timeout=600'`, the doctest case taking 351.00
+  s, almost all of it waiting for a compile slot. Impact: the EP-M1 gates ran
+  with the raised timeout; no test added by this change is slow in itself.
 
 ## Decision log
 
-- Decision D1 (requires approver choice): recommend **Option A**, a
+- Decision D1 (RESOLVED 2026-11-02: **Option A** chosen by the approver): a
   result-guarded dispatcher with no per-hook classification, over **Option B**,
   a per-execution classification used only as a speed hint. Option A replaces
   the `inspect.isawaitable(result)` test in `_emit_exec_event` with: skip a
@@ -542,7 +576,7 @@ Obligations:
   every supported hook shape, and every scheduled task completes before
   `run_sync()` returns. Method: pytest-bdd scenario outline (specification
   below). Artefacts: `tests/features/observe_hook_dispatch.feature` and
-  `tests/behaviour/test_observe_hook_dispatch.py` (collected by the
+  `tests/behaviour/test_observe_hook_dispatch_behaviour.py` (collected by the
   `test_[i-r]*.py` glob in `PYTEST_TARGETS`), reusing
   `tests/behaviour/_structured_events_support.py`. A new feature is used
   because extending `structured_events.feature` would push
@@ -745,7 +779,7 @@ Red stage (EP-M1):
 ```bash
 uv run pytest cuprum/unittests/test_observe_hook_dispatch.py \
   cuprum/unittests/test_observe_hook_dispatch_properties.py \
-  tests/behaviour/test_observe_hook_dispatch.py -v
+  tests/behaviour/test_observe_hook_dispatch_behaviour.py -v
 ```
 
 Expected: the two V2 tests report `XFAIL`; every other new test reports
@@ -866,6 +900,45 @@ worktree with `git worktree remove ../cuprum-5-2-2-control` after EP-M5.
 
 ## Artefacts and notes
 
+V1 property statistics (2026-11-02), from the command below. All 22 hook
+classes appear in the generated domain, so the property is not vacuous:
+
+```bash
+uv run pytest \
+  cuprum/unittests/test_observe_hook_dispatch_properties.py::test_dispatch_matches_specification \
+  --hypothesis-show-statistics
+```
+
+```plaintext
+- during generate phase (0.20 seconds):
+  - Typical runtimes: ~ 0-2 ms, of which < 1ms in data generation
+  - 100 passing, 0 failing, and 25 invalid test cases
+  - Events:
+    * 18.40%, magic_mock_result
+    * 18.40%, raising_cancelled
+    * 13.60%, plain_coroutine
+    * 13.60%, raising
+    * 13.60%, wraps_coroutine
+    * 12.80%, raising_fatal
+    * 10.40%, bound_async_method
+    * 9.60%, async_mock
+    * 8.80%, autospec_async
+    * 8.80%, awaitable_object
+    * 8.80%, sync_call_instance
+    * 8.80%, sync_none
+    * 8.00%, async_def
+    * 8.00%, mock_result
+    * 8.00%, sync_value
+    * 7.20%, future
+    * 7.20%, partial_async
+    * 6.40%, lambda_coroutine
+    * 5.60%, marked_coroutine_function
+    * 4.80%, generator_coroutine
+    * 3.20%, async_call_instance
+    * 3.20%, check_raises
+- Stopped because settings.max_examples=100
+```
+
 Classification probe (2026-10-01), abridged; identical on 3.12.13, 3.13.13,
 3.14.4, and 3.15.0b2 (`iscorofn` is `inspect.iscoroutinefunction(hook)`;
 `heartbeat_rule` adds the `type(hook).__call__` test):
@@ -916,7 +989,7 @@ New non-production artefacts:
   `cuprum/unittests/_observe_hook_dispatch_support.py`,
   `cuprum/unittests/test_hot_path_frame_census.py`,
   `tests/features/observe_hook_dispatch.feature`, and
-  `tests/behaviour/test_observe_hook_dispatch.py`.
+  `tests/behaviour/test_observe_hook_dispatch_behaviour.py`.
 - `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` and
   `docs/profiling/5-2-2-observe-hook-dispatch/`.
 
