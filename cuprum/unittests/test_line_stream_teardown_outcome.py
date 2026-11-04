@@ -50,6 +50,7 @@ def _failing_hook(_event: ExecEvent) -> cabc.Awaitable[None]:
     """Return an awaitable that fails when teardown drains its task."""
 
     async def fail() -> None:
+        """Fail on the first tick after the hook task is scheduled."""
         await asyncio.sleep(0)
         raise RuntimeError(_HOOK_FAILURE_MESSAGE)
 
