@@ -333,3 +333,18 @@ def test_a_single_step_removed_from_the_real_recipe_is_refused(
             selector=_INDIVIDUAL_SELECTOR,
             pytest_variable=PYTEST_INVOCATION,
         )
+
+
+def test_clean_removes_retained_boundary_run_roots() -> None:
+    """`make clean` removes the run evidence both boundary harnesses retain.
+
+    Each harness keeps a copied workspace under `.cache` for diagnostics, so
+    without an explicit cleanup path repeated local runs grow that directory
+    without bound. The harnesses do not prune during a run: a concurrent
+    invocation may be active, and the workflow archives the directory after
+    its step completes.
+    """
+    recipe = recipe_of("clean")
+
+    for runs in (".cache/boundary-contract/runs", ".cache/boundary-faults/runs"):
+        assert runs in recipe, f"make clean must remove {runs}"
