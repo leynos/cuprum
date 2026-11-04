@@ -46,6 +46,7 @@ __all__ = [
     "_kill_descendant",
     "_recorded_pid",
     "_spawn_output_pipe_holder",
+    "_spawn_output_pipe_holder_fallback",
     "_spawn_sleeper",
     "_wait_for_pid_file",
 ]
@@ -172,6 +173,33 @@ async def _spawn_output_pipe_holder(
             cwd=None,
             pipes=frozenset({STDOUT_STREAM, STDERR_STREAM}),
         ),
+    )
+
+
+async def _spawn_output_pipe_holder_fallback(
+    pid_file: pathlib.Path,
+    lifetime_s: float,
+) -> asyncio.subprocess.Process:
+    """Spawn the same pipe-holding child through asyncio's own subprocess.
+
+    The public spawn API is used deliberately rather than the ``wait4`` owner:
+    this is the object the fallback backend hands a run when ``wait4`` cannot
+    own the reap, and it is the one whose pipes asyncio's transport owns.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The child, with stdout and stderr piped to the parent.
+    """
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        _DESCENDANT_SCRIPT,
+        str(pid_file),
+        str(lifetime_s),
+        stdin=None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
 
 

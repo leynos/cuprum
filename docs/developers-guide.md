@@ -3095,10 +3095,15 @@ is suppressed independently, so an ordinary cleanup failure cannot abort a
 later step or replace the exception the caller is unwinding; a cancellation
 propagates only after the sequence completes. ADR-007's 2026-10-30 addendum
 records why the steps are ordered this way, and ADR-021 records why the pipe
-release is bounded. The close is not redundant with the reaping: the `wait4`
-owner collects the child and nothing else, so a discard that ends at the grace
-rather than at end-of-file would otherwise leave the parent's descriptor to be
-released only when the transport holding it was collected.
+release is bounded. The close is not redundant with the reaping on either
+backend. The `wait4` owner collects the child and nothing else, and asyncio's
+read-pipe transports wait for end-of-file before closing, so a discard that
+ends at the grace rather than at end-of-file would otherwise leave the parent's
+descriptor to be released only when the transport holding it was collected. The
+reclaim asks the `wait4` owner through `close_output_transports`, and for the
+fallback closes each output pipe's own transport through the stream that holds
+it — never the subprocess transport, so termination and process-group ownership
+are untouched.
 
 Three rules matter when adding or moving a post-spawn step:
 

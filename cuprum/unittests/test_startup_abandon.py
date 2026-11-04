@@ -14,11 +14,13 @@ matters because a drain that is cancelled rather than settled never builds the
 result that would have carried the spill handle, so the accumulator is the last
 reference to a temporary file the library created and is therefore responsible
 for. The descriptors matter because a descendant that inherited an output pipe
-can outlive the child and keep it from ever reaching end-of-file, and reaping
-the direct child closes nothing of the parent's. A further case pins the bound
-those discards share — one grace for both streams, as the capture drain gives
-them — with two stalled readers rather than a child, because the number of
-windows is what that case reads.
+can outlive the child and keep it from ever reaching end-of-file, and neither
+backend releases the parent's descriptor in that case: the ``wait4`` owner
+reaps the child and closes nothing, and asyncio's transport closes a pipe only
+once the pipe reports end-of-file. Both routes are therefore driven here. A
+further case pins the bound those discards share — one grace for both streams,
+as the capture drain gives them — with two stalled readers rather than a child,
+because the number of windows is what that case reads.
 """
 
 from __future__ import annotations
@@ -45,12 +47,14 @@ from cuprum.unittests._startup_abandon_support import (
     _kill_descendant,
     _recorded_pid,
     _spawn_output_pipe_holder,
+    _spawn_output_pipe_holder_fallback,
     _spawn_sleeper,
     _wait_for_pid_file,
 )
 from cuprum.unittests._wait4_process_support import _wait4_only
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib
 
     from cuprum._capture_types import CaptureFinal
@@ -185,9 +189,24 @@ def test_a_failing_capture_does_not_strand_the_other_stream(
     asyncio.run(run_case())
 
 
-@_wait4_only
+#: The two ways a run obtains its child. The ``wait4`` owner reaps without
+#: settling a transport; the fallback hands back asyncio's own process, whose
+#: read-pipe transports close only after their pipes report end-of-file.
+#: Neither route releases the parent-side descriptor once a descendant holds
+#: the write end, so both must be driven here.
+_SPAWN_ROUTES = (
+    pytest.param(_spawn_output_pipe_holder, marks=_wait4_only, id="wait4"),
+    pytest.param(_spawn_output_pipe_holder_fallback, id="asyncio-fallback"),
+)
+
+
+@pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_abandon_releases_output_pipes_a_descendant_keeps_open(
     tmp_path: pathlib.Path,
+    spawn_pipe_holder: cabc.Callable[
+        [pathlib.Path, float],
+        cabc.Awaitable[asyncio.subprocess.Process],
+    ],
 ) -> None:
     """An abandoned run must not leave its output pipes to the descendant.
 
@@ -195,11 +214,11 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
     to be signalled. Terminating the child therefore leaves the write ends
     open, so neither pipe ever reaches end-of-file and the discard's grace
     expires with the read transports still holding the parent-side
-    descriptors. Reaping the child does not release them: the ``wait4`` owner
-    collects the status and nothing else, and no other step closes its
-    transports. The reclaim must close them itself, and it must do so before
-    this coroutine returns, because the event loop is torn down immediately
-    afterwards.
+    descriptors. Reaping the child does not release them on either backend:
+    the ``wait4`` owner collects the status and nothing else, and asyncio's
+    transport waits for the pipe's end-of-file before closing it. The reclaim
+    must close them itself, and it must do so before this coroutine returns,
+    because the event loop is torn down immediately afterwards.
 
     The descendant is asserted to still be running when the descriptors are
     read, so a case that passed because the descendant had exited cannot be
@@ -209,7 +228,7 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
     async def run_case() -> None:
         """Abandon a real child whose descendant keeps the output pipes open."""
         pid_file = tmp_path / "descendant.pid"
-        process = await _spawn_output_pipe_holder(
+        process = await spawn_pipe_holder(
             pid_file,
             _DESCENDANT_LIFETIME_S,
         )

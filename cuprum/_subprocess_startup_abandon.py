@@ -203,22 +203,55 @@ async def _release_output_transports(
     is never read again, so releasing the parent's descriptor discards nothing
     a caller could still have wanted.
 
-    Only the ``wait4`` owner is asked, and through ``getattr`` rather than a
-    type test. The fallback backend returns asyncio's own subprocess
-    transport, whose pipes are the transport's to close; this reclaim releases
-    only what the ``wait4`` owner hands it, and that owner reaps with
-    ``wait4`` alone and closes nothing of its own accord.
+    Which close to ask is decided through ``getattr`` rather than a type
+    test, because the two backends release a descriptor differently. The
+    ``wait4`` owner reaps with ``wait4`` alone and closes nothing of its own
+    accord, so it is asked directly. The fallback hands back asyncio's own
+    subprocess, whose read pipes are held by the transports belonging to its
+    streams; those transports close a pipe only once it reports end-of-file,
+    which is exactly what a descendant holding the write end prevents, so each
+    is asked to close as well rather than left to collect the descriptor at an
+    arbitrary later point.
 
     A transport releases its descriptor from the loop callback its close
     schedules, so the yield is what makes "close requested" mean "descriptor
     released" before this reclaim hands control back.
     """
-    close = getattr(process, "close_output_transports", None)
-    if not callable(close):
-        return
-    with contextlib.suppress(Exception):
-        close()
+    close_owned = getattr(process, "close_output_transports", None)
+    if callable(close_owned):
+        with contextlib.suppress(Exception):
+            close_owned()
+    else:
+        _close_asyncio_output_transports(process)
     await asyncio.sleep(0)
+
+
+def _close_asyncio_output_transports(
+    process: asyncio.subprocess.Process,
+) -> None:
+    """Ask each of the fallback's output pipes to close its parent-side end.
+
+    asyncio publishes no accessor for the transport carrying a read pipe, so
+    each stream is asked instead:
+    :func:`cuprum._pipeline_stream_fds._stream_transport` already tolerates
+    both spellings of that attribute and is the project's existing route to
+    it. A stream answers with its own pipe transport rather than the
+    subprocess transport, so closing it releases exactly that descriptor and
+    leaves the child's termination and process-group ownership untouched;
+    asyncio finishes the subprocess transport by itself once every pipe it
+    owns has disconnected.
+    """
+    # Imported here rather than at module scope for the reason ``_release_pipes``
+    # gives: this module sits on a shorter load path than the pipeline internals.
+    from cuprum._pipeline_stream_fds import _stream_transport
+
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        close = getattr(_stream_transport(stream), "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
 
 
 async def _release_captures(

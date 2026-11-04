@@ -1531,10 +1531,15 @@ the output transports, so the parent-side descriptor does not outlive the run
 that abandoned it. Reaping cannot stand in for that close: `_Wait4Process`
 collects the child with `wait4` and releases nothing of the parent's, and no
 other step closes its transports, so without the close the descriptor would be
-released only once the transport was collected. Only the `wait4` owner is
-asked, because it is the backend that reaps without settling a transport; the
-fallback returns asyncio's own subprocess transport, whose pipes are that
-transport's to close.
+released only once the transport was collected. Both backends are asked,
+because neither releases the descriptor by itself. `_Wait4Process` reaps with
+`wait4` and settles nothing else, so it is asked through its own
+`close_output_transports`. The fallback hands back asyncio's own subprocess,
+whose read pipes are held by the transports belonging to its streams; those
+close a pipe only once it reports end-of-file — precisely what a descendant
+holding the write end prevents — so each output pipe's transport is closed as
+well. Only those pipe transports are closed, never the subprocess transport
+itself, so the child's termination and process-group ownership are untouched.
 
 The capture accumulators are released last, for two reasons. A cancelled drain
 never builds the result that would have carried its spill handle, so the
