@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.events import ExecEvent, ExecHook
+    from cuprum.program import Program
     from cuprum.sh import SafeCmd
 
 
@@ -96,6 +97,26 @@ def _resolve_executable_for(cmd: SafeCmd, *, cwd: Path | None) -> str | None:
     return current_context().resolve_executable(
         cmd.program, cwd=None if cwd is None else str(cwd)
     )
+
+
+def _bound_executable(program: Program, resolved_path: str | None) -> str:
+    """Return the file a permitted program is executed as.
+
+    This is the fallback rule for an unbound program — it runs under its
+    catalogued name — stated once for the spawn sites that need it. The managed
+    spawn reaches it through ``_StageObservation.argv0``; the detached launch has
+    no observation, so it calls this directly and must reach the same answer.
+
+    ``str`` on the program is deliberate: ``Program`` is a ``NewType`` over
+    ``str``, but a child's argument vector must be plain strings.
+
+    Returns
+    -------
+    str
+        The resolved path when an executable binding applied, otherwise the
+        program's catalogued name.
+    """
+    return str(program) if resolved_path is None else resolved_path
 
 
 def _base_stage_tags(
@@ -313,6 +334,7 @@ async def _drain_tasks_during_cleanup(
 __all__ = [
     "_ExecEventEmissionError",
     "_base_stage_tags",
+    "_bound_executable",
     "_drain_tasks_during_cleanup",
     "_emit_exec_event",
     "_merge_tags",

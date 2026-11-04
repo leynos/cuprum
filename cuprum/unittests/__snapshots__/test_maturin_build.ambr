@@ -29,6 +29,8 @@
       'cuprum/_context_policy.py',
       'cuprum/_daemon_thread.py',
       'cuprum/_delivery_lifecycle.py',
+      'cuprum/_detached_launch.py',
+      'cuprum/_detached_spawn.py',
       'cuprum/_echo_truncation.py',
       'cuprum/_enum_parse.py',
       'cuprum/_event_taxonomy.py',
