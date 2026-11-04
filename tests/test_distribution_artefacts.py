@@ -30,19 +30,22 @@ _MEASURED_COLD_MATURIN_SECONDS = 163
         (None, "uv", 180),
         (None, "maturin", 3600),
         ("300", "uv", 300),
-        ("300", "maturin", 300),
+        ("300", "maturin", 3600),
+        ("600", "maturin", 3600),
+        ("7200", "uv", 7200),
+        ("7200", "maturin", 7200),
     ],
 )
-def test_packaging_timeout_uses_positive_override_or_default(
+def test_packaging_timeout_override_can_only_raise_the_backend_default(
     configured_value: str | None,
     backend: typ.Literal["uv", "maturin"],
     expected_seconds: int,
 ) -> None:
-    """A configured frontend limit is positive and defaults per backend."""
+    """The override adds headroom and never lowers a backend bound."""
     assert (
         _configured_build_timeout_seconds(configured_value, backend=backend)
         == expected_seconds
-    ), "the packaging command must use configured seconds or its backend default"
+    ), "the packaging command must use the larger of override and backend default"
 
 
 @pytest.mark.parametrize("configured_value", ["0", "-1", "invalid"])

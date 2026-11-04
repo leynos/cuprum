@@ -5047,34 +5047,36 @@ target directory keyed by toolchain and Rust flags, and passes `--frozen` with
 separately. `make test` runs `test-python` before `test-rust`, so their sibling
 build workloads cannot overlap under parallel Make. The pytest session fixture
 shares one copied home within an invocation and xdist worker; the boundary
-harness prepares one for each run. The snapshot seeds registry indexes and
-Cargo git databases from the caller's cache. After locked fetch, it retains
-only registry `.crate` archives whose package names and versions appear in the
-workspace lockfile; registry indexes and Git databases remain copied as cache
-metadata. Cargo configuration is copied separately. Credentials are copied into
-staging only while the locked fetch runs, then removed before publication.
-Locked fetch materializes the sources and checkouts selected by the current
-lockfile, without copying stale extracted versions from the caller's cache.
-Copies contain ordinary files, not links to the snapshot or caller cache.
-Snapshot preparation and copying are recorded as dependency-preparation time;
-current packaging and doctest timeout marks remain finite end-to-end bounds and
-include any compiler-admission wait inside Cargo. The packaging frontend
-watchdog defaults to 180 seconds for uv and 3600 seconds for Maturin, whose
-cold target compiles the native extension; either can be raised with
-`CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. A
-cold Maturin wheel build measured 163 seconds on a loaded developer host on
-2026-10-30, but a gate run then waited behind 67 and then 123
-compiler-admission requests and overran a 600-second bound. Because the
-coordinator exposes no workload lease, the native watchdog stays at the finite
-end-to-end bound inherited from the pre-factory contract rather than at the
-measured workload. The packaging consumer mark is derived from the largest
-frontend bound with a 60-second margin. This timeout remains an end-to-end
-watchdog, not an execution-only budget. The snapshot key follows the Cargo
-lockfile, toolchain, Cargo version, and runner scope. Do not hand the snapshot
-itself to Cargo: Cargo coordinates cache access only within one home, and
-offline mode does not remove those locks. `CARGO_BUILD_JOBS` remains
-caller-owned. CPU, memory, and the host-wide compiler-admission limit remain
-separate resource constraints.
+harness prepares one for each run. The snapshot seeds registry indexes, Cargo
+git databases, and only those registry `.crate` archives whose package names
+and versions appear in the workspace lockfile. Filtering the archives during
+seeding means staging never needs room for the caller's whole download history;
+a prune after locked fetch retains the same selection as a defensive final
+pass. Registry indexes and Git databases remain copied as cache metadata. Cargo
+configuration is copied separately. Credentials are copied into staging only
+while the locked fetch runs, then removed before publication. Locked fetch
+materializes the sources and checkouts selected by the current lockfile,
+without copying stale extracted versions from the caller's cache. Copies
+contain ordinary files, not links to the snapshot or caller cache. Snapshot
+preparation and copying are recorded as dependency-preparation time; current
+packaging and doctest timeout marks remain finite end-to-end bounds and include
+any compiler-admission wait inside Cargo. The packaging frontend watchdog
+defaults to 180 seconds for uv and 3600 seconds for Maturin, whose cold target
+compiles the native extension; either can be raised with
+`CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom, and
+the override never lowers a backend below its default. A cold Maturin wheel
+build measured 163 seconds on a loaded developer host on 2026-10-30, but a gate
+run then waited behind 67 and then 123 compiler-admission requests and overran
+a 600-second bound. Because the coordinator exposes no workload lease, the
+native watchdog stays at the finite end-to-end bound inherited from the
+pre-factory contract rather than at the measured workload. The packaging
+consumer mark is derived from the largest frontend bound with a 60-second
+margin. This timeout remains an end-to-end watchdog, not an execution-only
+budget. The snapshot key follows the Cargo lockfile, toolchain, Cargo version,
+and runner scope. Do not hand the snapshot itself to Cargo: Cargo coordinates
+cache access only within one home, and offline mode does not remove those locks.
+`CARGO_BUILD_JOBS` remains caller-owned. CPU, memory, and the host-wide
+compiler-admission limit remain separate resource constraints.
 
 Target directories are keyed by build configuration: the route, toolchain
 fragment, Rust flags, and doctest Rustdoc flags all enter the key, so two
@@ -5505,7 +5507,12 @@ builds. `scripts/check_boundary_faults.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
 abstraction. Its progress and ownership checks have separate private runners;
 their scope is the existing four mutations, with the same controls and failure
-diagnostics. The download helpers separate bounded redirect traversal, one
+diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
+cannot: Cargo consumes a global `--frozen` before dispatching an external
+subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
+therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
+the copied workspace's lockfile digest after every run so a build that rewrites
+it fails closed. The download helpers separate bounded redirect traversal, one
 connection's lifetime, and response classification. They remain private to the
 pinned binary installer. The compiler-contract checker uses a named predicate
 requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler

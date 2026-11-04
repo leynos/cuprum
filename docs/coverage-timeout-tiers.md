@@ -169,19 +169,20 @@ _Table 2: Local packaging route timing observations._
 
 The packaging command watchdogs are 180 s for the uv frontend and 3600 s for
 Maturin. `CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise both end-to-end caps for a
-runner with more queueing, and the pytest mark stays 60 s above the largest
-configured cap. The 49.1 s Maturin wheel was measured in the grouped session;
-the 38.6 s sample used a separate empty target; in both, compiled objects were
-already available to the compiler cache. The 163 s sample rebuilt the native
-extension from an empty target, but a later gate run waited behind 67 and then
-123 compiler-admission requests and overran a 600 s Maturin bound. The native
-watchdog therefore remains the finite end-to-end bound inherited from the
-pre-factory contract, not the measured workload, because the coordinator
-exposes no workload lease that could exclude that queue. This was a
-developer-host observation, not a CI-runner or concurrent-run measurement. It
-does not establish the workload-only budget under a top-level resource lease.
-Repeat the measurement on the target CI runner and under the coordinator's
-documented workload lease before revising timeout contracts.
+runner with more queueing, but never lowers either below its default, and the
+pytest mark stays 60 s above the largest configured cap. The 49.1 s Maturin
+wheel was measured in the grouped session; the 38.6 s sample used a separate
+empty target; in both, compiled objects were already available to the compiler
+cache. The 163 s sample rebuilt the native extension from an empty target, but
+a later gate run waited behind 67 and then 123 compiler-admission requests and
+overran a 600 s Maturin bound. The native watchdog therefore remains the finite
+end-to-end bound inherited from the pre-factory contract, not the measured
+workload, because the coordinator exposes no workload lease that could exclude
+that queue. This was a developer-host observation, not a CI-runner or
+concurrent-run measurement. It does not establish the workload-only budget
+under a top-level resource lease. Repeat the measurement on the target CI
+runner and under the coordinator's documented workload lease before revising
+timeout contracts.
 
 The current compiler coordinator exposes bounded compiler scopes only, not a
 bounded outer Cargo-workload lease; its queue wait has no finite limit. Until

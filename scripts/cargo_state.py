@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts.cargo_cache_tree import (
     _prune_registry_archives,
+    selected_registry_archives,
 )
 from scripts.cargo_cache_tree import (
     make_tree_read_only as _make_tree_read_only,
@@ -220,7 +221,7 @@ def _existing_snapshot(
 
     snapshot_mode = stat.S_IMODE(snapshot_path.stat().st_mode)
     if snapshot_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
-        _reject_tree_symlinks(snapshot_path)
+        _reject_tree_symlinks_impl(snapshot_path, CargoStatePreparationError)
         _make_tree_read_only(snapshot_path)
     return PreparedCargoSnapshot(
         snapshot_path,
@@ -240,10 +241,15 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             dir=request.snapshot_root,
         )
     )
+    lockfile = request.repository_root / "rust/Cargo.lock"
+    lockfile_digest = _sha256(lockfile)
     try:
-        _seed_cargo_home(request.source_cargo_home, temporary_path)
-        lockfile = request.repository_root / "rust/Cargo.lock"
-        lockfile_digest = _sha256(lockfile)
+        _seed_cargo_home_impl(
+            request.source_cargo_home,
+            temporary_path,
+            CargoStatePreparationError,
+            selected_archives=selected_registry_archives(lockfile),
+        )
         fetch_environment = _cargo_environment(
             temporary_path,
             request.rustup_home,
@@ -268,10 +274,10 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             msg = "cargo fetch changed rust/Cargo.lock despite --locked"
             raise CargoStatePreparationError(msg)
 
-        _reject_tree_symlinks(temporary_path)
+        _reject_tree_symlinks_impl(temporary_path, CargoStatePreparationError)
         _prune_registry_archives(temporary_path, lockfile)
         _remove_credentials(temporary_path)
-        _reject_tree_symlinks(temporary_path)
+        _reject_tree_symlinks_impl(temporary_path, CargoStatePreparationError)
         _make_tree_read_only(temporary_path)
         reused = not _publish_snapshot(temporary_path, request.snapshot_path)
         return PreparedCargoSnapshot(
@@ -376,7 +382,7 @@ def create_run_cargo_home(snapshot: Path, run_root: Path) -> Path:
     if snapshot.is_symlink() or not snapshot.is_dir():
         msg = f"Cargo snapshot must be a real directory: {snapshot}"
         raise CargoStatePreparationError(msg)
-    _reject_tree_symlinks(snapshot)
+    _reject_tree_symlinks_impl(snapshot, CargoStatePreparationError)
     run_root.mkdir(parents=True, exist_ok=True)
     if run_root.is_symlink():
         msg = f"run root must not be a symlink: {run_root}"
@@ -388,13 +394,3 @@ def create_run_cargo_home(snapshot: Path, run_root: Path) -> Path:
     shutil.copytree(snapshot, run_home)
     _make_tree_writable(run_home)
     return run_home
-
-
-def _seed_cargo_home(source: Path, destination: Path) -> None:
-    """Seed the staging home while keeping cache errors domain-specific."""
-    _seed_cargo_home_impl(source, destination, CargoStatePreparationError)
-
-
-def _reject_tree_symlinks(root: Path) -> None:
-    """Reject symlinked cache entries with a preparation-specific failure."""
-    _reject_tree_symlinks_impl(root, CargoStatePreparationError)

@@ -46,7 +46,8 @@ _BUILD_TIMEOUT_ENVIRONMENT_VARIABLE = "CUPRUM_PACKAGING_BUILD_TIMEOUT"
 # compiler-admission requests and overran 600 s. No workload lease exists to
 # exclude that queue, so the native frontend keeps the 3600 s end-to-end
 # watchdog inherited from its pre-factory contract. The uv frontend only
-# packages Python and stays at 180 s.
+# packages Python and stays at 180 s. `CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise
+# either bound but never lowers a backend below its default.
 _DEFAULT_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
     "uv": 180,
     "maturin": 3600,
@@ -55,7 +56,23 @@ _BUILD_TIMEOUT_MARGIN_SECONDS = 60
 
 
 def _configured_build_timeout_seconds(value: str | None, *, backend: _Backend) -> int:
-    """Parse one frontend's positive timeout, defaulting per backend."""
+    """Return the backend default or a larger positive override.
+
+    The override exists to add queue headroom, so it can only raise a bound.
+    Applying a shared value such as ``600`` to both backends would otherwise
+    lower the native watchdog that has already expired under compiler-admission
+    queueing.
+
+    Returns
+    -------
+    int
+        The effective end-to-end watchdog in seconds.
+
+    Raises
+    ------
+    ValueError
+        If the override is not a positive integer.
+    """
     if value is None:
         return _DEFAULT_BUILD_TIMEOUT_SECONDS[backend]
     try:
@@ -66,7 +83,7 @@ def _configured_build_timeout_seconds(value: str | None, *, backend: _Backend) -
     if timeout_seconds <= 0:
         msg = f"{_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive integer"
         raise ValueError(msg)
-    return timeout_seconds
+    return max(_DEFAULT_BUILD_TIMEOUT_SECONDS[backend], timeout_seconds)
 
 
 DISTRIBUTION_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
